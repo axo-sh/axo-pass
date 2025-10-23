@@ -18,6 +18,10 @@ export const secretItem = style({
   borderColor: colorVar.light20,
   background: colorVar.light05,
   borderRadius: 8,
+  display: 'grid',
+  gridTemplateColumns: '1fr auto',
+  alignItems: 'center',
+  gap: spacing(1),
 });
 
 export const secretItemLabel = style({

@@ -70,6 +70,19 @@ export const button = recipe({
         vars: errorScheme,
         background: colorVar.base,
       },
+      secondaryError: {
+        ':hover': {
+          vars: errorScheme,
+          background: colorVar.base,
+        },
+      },
+    },
+    size: {
+      default: {},
+      large: {
+        fontSize: vars.scale.sm,
+        padding: '10px 16px',
+      },
     },
   },
 });
