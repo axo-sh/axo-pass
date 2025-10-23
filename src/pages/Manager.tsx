@@ -2,6 +2,7 @@ import React from 'react';
 
 import {IconLock} from '@tabler/icons-react';
 
+import {button} from '@/components/Button.css';
 import {Layout} from '@/layout/Layout';
 import {LayoutDescription} from '@/layout/LayoutDescription';
 import {LayoutTitle} from '@/layout/LayoutTitle';
@@ -17,7 +18,9 @@ export const Manager = () => {
           <IconLock size={80} stroke={1.5} />
         </div>
         <div>
-          <button onClick={() => setLocked(false)}>Unlock</button>
+          <button className={button()} onClick={() => setLocked(false)}>
+            Unlock
+          </button>
         </div>
       </Layout>
     );
