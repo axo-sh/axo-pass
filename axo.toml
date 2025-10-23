@@ -1,0 +1,14 @@
+project_name = "frittata"
+env_file = ".env.local"
+
+[tasks]
+dev = "cargo tauri dev"
+build = "cargo-tauri build -b app"
+start = "./src-tauri/target/release/bundle/macos/frittata.app/Contents/MacOS/frittata"
+test = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
+biome-assist = "npx @biomejs/biome check --formatter-enabled=false --linter-enabled=false"
+biome-fix = "npx @biomejs/biome check --write"
+logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
+
+[packages]
+"nodejs/node" = "^25.0.0"

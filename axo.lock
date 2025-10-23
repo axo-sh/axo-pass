@@ -1,0 +1,5 @@
+[[packages]]
+name = "nodejs/node"
+version = "25.0.0"
+backend = "node"
+sources = [""]
