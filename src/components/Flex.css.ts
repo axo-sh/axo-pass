@@ -8,6 +8,9 @@ export const flex = recipe({
     display: 'flex',
     gap: gapVar,
   },
+  defaultVariants: {
+    direction: 'row',
+  },
   variants: {
     direction: {
       row: {
