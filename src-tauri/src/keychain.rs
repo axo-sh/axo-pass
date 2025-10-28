@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-use apple_native_keyring_store::protected::{Cred, Store};
+use apple_native_keyring_store::protected::Store;
 use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use keyring_core::api::CredentialStoreApi;
-use objc2::runtime::AnyObject;
 use objc2_local_authentication::LAContext;
 use security_framework::item;
 use serde::Serialize;
@@ -24,26 +23,6 @@ fn get_store() -> Result<Arc<Store>, keyring_core::Error> {
     })
 }
 
-pub fn get_all_password_entries() -> Result<Vec<PasswordEntry>, keyring_core::Error> {
-    let store = get_store()?;
-    let options = HashMap::from([("show-authentication-ui", "true")]);
-    let entries: Vec<_> = store
-        .search(&options)?
-        .into_iter()
-        .filter_map(|item| {
-            item.as_any()
-                .downcast_ref::<Cred>()
-                .and_then(|cred| cred.account.strip_prefix("gpg-key-"))
-                .map(|key_id| PasswordEntry {
-                    key_id: key_id.to_string(),
-                })
-        })
-        .collect();
-
-    log::debug!("Found {} password entries", entries.len());
-    Ok(entries)
-}
-
 pub fn has_password(key_id: &str) -> io::Result<bool> {
     log::debug!("Checking if password exists for key_id: {key_id}");
     let account = format!("gpg-key-{key_id}");
@@ -59,7 +38,7 @@ pub fn has_password(key_id: &str) -> io::Result<bool> {
     let (_context, cf_context) = unsafe {
         let context = LAContext::new();
         context.setInteractionNotAllowed(true);
-        let cf_context_ref = context.as_ref() as *const AnyObject as CFTypeRef;
+        let cf_context_ref = context.as_ref() as *const LAContext as CFTypeRef;
         let cf_context = CFType::wrap_under_get_rule(cf_context_ref);
         (context, cf_context)
     };

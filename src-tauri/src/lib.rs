@@ -2,9 +2,12 @@ mod app;
 mod keychain;
 mod pinentry;
 mod pinentry_handler;
+mod secrets;
 
 use std::sync::OnceLock;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use serde_json::Value;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
@@ -12,6 +15,9 @@ use tokio::sync::oneshot;
 
 use crate::app::{AppMode, AppState, PinentryState};
 use crate::pinentry_handler::TauriPinentryHandler;
+use crate::secrets::keychain::KeyChainQuery;
+use crate::secrets::managed_key;
+use crate::secrets::vault::read_vault;
 
 // Global static to store the app mode
 static APP_MODE: OnceLock<AppMode> = OnceLock::new();
@@ -90,12 +96,72 @@ pub fn run() {
         .setup(move |app| {
             // Store the app handle in the state for event emission
             state.set_app_handle(app.handle().clone());
-            let args = app.cli().matches().ok();
-            let mode = if detect_pinentry_mode(args.as_ref()) {
+            let cli_matches = app.cli().matches().ok();
+
+            log::debug!("CLI matches: {:?}", cli_matches);
+            if let Some(sc_matches) = cli_matches
+                .as_ref()
+                .and_then(|m| m.subcommand.clone())
+                .iter()
+                .find(|sc| sc.name == "get")
+            {
+                let Some(item_url) = sc_matches.matches.args.get("item_url").cloned() else {
+                    panic!("Missing required argument: item_url");
+                };
+
+                let get_item_url = item_url
+                    .value
+                    .as_str()
+                    .ok_or_else(|| format!("Invalid item_url argument: {:?}", item_url.value))?
+                    .to_string();
+
+                log::debug!("Getting item for URL: {}", get_item_url);
+                let u = url::Url::parse(&get_item_url)
+                    .map_err(|e| format!("Invalid URL '{get_item_url}': {e}"))?;
+                if u.scheme() != "axo" {
+                    panic!("Unsupported URL scheme: {}", u.scheme())
+                }
+                let vault_name = u
+                    .host_str()
+                    .ok_or_else(|| format!("URL missing host: {}", get_item_url))?;
+
+                let mut vault = read_vault(&app.path().app_data_dir()?, Some(vault_name))
+                    .expect("Failed to read vault");
+
+                vault.unlock().expect("Failed to unlock vault");
+
+                let res = vault
+                    .get_secret_by_url(u)
+                    .expect("Failed to get item by URL");
+                println!("{}", res.unwrap_or_else(|| "<not found>".to_string()));
+                // get_item_url
+                app.handle().exit(0);
+                return Ok(());
+            }
+
+            let mode = if detect_pinentry_mode(cli_matches.as_ref()) {
                 log::debug!("Running in pinentry mode");
                 AppMode::Pinentry
             } else {
                 log::debug!("Running in app mode");
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    // random debug code
+
+                    let keys = KeyChainQuery::build()
+                        .with_key_class(managed_key::KeyClass::Public)
+                        .list()
+                        .unwrap();
+                    for key in keys {
+                        if let Some(pub_key) = key.public_key() {
+                            log::debug!("Found key: {:?} pub={}", key, b64.encode(pub_key));
+                        } else {
+                            log::debug!("Found key: {:?}", key);
+                        }
+                        // log::debug!("deleting...");
+                        // key.delete();
+                    }
+                });
                 AppMode::App(AppState {
                     pinentry_program_path: app
                         .path()
@@ -122,7 +188,6 @@ pub fn run() {
                         height: 500.0,
                     }));
                     let _ = window.set_resizable(false);
-                    let _ = window.center();
                 } else {
                     // In app mode: larger size (800x700), resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
@@ -134,6 +199,9 @@ pub fn run() {
 
                 let _ = window.show();
                 let _ = window.set_focus();
+                let _ = window
+                    .center()
+                    .inspect_err(|err| log::error!("err center: {err}"));
             }
 
             Ok(())
@@ -141,7 +209,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app::get_mode,
             app::list_passwords,
-            app::send_pinentry_response
+            app::send_pinentry_response,
+            app::get_vault,
+            app::init_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

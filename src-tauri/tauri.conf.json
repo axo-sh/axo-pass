@@ -17,7 +17,20 @@
           "name": "pinentry",
           "description": "Run in pinentry mode for GPG integration"
         }
-      ]
+      ],
+      "subcommands": {
+        "get": {
+          "description": "Get a secret from the vault",
+          "args": [
+            {
+              "name": "item_url",
+              "description": "The URL of the item to get",
+              "index": 1,
+              "takesValue": true
+            }
+          ]
+        }
+      }
     }
   },
   "app": {
