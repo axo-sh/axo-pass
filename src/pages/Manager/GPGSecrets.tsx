@@ -1,9 +1,8 @@
 import React from 'react';
 
-import {getVault, initVault} from '@/client';
+import {listPasswords} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
-import {Flex} from '@/components/Flex';
 import {
   secretItem,
   secretItemLabel,
@@ -12,53 +11,47 @@ import {
 } from '@/pages/Manager/Secrets.css';
 import {useClient} from '@/utils/useClient';
 
-export const Secrets: React.FC = () => {
+export const GPGSecrets: React.FC = () => {
   const [selectedKeyId, setSelectedKeyId] = React.useState<string | null>(null);
-  const {ready, result, error} = useClient(async () => (await getVault()) || []);
+  const {ready, result, error} = useClient(async () => (await listPasswords()) || []);
   const dialog = useDialog();
 
   if (error) {
-    if (String(error).includes('Vault not found')) {
-      // todo: separate component with loader
-      return (
-        <Flex column align="center" justify="center">
-          <h2>Vault not found.</h2>
-          <button
-            onClick={async () => {
-              await initVault();
-              window.location.reload();
-            }}
-            className={button({size: 'large'})}
-          >
-            Create new vault
-          </button>
-        </Flex>
-      );
-    }
-    return <p>Error loading vault: {String(error)}</p>;
+    return <p>Error loading passphrases: {String(error)}</p>;
   }
 
   if (!ready) {
-    return <p>Loading vault...</p>;
+    return <p>Loading passphrases...</p>;
   }
 
-  if (result === null) {
-    return <p>No stored vault found.</p>;
+  if (result === null || result.length === 0) {
+    return (
+      <p>
+        No stored GPG passphrases found. Passphrases will be saved here when you use Touch ID
+        authentication.
+      </p>
+    );
   }
 
   return (
     <div className={secretsList}>
-      {Object.keys(result.data).map((key) => {
-        const entry = result.data[key];
-        return (
-          <div key={key} className={secretItem}>
-            <div>
-              <div className={secretItemLabel}>{key}</div>
-              <code className={secretItemValue}>{entry.title}</code>
-            </div>
+      {result.map((entry) => (
+        <div key={entry.key_id} className={secretItem}>
+          <div>
+            <div className={secretItemLabel}>Key ID</div>
+            <code className={secretItemValue}>{entry.key_id}</code>
           </div>
-        );
-      })}
+          <button
+            className={button({variant: 'secondaryError'})}
+            onClick={() => {
+              setSelectedKeyId(entry.key_id);
+              dialog.open();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ))}
       <DeleteSecretDialog
         isOpen={dialog.isOpen}
         onClose={() => {

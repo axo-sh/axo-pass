@@ -1,11 +1,11 @@
 import {useEffect, useState} from 'react';
 
-import '@/App.css.ts';
-
 import {type AppMode, getMode} from '@/client';
 import {Layout} from '@/layout/Layout';
-import {Manager} from '@/pages/Manager';
+import {Dashboard} from '@/pages/Dashboard';
 import {PinentryScreen} from '@/pages/PinentryScreen';
+
+import '@/App.css.ts';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode | null>(null);
@@ -40,7 +40,7 @@ const App: React.FC = () => {
   }
 
   // Main app mode
-  return <Manager />;
+  return <Dashboard />;
 };
 
 export default App;

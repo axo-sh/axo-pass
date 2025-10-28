@@ -1,12 +1,10 @@
 import React from 'react';
 
-import {IconLock} from '@tabler/icons-react';
+import {IconLockSquareRoundedFilled} from '@tabler/icons-react';
 
 import {button} from '@/components/Button.css';
 import {Layout} from '@/layout/Layout';
-import {LayoutDescription} from '@/layout/LayoutDescription';
-import {LayoutTitle} from '@/layout/LayoutTitle';
-import {Secrets} from '@/pages/Manager/Secrets';
+import {Dashboard} from '@/pages/Dashboard';
 
 export const Manager = () => {
   const [locked, setLocked] = React.useState(true);
@@ -15,7 +13,7 @@ export const Manager = () => {
     return (
       <Layout centered>
         <div>
-          <IconLock size={80} stroke={1.5} />
+          <IconLockSquareRoundedFilled size={80} stroke={1.5} />
         </div>
         <div>
           <button className={button()} onClick={() => setLocked(false)}>
@@ -26,14 +24,5 @@ export const Manager = () => {
     );
   }
 
-  return (
-    <Layout>
-      <LayoutTitle>Secrets</LayoutTitle>
-      <LayoutDescription>
-        {/* Run <code>gpg --list-secret-keys --with-keygrip</code> to see them. */}
-        Key IDs for stored GPG passphrases correspond to key grips in GPG.
-      </LayoutDescription>
-      <Secrets />
-    </Layout>
-  );
+  return <Dashboard />;
 };

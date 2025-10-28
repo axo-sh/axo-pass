@@ -60,3 +60,26 @@ export type PasswordEntry = {
 export const listPasswords = async (): Promise<PasswordEntry[]> => {
   return await invoke<PasswordEntry[]>('list_passwords');
 };
+
+export type Vault = {
+  title: string | null;
+  data: {[key: string]: VaultItem};
+};
+
+export type VaultItem = {
+  id: string;
+  title: string;
+  credentials: {[key: string]: VaultItemCredential};
+};
+
+export type VaultItemCredential = {
+  title: string | null;
+};
+
+export const getVault = async (): Promise<Vault> => {
+  return await invoke<Vault>('get_vault');
+};
+
+export const initVault = async (): Promise<void> => {
+  return await invoke<void>('init_vault');
+};

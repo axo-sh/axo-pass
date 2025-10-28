@@ -4,10 +4,10 @@ import type {RecipeVariants} from '@vanilla-extract/recipes';
 import {spacing} from '../styles/utils';
 import {flex, gapVar} from './Flex.css';
 
-type FlexVariants = RecipeVariants<typeof flex>;
+type FlexVariants = NonNullable<RecipeVariants<typeof flex>>;
 
 type Props = React.PropsWithChildren<
-  Exclude<FlexVariants, 'direction'> & {
+  Omit<FlexVariants, 'direction'> & {
     column?: boolean;
     gap?: number;
   }
