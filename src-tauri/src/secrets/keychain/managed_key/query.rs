@@ -1,12 +1,13 @@
 use std::os::raw::c_void;
 
-use anyhow::bail;
+use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFMutableDictionary, CFString, CFType, Type};
 use objc2_security::{
     SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef, kSecValueRef,
 };
 
+use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::keychain::managed_key::shared::KeyClass;
@@ -38,10 +39,10 @@ impl ManagedKeyQuery {
 impl KeyChainQuery for ManagedKeyQuery {
     type Item = ManagedKey;
 
-    fn parse_result(&self, cf_type: &CFType) -> anyhow::Result<Self::Item> {
+    fn parse_result(&self, cf_type: &CFType) -> Result<Self::Item, KeychainError> {
         unsafe {
             let Some(cf_dict_ref) = cf_type.downcast_ref::<CFDictionary>() else {
-                bail!("expected dict in returned array");
+                return Err(anyhow!("expected dict").into());
             };
             // we do the pointer dance because the CFDictionary is opaque and
             // contains varying types.
@@ -52,7 +53,7 @@ impl KeyChainQuery for ManagedKeyQuery {
             let seckey_ptr =
                 cf_dict_ref.value(kSecValueRef as *const _ as *const c_void) as *const SecKey;
             let Some(sec_key) = seckey_ptr.as_ref() else {
-                bail!("no SecKey ref found in dict");
+                return Err(anyhow!("no SecKey found").into());
             };
             Ok(ManagedKey::new(
                 label.as_ref().map(|l| l.to_string()),
@@ -76,7 +77,7 @@ impl KeyChainQuery for ManagedKeyQuery {
             if let Some(key_class) = &self.key_class {
                 query.add(kSecAttrKeyClass, key_class.as_objc());
             }
-            query.into()
+            query
         }
     }
 }

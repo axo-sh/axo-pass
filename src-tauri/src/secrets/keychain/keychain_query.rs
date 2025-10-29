@@ -1,30 +1,34 @@
 use std::ptr;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFArray, CFMutableDictionary, CFString, CFType};
-use objc2_security::{SecItemCopyMatching, errSecSuccess, kSecMatchLimit, kSecMatchLimitAll};
+use objc2_security::{
+    SecItemCopyMatching, errSecInteractionNotAllowed, errSecSuccess, errSecUserCanceled,
+    kSecMatchLimit, kSecMatchLimitAll,
+};
+
+use crate::secrets::keychain::errors::KeychainError;
 
 pub trait KeyChainQuery {
     type Item;
 
-    fn parse_result(&self, result: &CFType) -> anyhow::Result<Self::Item>;
+    fn parse_result(&self, result: &CFType) -> Result<Self::Item, KeychainError>;
     fn build_query(&self) -> Retained<CFMutableDictionary<CFString, CFType>>;
 
-    fn one(&self) -> anyhow::Result<Option<Self::Item>> {
+    fn one(&self) -> Result<Option<Self::Item>, KeychainError> {
         unsafe {
             let query = self.build_query();
             let mut ret: *const CFType = ptr::null();
             let res = SecItemCopyMatching(query.as_opaque(), &mut ret);
-            if ret.is_null() {
-                log::debug!("ret is null");
-                return Ok(None);
+            #[allow(non_upper_case_globals)]
+            match res {
+                errSecSuccess if ret.is_null() => Ok(None),
+                errSecSuccess => self.parse_result(&*ret).map(Some),
+                errSecUserCanceled => Err(KeychainError::UserCancelled),
+                errSecInteractionNotAllowed => Err(KeychainError::ItemNotAccessible),
+                _ => Err(anyhow!("got error code: {res}").into()),
             }
-            if res != errSecSuccess {
-                log::debug!("got error code: {res}");
-                bail!("got error code: {res}");
-            }
-            self.parse_result(&*ret).map(Some)
         }
     }
 

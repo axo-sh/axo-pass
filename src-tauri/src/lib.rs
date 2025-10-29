@@ -1,5 +1,4 @@
 mod app;
-mod keychain;
 mod pinentry;
 mod pinentry_handler;
 mod secrets;

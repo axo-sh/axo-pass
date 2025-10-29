@@ -1,8 +1,11 @@
+use secrecy::ExposeSecret;
 use tauri::Emitter;
 use tokio::sync::oneshot;
 
 use crate::app::PinentryState;
-use crate::{keychain, pinentry};
+use crate::pinentry;
+use crate::secrets::keychain::errors::KeychainError;
+use crate::secrets::keychain::generic_password::{get_password, has_password, save_password};
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -92,16 +95,21 @@ impl TauriPinentryHandler {
                         match get_pin
                             .key_id
                             .as_ref()
-                            .and_then(|key_id| keychain::get_password(key_id).transpose())
+                            .and_then(|key_id| get_password(key_id).transpose())
                         {
-                            Some(Ok(password)) => PinentryRequest::GetPinSuccess(password),
-                            Some(Err(keyring_core::Error::PlatformFailure(err))) => {
-                                if err.to_string().contains("User canceled") {
-                                    log::debug!("User cancelled keychain access");
-                                } else {
-                                    // unknown error
-                                    get_pin_prompt.has_saved_password = false
-                                }
+                            Some(Ok(password)) => {
+                                PinentryRequest::GetPinSuccess(password.expose_secret().to_owned())
+                            },
+                            Some(Err(KeychainError::UserCancelled)) => {
+                                PinentryRequest::GetPin(get_pin_prompt)
+                            },
+                            Some(Err(err)) => {
+                                // unknown error
+                                log::error!(
+                                    "Error retrieving saved password for key_id {:?}: {err}",
+                                    get_pin.key_id
+                                );
+                                get_pin_prompt.has_saved_password = false;
                                 PinentryRequest::GetPin(get_pin_prompt)
                             },
                             _ => {
@@ -120,7 +128,7 @@ impl TauriPinentryHandler {
                     } => {
                         if save_to_keychain && let Some(ref kid) = get_pin.key_id {
                             log::debug!("Calling save_password_with_touchid for key: {kid}");
-                            match keychain::save_password(kid, &value) {
+                            match save_password(kid, &value) {
                                 Ok(()) => {
                                     log::debug!("Successfully saved password to keychain");
                                 },
@@ -197,7 +205,7 @@ impl pinentry::PinentryHandler for TauriPinentryHandler {
 
         let has_saved_password = key_id
             .as_ref()
-            .and_then(|kid| keychain::has_password(kid).ok())
+            .and_then(|kid| has_password(kid).ok())
             .unwrap_or(false);
 
         let state = PinentryRequest::GetPin(GetPinRequest {

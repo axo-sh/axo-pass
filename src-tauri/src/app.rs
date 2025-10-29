@@ -7,8 +7,8 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
 use crate::APP_MODE;
-use crate::keychain::PasswordEntry;
 use crate::pinentry_handler::{PinentryRequest, UserPinentryResponse};
+use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 
 // App mode enum
@@ -55,7 +55,7 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
     ];
 
     #[cfg(not(debug_assertions))]
-    let passwords = crate::keychain::get_all_password_entries()
+    let passwords = crate::secrets::keychain::generic_password::get_all_password_entries()
         .map_err(|e| format!("Failed to list passwords: {e}"))?
         .into_iter()
         .collect();
