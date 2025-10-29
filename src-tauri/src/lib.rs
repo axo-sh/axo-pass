@@ -10,8 +10,8 @@ use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
-use crate::app::{AppMode, AppState, PinentryState};
-use crate::pinentry_handler::TauriPinentryHandler;
+use crate::app::{AppMode, AppState};
+use crate::pinentry_handler::{PinentryState, TauriPinentryHandler};
 use crate::secrets::vault::read_vault;
 
 // Global static to store the app mode

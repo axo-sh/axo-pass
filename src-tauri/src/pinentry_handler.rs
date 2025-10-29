@@ -1,8 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use secrecy::ExposeSecret;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
-use crate::app::PinentryState;
 use crate::pinentry;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::{get_password, has_password, save_password};
@@ -38,6 +39,22 @@ pub enum UserPinentryResponse {
         value: String,
         save_to_keychain: bool,
     },
+}
+
+// Shared state for pinentry requests
+#[derive(Default, Clone)]
+pub struct PinentryState {
+    // pending_request is initially created from the pinentry request
+    // but also tracks intermediate states like GetPinSuccess
+    pub pending_request: Arc<Mutex<Option<PinentryRequest>>>,
+    pub response_sender: Arc<Mutex<Option<oneshot::Sender<UserPinentryResponse>>>>,
+    pub app_handle: Arc<Mutex<Option<AppHandle>>>,
+}
+
+impl PinentryState {
+    pub fn set_app_handle(&self, handle: AppHandle) {
+        *self.app_handle.lock().unwrap() = Some(handle);
+    }
 }
 
 // Pinentry handler that integrates with Tauri
@@ -78,7 +95,7 @@ impl TauriPinentryHandler {
             .map_err(|_| std::io::Error::other("Failed to receive response from user"))
     }
 
-    async fn handle_get_pin(&mut self, state: PinentryRequest) -> anyhow::Result<Option<String>> {
+    async fn handle_request(&mut self, state: PinentryRequest) -> anyhow::Result<Option<String>> {
         let mut state = state.clone();
         loop {
             self.set_pending_request(state.clone());
@@ -86,24 +103,26 @@ impl TauriPinentryHandler {
                 // try to get saved password with keychain
                 PinentryRequest::GetPin(ref get_pin) if get_pin.attempting_saved_password => {
                     let mut get_pin_prompt = get_pin.clone();
+                    // so subsequent attempts don't attempt the saved password again
                     get_pin_prompt.attempting_saved_password = false;
 
                     if !get_pin_prompt.has_saved_password {
                         // if no saved password, this will loop to prompt the user
                         PinentryRequest::GetPin(get_pin_prompt)
-                    } else {
-                        match get_pin
-                            .key_id
-                            .as_ref()
-                            .and_then(|key_id| get_password(key_id).transpose())
-                        {
-                            Some(Ok(password)) => {
+                    } else if let Some(ref key_id) = get_pin.key_id {
+                        match get_password(key_id) {
+                            Ok(Some(password)) => {
                                 PinentryRequest::GetPinSuccess(password.expose_secret().to_owned())
                             },
-                            Some(Err(KeychainError::UserCancelled)) => {
+                            Ok(None) => {
+                                // no saved password
+                                get_pin_prompt.has_saved_password = false;
                                 PinentryRequest::GetPin(get_pin_prompt)
                             },
-                            Some(Err(err)) => {
+                            Err(KeychainError::UserCancelled) => {
+                                PinentryRequest::GetPin(get_pin_prompt)
+                            },
+                            Err(err) => {
                                 // unknown error
                                 log::error!(
                                     "Error retrieving saved password for key_id {:?}: {err}",
@@ -112,11 +131,11 @@ impl TauriPinentryHandler {
                                 get_pin_prompt.has_saved_password = false;
                                 PinentryRequest::GetPin(get_pin_prompt)
                             },
-                            _ => {
-                                get_pin_prompt.has_saved_password = false;
-                                PinentryRequest::GetPin(get_pin_prompt)
-                            },
                         }
+                    } else {
+                        // no key id
+                        get_pin_prompt.has_saved_password = false;
+                        PinentryRequest::GetPin(get_pin_prompt)
                     }
                 },
 
@@ -216,7 +235,7 @@ impl pinentry::PinentryHandler for TauriPinentryHandler {
             attempting_saved_password: has_saved_password,
         });
 
-        self.handle_get_pin(state)
+        self.handle_request(state)
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))?
             .ok_or_else(|| std::io::Error::other("User cancelled"))

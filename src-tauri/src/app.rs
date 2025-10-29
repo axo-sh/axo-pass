@@ -1,13 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tokio::sync::oneshot;
 
 use crate::APP_MODE;
-use crate::pinentry_handler::{PinentryRequest, UserPinentryResponse};
+use crate::pinentry_handler::{PinentryState, UserPinentryResponse};
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 
@@ -60,20 +58,6 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
         .into_iter()
         .collect();
     Ok(passwords)
-}
-
-// Shared state for pinentry requests
-#[derive(Default, Clone)]
-pub struct PinentryState {
-    pub pending_request: Arc<Mutex<Option<PinentryRequest>>>,
-    pub response_sender: Arc<Mutex<Option<oneshot::Sender<UserPinentryResponse>>>>,
-    pub app_handle: Arc<Mutex<Option<AppHandle>>>,
-}
-
-impl PinentryState {
-    pub fn set_app_handle(&self, handle: AppHandle) {
-        *self.app_handle.lock().unwrap() = Some(handle);
-    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
