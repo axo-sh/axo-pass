@@ -1,38 +1,27 @@
+mod query;
+mod shared;
+
 use std::fmt::Debug;
 use std::ptr;
 
+use anyhow::bail;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use objc2::rc::Retained;
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType,
+    CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType, Type,
 };
 use objc2_security::{
-    SecItemDelete, SecKey, SecKeyAlgorithm, kSecAttrApplicationLabel, kSecAttrApplicationTag,
-    kSecAttrKeyClassPrivate, kSecAttrKeyClassPublic, kSecClass, kSecClassKey,
-    kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM, kSecMatchItemList,
-    kSecUseDataProtectionKeychain,
+    SecAccessControl, SecAccessControlCreateFlags, SecItemDelete, SecKey, kSecAttrAccessControl,
+    kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAttrApplicationLabel, kSecAttrApplicationTag,
+    kSecAttrIsPermanent, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
+    kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecMatchItemList,
+    kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseDataProtectionKeychain,
 };
+pub use query::ManagedKeyQuery;
+pub use shared::KeyClass;
 
-fn alg() -> &'static SecKeyAlgorithm {
-    unsafe { kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM }
-}
-
-pub enum KeyClass {
-    Public,  // encryption
-    Private, // decryption
-}
-
-impl KeyClass {
-    pub fn as_objc(&self) -> &CFString {
-        unsafe {
-            match self {
-                KeyClass::Public => kSecAttrKeyClassPublic,
-                KeyClass::Private => kSecAttrKeyClassPrivate,
-            }
-        }
-    }
-}
+use crate::secrets::keychain::managed_key::shared::alg;
 
 pub struct ManagedKey {
     label: Option<String>,
@@ -40,8 +29,58 @@ pub struct ManagedKey {
 }
 
 impl ManagedKey {
+    pub fn common_attrs(label: Option<String>) -> Retained<CFMutableDictionary<CFString, CFType>> {
+        let query = CFMutableDictionary::<CFString, CFType>::empty();
+        unsafe {
+            query.add(kSecClass, kSecClassKey);
+            query.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
+            // we store in the data protection keychain (secure enclave)
+            query.add(kSecUseDataProtectionKeychain, CFBoolean::new(true));
+            if let Some(label) = label {
+                query.add(kSecAttrLabel, &CFString::from_str(&label));
+            }
+        }
+        query.into()
+    }
+
     pub fn new(label: Option<String>, sec_key: Retained<SecKey>) -> Self {
         ManagedKey { label, sec_key }
+    }
+
+    pub fn create(label: &str) -> anyhow::Result<ManagedKey> {
+        log::debug!("Creating new user key with label: {}", label);
+        unsafe {
+            let public_attrs = CFMutableDictionary::<CFString, CFType>::empty();
+            public_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
+
+            let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
+            private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
+            private_attrs.add(kSecAttrAccessControl, &*create_access_control_flags()?);
+
+            let query = Self::common_attrs(Some(label.to_string()));
+            query.add(kSecPublicKeyAttrs, &public_attrs);
+            query.add(kSecPrivateKeyAttrs, &private_attrs);
+            query.add(kSecAttrTokenID, kSecAttrTokenIDSecureEnclave);
+            query.add(
+                kSecAttrApplicationLabel,
+                &CFData::from_bytes(label.as_bytes()),
+            );
+
+            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            log::debug!("Calling SecKey::new_random_key...");
+            let sec_key = SecKey::new_random_key(query.as_opaque(), &mut cf_error_ptr);
+            if !cf_error_ptr.is_null() {
+                let cf_error = &*cf_error_ptr;
+                bail!("Failed to create SecKey: {cf_error:?}");
+            }
+            let Some(sec_key) = sec_key else {
+                bail!("Failed to create SecKey: unknown error");
+            };
+
+            let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.retain().into());
+            log::debug!("Created new managed key: {:?}", managed_key);
+            Ok(managed_key)
+        }
     }
 
     pub fn is_private(&self) -> bool {
@@ -89,12 +128,8 @@ impl ManagedKey {
     #[allow(dead_code)]
     pub fn delete(&self) -> anyhow::Result<()> {
         unsafe {
-            let query = CFMutableDictionary::<CFString, CFType>::empty();
-            query.add(kSecClass, kSecClassKey);
-            query.add(kSecUseDataProtectionKeychain, CFBoolean::new(true));
-
-            let key_ref = &*self.sec_key;
-            query.add(kSecMatchItemList, &CFArray::from_objects(&[key_ref]));
+            let query = Self::common_attrs(None);
+            query.add(kSecMatchItemList, &CFArray::from_objects(&[&*self.sec_key]));
             let status = SecItemDelete(query.as_opaque());
             log::debug!("Deleted key status: {}", status);
         }
@@ -160,5 +195,27 @@ impl Debug for ManagedKey {
             .field("tag", &self.tag())
             .field("is_private", &self.is_private())
             .finish()
+    }
+}
+
+fn create_access_control_flags() -> anyhow::Result<Retained<SecAccessControl>> {
+    unsafe {
+        let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+        // https://developer.apple.com/documentation/security/secaccesscontrolcreateflags/privatekeyusage?language=objc
+        let access_control = SecAccessControl::with_flags(
+            None,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            SecAccessControlCreateFlags::UserPresence
+                | SecAccessControlCreateFlags::PrivateKeyUsage,
+            &mut cf_error_ptr,
+        );
+        if !cf_error_ptr.is_null() {
+            let cf_error = &*cf_error_ptr;
+            bail!("Failed to create SecAccessControl: {cf_error:?}");
+        }
+        let Some(access_control) = access_control else {
+            bail!("Failed to create SecAccessControl: unknown error");
+        };
+        Ok(access_control.into())
     }
 }

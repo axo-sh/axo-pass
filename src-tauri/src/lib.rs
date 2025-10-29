@@ -6,8 +6,6 @@ mod secrets;
 
 use std::sync::OnceLock;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use serde_json::Value;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
@@ -15,8 +13,6 @@ use tokio::sync::oneshot;
 
 use crate::app::{AppMode, AppState, PinentryState};
 use crate::pinentry_handler::TauriPinentryHandler;
-use crate::secrets::keychain::KeyChainQuery;
-use crate::secrets::managed_key;
 use crate::secrets::vault::read_vault;
 
 // Global static to store the app mode
@@ -144,24 +140,6 @@ pub fn run() {
                 AppMode::Pinentry
             } else {
                 log::debug!("Running in app mode");
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    // random debug code
-
-                    let keys = KeyChainQuery::build()
-                        .with_key_class(managed_key::KeyClass::Public)
-                        .list()
-                        .unwrap();
-                    for key in keys {
-                        if let Some(pub_key) = key.public_key() {
-                            log::debug!("Found key: {:?} pub={}", key, b64.encode(pub_key));
-                        } else {
-                            log::debug!("Found key: {:?}", key);
-                        }
-                        // log::debug!("deleting...");
-                        // key.delete();
-                    }
-                });
                 AppMode::App(AppState {
                     pinentry_program_path: app
                         .path()

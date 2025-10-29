@@ -15,8 +15,8 @@ use serde_with::serde_as;
 use uuid::Uuid;
 
 use crate::secrets::errors::Error;
-use crate::secrets::keychain::{KeyChainQuery, new_user_key};
-use crate::secrets::managed_key::{KeyClass, ManagedKey};
+use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 
 const DEFAULT_VAULT: &str = "default-vault";
 
@@ -91,7 +91,7 @@ impl Vault {
 
     pub fn unlock(&mut self) -> anyhow::Result<()> {
         // decrypt key &self.metadata.file_key with managed key
-        let Some(managed_key) = KeyChainQuery::build()
+        let Some(managed_key) = ManagedKeyQuery::build()
             .with_label("vault-encryption-key")
             .with_key_class(KeyClass::Private)
             .one()?
@@ -244,32 +244,16 @@ impl Vault {
 }
 
 pub fn init_vault(app_data_dir: &Path) -> Result<Vault, Error> {
-    let user_encryption_key = match KeyChainQuery::build()
+    let user_encryption_key = match ManagedKeyQuery::build()
         .with_label(VAULT_ENCRYPTION_KEY_LABEL)
         .with_key_class(KeyClass::Private)
         .one()
     {
         Ok(Some(user_encryption_key)) => user_encryption_key,
-
-        //     log::debug!("Found existing vault encryption key in keychain.");
-
-        //     user_encryption_key.delete().map_err(|e| {
-        //         Error::KeychainError(anyhow::anyhow!(
-        //             "Failed to delete existing vault encryption key: {e}"
-        //         ))
-        //     })?;
-
-        //     log::debug!("Reinitializing vault encryption key...");
-        //     new_user_key(VAULT_ENCRYPTION_KEY_LABEL).map_err(|e| {
-        //         Error::KeychainError(anyhow::anyhow!(
-        //             "Failed to create vault encryption key: {e}"
-        //         ))
-        //     })?
-        // },
         Ok(None) => {
             // create new vault-encryption-key
             log::debug!("Vault encryption key not found, initializing new key...");
-            new_user_key(VAULT_ENCRYPTION_KEY_LABEL).map_err(|e| {
+            ManagedKey::create(VAULT_ENCRYPTION_KEY_LABEL).map_err(|e| {
                 Error::KeychainError(anyhow::anyhow!(
                     "Failed to create vault encryption key: {e}"
                 ))
