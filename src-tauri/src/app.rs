@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 use crate::APP_MODE;
 use crate::password_request::{PasswordResponse, RequestEvent};
 use crate::pinentry_handler::{GetPinRequest, PinentryState};
-use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
+use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 use crate::ssh_askpass_handler::{AskPassState, AskPasswordRequest};
 
@@ -65,10 +65,11 @@ pub async fn get_mode(app_handle: AppHandle) -> Result<AppModeAndState, String> 
     }
 }
 
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
+    use crate::secrets::keychain::generic_password::PasswordEntryType;
     // no keychain in debug mode because it's not codesigned
-    #[cfg(debug_assertions)]
     let passwords = vec![
         PasswordEntry {
             password_type: PasswordEntryType::GPGKey,
@@ -83,10 +84,13 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
             key_id: "test-key-3".to_string(),
         },
     ];
+    Ok(passwords)
+}
 
-    #[cfg(not(debug_assertions))]
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
     let passwords = PasswordEntry::list().map_err(|e| format!("Failed to list passwords: {e}"))?;
-
     Ok(passwords)
 }
 
