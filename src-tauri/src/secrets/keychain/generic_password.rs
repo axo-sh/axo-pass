@@ -2,7 +2,6 @@ mod query;
 
 use std::fmt::Debug;
 use std::ptr;
-use std::str::FromStr;
 
 use anyhow::anyhow;
 use objc2::rc::Retained;
@@ -25,7 +24,7 @@ static SERVICE_NAME: &str = "com.breakfastlabs.frittata";
 #[serde(rename_all = "snake_case")]
 pub enum PasswordEntryType {
     GPGKey,
-
+    SSHKey,
     Other,
 }
 
@@ -43,21 +42,34 @@ impl PasswordEntry {
         }
     }
 
+    pub fn ssh(key_id: &str) -> Self {
+        PasswordEntry {
+            password_type: PasswordEntryType::SSHKey,
+            key_id: key_id.to_string(),
+        }
+    }
+
     pub fn account(&self) -> String {
         match self.password_type {
             PasswordEntryType::GPGKey => format!("gpg-key-{}", self.key_id),
+            PasswordEntryType::SSHKey => format!("ssh-key-{}", self.key_id),
             PasswordEntryType::Other => self.key_id.clone(),
         }
     }
 }
 
-impl FromStr for PasswordEntry {
+impl std::str::FromStr for PasswordEntry {
     type Err = KeychainError;
 
     fn from_str(account: &str) -> Result<Self, Self::Err> {
         if let Some(key_id) = account.strip_prefix("gpg-key-") {
             Ok(PasswordEntry {
                 password_type: PasswordEntryType::GPGKey,
+                key_id: key_id.to_string(),
+            })
+        } else if let Some(key_id) = account.strip_prefix("ssh-key-") {
+            Ok(PasswordEntry {
+                password_type: PasswordEntryType::SSHKey,
                 key_id: key_id.to_string(),
             })
         } else {

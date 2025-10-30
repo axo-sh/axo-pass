@@ -4,6 +4,7 @@ mod password_request;
 mod pinentry;
 mod pinentry_handler;
 mod secrets;
+mod ssh_askpass_handler;
 
 use std::sync::OnceLock;
 
@@ -12,8 +13,9 @@ use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
 use crate::app::AppMode;
-use crate::cli::run_cli_command;
+use crate::cli::{get_arg, run_cli_command};
 use crate::pinentry_handler::{PinentryHandler, PinentryState};
+use crate::ssh_askpass_handler::AskPassState;
 
 // Global static to store the app mode
 static APP_MODE: OnceLock<AppMode> = OnceLock::new();
@@ -45,12 +47,37 @@ fn run_pinentry_mode(app_handle: tauri::AppHandle, state: PinentryState) {
 
     // Monitor the exit signal and close the window when it's received
     std::thread::spawn(move || {
-        // Block on the oneshot receiver
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let _ = exit_rx.await;
             tokio::time::sleep(STD_DELAY).await;
             log::debug!("Exiting app after pinentry completion");
+            app_handle.exit(0);
+        });
+    });
+}
+
+fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, state: AskPassState, prompt: String) {
+    let (exit_tx, exit_rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tokio::time::sleep(STD_DELAY).await;
+            let handler = ssh_askpass_handler::SshAskpassHandler::new(state, exit_tx);
+            if let Err(e) = handler.run(prompt).await {
+                log::error!("SSH askpass handler error: {e}");
+                std::process::exit(1);
+            }
+        });
+    });
+
+    // Monitor the exit signal and close the window when it's received
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _ = exit_rx.await;
+            tokio::time::sleep(STD_DELAY).await;
+            log::debug!("Exiting app after SSH askpass completion");
             app_handle.exit(0);
         });
     });
@@ -91,6 +118,17 @@ pub fn run() {
                             .expect("APP_MODE already set");
                         run_pinentry_mode(app.handle().clone(), pinentry_state.clone());
                     },
+                    "ssh-askpass" => {
+                        log::debug!("Running in SSH askpass mode");
+                        let askpass_state = ssh_askpass_handler::AskPassState::default();
+                        askpass_state.set_app_handle(app.handle().clone());
+                        app.manage(askpass_state.clone());
+                        APP_MODE
+                            .set(AppMode::SshAskpass)
+                            .expect("APP_MODE already set");
+                        let prompt = get_arg(subcommand, "prompt")?;
+                        run_ssh_askpass_mode(app.handle().clone(), askpass_state.clone(), prompt);
+                    },
                     command => {
                         log::debug!("Running in cli mode");
                         APP_MODE.set(AppMode::CLI).expect("APP_MODE already set");
@@ -103,8 +141,11 @@ pub fn run() {
             }
 
             if let Some(window) = app.get_webview_window("main") {
-                if matches!(APP_MODE.get(), Some(AppMode::Pinentry)) {
-                    // In password request mode: compact fixed size, non-resizable
+                if matches!(
+                    APP_MODE.get(),
+                    Some(AppMode::Pinentry) | Some(AppMode::SshAskpass)
+                ) {
+                    // In pinentry/SSH askpass mode: compact fixed size, non-resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                         width: 350.0,
                         height: 500.0,
@@ -132,6 +173,7 @@ pub fn run() {
             app::get_mode,
             app::list_passwords,
             app::send_pinentry_response,
+            app::send_askpass_response,
             app::get_vault,
             app::init_vault,
         ])

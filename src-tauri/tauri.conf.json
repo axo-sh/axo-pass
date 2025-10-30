@@ -15,6 +15,16 @@
         "pinentry": {
           "description": "Run in pinentry mode for GPG integration"
         },
+        "ssh-askpass": {
+          "description": "Run in SSH askpass mode for SSH integration",
+          "args": [
+            {
+              "name": "prompt",
+              "description": "SSH prompt",
+              "takesValue": true
+            }
+          ]
+        },
         "get": {
           "description": "Get a secret from the vault",
           "args": [

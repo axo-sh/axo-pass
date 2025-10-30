@@ -9,6 +9,7 @@ use crate::password_request::{PasswordResponse, RequestEvent};
 use crate::pinentry_handler::{GetPinRequest, PinentryState};
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
+use crate::ssh_askpass_handler::{AskPassState, AskPasswordRequest};
 
 // App mode enum
 #[derive(Serialize, Clone, Debug)]
@@ -17,6 +18,7 @@ pub enum AppMode {
     App,
     CLI,
     Pinentry,
+    SshAskpass,
 }
 
 #[derive(Serialize, Clone)]
@@ -26,6 +28,7 @@ pub enum AppModeAndState {
         pinentry_program_path: Option<PathBuf>,
     },
     Pinentry(Option<RequestEvent<GetPinRequest>>),
+    SshAskpass(Option<RequestEvent<AskPasswordRequest>>),
 }
 
 #[tauri::command]
@@ -50,6 +53,11 @@ pub async fn get_mode(app_handle: AppHandle) -> Result<AppModeAndState, String> 
             let state = app_handle.state::<PinentryState>();
             let pending_event = state.get_pending_event();
             Ok(AppModeAndState::Pinentry(pending_event))
+        },
+        AppMode::SshAskpass => {
+            let state = app_handle.state::<AskPassState>();
+            let pending_event = state.get_pending_event();
+            Ok(AppModeAndState::SshAskpass(pending_event))
         },
         _ => {
             return Err("Unsupported mode".to_string());
@@ -86,6 +94,19 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
 pub async fn send_pinentry_response(
     response: PasswordResponse,
     state: tauri::State<'_, PinentryState>,
+) -> Result<(), String> {
+    if let Some(sender) = state.take_response_sender() {
+        sender
+            .send(response)
+            .map_err(|_| "Failed to send response".to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn send_askpass_response(
+    response: PasswordResponse,
+    state: tauri::State<'_, AskPassState>,
 ) -> Result<(), String> {
     if let Some(sender) = state.take_response_sender() {
         sender
