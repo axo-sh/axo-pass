@@ -6,7 +6,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::APP_MODE;
 use crate::pinentry_handler::{PinentryState, UserPinentryResponse};
-use crate::secrets::keychain::generic_password::PasswordEntry;
+use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 
 // App mode enum
@@ -42,21 +42,22 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
     #[cfg(debug_assertions)]
     let passwords = vec![
         PasswordEntry {
+            password_type: PasswordEntryType::GPGKey,
             key_id: "test-key-1".to_string(),
         },
         PasswordEntry {
+            password_type: PasswordEntryType::GPGKey,
             key_id: "test-key-2".to_string(),
         },
         PasswordEntry {
+            password_type: PasswordEntryType::GPGKey,
             key_id: "test-key-3".to_string(),
         },
     ];
 
     #[cfg(not(debug_assertions))]
-    let passwords = crate::secrets::keychain::generic_password::get_all_password_entries()
-        .map_err(|e| format!("Failed to list passwords: {e}"))?
-        .into_iter()
-        .collect();
+    let passwords = PasswordEntry::list().map_err(|e| format!("Failed to list passwords: {e}"))?;
+
     Ok(passwords)
 }
 

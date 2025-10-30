@@ -8,6 +8,9 @@ pub enum KeychainError {
     #[error("Item exists but access is not allowed without user authentication")]
     ItemNotAccessible,
 
+    #[error("Failed to add to keychain: {0}")]
+    AddFailed(String),
+
     #[error("Keychain error: {0}")]
     Generic(#[from] anyhow::Error),
 }

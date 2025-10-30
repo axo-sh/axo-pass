@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::pinentry;
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::generic_password::{get_password, has_password, save_password};
+use crate::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,7 +110,7 @@ impl TauriPinentryHandler {
                         // if no saved password, this will loop to prompt the user
                         PinentryRequest::GetPin(get_pin_prompt)
                     } else if let Some(ref key_id) = get_pin.key_id {
-                        match get_password(key_id) {
+                        match PasswordEntry::gpg(key_id).get_password() {
                             Ok(Some(password)) => {
                                 PinentryRequest::GetPinSuccess(password.expose_secret().to_owned())
                             },
@@ -147,7 +147,7 @@ impl TauriPinentryHandler {
                     } => {
                         if save_to_keychain && let Some(ref kid) = get_pin.key_id {
                             log::debug!("Calling save_password_with_touchid for key: {kid}");
-                            match save_password(kid, &value) {
+                            match PasswordEntry::gpg(&kid).save_password(&value) {
                                 Ok(()) => {
                                     log::debug!("Successfully saved password to keychain");
                                 },
@@ -224,7 +224,7 @@ impl pinentry::PinentryHandler for TauriPinentryHandler {
 
         let has_saved_password = key_id
             .as_ref()
-            .and_then(|kid| has_password(kid).ok())
+            .and_then(|kid| PasswordEntry::gpg(&kid).exists().ok())
             .unwrap_or(false);
 
         let state = PinentryRequest::GetPin(GetPinRequest {
