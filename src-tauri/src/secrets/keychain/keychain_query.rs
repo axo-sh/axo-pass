@@ -4,8 +4,8 @@ use anyhow::{anyhow, bail};
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFArray, CFMutableDictionary, CFString, CFType};
 use objc2_security::{
-    SecItemCopyMatching, errSecInteractionNotAllowed, errSecSuccess, errSecUserCanceled,
-    kSecMatchLimit, kSecMatchLimitAll,
+    SecItemCopyMatching, errSecInteractionNotAllowed, errSecItemNotFound, errSecSuccess,
+    errSecUserCanceled, kSecMatchLimit, kSecMatchLimitAll,
 };
 
 use crate::secrets::keychain::errors::KeychainError;
@@ -25,6 +25,7 @@ pub trait KeyChainQuery {
             match res {
                 errSecSuccess if ret.is_null() => Ok(None),
                 errSecSuccess => self.parse_result(&*ret).map(Some),
+                errSecItemNotFound => Ok(None),
                 errSecUserCanceled => Err(KeychainError::UserCancelled),
                 errSecInteractionNotAllowed => Err(KeychainError::ItemNotAccessible),
                 _ => Err(anyhow!("got error code: {res}").into()),
