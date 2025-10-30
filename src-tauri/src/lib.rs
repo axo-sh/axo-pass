@@ -25,61 +25,49 @@ fn run_pinentry_mode(app_handle: tauri::AppHandle, state: PinentryState) {
     let (exit_tx, exit_rx) = oneshot::channel();
 
     // Start pinentry server in background thread
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let stdin = tokio::io::stdin();
-            let stdout = tokio::io::stdout();
+    tauri::async_runtime::spawn(async move {
+        let stdin = tokio::io::stdin();
+        let stdout = tokio::io::stdout();
 
-            // Give the app time to start
-            tokio::time::sleep(STD_DELAY).await;
+        // Give the app time to start
+        tokio::time::sleep(STD_DELAY).await;
 
-            let mut handler = PinentryHandler::new(state, exit_tx);
-            let mut server = pinentry::PinentryServer::new(stdin, stdout)
-                .await
-                .expect("Failed to create pinentry server");
+        let mut handler = PinentryHandler::new(state, exit_tx);
+        let mut server = pinentry::PinentryServer::new(stdin, stdout)
+            .await
+            .expect("Failed to create pinentry server");
 
-            if let Err(e) = server.run(&mut handler).await {
-                log::error!("Pinentry server error: {e}");
-            }
-        });
+        if let Err(e) = server.run(&mut handler).await {
+            log::error!("Pinentry server error: {e}");
+        }
     });
 
     // Monitor the exit signal and close the window when it's received
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _ = exit_rx.await;
-            tokio::time::sleep(STD_DELAY).await;
-            log::debug!("Exiting app after pinentry completion");
-            app_handle.exit(0);
-        });
+    tauri::async_runtime::spawn(async move {
+        let _ = exit_rx.await;
+        tokio::time::sleep(STD_DELAY).await;
+        log::debug!("Exiting app after pinentry completion");
+        app_handle.exit(0);
     });
 }
 
 fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, state: AskPassState, prompt: String) {
     let (exit_tx, exit_rx) = oneshot::channel();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            tokio::time::sleep(STD_DELAY).await;
-            let handler = ssh_askpass_handler::SshAskpassHandler::new(state, exit_tx);
-            if let Err(e) = handler.run(prompt).await {
-                log::error!("SSH askpass handler error: {e}");
-                std::process::exit(1);
-            }
-        });
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(STD_DELAY).await;
+        let handler = ssh_askpass_handler::SshAskpassHandler::new(state, exit_tx);
+        if let Err(e) = handler.run(prompt).await {
+            log::error!("SSH askpass handler error: {e}");
+            std::process::exit(1);
+        }
     });
 
     // Monitor the exit signal and close the window when it's received
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let _ = exit_rx.await;
-            tokio::time::sleep(STD_DELAY).await;
-            log::debug!("Exiting app after SSH askpass completion");
-            app_handle.exit(0);
-        });
+    tauri::async_runtime::spawn(async move {
+        let _ = exit_rx.await;
+        tokio::time::sleep(STD_DELAY).await;
+        log::debug!("Exiting app after SSH askpass completion");
+        app_handle.exit(0);
     });
 }
 
