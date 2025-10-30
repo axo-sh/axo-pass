@@ -2,7 +2,7 @@ import React from 'react';
 
 import {IconCircleKeyFilled} from '@tabler/icons-react';
 
-import {type GetPinRequest, sendPinentryResponse} from '@/client';
+import type {PasswordRequestData, PasswordResponse} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card} from '@/components/Card';
 import {Flex} from '@/components/Flex';
@@ -12,11 +12,16 @@ import {LayoutTitle} from '@/layout/LayoutTitle';
 import {pinentryDescription} from '@/pages/PasswordRequest.css';
 
 type Props = {
-  request: GetPinRequest;
-  onResponse: () => void;
+  request: PasswordRequestData & {
+    description?: string | null;
+    prompt?: string | null;
+    key_path?: string | null;
+  };
+  onResponse: (response: PasswordResponse) => void;
+  serviceName?: string;
 };
 
-export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
+export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceName = 'Key'}) => {
   const [inputValue, setInputValue] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [saveToKeychain, setSaveToKeychain] = React.useState(true);
@@ -24,16 +29,15 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   const handleSubmit = async (success: boolean) => {
     try {
       if (success) {
-        await sendPinentryResponse({
+        onResponse({
           password: {
             value: inputValue,
             save_to_keychain: saveToKeychain,
           },
         });
       } else {
-        await sendPinentryResponse('cancelled');
+        onResponse('cancelled');
       }
-      onResponse();
     } catch (error) {
       console.error('Error submitting response:', error);
       alert(`Error submitting response: ${error}`);
@@ -42,13 +46,17 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
 
   const handleUseSavedPassword = async () => {
     try {
-      await sendPinentryResponse('use_saved_password');
-      onResponse();
+      onResponse('use_saved_password');
     } catch (error) {
       console.error('Error using saved password:', error);
       alert(`Error using saved password: ${error}`);
     }
   };
+
+  // Get the key identifier (either key_id or key_path)
+  const keyIdentifier = request.key_id || request.key_path;
+  const description = request.description;
+  const prompt = request.prompt || 'Enter password:';
 
   if (request.attempting_saved_password) {
     return (
@@ -57,9 +65,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
           Password Required
         </LayoutTitle>
         <Flex column>
-          {request.description && (
-            <Card className={pinentryDescription}>{request.description.trim()}</Card>
-          )}
+          {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
           <Card>
             <p>Requesting authentication to unlock your saved passphrase...</p>
             <Flex justify="end">
@@ -74,12 +80,10 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   return (
     <Layout>
       <LayoutTitle icon={IconCircleKeyFilled} centered>
-        Password Required
+        {serviceName} Password Required
       </LayoutTitle>
       <Flex column>
-        {request.description && (
-          <Card className={pinentryDescription}>{request.description.trim()}</Card>
-        )}
+        {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
 
         {request.has_saved_password && (
           <Card>
@@ -99,7 +103,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
           }}
         >
           <div style={{marginBottom: '1rem'}}>
-            <label htmlFor="password-input">{request.prompt || 'Enter password:'}</label>
+            <label htmlFor="password-input">{prompt}</label>
             <input
               id="password-input"
               type={showPassword ? 'text' : 'password'}
@@ -110,7 +114,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse}) => {
             />
           </div>
 
-          {request.key_id && !request.has_saved_password && (
+          {keyIdentifier && !request.has_saved_password && (
             <div
               style={{
                 marginBottom: '1rem',

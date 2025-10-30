@@ -1,19 +1,30 @@
 import {invoke} from '@tauri-apps/api/core';
 
-export type GetPinRequest = {
-  description: string | null;
-  prompt: string | null;
+// Common password request structure (used by both pinentry and SSH askpass)
+export type PasswordRequestData = {
   key_id: string | null;
   has_saved_password: boolean;
   attempting_saved_password: boolean;
 };
 
+// Pinentry-specific request
+export type GetPinRequest = PasswordRequestData & {
+  description: string | null;
+  prompt: string | null;
+};
+
+// SSH askpass-specific request
+export type AskPasswordRequest = PasswordRequestData & {
+  key_path: string | null;
+};
+
+// Pinentry request events
 export type PinentryRequest =
   | {
-      get_pin: GetPinRequest;
+      get_password: GetPinRequest;
     }
   | {
-      get_pin_success: any;
+      success: string;
     }
   | {
       confirm: {
@@ -26,7 +37,17 @@ export type PinentryRequest =
       };
     };
 
-export type PinentryResponse =
+// SSH askpass request events
+export type AskPassRequest =
+  | {
+      get_password: AskPasswordRequest;
+    }
+  | {
+      success: string;
+    };
+
+// Common password response (used by both)
+export type PasswordResponse =
   | 'use_saved_password'
   | 'confirmed'
   | 'cancelled'
@@ -37,20 +58,30 @@ export type PinentryResponse =
       };
     };
 
-export const sendPinentryResponse = async (response: PinentryResponse) => {
+export const sendPinentryResponse = async (response: PasswordResponse) => {
   await invoke('send_pinentry_response', {response});
 };
 
-export type AppMode =
-  | 'pinentry'
+export const sendAskpassResponse = async (response: PasswordResponse) => {
+  await invoke('send_askpass_response', {response});
+};
+
+// Updated to match Rust's AppModeAndState enum
+export type AppModeAndState =
   | {
       app: {
         pinentry_program_path: string | null;
       };
+    }
+  | {
+      pinentry: PinentryRequest | null;
+    }
+  | {
+      ssh_askpass: AskPassRequest | null;
     };
 
-export const getMode = async (): Promise<AppMode> => {
-  return await invoke<AppMode>('get_mode');
+export const getMode = async (): Promise<AppModeAndState> => {
+  return await invoke<AppModeAndState>('get_mode');
 };
 
 export type PasswordEntry = {

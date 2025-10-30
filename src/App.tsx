@@ -1,14 +1,16 @@
 import {useEffect, useState} from 'react';
 
-import {type AppMode, getMode} from '@/client';
+import type {AppModeAndState} from '@/client';
+import {getMode} from '@/client';
 import {Layout} from '@/layout/Layout';
 import {Dashboard} from '@/pages/Dashboard';
 import {PinentryScreen} from '@/pages/PinentryScreen';
+import {SshAskpassScreen} from '@/pages/SshAskpassScreen';
 
 import '@/App.css.ts';
 
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode | null>(null);
+  const [mode, setMode] = useState<AppModeAndState | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Initialize the app by getting the mode
@@ -35,8 +37,12 @@ const App: React.FC = () => {
     );
   }
 
-  if (mode === 'pinentry') {
-    return <PinentryScreen />;
+  if (mode && 'pinentry' in mode) {
+    return <PinentryScreen initialRequest={mode.pinentry} />;
+  }
+
+  if (mode && 'ssh_askpass' in mode) {
+    return <SshAskpassScreen initialRequest={mode.ssh_askpass} />;
   }
 
   // Main app mode
