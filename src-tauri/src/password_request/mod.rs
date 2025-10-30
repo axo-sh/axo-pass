@@ -4,4 +4,4 @@ mod types;
 
 pub use handler::PasswordRequestHandler;
 pub use state::RequestState;
-pub use types::{PasswordRequest, PasswordResponse};
+pub use types::{PasswordRequest, PasswordResponse, RequestEvent};

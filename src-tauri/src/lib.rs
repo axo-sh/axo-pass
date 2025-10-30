@@ -1,4 +1,5 @@
 mod app;
+mod cli;
 mod password_request;
 mod pinentry;
 mod pinentry_handler;
@@ -6,27 +7,19 @@ mod secrets;
 
 use std::sync::OnceLock;
 
-use serde_json::Value;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
-use crate::app::{AppMode, AppState};
+use crate::app::AppMode;
+use crate::cli::run_cli_command;
 use crate::pinentry_handler::{PinentryHandler, PinentryState};
-use crate::secrets::vault::read_vault;
 
 // Global static to store the app mode
 static APP_MODE: OnceLock<AppMode> = OnceLock::new();
+const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
 
-/// Detect if the app was started in pinentry mode by checking for the arg or
-/// the presence of an open stdin pipe
-pub fn detect_pinentry_mode(args: Option<&tauri_plugin_cli::Matches>) -> bool {
-    args.and_then(|m| m.args.get("pinentry"))
-        .map(|arg| arg.value == Value::Bool(true))
-        .unwrap_or(false)
-}
-
-fn run_pinentry_mode(state: PinentryState, app_handle: tauri::AppHandle) {
+fn run_pinentry_mode(app_handle: tauri::AppHandle, state: PinentryState) {
     let (exit_tx, exit_rx) = oneshot::channel();
 
     // Start pinentry server in background thread
@@ -37,7 +30,7 @@ fn run_pinentry_mode(state: PinentryState, app_handle: tauri::AppHandle) {
             let stdout = tokio::io::stdout();
 
             // Give the app time to start
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(STD_DELAY).await;
 
             let mut handler = PinentryHandler::new(state, exit_tx);
             let mut server = pinentry::PinentryServer::new(stdin, stdout)
@@ -56,10 +49,7 @@ fn run_pinentry_mode(state: PinentryState, app_handle: tauri::AppHandle) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let _ = exit_rx.await;
-
-            // Give a moment for the response to be sent back through pinentry
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
+            tokio::time::sleep(STD_DELAY).await;
             log::debug!("Exiting app after pinentry completion");
             app_handle.exit(0);
         });
@@ -67,8 +57,6 @@ fn run_pinentry_mode(state: PinentryState, app_handle: tauri::AppHandle) {
 }
 
 pub fn run() {
-    let state = PinentryState::default();
-
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -88,79 +76,35 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_cli::init())
-        .manage(state.clone())
         .setup(move |app| {
-            // Store the app handle in the state for event emission
-            state.set_app_handle(app.handle().clone());
             let cli_matches = app.cli().matches().ok();
 
-            log::debug!("CLI matches: {:?}", cli_matches);
-            if let Some(sc_matches) = cli_matches
-                .as_ref()
-                .and_then(|m| m.subcommand.clone())
-                .iter()
-                .find(|sc| sc.name == "get")
-            {
-                let Some(item_url) = sc_matches.matches.args.get("item_url").cloned() else {
-                    panic!("Missing required argument: item_url");
-                };
-
-                let get_item_url = item_url
-                    .value
-                    .as_str()
-                    .ok_or_else(|| format!("Invalid item_url argument: {:?}", item_url.value))?
-                    .to_string();
-
-                log::debug!("Getting item for URL: {}", get_item_url);
-                let u = url::Url::parse(&get_item_url)
-                    .map_err(|e| format!("Invalid URL '{get_item_url}': {e}"))?;
-                if u.scheme() != "axo" {
-                    panic!("Unsupported URL scheme: {}", u.scheme())
+            if let Some(subcommand) = cli_matches.as_ref().and_then(|m| m.subcommand.as_deref()) {
+                match subcommand.name.as_str() {
+                    "pinentry" => {
+                        let pinentry_state = PinentryState::default();
+                        pinentry_state.set_app_handle(app.handle().clone());
+                        app.manage(pinentry_state.clone());
+                        log::debug!("Running in pinentry mode");
+                        APP_MODE
+                            .set(AppMode::Pinentry)
+                            .expect("APP_MODE already set");
+                        run_pinentry_mode(app.handle().clone(), pinentry_state.clone());
+                    },
+                    command => {
+                        log::debug!("Running in cli mode");
+                        APP_MODE.set(AppMode::CLI).expect("APP_MODE already set");
+                        run_cli_command(app.handle().clone(), subcommand, command);
+                        return Ok(());
+                    },
                 }
-                let vault_name = u
-                    .host_str()
-                    .ok_or_else(|| format!("URL missing host: {}", get_item_url))?;
-
-                let mut vault = read_vault(&app.path().app_data_dir()?, Some(vault_name))
-                    .expect("Failed to read vault");
-
-                vault.unlock().expect("Failed to unlock vault");
-
-                let res = vault
-                    .get_secret_by_url(u)
-                    .expect("Failed to get item by URL");
-                println!("{}", res.unwrap_or_else(|| "<not found>".to_string()));
-                // get_item_url
-                app.handle().exit(0);
-                return Ok(());
-            }
-
-            let mode = if detect_pinentry_mode(cli_matches.as_ref()) {
-                log::debug!("Running in pinentry mode");
-                AppMode::Pinentry
             } else {
-                log::debug!("Running in app mode");
-                AppMode::App(AppState {
-                    pinentry_program_path: app
-                        .path()
-                        .resource_dir()
-                        .map(|p| p.join("frittata-pinentry"))
-                        .ok(),
-                })
-            };
-
-            let is_pinentry = mode.is_pinentry();
-            APP_MODE.set(mode).expect("APP_MODE already set");
-
-            // Setup based on mode
-            if is_pinentry {
-                run_pinentry_mode(state.clone(), app.handle().clone());
+                APP_MODE.set(AppMode::App).expect("APP_MODE already set");
             }
 
             if let Some(window) = app.get_webview_window("main") {
-                // Configure window based on mode
-                if is_pinentry {
-                    // In pinentry mode: compact fixed size, non-resizable
+                if matches!(APP_MODE.get(), Some(AppMode::Pinentry)) {
+                    // In password request mode: compact fixed size, non-resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                         width: 350.0,
                         height: 500.0,

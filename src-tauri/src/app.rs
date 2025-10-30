@@ -5,36 +5,56 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::APP_MODE;
-use crate::password_request::PasswordResponse;
-use crate::pinentry_handler::PinentryState;
+use crate::password_request::{PasswordResponse, RequestEvent};
+use crate::pinentry_handler::{GetPinRequest, PinentryState};
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 
 // App mode enum
 #[derive(Serialize, Clone, Debug)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AppMode {
-    App(AppState),
+    App,
+    CLI,
     Pinentry,
 }
 
-impl AppMode {
-    pub fn is_pinentry(&self) -> bool {
-        matches!(self, AppMode::Pinentry)
-    }
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct AppState {
-    pub pinentry_program_path: Option<PathBuf>,
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum AppModeAndState {
+    App {
+        pinentry_program_path: Option<PathBuf>,
+    },
+    Pinentry(Option<RequestEvent<GetPinRequest>>),
 }
 
 #[tauri::command]
-pub async fn get_mode() -> Result<AppMode, String> {
-    APP_MODE
-        .get()
-        .cloned()
-        .ok_or_else(|| "App mode not set".to_string())
+pub async fn get_mode(app_handle: AppHandle) -> Result<AppModeAndState, String> {
+    let Some(mode) = APP_MODE.get() else {
+        return Err("Unknown mode".to_string());
+    };
+
+    match mode {
+        AppMode::App => {
+            let pinentry_program_path = app_handle
+                .path()
+                .resource_dir()
+                .map(|p| p.join("frittata-pinentry"))
+                .inspect_err(|e| log::debug!("Failed to get app data directory: {e}"))
+                .ok();
+            Ok(AppModeAndState::App {
+                pinentry_program_path,
+            })
+        },
+        AppMode::Pinentry => {
+            let state = app_handle.state::<PinentryState>();
+            let pending_event = state.get_pending_event();
+            Ok(AppModeAndState::Pinentry(pending_event))
+        },
+        _ => {
+            return Err("Unsupported mode".to_string());
+        },
+    }
 }
 
 #[tauri::command]

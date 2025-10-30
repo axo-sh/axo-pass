@@ -11,14 +11,10 @@
   },
   "plugins": {
     "cli": {
-      "description": "axo gpg pinentry",
-      "args": [
-        {
-          "name": "pinentry",
-          "description": "Run in pinentry mode for GPG integration"
-        }
-      ],
       "subcommands": {
+        "pinentry": {
+          "description": "Run in pinentry mode for GPG integration"
+        },
         "get": {
           "description": "Get a secret from the vault",
           "args": [
@@ -29,6 +25,30 @@
               "takesValue": true
             }
           ]
+        },
+        "items": {
+          "description": "Debug vault items",
+          "subcommands": {
+            "list": {
+              "description": "List vault items"
+            }
+          }
+        },
+        "managed-keys": {
+          "description": "Debug cryptographic keys stored in the vault",
+          "subcommands": {
+            "list": {
+              "description": "List managed keys"
+            }
+          }
+        },
+        "generic-password": {
+          "description": "Debug generic passwords stored in the vault",
+          "subcommands": {
+            "list": {
+              "description": "List generic passwords"
+            }
+          }
         }
       }
     }
@@ -58,7 +78,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "./misc/frittata-pinentry": "frittata-pinentry"
+      "./misc/frittata-pinentry": "frittata-pinentry",
+      "./misc/frittata-ssh-askpass": "frittata-ssh-askpass"
     },
     "macOS": {
       "entitlements": "./misc/entitlements.plist"
