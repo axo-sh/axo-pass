@@ -1,4 +1,5 @@
 mod app;
+mod password_request;
 mod pinentry;
 mod pinentry_handler;
 mod secrets;
@@ -11,7 +12,7 @@ use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
 use crate::app::{AppMode, AppState};
-use crate::pinentry_handler::{PinentryState, TauriPinentryHandler};
+use crate::pinentry_handler::{PinentryHandler, PinentryState};
 use crate::secrets::vault::read_vault;
 
 // Global static to store the app mode
@@ -38,7 +39,7 @@ fn run_pinentry_mode(state: PinentryState, app_handle: tauri::AppHandle) {
             // Give the app time to start
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-            let mut handler = TauriPinentryHandler::new(state, exit_tx);
+            let mut handler = PinentryHandler::new(state, exit_tx);
             let mut server = pinentry::PinentryServer::new(stdin, stdout)
                 .await
                 .expect("Failed to create pinentry server");

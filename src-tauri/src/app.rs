@@ -5,7 +5,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::APP_MODE;
-use crate::pinentry_handler::{PinentryState, UserPinentryResponse};
+use crate::password_request::PasswordResponse;
+use crate::pinentry_handler::PinentryState;
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
 
@@ -63,11 +64,10 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn send_pinentry_response(
-    response: UserPinentryResponse,
+    response: PasswordResponse,
     state: tauri::State<'_, PinentryState>,
 ) -> Result<(), String> {
-    let sender = state.response_sender.lock().unwrap().take();
-    if let Some(sender) = sender {
+    if let Some(sender) = state.take_response_sender() {
         sender
             .send(response)
             .map_err(|_| "Failed to send response".to_string())?;
