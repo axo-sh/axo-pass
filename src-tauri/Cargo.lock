@@ -1254,7 +1254,6 @@ dependencies = [
  "percent-encoding",
  "regex",
  "secrecy",
- "security-framework",
  "serde",
  "serde_json",
  "serde_with",

@@ -29,7 +29,6 @@ apple-native-keyring-store = { version = "0.2.1", features = ["keychain", "prote
 keyring-core = "0.7.0"
 objc2 = "0.6.3"
 objc2-local-authentication = "0.3.2"
-security-framework = "3.5.1"
 anyhow = "1.0.100"
 thiserror = "2.0.17"
 log = "0.4.28"
