@@ -16,13 +16,17 @@ use tokio::sync::oneshot;
 use crate::app::AppMode;
 use crate::cli::{get_arg, run_cli_command};
 use crate::pinentry_handler::{PinentryHandler, PinentryState};
-use crate::ssh_askpass_handler::AskPassState;
+use crate::ssh_askpass_handler::{AskPassState, SshAskpassHandler};
 
 // Global static to store the app mode
 static APP_MODE: OnceLock<AppMode> = OnceLock::new();
 const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
 
-fn run_pinentry_mode(app_handle: tauri::AppHandle, state: PinentryState) {
+fn run_pinentry_mode(app_handle: tauri::AppHandle) {
+    let state = PinentryState::default();
+    state.set_app_handle(app_handle.clone());
+    app_handle.manage(state.clone());
+
     let (exit_tx, exit_rx) = oneshot::channel();
 
     // Start pinentry server in background thread
@@ -52,11 +56,15 @@ fn run_pinentry_mode(app_handle: tauri::AppHandle, state: PinentryState) {
     });
 }
 
-fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, state: AskPassState, prompt: String) {
+fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, prompt: String) {
+    let state = AskPassState::default();
+    state.set_app_handle(app_handle.clone());
+    app_handle.manage(state.clone());
+
     let (exit_tx, exit_rx) = oneshot::channel();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STD_DELAY).await;
-        let handler = ssh_askpass_handler::SshAskpassHandler::new(state, exit_tx);
+        let handler = SshAskpassHandler::new(state, exit_tx);
         if let Err(e) = handler.run(prompt).await {
             log::error!("SSH askpass handler error: {e}");
             std::process::exit(1);
@@ -94,29 +102,22 @@ pub fn run() {
         .plugin(tauri_plugin_cli::init())
         .setup(move |app| {
             let cli_matches = app.cli().matches().ok();
-
             if let Some(subcommand) = cli_matches.as_ref().and_then(|m| m.subcommand.as_deref()) {
                 match subcommand.name.as_str() {
                     "pinentry" => {
-                        let pinentry_state = PinentryState::default();
-                        pinentry_state.set_app_handle(app.handle().clone());
-                        app.manage(pinentry_state.clone());
                         log::debug!("Running in pinentry mode");
                         APP_MODE
                             .set(AppMode::Pinentry)
                             .expect("APP_MODE already set");
-                        run_pinentry_mode(app.handle().clone(), pinentry_state.clone());
+                        run_pinentry_mode(app.handle().clone());
                     },
                     "ssh-askpass" => {
                         log::debug!("Running in SSH askpass mode");
-                        let askpass_state = ssh_askpass_handler::AskPassState::default();
-                        askpass_state.set_app_handle(app.handle().clone());
-                        app.manage(askpass_state.clone());
                         APP_MODE
                             .set(AppMode::SshAskpass)
                             .expect("APP_MODE already set");
                         let prompt = get_arg(subcommand, "prompt")?;
-                        run_ssh_askpass_mode(app.handle().clone(), askpass_state.clone(), prompt);
+                        run_ssh_askpass_mode(app.handle().clone(), prompt);
                     },
                     command => {
                         log::debug!("Running in cli mode");
