@@ -160,12 +160,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app::get_mode,
-            app::list_passwords,
-            app::delete_password,
-            app::send_pinentry_response,
-            app::send_askpass_response,
-            app::get_vault,
-            app::init_vault,
+            app::passwords::list_passwords,
+            app::passwords::delete_password,
+            app::user_authorization::send_pinentry_response,
+            app::user_authorization::send_askpass_response,
+            app::vault::init_vault,
+            app::vault::get_vault,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
