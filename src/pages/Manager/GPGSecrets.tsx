@@ -1,10 +1,11 @@
 import React from 'react';
 
-import {deletePassword, listPasswords, type PasswordEntry} from '@/client';
+import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryType} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {
   secretItem,
+  secretItemDetail,
   secretItemLabel,
   secretItemValue,
   secretsList,
@@ -27,7 +28,7 @@ export const GPGSecrets: React.FC = () => {
   if (result === null || result.length === 0) {
     return (
       <p>
-        No stored GPG passphrases found. Passphrases will be saved here when you use Touch ID
+        No stored passphrases found. Passphrases will be saved here when you use Touch ID
         authentication.
       </p>
     );
@@ -37,8 +38,8 @@ export const GPGSecrets: React.FC = () => {
     <div className={secretsList}>
       {result.map((entry) => (
         <div key={entry.key_id} className={secretItem}>
-          <div>
-            <div className={secretItemLabel}>Key ID</div>
+          <div className={secretItemDetail}>
+            <div className={secretItemLabel}>{getKeyTypeShort(entry.password_type)}</div>
             <code className={secretItemValue}>{entry.key_id}</code>
           </div>
           <button
@@ -88,13 +89,7 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
     return null;
   }
 
-  let keyType = 'key';
-  if (entry.password_type === 'gpg_key') {
-    keyType = 'GPG key';
-  } else if (entry.password_type === 'ssh_key') {
-    keyType = 'SSH key';
-  }
-
+  const keyType = getKeyType(entry.password_type);
   return (
     <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete the passphrase for the {keyType} with key grip ID{' '}
@@ -110,4 +105,26 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
       </DialogActions>
     </Dialog>
   );
+};
+
+const getKeyTypeShort = (type: PasswordEntryType) => {
+  switch (type) {
+    case 'gpg_key':
+      return 'GPG';
+    case 'ssh_key':
+      return 'SSH';
+    default:
+      return 'Other';
+  }
+};
+
+const getKeyType = (type: PasswordEntryType) => {
+  switch (type) {
+    case 'gpg_key':
+      return 'GPG key';
+    case 'ssh_key':
+      return 'SSH key';
+    default:
+      return 'key';
+  }
 };

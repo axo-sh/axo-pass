@@ -4,7 +4,7 @@ import {Layout} from '@/layout/Layout';
 import {LayoutDescription} from '@/layout/LayoutDescription';
 import {LayoutTitle} from '@/layout/LayoutTitle';
 import {DashboardNav} from '@/pages/Dashboard/DashboardNav';
-import {dashboard} from '@/pages/Dashboard.css';
+import {dashboard, dashboardContent} from '@/pages/Dashboard.css';
 import {GPGSecrets} from '@/pages/Manager/GPGSecrets';
 import {Secrets} from '@/pages/Manager/Secrets';
 
@@ -13,7 +13,7 @@ export const Dashboard = () => {
     <Layout>
       <div className={dashboard}>
         <DashboardNav />
-        <div>
+        <div className={dashboardContent}>
           <Switch>
             <Route path="/dashboard/envs">
               <LayoutTitle>Environments</LayoutTitle>

@@ -9,3 +9,7 @@ export const dashboard = style({
   gap: spacing(2),
   height: '100%',
 });
+
+export const dashboardContent = style({
+  overflowY: 'scroll',
+});

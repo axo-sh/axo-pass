@@ -24,6 +24,10 @@ export const secretItem = style({
   gap: spacing(1),
 });
 
+export const secretItemDetail = style({
+  overflow: 'hidden',
+});
+
 export const secretItemLabel = style({
   textTransform: 'uppercase',
   fontSize: vars.scale.xxs,
@@ -33,7 +37,15 @@ export const secretItemLabel = style({
 });
 
 export const secretItemValue = style({
+  display: 'block',
   fontFamily: vars.fonts.monospace,
   fontWeight: 800,
   fontSize: vars.scale.sm,
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  ':hover': {
+    whiteSpace: 'normal',
+    wordBreak: 'break-all',
+  },
 });
