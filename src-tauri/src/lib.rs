@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod la_context;
 mod password_request;
 mod pinentry;
 mod pinentry_handler;

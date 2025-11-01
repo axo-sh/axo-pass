@@ -1243,6 +1243,7 @@ dependencies = [
  "apple-native-keyring-store",
  "async-trait",
  "base64 0.22.1",
+ "block2 0.6.2",
  "keyring-core",
  "log",
  "objc2 0.6.3",

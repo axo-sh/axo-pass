@@ -13,6 +13,7 @@ use objc2_security::{
 };
 use secrecy::SecretString;
 
+use crate::la_context::THREAD_LA_CONTEXT;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 
@@ -99,6 +100,11 @@ impl KeyChainQuery for GenericPasswordQuery {
             query.add(kSecReturnAttributes, CFBoolean::new(true));
             if self.authenticate {
                 query.add(kSecUseAuthenticationUI, CFBoolean::new(true));
+                THREAD_LA_CONTEXT.with(|thread_la_context| {
+                    let la_context =
+                        thread_la_context.as_ref() as *const LAContext as *const CFType;
+                    query.add(kSecUseAuthenticationContext, &*la_context);
+                });
             } else {
                 let la_context = LAContext::new();
                 la_context.setInteractionNotAllowed(true);

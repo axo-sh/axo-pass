@@ -14,6 +14,7 @@ use objc2_security::{
 use secrecy::SecretString;
 use serde::Serialize;
 
+use crate::la_context::evaluate_local_la_context;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
@@ -105,6 +106,8 @@ impl PasswordEntry {
     }
 
     pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {
+        evaluate_local_la_context(create_access_control_flags()?)
+            .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
         // need authentication: without it, we don't get all items
         let passwords = GenericPasswordQuery::build()
             .list()
