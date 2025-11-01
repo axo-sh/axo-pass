@@ -1,6 +1,6 @@
 import React from 'react';
 
-import {listPasswords} from '@/client';
+import {deletePassword, listPasswords, type PasswordEntry} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {
@@ -12,8 +12,8 @@ import {
 import {useClient} from '@/utils/useClient';
 
 export const GPGSecrets: React.FC = () => {
-  const [selectedKeyId, setSelectedKeyId] = React.useState<string | null>(null);
-  const {ready, result, error} = useClient(async () => (await listPasswords()) || []);
+  const [selectedEntry, setSelectedEntry] = React.useState<PasswordEntry | null>(null);
+  const {ready, result, error, reload} = useClient(async () => (await listPasswords()) || []);
   const dialog = useDialog();
 
   if (error) {
@@ -44,7 +44,7 @@ export const GPGSecrets: React.FC = () => {
           <button
             className={button({variant: 'secondaryError'})}
             onClick={() => {
-              setSelectedKeyId(entry.key_id);
+              setSelectedEntry(entry);
               dialog.open();
             }}
           >
@@ -54,33 +54,59 @@ export const GPGSecrets: React.FC = () => {
       ))}
       <DeleteSecretDialog
         isOpen={dialog.isOpen}
+        entry={selectedEntry}
+        onDelete={async () => {
+          if (selectedEntry) {
+            try {
+              await deletePassword(selectedEntry);
+              setSelectedEntry(null);
+              dialog.onClose();
+              reload();
+            } catch (error) {
+              alert(error);
+            }
+          }
+        }}
         onClose={() => {
-          setSelectedKeyId(null);
+          setSelectedEntry(null);
           dialog.onClose();
         }}
-        keyId={selectedKeyId || ''}
       />
     </div>
   );
 };
 
 type DialogProps = {
-  keyId: string;
+  entry: PasswordEntry | null;
   isOpen: boolean;
+  onDelete: () => void;
   onClose: () => void;
 };
 
-const DeleteSecretDialog: React.FC<DialogProps> = ({keyId, isOpen, onClose}) => {
+const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onClose}) => {
+  if (!entry) {
+    return null;
+  }
+
+  let keyType = 'key';
+  if (entry.password_type === 'gpg_key') {
+    keyType = 'GPG key';
+  } else if (entry.password_type === 'ssh_key') {
+    keyType = 'SSH key';
+  }
+
   return (
-    <Dialog title={`Delete saved GPG key passphrase?`} isOpen={isOpen} onClose={onClose}>
-      Are you sure you want to delete the passphrase for the GPG key with key grip ID{' '}
-      <code>{keyId}</code> stored in your system keychain? You will need to re-enter the passphrase
-      the next time you use the GPG key.
+    <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
+      Are you sure you want to delete the passphrase for the {keyType} with key grip ID{' '}
+      <code>{entry.key_id}</code> stored in your system keychain? You will need to re-enter the
+      passphrase the next time you use the {keyType}.
       <DialogActions>
         <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
           Cancel
         </button>
-        <button className={button({variant: 'error', size: 'large'})}>Delete</button>
+        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
+          Delete
+        </button>
       </DialogActions>
     </Dialog>
   );

@@ -161,6 +161,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app::get_mode,
             app::list_passwords,
+            app::delete_password,
             app::send_pinentry_response,
             app::send_askpass_response,
             app::get_vault,

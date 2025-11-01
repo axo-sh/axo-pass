@@ -94,7 +94,15 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, String> {
     Ok(passwords)
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
+pub async fn delete_password(entry: PasswordEntry) -> Result<(), String> {
+    log::debug!("Deleting password entry: {:?}", entry);
+    entry
+        .delete()
+        .map_err(|e| format!("Failed to delete password entry: {e}"))
+}
+
+#[tauri::command]
 pub async fn send_pinentry_response(
     response: PasswordResponse,
     state: tauri::State<'_, PinentryState>,
@@ -107,7 +115,7 @@ pub async fn send_pinentry_response(
     Ok(())
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn send_askpass_response(
     response: PasswordResponse,
     state: tauri::State<'_, AskPassState>,

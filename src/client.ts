@@ -84,7 +84,10 @@ export const getMode = async (): Promise<AppModeAndState> => {
   return await invoke<AppModeAndState>('get_mode');
 };
 
+export type PasswordEntryType = 'gpg_key' | 'ssh_key' | 'other';
+
 export type PasswordEntry = {
+  password_type: PasswordEntryType;
   key_id: string;
 };
 
@@ -113,4 +116,8 @@ export const getVault = async (): Promise<Vault> => {
 
 export const initVault = async (): Promise<void> => {
   return await invoke<void>('init_vault');
+};
+
+export const deletePassword = async (entry: PasswordEntry): Promise<void> => {
+  return await invoke<void>('delete_password', {entry});
 };

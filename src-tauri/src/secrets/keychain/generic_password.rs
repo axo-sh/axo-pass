@@ -2,17 +2,18 @@ mod query;
 
 use std::fmt::Debug;
 use std::ptr;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFData, CFError, CFMutableDictionary, CFString, CFType};
 use objc2_security::{
-    SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, errSecSuccess,
+    SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, SecItemDelete, errSecSuccess,
     kSecAttrAccessControl, kSecAttrAccessibleWhenUnlocked, kSecAttrAccount, kSecAttrService,
     kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain, kSecValueData,
 };
 use secrecy::SecretString;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::la_context::evaluate_local_la_context;
 use crate::secrets::keychain::errors::KeychainError;
@@ -21,15 +22,18 @@ use crate::secrets::keychain::keychain_query::KeyChainQuery;
 
 static SERVICE_NAME: &str = "com.breakfastlabs.frittata";
 
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum PasswordEntryType {
+    #[serde(rename = "gpg_key")]
     GPGKey,
+    #[serde(rename = "ssh_key")]
     SSHKey,
     Other,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct PasswordEntry {
     pub password_type: PasswordEntryType,
     pub key_id: String, // account
@@ -57,9 +61,18 @@ impl PasswordEntry {
             PasswordEntryType::Other => self.key_id.clone(),
         }
     }
+
+    pub fn delete(&self) -> anyhow::Result<()> {
+        unsafe {
+            let query = Self::common_attrs(Some(&self.account()));
+            let status = SecItemDelete(query.as_opaque());
+            log::debug!("Deleted key status: {}", status);
+        }
+        Ok(())
+    }
 }
 
-impl std::str::FromStr for PasswordEntry {
+impl FromStr for PasswordEntry {
     type Err = KeychainError;
 
     fn from_str(account: &str) -> Result<Self, Self::Err> {
