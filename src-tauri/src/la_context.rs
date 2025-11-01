@@ -14,10 +14,10 @@ use crate::secrets::keychain::errors::KeychainError;
 thread_local! {
     pub static THREAD_LA_CONTEXT: LazyLock<Retained<LAContext>> = LazyLock::new(|| {
         unsafe {
-            let la_ctx = LAContext::new();
+
             // five minutes
             // la_ctx.setTouchIDAuthenticationAllowableReuseDuration(600.0);
-            la_ctx
+            LAContext::new()
         }
     });
 }
@@ -68,8 +68,7 @@ pub fn evaluate_local_la_context(
             );
         });
 
-        let _ = rx
-            .recv()
+        rx.recv()
             .map_err(|e| anyhow!("Blocking task panicked: {}", e))??;
 
         Ok(())

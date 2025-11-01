@@ -88,7 +88,7 @@ impl pinentry::PinentryHandler for PinentryHandler {
 
         let has_saved_password = key_id
             .as_ref()
-            .and_then(|key_id| PasswordEntry::gpg(&key_id).exists().ok())
+            .and_then(|key_id| PasswordEntry::gpg(key_id).exists().ok())
             .unwrap_or(false);
 
         let request = GetPinRequest {

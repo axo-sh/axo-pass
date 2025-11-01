@@ -59,9 +59,7 @@ pub async fn get_mode(app_handle: AppHandle) -> Result<AppModeAndState, String> 
             let pending_event = state.get_pending_event();
             Ok(AppModeAndState::SshAskpass(pending_event))
         },
-        _ => {
-            return Err("Unsupported mode".to_string());
-        },
+        _ => Err("Unsupported mode".to_string()),
     }
 }
 

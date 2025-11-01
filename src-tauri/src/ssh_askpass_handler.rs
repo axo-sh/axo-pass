@@ -82,7 +82,7 @@ impl SshAskpassHandler {
         if request
             .key_id
             .as_ref()
-            .and_then(|key_id| PasswordEntry::ssh(&key_id).exists().ok())
+            .and_then(|key_id| PasswordEntry::ssh(key_id).exists().ok())
             .unwrap_or(false)
         {
             request.set_has_saved_password(true);
