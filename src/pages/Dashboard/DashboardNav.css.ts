@@ -11,7 +11,7 @@ export const nav = style({
 
   paddingTop: spacing(4),
   paddingRight: spacing(2),
-  fontSize: vars.scale.xs,
+  fontSize: vars.scale.sm,
 });
 
 export const navLinks = style({

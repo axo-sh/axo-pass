@@ -5,7 +5,7 @@ import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const pinentryDescription = style({
-  fontSize: vars.scale.xxs,
+  fontSize: vars.scale.xs,
   fontFamily: vars.fonts.monospace,
   fontWeight: 600,
   whiteSpace: 'pre',
@@ -15,7 +15,7 @@ export const pinentryDescription = style({
 export const keyId = style({
   fontFamily: vars.fonts.monospace,
   fontWeight: 500,
-  fontSize: vars.scale.xs,
+  fontSize: vars.scale.sm,
 
   padding: spacing(0.5),
   background: colorVar.base,

@@ -8,7 +8,7 @@ import {
 } from '@tabler/icons-react';
 import {Link} from 'wouter';
 
-import {nav, navLink, navLinks} from '@/pages/Dashboard/DashboardNav..css';
+import {nav, navLink, navLinks} from '@/pages/Dashboard/DashboardNav.css';
 
 export const DashboardNav: React.FC = () => {
   return (

@@ -11,13 +11,13 @@ export const vars = createGlobalTheme(':root', {
     monospace: 'ui-monospace, "SF Mono", Menlo, monospace',
   },
   scale: {
-    xxs: '.75rem', // 12px
-    xs: '.875rem', // 14px
-    sm: '1rem', // 16px
-    md: '1.25rem', // 20px
-    lg: '1.5rem', // 24px
-    xl: '2.25rem', // 36px
-    xxl: '3rem', // 48px
+    xxs: '.75rem', // 9.75
+    xs: '.875rem', // 11.375
+    sm: '1rem', // 13px
+    md: '1.25rem', // 16.25
+    lg: '1.5rem',
+    xl: '2.25rem',
+    xxl: '3rem',
   },
 });
 
@@ -25,7 +25,7 @@ globalStyle('html, body', {
   margin: 0,
   padding: 0,
   fontFamily: vars.fonts.body,
-  fontSize: vars.scale.sm,
+  fontSize: 13,
   fontWeight: 500,
   lineHeight: 1.6,
   WebkitFontSmoothing: 'antialiased',

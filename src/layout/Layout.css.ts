@@ -46,6 +46,7 @@ export const layoutTitle = recipe({
     display: 'flex',
     alignItems: 'center',
     gap: spacing(3 / 4),
+    lineHeight: 1.3,
   },
   variants: {
     centered: {

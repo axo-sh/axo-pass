@@ -6,6 +6,7 @@ import {vars} from '@/App.css';
 import {flex} from '@/components/Flex.css';
 import {loader} from '@/components/Loader.css';
 import {accentScheme, colorVar, errorScheme, greyScheme} from '@/styles/colors.css';
+import {spacing} from '@/styles/utils';
 
 export type ButtonVariants = NonNullable<Required<RecipeVariants<typeof button>>>;
 
@@ -15,13 +16,13 @@ export const button = recipe({
   base: {
     position: 'relative',
     display: 'inline-flex',
-    padding: '8px 12px',
+    padding: spacing(2 / 3, 1),
     cursor: 'pointer',
-    fontSize: vars.scale.xs,
+    fontSize: vars.scale.sm,
     textAlign: 'center',
     textDecoration: 'none',
     fontWeight: 600,
-    borderRadius: 8,
+    borderRadius: 6,
     lineHeight: 1,
     alignItems: 'center',
     transition: 'background 75ms ease-out,box-shadow 75ms ease-out',
@@ -78,6 +79,10 @@ export const button = recipe({
       },
     },
     size: {
+      small: {
+        fontSize: vars.scale.xs,
+        padding: '6px 10px',
+      },
       default: {},
       large: {
         fontSize: vars.scale.sm,
