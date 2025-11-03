@@ -148,7 +148,7 @@ impl Vault {
             .map_err(|err| anyhow!("encryption failure: {err}"))?;
 
         // first 12 bytes are the nonce
-        Ok(nonce.to_vec().into_iter().chain(ciphertext).collect())
+        Ok(nonce.iter().copied().chain(ciphertext).collect())
     }
 
     pub fn add_secret(
