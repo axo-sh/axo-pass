@@ -96,6 +96,7 @@ export const listPasswords = async (): Promise<PasswordEntry[]> => {
 };
 
 export type Vault = {
+  key: string;
   title: string | null;
   data: {[key: string]: VaultItem};
 };
@@ -120,4 +121,22 @@ export const initVault = async (): Promise<void> => {
 
 export const deletePassword = async (entry: PasswordEntry): Promise<void> => {
   return await invoke<void>('delete_password', {entry});
+};
+
+export type DecryptedCredential = {
+  title: string | null;
+  secret: string;
+  url: string;
+};
+
+export const getDecryptedVaultItemCredential = async (
+  vaultKey: string,
+  itemKey: string,
+  credentialKey: string,
+): Promise<DecryptedCredential | null> => {
+  return await invoke<DecryptedCredential | null>('get_decrypted_vault_item_credential', {
+    vault_key: vaultKey,
+    item_key: itemKey,
+    credential_key: credentialKey,
+  });
 };

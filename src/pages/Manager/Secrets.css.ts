@@ -7,21 +7,21 @@ import {spacing} from '@/styles/utils';
 export const secretsList = style({
   display: 'flex',
   flexDirection: 'column',
-  gap: spacing(0.5),
+  gap: spacing(1 / 6),
   textAlign: 'left',
 });
 
 export const secretItem = style({
-  padding: spacing(1),
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: colorVar.light20,
-  background: colorVar.light05,
-  borderRadius: 8,
   display: 'grid',
   gridTemplateColumns: '1fr auto',
   alignItems: 'center',
-  gap: spacing(1),
+  gap: spacing(1 / 8),
+  padding: spacing(1 / 2),
+  margin: spacing(0, -1 / 2),
+  borderRadius: 8,
+  ':hover': {
+    backgroundColor: colorVar.light10,
+  },
 });
 
 export const secretItemDetail = style({

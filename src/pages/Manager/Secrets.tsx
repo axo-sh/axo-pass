@@ -1,7 +1,9 @@
 import React from 'react';
 
-import {getVault, initVault} from '@/client';
+import type {DecryptedCredential, VaultItem, VaultItemCredential} from '@/client';
+import {getDecryptedVaultItemCredential, getVault, initVault} from '@/client';
 import {button} from '@/components/Button.css';
+import {Card} from '@/components/Card';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {Flex} from '@/components/Flex';
 import {
@@ -14,7 +16,7 @@ import {useClient} from '@/utils/useClient';
 
 export const Secrets: React.FC = () => {
   const [selectedKeyId, setSelectedKeyId] = React.useState<string | null>(null);
-  const {ready, result, error} = useClient(async () => (await getVault()) || []);
+  const {ready, result: vault, error} = useClient(async () => (await getVault()) || []);
   const dialog = useDialog();
 
   if (error) {
@@ -42,22 +44,15 @@ export const Secrets: React.FC = () => {
     return <p>Loading vault...</p>;
   }
 
-  if (result === null) {
+  if (vault === null) {
     return <p>No stored vault found.</p>;
   }
 
   return (
     <div className={secretsList}>
-      {Object.keys(result.data).map((key) => {
-        const entry = result.data[key];
-        return (
-          <div key={key} className={secretItem}>
-            <div>
-              <div className={secretItemLabel}>{key}</div>
-              <code className={secretItemValue}>{entry.title}</code>
-            </div>
-          </div>
-        );
+      {Object.keys(vault.data).map((key) => {
+        const entry = vault.data[key];
+        return <SecretItem vaultKey={vault.key} key={key} itemKey={key} entry={entry} />;
       })}
       <DeleteSecretDialog
         isOpen={dialog.isOpen}
@@ -90,5 +85,125 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({keyId, isOpen, onClose}) => 
         <button className={button({variant: 'error', size: 'large'})}>Delete</button>
       </DialogActions>
     </Dialog>
+  );
+};
+
+const SecretItem: React.FC<{vaultKey: string; itemKey: string; entry: VaultItem}> = ({
+  vaultKey,
+  itemKey,
+  entry,
+}) => {
+  const [expanded, setExpanded] = React.useState(false);
+
+  if (!expanded) {
+    return (
+      <div>
+        <div className={secretItem}>
+          <div>
+            <div className={secretItemLabel}>{itemKey}</div>
+            <code className={secretItemValue}>{entry.title}</code>
+          </div>
+          <button onClick={() => setExpanded(!expanded)} className={button()}>
+            Show
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <Card>
+      <div className={secretItem}>
+        <div>
+          <div className={secretItemLabel}>{itemKey}</div>
+          <code className={secretItemValue}>{entry.title}</code>
+        </div>
+        <button onClick={() => setExpanded(!expanded)} className={button()}>
+          Hide
+        </button>
+      </div>
+      <SecretCredentialList vaultKey={vaultKey} itemKey={itemKey} credentials={entry.credentials} />
+    </Card>
+  );
+};
+
+const SecretCredentialList: React.FC<{
+  vaultKey: string;
+  itemKey: string;
+  credentials: {[key: string]: VaultItemCredential};
+}> = ({vaultKey, itemKey, credentials}) => {
+  return (
+    <div>
+      {Object.keys(credentials).map((credKey) => {
+        const cred = credentials[credKey];
+        return (
+          <div key={credKey} className={secretItem}>
+            <div>
+              <div className={secretItemLabel}>{credKey}</div>
+              <code className={secretItemValue}>{cred.title}</code>
+            </div>
+            <HiddenSecretValue vaultKey={vaultKey} itemKey={itemKey} credKey={credKey} />
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const HiddenSecretValue: React.FC<{vaultKey: string; itemKey: string; credKey: string}> = ({
+  vaultKey,
+  itemKey,
+  credKey,
+}) => {
+  const [revealed, setRevealed] = React.useState(false);
+  const [decryptedCred, setDecryptedCred] = React.useState<DecryptedCredential | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const onShowSecret = async () => {
+    if (revealed) {
+      setRevealed(false);
+      setDecryptedCred(null);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const cred = await getDecryptedVaultItemCredential(vaultKey, itemKey, credKey);
+      setDecryptedCred(cred);
+      setRevealed(true);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return <code className={secretItemValue}>Loading...</code>;
+  }
+
+  if (error) {
+    // todo: error dialog box
+    return <code className={secretItemValue}>Error: {error}</code>;
+  }
+
+  if (revealed && decryptedCred) {
+    return (
+      <div className={secretItemValue}>
+        <code>{decryptedCred.secret}</code>
+        <button onClick={onShowSecret} className={button({size: 'small', variant: 'clear'})}>
+          Hide
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={secretItemValue}>
+      <button onClick={onShowSecret} className={button({size: 'small', variant: 'clear'})}>
+        Show secret
+      </button>
+    </div>
   );
 };
