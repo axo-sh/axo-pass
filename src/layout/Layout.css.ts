@@ -44,7 +44,7 @@ export const layoutTitle = recipe({
     fontFamily: vars.fonts.title,
     fontSize: vars.scale.lg,
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing(3 / 4),
     lineHeight: 1.3,
   },
@@ -55,6 +55,11 @@ export const layoutTitle = recipe({
       },
     },
   },
+});
+
+export const layoutTitleIcon = style({
+  position: 'relative',
+  top: spacing(1 / 3),
 });
 
 export const layoutDescription = recipe({
