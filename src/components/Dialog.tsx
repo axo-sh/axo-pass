@@ -23,7 +23,7 @@ export const useDialog = (): DialogHandle => {
 
 type Props = {
   className?: string;
-  title: string;
+  title?: string;
   children: React.ReactNode;
   after?: React.ReactNode;
   isOpen: boolean;
@@ -106,7 +106,7 @@ export const Dialog: React.FC<Props> = ({className, title, children, after, isOp
         &times;
       </div>
       <div className={dialogContent}>
-        <div className={dialogTitle}>{title}</div>
+        {title && <div className={dialogTitle}>{title}</div>}
         <div className={className}>{children}</div>
       </div>
       {after}

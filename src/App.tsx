@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 
 import type {AppModeAndState} from '@/client';
 import {getMode} from '@/client';
+import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
 import {Dashboard} from '@/pages/Dashboard';
 import {PinentryScreen} from '@/pages/PinentryScreen';
@@ -31,22 +32,36 @@ const App: React.FC = () => {
 
   if (loading) {
     return (
-      <Layout>
-        <h1>Loading...</h1>
-      </Layout>
+      <ErrorDialogProvider>
+        <Layout>
+          <h1>Loading...</h1>
+        </Layout>
+      </ErrorDialogProvider>
     );
   }
 
   if (mode && 'pinentry' in mode) {
-    return <PinentryScreen initialRequest={mode.pinentry} />;
+    return (
+      <ErrorDialogProvider>
+        <PinentryScreen initialRequest={mode.pinentry} />
+      </ErrorDialogProvider>
+    );
   }
 
   if (mode && 'ssh_askpass' in mode) {
-    return <SshAskpassScreen initialRequest={mode.ssh_askpass} />;
+    return (
+      <ErrorDialogProvider>
+        <SshAskpassScreen initialRequest={mode.ssh_askpass} />
+      </ErrorDialogProvider>
+    );
   }
 
   // Main app mode
-  return <Dashboard />;
+  return (
+    <ErrorDialogProvider>
+      <Dashboard />
+    </ErrorDialogProvider>
+  );
 };
 
 export default App;

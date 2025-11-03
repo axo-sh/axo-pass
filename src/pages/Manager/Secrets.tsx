@@ -5,6 +5,7 @@ import {getDecryptedVaultItemCredential, getVault, initVault} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card} from '@/components/Card';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
+import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {
   secretItem,
@@ -156,9 +157,8 @@ const HiddenSecretValue: React.FC<{vaultKey: string; itemKey: string; credKey: s
 }) => {
   const [revealed, setRevealed] = React.useState(false);
   const [decryptedCred, setDecryptedCred] = React.useState<DecryptedCredential | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
 
+  const errorDialog = useErrorDialog();
   const onShowSecret = async () => {
     if (revealed) {
       setRevealed(false);
@@ -166,27 +166,14 @@ const HiddenSecretValue: React.FC<{vaultKey: string; itemKey: string; credKey: s
       return;
     }
 
-    setLoading(true);
-    setError(null);
     try {
       const cred = await getDecryptedVaultItemCredential(vaultKey, itemKey, credKey);
       setDecryptedCred(cred);
       setRevealed(true);
     } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
+      errorDialog.showError(null, `Failed to decrypt credential: ${String(err)}`);
     }
   };
-
-  if (loading) {
-    return <code className={secretItemValue}>Loading...</code>;
-  }
-
-  if (error) {
-    // todo: error dialog box
-    return <code className={secretItemValue}>Error: {error}</code>;
-  }
 
   if (revealed && decryptedCred) {
     return (
