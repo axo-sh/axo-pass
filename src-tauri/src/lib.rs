@@ -164,6 +164,7 @@ pub fn run() {
             app::user_authorization::send_askpass_response,
             app::vault::init_vault,
             app::vault::get_vault,
+            app::vault::get_decrypted_vault_item_credential,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

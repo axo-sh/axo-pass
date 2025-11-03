@@ -53,6 +53,9 @@ pub struct VaultItem {
 pub struct Vault {
     pub id: Uuid,
 
+    #[serde(skip, default)]
+    pub key: String,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
@@ -80,8 +83,10 @@ impl Vault {
         log::debug!("Creating new vault: Creating cipher...");
         let cipher = Some(Aes256Gcm::new(&actual_file_key));
         log::debug!("Creating new vault: finalizing...");
+        let vault_id = Uuid::new_v4();
         Ok(Self {
-            id: Uuid::new_v4(),
+            id: vault_id,
+            key: vault_id.to_string(),
             title: None,
             file_key: file_key.into_bytes(),
             cipher,
@@ -90,6 +95,9 @@ impl Vault {
     }
 
     pub fn unlock(&mut self) -> anyhow::Result<()> {
+        if self.cipher.is_some() {
+            return Ok(());
+        }
         // decrypt key &self.metadata.file_key with managed key
         let Some(managed_key) = ManagedKeyQuery::build()
             .with_label("vault-encryption-key")
@@ -102,6 +110,7 @@ impl Vault {
         let Some(file_key_bytes) = managed_key.decrypt(&self.file_key) else {
             bail!("Failed to decrypt vault file key");
         };
+
         #[allow(deprecated)]
         let key = Key::<Aes256Gcm>::from_slice(&file_key_bytes);
         self.cipher = Some(Aes256Gcm::new(key));
@@ -212,15 +221,19 @@ impl Vault {
         Ok(())
     }
 
-    pub fn get_secret(&self, key: &str, credential: &str) -> anyhow::Result<Option<String>> {
+    pub fn get_secret(
+        &self,
+        item_key: &str,
+        credential_key: &str,
+    ) -> anyhow::Result<Option<String>> {
         let Some(cipher) = &self.cipher else {
             bail!("Vault is locked")
         };
-        let Some(item) = self.data.get(key) else {
+        let Some(item) = self.data.get(item_key) else {
             return Ok(None);
         };
 
-        let Some(cred) = item.credentials.get(credential) else {
+        let Some(cred) = item.credentials.get(credential_key) else {
             return Ok(None);
         };
 
@@ -284,10 +297,9 @@ pub fn init_vault(app_data_dir: &Path) -> Result<Vault, Error> {
     Ok(vault)
 }
 
-pub fn read_vault(app_data_dir: &Path, vault_name: Option<&str>) -> Result<Vault, Error> {
-    let vault_file_path = app_data_dir
-        .join(vault_name.unwrap_or(DEFAULT_VAULT))
-        .with_extension("json");
+pub fn read_vault(app_data_dir: &Path, vault_key: Option<&str>) -> Result<Vault, Error> {
+    let vault_key = vault_key.unwrap_or(DEFAULT_VAULT);
+    let vault_file_path = app_data_dir.join(vault_key).with_extension("json");
     log::debug!("Reading vault from file: {:?}", vault_file_path);
     let vault_data = fs::read_to_string(&vault_file_path).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
@@ -296,16 +308,17 @@ pub fn read_vault(app_data_dir: &Path, vault_name: Option<&str>) -> Result<Vault
             Error::VaultReadError(e)
         }
     })?;
-    let vault: Vault =
+    let mut vault: Vault =
         serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)?;
+    vault.key = vault_key.to_owned();
     Ok(vault)
 }
 
-pub fn save_vault(app_data_dir: &Path, vault_name: &str, vault: &Vault) -> Result<(), Error> {
+pub fn save_vault(app_data_dir: &Path, vault_key: &str, vault: &Vault) -> Result<(), Error> {
     // make sure app_data_dir exists
     fs::create_dir_all(app_data_dir).map_err(Error::VaultDirCreateError)?;
 
-    let secrets_file_path = app_data_dir.join(vault_name).with_extension("json");
+    let secrets_file_path = app_data_dir.join(vault_key).with_extension("json");
     let secrets_data =
         serde_json::to_string_pretty(vault).map_err(Error::VaultSerializationError)?;
     fs::write(&secrets_file_path, secrets_data).map_err(Error::VaultWriteError)?;

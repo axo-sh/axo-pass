@@ -121,6 +121,7 @@ impl PasswordEntry {
     pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {
         evaluate_local_la_context(create_access_control_flags()?)
             .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
+
         // need authentication: without it, we don't get all items
         let passwords = GenericPasswordQuery::build()
             .list()

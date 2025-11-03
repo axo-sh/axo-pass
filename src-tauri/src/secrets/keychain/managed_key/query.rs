@@ -3,10 +3,13 @@ use std::os::raw::c_void;
 use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFMutableDictionary, CFString, CFType, Type};
+use objc2_local_authentication::LAContext;
 use objc2_security::{
-    SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef, kSecValueRef,
+    SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef,
+    kSecUseAuthenticationContext, kSecValueRef,
 };
 
+use crate::la_context::THREAD_LA_CONTEXT;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::ManagedKey;
@@ -77,6 +80,12 @@ impl KeyChainQuery for ManagedKeyQuery {
             if let Some(key_class) = &self.key_class {
                 query.add(kSecAttrKeyClass, key_class.as_objc());
             }
+
+            // reuse our LAContext
+            THREAD_LA_CONTEXT.with(|thread_la_context| {
+                let la_context = thread_la_context.as_ref() as *const LAContext as *const CFType;
+                query.add(kSecUseAuthenticationContext, &*la_context);
+            });
             query
         }
     }
