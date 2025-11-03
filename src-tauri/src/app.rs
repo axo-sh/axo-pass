@@ -1,9 +1,11 @@
+mod app_state;
 pub mod passwords;
 pub mod user_authorization;
 pub mod vault;
 
 use std::path::PathBuf;
 
+pub use app_state::AppState;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 

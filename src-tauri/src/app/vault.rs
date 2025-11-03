@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::secrets::vault::{Vault, init_vault as do_init_vault, read_vault};
+use crate::app::AppState;
+use crate::secrets::vault::{DEFAULT_VAULT, Vault, init_vault as do_init_vault};
 
 // safe view for vaults
 #[derive(Serialize, Debug, Clone)]
@@ -12,10 +14,10 @@ pub struct VaultView {
     data: BTreeMap<String, VaultItemView>,
 }
 
-impl From<Vault> for VaultView {
-    fn from(vault: Vault) -> Self {
+impl From<&Vault> for VaultView {
+    fn from(vault: &Vault) -> Self {
         VaultView {
-            title: vault.title,
+            title: vault.title.clone(),
             data: vault
                 .data
                 .iter()
@@ -65,19 +67,16 @@ pub async fn init_vault(app: AppHandle) -> Result<VaultView, String> {
         .map_err(|e| format!("Failed to get app data directory: {e}"))?;
     let vault =
         do_init_vault(&app_data_dir).map_err(|e| format!("Failed to initialize vault: {e}"))?;
-    Ok(vault.into())
+    Ok((&vault).into())
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_vault(app: AppHandle) -> Result<VaultView, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
-    log::debug!("Reading vault from app data dir: {:?}", app_data_dir);
-    let vault = read_vault(&app_data_dir, None).map_err(|e| {
-        log::error!("Error reading vault: {:?}", e);
-        format!("Failed to read vault: {e}")
-    })?;
+pub async fn get_vault(state: tauri::State<'_, Mutex<AppState>>) -> Result<VaultView, String> {
+    let mut state = state
+        .lock()
+        .map_err(|e| format!("Failed to lock app state: {e}"))?;
+    let vault: &Vault = state
+        .get_vault_mut(DEFAULT_VAULT)
+        .map_err(|e| format!("Failed to get vault: {e}"))?;
     Ok(vault.into())
 }

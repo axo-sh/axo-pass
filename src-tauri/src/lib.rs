@@ -7,11 +7,13 @@ mod pinentry_handler;
 mod secrets;
 mod ssh_askpass_handler;
 
+use std::sync::Mutex;
+
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
-use crate::app::AppMode;
+use crate::app::{AppMode, AppState};
 use crate::cli::{get_arg, run_cli_command};
 use crate::pinentry_handler::{PinentryHandler, PinentryState};
 use crate::ssh_askpass_handler::{AskPassState, SshAskpassHandler};
@@ -120,6 +122,11 @@ pub fn run() {
                 }
             } else {
                 app.handle().manage(AppMode::App);
+                let app_data_dir = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| format!("Failed to get app data directory: {e}"))?;
+                app.handle().manage(Mutex::new(AppState::new(app_data_dir)));
             }
 
             let app_mode = app.handle().state::<AppMode>();
