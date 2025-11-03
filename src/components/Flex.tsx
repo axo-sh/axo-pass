@@ -10,16 +10,24 @@ type Props = React.PropsWithChildren<
   Omit<FlexVariants, 'direction'> & {
     column?: boolean;
     gap?: number;
+    as?: React.ElementType;
   }
 >;
 
-export const Flex: React.FC<Props> = ({children, column, align, justify, gap = 1}) => {
+export const Flex: React.FC<Props> = ({
+  children,
+  column,
+  align,
+  justify,
+  gap = 1,
+  as: Component = 'div',
+}) => {
   return (
-    <div
+    <Component
       className={flex({direction: column ? 'column' : 'row', align, justify})}
       style={assignInlineVars({[gapVar]: spacing(gap)})}
     >
       {children}
-    </div>
+    </Component>
   );
 };

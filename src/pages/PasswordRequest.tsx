@@ -6,6 +6,9 @@ import type {PasswordRequestData, PasswordResponse} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card} from '@/components/Card';
 import {Flex} from '@/components/Flex';
+import {Form} from '@/components/form/Form';
+import {FormRow} from '@/components/form/FormRow';
+import {textInput} from '@/components/Input.css';
 import {Loader} from '@/components/Loader';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
@@ -56,7 +59,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
   // Get the key identifier (either key_id or key_path)
   const keyIdentifier = request.key_id || request.key_path;
   const description = request.description;
-  const prompt = request.prompt || 'Enter password:';
+  const prompt = request.prompt || 'Enter password';
 
   if (request.attempting_saved_password) {
     return (
@@ -96,74 +99,62 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
           </Card>
         )}
 
-        <form
+        <Form
           onSubmit={(e) => {
             e.preventDefault();
             handleSubmit(true);
           }}
         >
-          <div style={{marginBottom: '1rem'}}>
-            <label htmlFor="password-input">{prompt}</label>
+          <FormRow label={prompt}>
             <input
+              className={textInput}
               id="password-input"
               type={showPassword ? 'text' : 'password'}
               value={inputValue}
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
               onChange={(e) => setInputValue(e.currentTarget.value)}
               autoFocus={!request.has_saved_password}
-              style={{width: '100%', padding: '0.5rem', marginTop: '0.5rem'}}
             />
-          </div>
+          </FormRow>
 
           {keyIdentifier && !request.has_saved_password && (
-            <div
-              style={{
-                marginBottom: '1rem',
-                padding: '0.75rem',
-                backgroundColor: '#666',
-                borderRadius: '4px',
-              }}
-            >
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem',
-                }}
-              >
+            <Card>
+              <Flex gap={1 / 2} align="center">
                 <input
                   type="checkbox"
                   checked={saveToKeychain}
                   onChange={(e) => setSaveToKeychain(e.target.checked)}
                 />
-                <span>💾 Save password to keychain</span>
-              </label>
-            </div>
+                <span>Save password to keychain</span>
+              </Flex>
+            </Card>
           )}
 
-          <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-            <button className={button()} type="submit">
-              OK
-            </button>
-            <button
-              className={button({variant: 'clear'})}
-              type="button"
-              onClick={() => handleSubmit(false)}
-            >
-              Cancel
-            </button>
-            <label
-              style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.25rem'}}
-            >
+          <Flex gap={1 / 2} justify="between">
+            <Flex gap={1 / 2} align="center">
+              <button className={button()} type="submit">
+                OK
+              </button>
+              <button
+                className={button({variant: 'clear'})}
+                type="button"
+                onClick={() => handleSubmit(false)}
+              >
+                Cancel
+              </button>
+            </Flex>
+            <Flex align="center" gap={1 / 2} as="label">
               <input
                 type="checkbox"
                 checked={showPassword}
                 onChange={(e) => setShowPassword(e.target.checked)}
               />
               Show password
-            </label>
-          </div>
-        </form>
+            </Flex>
+          </Flex>
+        </Form>
       </Flex>
     </Layout>
   );
