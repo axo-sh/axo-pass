@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::APP_MODE;
 use crate::password_request::RequestEvent;
 use crate::pinentry_handler::{GetPinRequest, PinentryState};
 use crate::ssh_askpass_handler::{AskPassState, AskPasswordRequest};
@@ -17,7 +16,7 @@ use crate::ssh_askpass_handler::{AskPassState, AskPasswordRequest};
 #[serde(rename_all = "snake_case")]
 pub enum AppMode {
     App,
-    CLI,
+    Cli,
     Pinentry,
     SshAskpass,
 }
@@ -33,12 +32,11 @@ pub enum AppModeAndState {
 }
 
 #[tauri::command]
-pub async fn get_mode(app_handle: AppHandle) -> Result<AppModeAndState, String> {
-    let Some(mode) = APP_MODE.get() else {
-        return Err("Unknown mode".to_string());
-    };
-
-    match mode {
+pub async fn get_mode(
+    app_handle: AppHandle,
+    app_mode: tauri::State<'_, AppMode>,
+) -> Result<AppModeAndState, String> {
+    match &*app_mode {
         AppMode::App => {
             let pinentry_program_path = app_handle
                 .path()

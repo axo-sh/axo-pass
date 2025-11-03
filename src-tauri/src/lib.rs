@@ -7,8 +7,6 @@ mod pinentry_handler;
 mod secrets;
 mod ssh_askpass_handler;
 
-use std::sync::OnceLock;
-
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
@@ -18,8 +16,6 @@ use crate::cli::{get_arg, run_cli_command};
 use crate::pinentry_handler::{PinentryHandler, PinentryState};
 use crate::ssh_askpass_handler::{AskPassState, SshAskpassHandler};
 
-// Global static to store the app mode
-static APP_MODE: OnceLock<AppMode> = OnceLock::new();
 const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
 
 fn run_pinentry_mode(app_handle: tauri::AppHandle) {
@@ -106,35 +102,29 @@ pub fn run() {
                 match subcommand.name.as_str() {
                     "pinentry" => {
                         log::debug!("Running in pinentry mode");
-                        APP_MODE
-                            .set(AppMode::Pinentry)
-                            .expect("APP_MODE already set");
+                        app.handle().manage(AppMode::Pinentry);
                         run_pinentry_mode(app.handle().clone());
                     },
                     "ssh-askpass" => {
                         log::debug!("Running in SSH askpass mode");
-                        APP_MODE
-                            .set(AppMode::SshAskpass)
-                            .expect("APP_MODE already set");
+                        app.handle().manage(AppMode::SshAskpass);
                         let prompt = get_arg(subcommand, "prompt")?;
                         run_ssh_askpass_mode(app.handle().clone(), prompt);
                     },
                     command => {
                         log::debug!("Running in cli mode");
-                        APP_MODE.set(AppMode::CLI).expect("APP_MODE already set");
+                        app.handle().manage(AppMode::Cli);
                         run_cli_command(app.handle().clone(), subcommand, command);
                         return Ok(());
                     },
                 }
             } else {
-                APP_MODE.set(AppMode::App).expect("APP_MODE already set");
+                app.handle().manage(AppMode::App);
             }
 
+            let app_mode = app.handle().state::<AppMode>();
             if let Some(window) = app.get_webview_window("main") {
-                if matches!(
-                    APP_MODE.get(),
-                    Some(AppMode::Pinentry) | Some(AppMode::SshAskpass)
-                ) {
+                if matches!(&*app_mode, AppMode::Pinentry | AppMode::SshAskpass) {
                     // In pinentry/SSH askpass mode: compact fixed size, non-resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                         width: 350.0,
