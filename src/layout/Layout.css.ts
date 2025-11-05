@@ -62,6 +62,10 @@ export const layoutTitleIcon = style({
   top: spacing(1 / 3),
 });
 
+export const layoutTitleContent = style({
+  flexGrow: 1,
+});
+
 export const layoutDescription = recipe({
   base: {
     marginBottom: spacing(2),
