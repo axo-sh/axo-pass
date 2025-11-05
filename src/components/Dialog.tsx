@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import type {RecipeVariants} from '@vanilla-extract/recipes';
+
 import {
   dialog,
   dialogActions,
@@ -7,6 +9,8 @@ import {
   dialogContent,
   dialogTitle,
 } from '@/components/Dialog.css';
+
+export type DialogVariants = NonNullable<RecipeVariants<typeof dialog>>;
 
 export type DialogHandle = {
   open: () => void;
@@ -28,9 +32,18 @@ type Props = {
   after?: React.ReactNode;
   isOpen: boolean;
   onClose: () => void;
+  size?: DialogVariants['size'];
 };
 
-export const Dialog: React.FC<Props> = ({className, title, children, after, isOpen, onClose}) => {
+export const Dialog: React.FC<Props> = ({
+  className,
+  title,
+  children,
+  after,
+  isOpen,
+  onClose,
+  size,
+}) => {
   const dialogRef = React.useRef<HTMLDialogElement>(null);
 
   // Sync the isOpen prop with the native dialog element
@@ -101,7 +114,7 @@ export const Dialog: React.FC<Props> = ({className, title, children, after, isOp
     return null;
   }
   return (
-    <dialog ref={dialogRef} className={dialog}>
+    <dialog ref={dialogRef} className={dialog({size})}>
       <div className={dialogClose} onClick={() => onClose()}>
         &times;
       </div>

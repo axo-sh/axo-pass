@@ -1,13 +1,13 @@
 import {style} from '@vanilla-extract/css';
+import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
 import {flex, gapVar} from '@/components/Flex.css';
 import {colorVar, greyScheme} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
-export const dialog = style([
-  {
-    width: `min(calc(100% - 6px - 2em), 400px)`,
+export const dialog = recipe({
+  base: {
     borderRadius: 12,
     padding: 0,
     boxShadow: `0px 4px 8px ${colorVar.dark20}`,
@@ -17,13 +17,24 @@ export const dialog = style([
     borderStyle: 'solid',
     borderColor: colorVar.light10,
     vars: greyScheme,
-  },
-  {
     ':focus': {
       outline: 'none',
     },
   },
-]);
+  variants: {
+    size: {
+      default: {
+        width: `min(calc(100% - 6px - 2em), 400px)`,
+      },
+      wide: {
+        width: `min(calc(100% - 6px - 2em), 600px)`,
+      },
+    },
+  },
+  defaultVariants: {
+    size: 'default',
+  },
+});
 
 export const dialogClose = style({
   position: 'sticky',

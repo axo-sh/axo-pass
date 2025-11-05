@@ -70,7 +70,12 @@ export const ErrorDialog: React.FC<Props> = ({
   dismissText = 'OK',
 }) => {
   return (
-    <Dialog title={title} isOpen={isOpen} onClose={onClose} className={errorDialogContent}>
+    <Dialog
+      title={title || undefined}
+      isOpen={isOpen}
+      onClose={onClose}
+      className={errorDialogContent}
+    >
       <div className={errorIcon}>
         <IconAlertSquareRounded size={48} />
       </div>
