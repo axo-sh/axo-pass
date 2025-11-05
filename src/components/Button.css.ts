@@ -25,7 +25,7 @@ export const button = recipe({
     borderRadius: 6,
     lineHeight: 1,
     alignItems: 'center',
-    transition: 'background 75ms ease-out,box-shadow 75ms ease-out',
+    transition: 'all 75ms ease-out',
     whiteSpace: 'nowrap',
     justifyContent: 'center',
     boxShadow: '0 2px 2px rgba(0, 0, 0, 0.07)',
@@ -62,7 +62,8 @@ export const button = recipe({
         },
         ':hover': {
           outline: 'none',
-          background: 'rgba(255,255,255,0.02)',
+          background: 'rgba(255,255,255,0.04)',
+          borderColor: colorVar.light20,
           boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
         },
         vars: greyScheme,
@@ -72,8 +73,10 @@ export const button = recipe({
         background: colorVar.base,
       },
       secondaryError: {
+        borderColor: colorVar.light20,
         ':hover': {
           vars: errorScheme,
+          borderColor: colorVar.base,
           background: colorVar.base,
         },
       },

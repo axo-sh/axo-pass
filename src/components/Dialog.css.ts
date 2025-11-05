@@ -54,7 +54,7 @@ export const dialogContent = style({
 
 export const dialogTitle = style({
   fontWeight: 600,
-  fontSize: vars.scale.md,
+  fontSize: vars.scale.lg,
   marginBottom: spacing(1),
   lineHeight: 1.3,
 });
@@ -63,6 +63,6 @@ export const dialogActions = style([
   flex({align: 'center', justify: 'end'}),
   {
     vars: {[gapVar]: spacing(3 / 4)},
-    marginTop: spacing(2),
+    marginTop: spacing(3 / 2),
   },
 ]);
