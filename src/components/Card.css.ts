@@ -1,16 +1,26 @@
 import {globalStyle, style} from '@vanilla-extract/css';
+import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
 import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
-export const card = style({
-  padding: spacing(1),
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: colorVar.light20,
-  background: colorVar.light05,
-  borderRadius: 8,
+export const card = recipe({
+  base: {
+    padding: spacing(1),
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colorVar.light20,
+    background: colorVar.light05,
+    borderRadius: 8,
+  },
+  variants: {
+    sectioned: {
+      true: {
+        padding: 0,
+      },
+    },
+  },
 });
 
 export const cardTitle = style({});
@@ -24,6 +34,14 @@ export const cardLabel = style({
 });
 
 export const cardContent = style({});
+
+export const cardSection = style({
+  padding: spacing(3 / 4),
+});
+
+globalStyle(`${cardSection} + ${cardSection}`, {
+  borderTop: `1px solid ${colorVar.light20}`,
+});
 
 globalStyle(`${cardContent} > p:first-child`, {
   marginTop: 0,
