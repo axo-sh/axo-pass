@@ -107,7 +107,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
         >
           <FormRow label={prompt}>
             <input
-              className={textInput}
+              className={textInput()}
               id="password-input"
               type={showPassword ? 'text' : 'password'}
               value={inputValue}
