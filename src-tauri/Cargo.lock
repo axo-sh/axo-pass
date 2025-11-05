@@ -161,17 +161,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
-name = "apple-native-keyring-store"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10f9955235ce557bd0ea2c64d7ff09a887885f515e98572d2640a29520d9c98c"
-dependencies = [
- "keyring-core",
- "log",
- "security-framework",
-]
-
-[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1240,11 +1229,9 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
- "apple-native-keyring-store",
  "async-trait",
  "base64 0.22.1",
  "block2 0.6.2",
- "keyring-core",
  "log",
  "objc2 0.6.3",
  "objc2-app-kit",
@@ -2137,15 +2124,6 @@ dependencies = [
  "bitflags 2.10.0",
  "serde",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "keyring-core"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ad182c4841eb5795af9d20e6e020b65a895517f6a41e6358ed8af74ba35d98"
-dependencies = [
- "log",
 ]
 
 [[package]]
@@ -3561,29 +3539,6 @@ checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
  "serde",
  "zeroize",
-]
-
-[[package]]
-name = "security-framework"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3297343eaf830f66ede390ea39da1d462b6b0c1b000f420d0a83f898bbbe6ef"
-dependencies = [
- "bitflags 2.10.0",
- "core-foundation",
- "core-foundation-sys",
- "libc",
- "security-framework-sys",
-]
-
-[[package]]
-name = "security-framework-sys"
-version = "2.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc1f0cbffaac4852523ce30d8bd3c5cdc873501d96ff467ca09b6767bb8cd5c0"
-dependencies = [
- "core-foundation-sys",
- "libc",
 ]
 
 [[package]]
