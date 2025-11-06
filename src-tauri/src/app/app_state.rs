@@ -29,7 +29,7 @@ impl AppState {
                 log::error!("Error reading vault: {:?}", e);
                 anyhow!("Failed to read vault: {e}")
             })?;
-            self.vaults.insert(name.to_string(), vw.into());
+            self.vaults.insert(name.to_string(), vw);
         }
 
         Ok(self.vaults.get_mut(name).unwrap())
