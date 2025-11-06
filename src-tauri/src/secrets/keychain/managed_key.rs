@@ -21,6 +21,7 @@ use objc2_security::{
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
 
+use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::alg;
 
 pub struct ManagedKey {
@@ -47,7 +48,7 @@ impl ManagedKey {
         ManagedKey { label, sec_key }
     }
 
-    pub fn create(label: &str) -> anyhow::Result<ManagedKey> {
+    pub fn create(label: &str) -> Result<ManagedKey, KeychainError> {
         log::debug!("Creating new user key with label: {}", label);
         unsafe {
             let public_attrs = CFMutableDictionary::<CFString, CFType>::empty();
@@ -71,10 +72,18 @@ impl ManagedKey {
             let sec_key = SecKey::new_random_key(query.as_opaque(), &mut cf_error_ptr);
             if !cf_error_ptr.is_null() {
                 let cf_error = &*cf_error_ptr;
-                bail!("Failed to create SecKey: {cf_error:?}");
+                // todo: may need to handle error codes
+                log::error!(
+                    "Error creating new managed key with label {}: {:?}",
+                    label,
+                    cf_error
+                );
+                return Err(KeychainError::Generic(anyhow::anyhow!(
+                    cf_error.to_string()
+                )));
             }
             let Some(sec_key) = sec_key else {
-                bail!("Failed to create SecKey: unknown error");
+                return Err(KeychainError::KeyCreationFailed);
             };
 
             let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.retain().into());

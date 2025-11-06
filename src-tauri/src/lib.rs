@@ -162,9 +162,14 @@ pub fn run() {
             app::passwords::delete_password,
             app::user_authorization::send_pinentry_response,
             app::user_authorization::send_askpass_response,
-            app::vault::init_vault,
-            app::vault::get_vault,
-            app::vault::get_decrypted_vault_item_credential,
+            app::vault::get_vault::init_vault,
+            app::vault::get_vault::get_vault,
+            app::vault::get_decrypted_credential::get_decrypted_credential,
+            app::vault::add_item::add_item,
+            app::vault::delete_item::delete_item,
+            app::vault::update_item::update_item,
+            app::vault::add_credential::add_credential,
+            app::vault::delete_credential::delete_credential,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

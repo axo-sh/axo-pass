@@ -4,6 +4,7 @@ env_file = ".env.local"
 [tasks]
 dev = "cargo tauri dev"
 build = "cargo-tauri build -b app"
+types = "typeshare ./src-tauri --lang=typescript --output-file=src/binding.ts"
 start = "./src-tauri/target/release/bundle/macos/frittata.app/Contents/MacOS/frittata"
 test = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 biome-assist = "npx @biomejs/biome check --formatter-enabled=false --linter-enabled=false"

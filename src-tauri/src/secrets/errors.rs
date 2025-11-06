@@ -1,10 +1,15 @@
 use thiserror::Error;
 
+use crate::secrets::keychain::errors::KeychainError;
+
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
     #[error("Vault not found")]
     VaultNotFound,
+
+    #[error("Vault is locked")]
+    VaultLocked,
 
     #[error("Failed to create vault directory: {0}")]
     VaultDirCreateError(#[source] std::io::Error),
@@ -18,15 +23,24 @@ pub enum Error {
     #[error("Failed to encrypt vault file key")]
     VaultFileKeyEncryptionError,
 
+    #[error("Failed to decrypt vault file key")]
+    VaultFileKeyDecryptionError,
+
+    #[error("Failed to encrypt secret")]
+    VaultSecretEncryptionError,
+
+    #[error("Failed to decrypt secret")]
+    VaultSecretDecryptionError,
+
     #[error("Failed to serialize vault: {0}")]
     VaultSerializationError(#[source] serde_json::Error),
 
     #[error("Failed to save vault: {0}")]
     VaultWriteError(#[source] std::io::Error),
 
-    #[error("Keychain error: {0}")]
-    KeychainError(#[source] anyhow::Error),
+    #[error("Failed to create new encryption: {0}")]
+    KeyCreationFailed(KeychainError),
 
-    #[error("Failed to add secret to vault: {0}")]
-    VaultAddSecretError(anyhow::Error),
+    #[error("Could not retrieve key from keychain: {0}")]
+    KeyRetrievalFailed(KeychainError),
 }

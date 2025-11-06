@@ -13,4 +13,7 @@ pub enum KeychainError {
 
     #[error("Keychain error: {0}")]
     Generic(#[from] anyhow::Error),
+
+    #[error("Key creation failed with unexpected error")]
+    KeyCreationFailed,
 }
