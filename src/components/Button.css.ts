@@ -86,6 +86,11 @@ export const button = recipe({
         fontSize: vars.scale.xs,
         padding: '6px 10px',
       },
+      iconSmall: {
+        fontSize: vars.scale.xs,
+        padding: spacing(0.5),
+        border: 'none',
+      },
       default: {},
       large: {
         fontSize: vars.scale.sm,

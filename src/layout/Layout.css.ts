@@ -2,6 +2,7 @@ import {globalStyle, style} from '@vanilla-extract/css';
 import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
+import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const layout = style({
@@ -70,6 +71,7 @@ export const layoutDescription = recipe({
   base: {
     marginBottom: spacing(2),
     fontSize: vars.scale.sm,
+    color: `color-mix(in srgb, ${colorVar.text} 75%, transparent)`,
     opacity: 0.75,
     display: 'flex',
     flexDirection: 'column',

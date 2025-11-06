@@ -1,5 +1,16 @@
 import {invoke} from '@tauri-apps/api/core';
 
+import type {
+  AddCredentialRequest,
+  AddItemRequest,
+  DecryptedCredential,
+  DecryptedCredentialRequest,
+  DeleteCredentialRequest,
+  DeleteItemRequest,
+  UpdateItemRequest,
+  VaultResponse,
+} from '@/binding';
+
 // Common password request structure (used by both pinentry and SSH askpass)
 export type PasswordRequestData = {
   key_id: string | null;
@@ -95,24 +106,8 @@ export const listPasswords = async (): Promise<PasswordEntry[]> => {
   return await invoke<PasswordEntry[]>('list_passwords');
 };
 
-export type Vault = {
-  key: string;
-  title: string | null;
-  data: {[key: string]: VaultItem};
-};
-
-export type VaultItem = {
-  id: string;
-  title: string;
-  credentials: {[key: string]: VaultItemCredential};
-};
-
-export type VaultItemCredential = {
-  title: string | null;
-};
-
-export const getVault = async (): Promise<Vault> => {
-  return await invoke<Vault>('get_vault');
+export const getVault = async (): Promise<VaultResponse> => {
+  return await invoke<VaultResponse>('get_vault');
 };
 
 export const initVault = async (): Promise<void> => {
@@ -123,20 +118,30 @@ export const deletePassword = async (entry: PasswordEntry): Promise<void> => {
   return await invoke<void>('delete_password', {entry});
 };
 
-export type DecryptedCredential = {
-  title: string | null;
-  secret: string;
-  url: string;
+export const getDecryptedVaultItemCredential = async (
+  request: DecryptedCredentialRequest,
+): Promise<DecryptedCredential | null> => {
+  return await invoke<DecryptedCredential | null>('get_decrypted_credential', {
+    request,
+  });
 };
 
-export const getDecryptedVaultItemCredential = async (
-  vaultKey: string,
-  itemKey: string,
-  credentialKey: string,
-): Promise<DecryptedCredential | null> => {
-  return await invoke<DecryptedCredential | null>('get_decrypted_vault_item_credential', {
-    vault_key: vaultKey,
-    item_key: itemKey,
-    credential_key: credentialKey,
-  });
+export const addItem = async (request: AddItemRequest): Promise<void> => {
+  return await invoke<void>('add_item', {request});
+};
+
+export const updateItem = async (request: UpdateItemRequest): Promise<void> => {
+  return await invoke<void>('update_item', {request});
+};
+
+export const deleteItem = async (request: DeleteItemRequest): Promise<void> => {
+  return await invoke<void>('delete_item', {request});
+};
+
+export const addCredential = async (request: AddCredentialRequest): Promise<void> => {
+  return await invoke<void>('add_credential', {request});
+};
+
+export const deleteCredential = async (request: DeleteCredentialRequest): Promise<void> => {
+  return await invoke<void>('delete_credential', {request});
 };

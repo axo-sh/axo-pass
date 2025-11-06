@@ -1,26 +1,46 @@
 import {style} from '@vanilla-extract/css';
+import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
 import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
-export const secretsList = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: spacing(1 / 6),
-  textAlign: 'left',
+export const secretsList = recipe({
+  base: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: spacing(1),
+    textAlign: 'left',
+  },
+  variants: {
+    clickable: {
+      true: {
+        gap: spacing(0.5),
+      },
+    },
+  },
 });
 
-export const secretItem = style({
-  display: 'grid',
-  gridTemplateColumns: '1fr auto',
-  alignItems: 'center',
-  gap: spacing(1 / 8),
-  padding: spacing(1 / 2),
-  margin: spacing(0, -1 / 2),
-  borderRadius: 8,
-  ':hover': {
-    backgroundColor: colorVar.light10,
+export const secretItem = recipe({
+  base: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    alignItems: 'center',
+    gap: spacing(1 / 8),
+  },
+  variants: {
+    clickable: {
+      true: {
+        padding: spacing(0.5, 0.5, 0.5, 0.75),
+        margin: spacing(0, -0.5, 0, -0.75),
+        // with an icon on the right, it looks better if we pad the left more
+        borderRadius: 8,
+        cursor: 'pointer',
+        ':hover': {
+          backgroundColor: colorVar.light10,
+        },
+      },
+    },
   },
 });
 
@@ -39,7 +59,7 @@ export const secretItemLabel = style({
 export const secretItemValue = style({
   display: 'block',
   fontFamily: vars.fonts.monospace,
-  fontWeight: 800,
+  fontWeight: 600,
   fontSize: vars.scale.sm,
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -48,4 +68,10 @@ export const secretItemValue = style({
     whiteSpace: 'normal',
     wordBreak: 'break-all',
   },
+});
+
+export const secretItemDesc = style({
+  fontSize: vars.scale.xs,
+  color: colorVar.light30,
+  fontFamily: vars.fonts.monospace,
 });

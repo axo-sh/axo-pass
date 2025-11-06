@@ -1,13 +1,15 @@
 import {assignInlineVars} from '@vanilla-extract/dynamic';
 import type {RecipeVariants} from '@vanilla-extract/recipes';
+import cx from 'classnames';
 
-import {spacing} from '../styles/utils';
-import {flex, gapVar} from './Flex.css';
+import {flex, flexSpacer, gapVar} from '@/components/Flex.css';
+import {spacing} from '@/styles/utils';
 
 type FlexVariants = NonNullable<RecipeVariants<typeof flex>>;
 
-type Props = React.PropsWithChildren<
+export type Props = React.PropsWithChildren<
   Omit<FlexVariants, 'direction'> & {
+    className?: string;
     column?: boolean;
     gap?: number;
     as?: React.ElementType;
@@ -15,6 +17,7 @@ type Props = React.PropsWithChildren<
 >;
 
 export const Flex: React.FC<Props> = ({
+  className,
   children,
   column,
   align,
@@ -24,10 +27,12 @@ export const Flex: React.FC<Props> = ({
 }) => {
   return (
     <Component
-      className={flex({direction: column ? 'column' : 'row', align, justify})}
+      className={cx(flex({direction: column ? 'column' : 'row', align, justify}), className)}
       style={assignInlineVars({[gapVar]: spacing(gap)})}
     >
       {children}
     </Component>
   );
 };
+
+export const FlexSpacer = () => <div className={flexSpacer} />;

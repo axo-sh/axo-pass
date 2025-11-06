@@ -2,7 +2,13 @@ import type * as React from 'react';
 
 import cx from 'classnames';
 
-import {rowErrorStyle, rowLabelStyle, rowStyle} from '@/components/form/FormRow.css';
+import {
+  rowContentStyle,
+  rowDescStyle,
+  rowErrorStyle,
+  rowLabelStyle,
+  rowStyle,
+} from '@/components/form/FormRow.css';
 
 interface Props {
   label?: string;
@@ -25,8 +31,8 @@ export const FormRow: React.FC<Props> = ({
   return (
     <div className={cx(className, rowStyle({error: !!errorRow}))}>
       {label && <div className={rowLabelStyle}>{label}</div>}
-      {description && <div className={rowLabelStyle}>{description}</div>}
-      <div>{children}</div>
+      {description && <div className={rowDescStyle}>{description}</div>}
+      <div className={rowContentStyle}>{children}</div>
       {error && <div className={rowErrorStyle}>{error}</div>}
     </div>
   );

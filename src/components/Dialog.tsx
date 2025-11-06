@@ -7,7 +7,9 @@ import {
   dialogActions,
   dialogClose,
   dialogContent,
+  dialogSubtitle,
   dialogTitle,
+  dialogTitleText,
 } from '@/components/Dialog.css';
 
 export type DialogVariants = NonNullable<RecipeVariants<typeof dialog>>;
@@ -28,6 +30,7 @@ export const useDialog = (): DialogHandle => {
 type Props = {
   className?: string;
   title?: string;
+  subtitle?: string;
   children: React.ReactNode;
   after?: React.ReactNode;
   isOpen: boolean;
@@ -38,6 +41,7 @@ type Props = {
 export const Dialog: React.FC<Props> = ({
   className,
   title,
+  subtitle,
   children,
   after,
   isOpen,
@@ -119,11 +123,23 @@ export const Dialog: React.FC<Props> = ({
         &times;
       </div>
       <div className={dialogContent}>
-        {title && <div className={dialogTitle}>{title}</div>}
+        <DialogTitle title={title} subtitle={subtitle} />
         <div className={className}>{children}</div>
       </div>
       {after}
     </dialog>
+  );
+};
+
+const DialogTitle: React.FC<{title?: string; subtitle?: string}> = ({title, subtitle}) => {
+  if (!title) {
+    return null;
+  }
+  return (
+    <div className={dialogTitle}>
+      <div className={dialogTitleText}>{title}</div>
+      {subtitle && <div className={dialogSubtitle}>{subtitle}</div>}
+    </div>
   );
 };
 

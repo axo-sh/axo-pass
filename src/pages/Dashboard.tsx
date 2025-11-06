@@ -1,5 +1,7 @@
 import {Redirect, Route, Switch} from 'wouter';
 
+import {button} from '@/components/Button.css';
+import {useDialog} from '@/components/Dialog';
 import {Layout} from '@/layout/Layout';
 import {LayoutDescription} from '@/layout/LayoutDescription';
 import {LayoutTitle} from '@/layout/LayoutTitle';
@@ -9,6 +11,8 @@ import {GPGSecrets} from '@/pages/Manager/GPGSecrets';
 import {Secrets} from '@/pages/Manager/Secrets';
 
 export const Dashboard = () => {
+  const addSecretDialog = useDialog();
+
   return (
     <Layout>
       <div className={dashboard}>
@@ -20,11 +24,19 @@ export const Dashboard = () => {
               <LayoutDescription>Placeholder for environment page.</LayoutDescription>
             </Route>
             <Route path="/dashboard/secrets">
-              <LayoutTitle>Secrets</LayoutTitle>
+              <LayoutTitle
+                action={
+                  <button className={button({variant: 'clear'})} onClick={addSecretDialog.open}>
+                    Add secret
+                  </button>
+                }
+              >
+                Secrets
+              </LayoutTitle>
               <LayoutDescription>
                 Your stored vault secrets. These are encrypted and can be decrypted.
               </LayoutDescription>
-              <Secrets />
+              <Secrets addSecretDialog={addSecretDialog} />
             </Route>
             <Route path="/dashboard/gpg">
               <LayoutTitle>GPG</LayoutTitle>

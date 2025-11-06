@@ -1,5 +1,7 @@
 import React from 'react';
 
+import {IconTrash} from '@tabler/icons-react';
+
 import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryType} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
@@ -35,21 +37,21 @@ export const GPGSecrets: React.FC = () => {
   }
 
   return (
-    <div className={secretsList}>
+    <div className={secretsList()}>
       {result.map((entry) => (
-        <div key={entry.key_id} className={secretItem}>
+        <div key={entry.key_id} className={secretItem()}>
           <div className={secretItemDetail}>
             <div className={secretItemLabel}>{getKeyTypeShort(entry.password_type)}</div>
             <code className={secretItemValue}>{entry.key_id}</code>
           </div>
           <button
-            className={button({variant: 'secondaryError'})}
+            className={button({size: 'iconSmall', variant: 'secondaryError'})}
             onClick={() => {
               setSelectedEntry(entry);
               dialog.open();
             }}
           >
-            Delete
+            <IconTrash size={16} />
           </button>
         </div>
       ))}

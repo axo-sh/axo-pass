@@ -10,6 +10,4 @@ export const dashboard = style({
   height: '100%',
 });
 
-export const dashboardContent = style({
-  overflowY: 'scroll',
-});
+export const dashboardContent = style({});

@@ -60,13 +60,24 @@ export const dialogClose = style({
 
 export const dialogContent = style({
   padding: spacing(1.5, 2),
-  fontSize: vars.scale.xs,
+  fontSize: vars.scale.sm,
 });
 
 export const dialogTitle = style({
+  marginBottom: spacing(1),
+});
+
+export const dialogTitleText = style({
   fontWeight: 600,
   fontSize: vars.scale.lg,
-  marginBottom: spacing(1),
+  lineHeight: 1.3,
+});
+
+export const dialogSubtitle = style({
+  marginTop: spacing(1 / 4),
+  fontFamily: vars.fonts.monospace,
+  fontSize: vars.scale.sm,
+  color: `color-mix(in srgb, ${colorVar.text} 75%, transparent)`,
   lineHeight: 1.3,
 });
 
