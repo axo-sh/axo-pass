@@ -159,28 +159,23 @@ impl VaultWrapper {
 
     pub fn update_item(
         &mut self,
-        item_id: Uuid,
+        item_key: &str,
         new_title: String,
         credentials: BTreeMap<String, (Option<String>, Option<SecretString>)>,
     ) -> anyhow::Result<()> {
         let new_title = new_title.trim();
-
-        // First, encrypt all the new credential values
         let mut encrypted_values: BTreeMap<String, String> = BTreeMap::new();
-
-        // Get the item to retrieve credential IDs for encryption
         let item = self
             .vault
             .data
-            .values()
-            .find(|i| i.id == item_id)
-            .ok_or_else(|| anyhow!("Item with id {item_id} not found"))?;
+            .get(item_key)
+            .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
 
         for (cred_key, (_, new_cred_value)) in &credentials {
             if let Some(new_value) = new_cred_value
                 && let Some(credential) = item.credentials.get(cred_key)
             {
-                let aad = format!("{}:{}", item_id, credential.id);
+                let aad = format!("{}:{}", item.id, credential.id);
                 let encrypted = self.encrypt(new_value.clone(), aad.as_bytes())?;
                 let secret_leaf = b64.encode(&encrypted);
                 encrypted_values.insert(cred_key.clone(), secret_leaf);
@@ -191,9 +186,8 @@ impl VaultWrapper {
         let item = self
             .vault
             .data
-            .values_mut()
-            .find(|i| i.id == item_id)
-            .ok_or_else(|| anyhow!("Item with id {item_id} not found"))?;
+            .get_mut(item_key)
+            .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
 
         item.title = new_title.to_string();
 
@@ -358,14 +352,14 @@ impl VaultWrapper {
             .ok_or_else(|| anyhow!("Item {item_key} not found."))?;
 
         if item.credentials.remove(credential_key).is_none() {
-            log::debug!("Did not find credential {item_key}/{credential_key} to delete");
+            log::debug!("Could not not find credential {item_key}/{credential_key} to delete");
         };
 
         Ok(())
     }
 }
 
-const WHITESPACE_REGEX: LazyLock<regex::Regex> =
+static WHITESPACE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+").unwrap());
 
 pub fn normalize_key(key: &str) -> String {

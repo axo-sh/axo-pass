@@ -20,8 +20,7 @@ pub struct CredentialUpdate {
 
 pub struct UpdateItemRequest {
     pub vault_key: String,
-    #[typeshare(serialized_as = "String")]
-    pub item_id: uuid::Uuid,
+    pub item_key: String,
     pub item_title: String,
     #[typeshare(serialized_as = "HashMap<String, CredentialUpdate>")]
     pub credentials: BTreeMap<String, CredentialUpdate>,
@@ -34,7 +33,7 @@ pub async fn update_item(
 ) -> Result<(), String> {
     let UpdateItemRequest {
         vault_key,
-        item_id,
+        item_key,
         item_title,
         credentials,
     } = request;
@@ -55,7 +54,7 @@ pub async fn update_item(
             })
             .collect();
 
-    vw.update_item(item_id, item_title, credentials_with_secrets)
+    vw.update_item(&item_key, item_title, credentials_with_secrets)
         .map_err(|e| format!("Failed to update item in vault: {e}"))?;
     vw.save()
         .map_err(|e| format!("Failed to save vault: {e}"))?;
