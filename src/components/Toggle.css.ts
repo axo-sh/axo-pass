@@ -1,6 +1,6 @@
 import {createVar, globalStyle, style} from '@vanilla-extract/css';
 
-import {colorVar} from '@/styles/colors.css';
+import {accentScheme, colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const toggleSize = createVar();
@@ -15,6 +15,7 @@ export const toggle = style({
   vars: {
     [toggleSize]: '24px',
     [togglePadding]: '3px',
+    ...accentScheme,
   },
 });
 

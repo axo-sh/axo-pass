@@ -33,7 +33,7 @@ export const Toggle: React.FC<Props> = ({
   };
 
   return (
-    <label className={cx(toggle, button({variant: 'clear'}))}>
+    <label className={cx(toggle, button({size: 'small', variant: 'clear'}))}>
       {!!children && <div className={toggleLabel}>{children}</div>}
       <div
         className={toggleSliderContainer}
