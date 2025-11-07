@@ -44,6 +44,19 @@ export interface DeleteItemRequest {
   item_key: string;
 }
 
+export interface GetVaultRequest {
+  vault_key?: string;
+}
+
+export interface InitVaultRequest {
+  vault_name?: string;
+  vault_key?: string;
+}
+
+export interface ListVaultsResponse {
+  vaults: string[];
+}
+
 export interface UpdateItemRequest {
   vault_key: string;
   item_key: string;

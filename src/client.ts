@@ -7,6 +7,8 @@ import type {
   DecryptedCredentialRequest,
   DeleteCredentialRequest,
   DeleteItemRequest,
+  InitVaultRequest,
+  ListVaultsResponse,
   UpdateItemRequest,
   VaultResponse,
 } from '@/binding';
@@ -106,12 +108,18 @@ export const listPasswords = async (): Promise<PasswordEntry[]> => {
   return await invoke<PasswordEntry[]>('list_passwords');
 };
 
-export const getVault = async (): Promise<VaultResponse> => {
-  return await invoke<VaultResponse>('get_vault');
+export const getVault = async (vaultKey?: string): Promise<VaultResponse> => {
+  return await invoke<VaultResponse>('get_vault', {
+    request: {vault_key: vaultKey},
+  });
 };
 
-export const initVault = async (): Promise<void> => {
-  return await invoke<void>('init_vault');
+export const listVaults = async (): Promise<string[]> => {
+  return (await invoke<ListVaultsResponse>('list_vaults')).vaults;
+};
+
+export const initVault = async (request: InitVaultRequest): Promise<void> => {
+  return await invoke<void>('init_vault', {request});
 };
 
 export const deletePassword = async (entry: PasswordEntry): Promise<void> => {
