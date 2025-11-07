@@ -2,7 +2,7 @@ import {style} from '@vanilla-extract/css';
 import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
-import {colorVar} from '@/styles/colors.css';
+import {accentScheme, colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const secretsList = recipe({
@@ -15,7 +15,7 @@ export const secretsList = recipe({
   variants: {
     clickable: {
       true: {
-        gap: spacing(0.5),
+        gap: spacing(1 / 6),
       },
     },
   },
@@ -57,7 +57,9 @@ export const secretItemLabel = style({
 });
 
 export const secretItemValue = style({
-  display: 'block',
+  display: 'flex',
+  alignItems: 'center',
+  gap: spacing(0.25),
   fontFamily: vars.fonts.monospace,
   fontWeight: 600,
   fontSize: vars.scale.sm,
@@ -68,6 +70,16 @@ export const secretItemValue = style({
     whiteSpace: 'normal',
     wordBreak: 'break-all',
   },
+});
+
+export const secretItemValueCode = style({
+  display: 'inline-block',
+  padding: spacing(1 / 2, 2 / 3),
+  fontFamily: vars.fonts.monospace,
+  border: `1px solid ${colorVar.light10}`,
+  lineHeight: 1,
+  borderRadius: 6,
+  vars: accentScheme,
 });
 
 export const secretItemDesc = style({

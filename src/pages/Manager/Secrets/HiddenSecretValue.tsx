@@ -4,7 +4,7 @@ import type {DecryptedCredential} from '@/binding';
 import {getDecryptedVaultItemCredential} from '@/client';
 import {button} from '@/components/Button.css';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {secretItemValue} from '@/pages/Manager/Secrets.css';
+import {secretItemValue, secretItemValueCode} from '@/pages/Manager/Secrets.css';
 
 type Props = {
   vaultKey: string;
@@ -17,7 +17,7 @@ export const HiddenSecretValue: React.FC<Props> = ({vaultKey, itemKey, credKey})
   const [decryptedCred, setDecryptedCred] = React.useState<DecryptedCredential | null>(null);
 
   const errorDialog = useErrorDialog();
-  const onShowSecret = async (e: React.MouseEvent<HTMLButtonElement>) => {
+  const onToggleSecret = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     if (revealed) {
       setRevealed(false);
@@ -41,17 +41,16 @@ export const HiddenSecretValue: React.FC<Props> = ({vaultKey, itemKey, credKey})
   if (revealed && decryptedCred) {
     return (
       <div className={secretItemValue}>
-        <code>{decryptedCred.secret}</code>
-        <button onClick={onShowSecret} className={button({size: 'small', variant: 'clear'})}>
-          Hide
-        </button>
+        <code onClick={onToggleSecret} className={secretItemValueCode}>
+          {decryptedCred.secret}
+        </code>
       </div>
     );
   }
 
   return (
     <div className={secretItemValue}>
-      <button onClick={onShowSecret} className={button({size: 'small', variant: 'clear'})}>
+      <button onClick={onToggleSecret} className={button({size: 'small', variant: 'clear'})}>
         Show
       </button>
     </div>
