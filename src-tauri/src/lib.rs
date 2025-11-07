@@ -139,21 +139,35 @@ pub fn run() {
                         width: 350.0,
                         height: 500.0,
                     }));
+
                     let _ = window.set_resizable(false);
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window
+                        .center()
+                        .inspect_err(|err| log::error!("err center: {err}"));
+
+                    let mut pos = window
+                        .outer_position()
+                        .unwrap()
+                        .to_logical::<f64>(window.scale_factor()?);
+                    pos.x -= 300.0;
+                    window.set_position(pos)?;
                 } else {
                     // In app mode: larger size (800x700), resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                         width: 800.0,
                         height: 700.0,
                     }));
-                    let _ = window.set_resizable(true);
-                }
+                    window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
+                        width: 600.0,
+                        height: 400.0,
+                    })))?;
 
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window
-                    .center()
-                    .inspect_err(|err| log::error!("err center: {err}"));
+                    let _ = window.set_resizable(true);
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
 
             Ok(())
