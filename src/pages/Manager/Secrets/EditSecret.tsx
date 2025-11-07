@@ -6,7 +6,7 @@ import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
 
 import type {CredentialUpdate, VaultSchema} from '@/binding';
-import {deleteCredential, updateItem} from '@/client';
+import {updateItem} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card, CardSection} from '@/components/Card';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
@@ -14,6 +14,7 @@ import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {flex} from '@/components/Flex.css';
 import {AddCredentialDialog} from '@/pages/Manager/Secrets/AddCredential';
+import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
 import {HiddenSecretValue} from '@/pages/Manager/Secrets/HiddenSecretValue';
 import {SecretForm, type SecretFormData} from '@/pages/Manager/Secrets/SecretForm';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
@@ -207,50 +208,3 @@ const SecretCredentialList: React.FC<{
 });
 
 SecretCredentialList.displayName = 'SecretCredentialList';
-
-type DialogProps = {
-  vault: VaultSchema;
-  itemKey: string;
-  credentialKey: string;
-  isOpen: boolean;
-  onClose: () => void;
-};
-
-const DeleteCredentialDialog: React.FC<DialogProps> = ({
-  vault,
-  itemKey,
-  credentialKey,
-  isOpen,
-  onClose,
-}) => {
-  const vaultStore = useVaultStore();
-  const errorDialog = useErrorDialog();
-  const onDelete = async () => {
-    try {
-      await deleteCredential({
-        vault_key: vault.key,
-        item_key: itemKey,
-        credential_key: credentialKey,
-      });
-    } catch (err) {
-      errorDialog.showError(null, String(err));
-    }
-    toast.success('Credential deleted');
-    await vaultStore.reload(vault.key);
-    onClose();
-  };
-
-  return (
-    <Dialog title="Delete credential?" isOpen={isOpen} onClose={onClose}>
-      Are you sure you want to delete this credential? This action cannot be undone.
-      <DialogActions>
-        <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
-          Cancel
-        </button>
-        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
-          Delete
-        </button>
-      </DialogActions>
-    </Dialog>
-  );
-};
