@@ -1,12 +1,26 @@
 use std::sync::Mutex;
 
-use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::vault::schemas::VaultSchema;
-use crate::secrets::vault_wrapper::{DEFAULT_VAULT, VaultWrapper, get_vault_encryption_key};
+use crate::secrets::vault_wrapper::{
+    DEFAULT_VAULT, VaultWrapper, get_vault_encryption_key, normalize_key,
+};
+
+#[derive(Deserialize)]
+#[typeshare]
+pub struct InitVaultRequest {
+    vault_name: Option<String>,
+    vault_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[typeshare]
+pub struct GetVaultRequest {
+    vault_key: Option<String>,
+}
 
 #[derive(Serialize)]
 #[typeshare]
@@ -15,22 +29,35 @@ pub struct VaultResponse {
 }
 
 #[tauri::command]
-pub async fn init_vault(app: AppHandle) -> Result<VaultResponse, String> {
+pub async fn init_vault(
+    request: InitVaultRequest,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<VaultResponse, String> {
     log::debug!("command: init_vault with test values");
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
+    let state = state
+        .lock()
+        .map_err(|e| format!("Failed to lock app state: {e}"))?;
+
     let user_encryption_key = get_vault_encryption_key()
         .map_err(|e| format!("Failed to get vault encryption key: {e}"))?;
 
-    let mut vw = VaultWrapper::new_vault(&app_data_dir, DEFAULT_VAULT, user_encryption_key)
-        .map_err(|e| format!("Failed to create new vault: {e}",))?;
+    let vault_key = request
+        .vault_key
+        .or_else(|| request.vault_name.clone().map(|name| normalize_key(&name)))
+        .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+
+    let mut vw = VaultWrapper::new_vault(
+        request.vault_name,
+        &state.vaults_dir,
+        &vault_key,
+        user_encryption_key,
+    )
+    .map_err(|e| format!("Failed to create new vault: {e}",))?;
 
     log::debug!("Vault created, saving new vault to disk...");
     vw.add_secret(
         "test item",
-        Some("test_item"),
+        "test-item",
         "cred item",
         "cred_item",
         "super-secret-value".into(),
@@ -44,13 +71,37 @@ pub async fn init_vault(app: AppHandle) -> Result<VaultResponse, String> {
 }
 
 #[tauri::command]
-pub async fn get_vault(state: tauri::State<'_, Mutex<AppState>>) -> Result<VaultResponse, String> {
+pub async fn get_vault(
+    request: GetVaultRequest,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<VaultResponse, String> {
     log::debug!("command: get_vault");
     let mut state = state
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
+    let vault_key = request
+        .vault_key
+        .unwrap_or_else(|| DEFAULT_VAULT.to_string());
     let vw: &VaultWrapper = state
-        .get_vault(DEFAULT_VAULT)
+        .get_vault(&vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
     Ok(VaultResponse { vault: vw.into() })
+}
+
+#[derive(Serialize)]
+#[typeshare]
+pub struct ListVaultsResponse {
+    pub vaults: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn list_vaults(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<ListVaultsResponse, String> {
+    log::debug!("command: list_vaults");
+    let state = state
+        .lock()
+        .map_err(|e| format!("Failed to lock app state: {e}"))?;
+    let vaults: Vec<String> = state.vaults.keys().cloned().collect();
+    Ok(ListVaultsResponse { vaults })
 }

@@ -30,11 +30,12 @@ pub struct VaultWrapper {
 
 impl VaultWrapper {
     pub fn new_vault(
+        name: Option<String>,
         vault_dir: &Path,
         vault_key: &str,
         user_encryption_key: ManagedKey,
     ) -> Result<Self, Error> {
-        let vault = Vault::new(user_encryption_key)?;
+        let vault = Vault::new(name, user_encryption_key)?;
         let vault_path = vault_dir.join(vault_key).with_extension("json");
         let vault_wrapper = Self {
             key: vault_key.to_string(),
@@ -219,14 +220,14 @@ impl VaultWrapper {
     pub fn add_secret(
         &mut self,
         item_title: &str,
-        item_key: Option<&str>,
+        item_key: &str,
         cred_title: &str,
         cred_key: &str,
         cred_value: SecretString,
     ) -> Result<(), Error> {
         // normalize values
         let item_title = item_title.trim();
-        let item_key = normalize_key(item_key.unwrap_or(item_title));
+        let item_key = normalize_key(item_key);
         let cred_key = normalize_key(cred_key);
 
         // get ids and encrypt credential value
@@ -364,7 +365,7 @@ static WHITESPACE_REGEX: LazyLock<regex::Regex> =
 
 pub fn normalize_key(key: &str) -> String {
     WHITESPACE_REGEX
-        .replace_all(&key.trim().to_lowercase(), "_")
+        .replace_all(&key.trim().to_lowercase(), "-")
         .to_string()
 }
 
@@ -387,7 +388,7 @@ impl From<&VaultWrapper> for VaultSchema {
     fn from(vw: &VaultWrapper) -> Self {
         VaultSchema {
             key: vw.key.clone(),
-            title: vw.vault.title.clone(),
+            title: vw.vault.name.clone(),
             data: vw
                 .vault
                 .data

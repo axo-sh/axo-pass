@@ -82,14 +82,8 @@ pub fn cmd_set_item(
         },
     };
 
-    vw.add_secret(
-        item_key,
-        Some(item_key),
-        credential_key,
-        credential_key,
-        secret,
-    )
-    .expect("Failed to add secret");
+    vw.add_secret(item_key, item_key, credential_key, credential_key, secret)
+        .expect("Failed to add secret");
 
     vw.save().expect("Failed to save vault");
 

@@ -164,6 +164,7 @@ pub fn run() {
             app::user_authorization::send_askpass_response,
             app::vault::get_vault::init_vault,
             app::vault::get_vault::get_vault,
+            app::vault::get_vault::list_vaults,
             app::vault::get_decrypted_credential::get_decrypted_credential,
             app::vault::add_item::add_item,
             app::vault::delete_item::delete_item,

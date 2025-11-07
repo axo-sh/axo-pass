@@ -44,7 +44,7 @@ pub struct Vault {
     pub id: Uuid,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub name: Option<String>,
 
     #[serde_as(as = "Base64")]
     pub file_key: Vec<u8>, // encrypted file key
@@ -54,7 +54,7 @@ pub struct Vault {
 }
 
 impl Vault {
-    pub fn new(user_encryption_key: ManagedKey) -> Result<Self, Error> {
+    pub fn new(name: Option<String>, user_encryption_key: ManagedKey) -> Result<Self, Error> {
         log::debug!("Creating new vault...");
         log::debug!("Creating new vault: generating file key...");
         let actual_file_key = Aes256Gcm::generate_key(OsRng);
@@ -67,7 +67,7 @@ impl Vault {
         let vault_id = Uuid::new_v4();
         Ok(Self {
             id: vault_id,
-            title: None,
+            name,
             file_key: file_key.into_bytes(),
             data: BTreeMap::new(),
         })
