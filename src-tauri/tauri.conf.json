@@ -41,6 +41,39 @@
           "subcommands": {
             "list": {
               "description": "List vault items"
+            },
+            "set": {
+              "description": "Set a vault item",
+              "args": [
+                {
+                  "name": "vault_key",
+                  "description": "The key of the vault item",
+                  "index": 1,
+                  "takesValue": true,
+                  "required": true
+                },
+                {
+                  "name": "item_key",
+                  "description": "The key of the item to set",
+                  "index": 2,
+                  "takesValue": true,
+                  "required": true
+                },
+                {
+                  "name": "credential_key",
+                  "description": "The key of the credential to set",
+                  "index": 3,
+                  "takesValue": true,
+                  "required": true
+                },
+                {
+                  "name": "secret_value",
+                  "description": "The secret value to set",
+                  "index": 4,
+                  "takesValue": true,
+                  "required": false
+                }
+              ]
             }
           }
         },
