@@ -88,8 +88,8 @@ export const EditSecret: React.FC<Props> = observer(({vault, isOpen, onClose, it
         item_title: data.label,
         credentials: credentials,
       });
-      toast.success('Secret updated');
       await vaultStore.reload(vault.key);
+      toast.success('Secret updated.');
       setIsEditing(false);
     } catch (err) {
       errorDialog.showError('Failed to update secret', String(err));

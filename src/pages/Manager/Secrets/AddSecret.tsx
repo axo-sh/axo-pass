@@ -41,7 +41,7 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose
         item_key: data.id,
       });
       await vaultStore.reload(vaultKey);
-      toast.success('Secret created');
+      toast.success('Secret created.');
       onClose();
     } catch (err) {
       errorDialog.showError('Failed to create secret', String(err));

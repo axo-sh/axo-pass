@@ -33,10 +33,10 @@ export const DeleteCredentialDialog: React.FC<Props> = ({
       });
       await vaultStore.reload(vault.key);
       toast.success('Credential deleted.');
+      onClose();
     } catch (err) {
       errorDialog.showError(null, String(err));
     }
-    onClose();
   };
 
   return (

@@ -99,12 +99,12 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({vault, itemKey, isOpen, onCl
   const onDelete = async () => {
     try {
       await deleteItem({vault_key: vault.key, item_key: itemKey});
-      toast.success('Secret deleted');
       await vaultStore.reload(vault.key);
+      toast.success('Secret deleted.');
+      onClose();
     } catch (err) {
       errorDialog.showError(null, String(err));
     }
-    onClose();
   };
 
   return (
