@@ -79,23 +79,25 @@ fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, prompt: String) {
 }
 
 pub fn run() {
+    let mut log_plugin = tauri_plugin_log::Builder::new()
+        .clear_targets()
+        .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some("frittata".to_string()),
+            },
+        ))
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
+        .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+        .level(log::LevelFilter::Debug);
+
+    if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
+        log_plugin = log_plugin.target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::Stderr,
+        ));
+    }
+
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .clear_targets()
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::Stderr,
-                ))
-                .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("frittata".to_string()),
-                    },
-                ))
-                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
-                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-                .level(log::LevelFilter::Debug)
-                .build(),
-        )
+        .plugin(log_plugin.build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_cli::init())
         .setup(move |app| {

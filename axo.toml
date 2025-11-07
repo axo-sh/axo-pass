@@ -14,3 +14,6 @@ fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 
 [packages]
 "nodejs/node" = "^25.0.0"
+
+[env]
+FRITTATA_DEBUG="1"
