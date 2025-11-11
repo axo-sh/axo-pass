@@ -4,8 +4,6 @@
 <dict>
     <key>com.apple.application-identifier</key>
     <string>75J48AQ5LF.com.breakfastlabs.frittata</string>
-    <key>com.apple.security.app-sandbox</key>
-    <true/>
     <key>com.apple.security.network.client</key>
     <true/>
 </dict>
