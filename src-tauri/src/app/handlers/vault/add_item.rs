@@ -24,6 +24,7 @@ pub async fn add_item(
         .map_err(|e| format!("Failed to lock state: {e}"))?;
 
     let vw: &mut VaultWrapper = state
+        .vaults
         .get_vault_mut(&request.vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
 

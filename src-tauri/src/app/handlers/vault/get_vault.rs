@@ -48,7 +48,7 @@ pub async fn init_vault(
 
     let mut vw = VaultWrapper::new_vault(
         request.vault_name,
-        &state.vaults_dir,
+        &state.vaults.vaults_dir,
         &vault_key,
         user_encryption_key,
     )
@@ -83,6 +83,7 @@ pub async fn get_vault(
         .vault_key
         .unwrap_or_else(|| DEFAULT_VAULT.to_string());
     let vw: &VaultWrapper = state
+        .vaults
         .get_vault(&vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
     Ok(VaultResponse { vault: vw.into() })
@@ -102,6 +103,6 @@ pub async fn list_vaults(
     let state = state
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
-    let vaults: Vec<String> = state.vaults.keys().cloned().collect();
+    let vaults: Vec<String> = state.vaults.vault_keys().collect();
     Ok(ListVaultsResponse { vaults })
 }
