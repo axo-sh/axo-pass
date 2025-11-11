@@ -1,6 +1,6 @@
-mod cmd_generic_password;
+pub mod cmd_generic_password;
 mod cmd_item;
-mod cmd_managed_keys;
+pub mod cmd_managed_keys;
 use anyhow::bail;
 use tauri::AppHandle;
 use tauri_plugin_cli::SubcommandMatches;

@@ -1,16 +1,17 @@
-project_name = "frittata"
+project_name = "axo-pass"
 env_file = ".env.local"
 
 [tasks]
 dev = "cargo tauri dev"
 build = "cargo-tauri build -b app"
 types = "typeshare ./src-tauri --lang=typescript --output-file=src/binding.ts"
-start = "./src-tauri/target/release/bundle/macos/frittata.app/Contents/MacOS/frittata"
-test = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
+start = "./src-tauri/target/release/bundle/macos/Axo\\ Pass.app/Contents/MacOS/axo-pass"
 biome-assist = "npx @biomejs/biome check --formatter-enabled=false --linter-enabled=false"
 biome-fix = "npx @biomejs/biome check --write"
 logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
 fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
+test = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
+
 
 [packages]
 "nodejs/node" = "^25.0.0"

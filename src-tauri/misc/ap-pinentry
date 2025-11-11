@@ -1,0 +1,3 @@
+#!/bin/sh
+# This script executes the axo-pass binary with the pinentry subcommand
+exec "$(dirname "$0")/../MacOS/axo-pass" pinentry

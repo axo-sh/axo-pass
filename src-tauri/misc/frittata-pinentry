@@ -1,3 +1,0 @@
-#!/bin/sh
-# This script executes the frittata binary with the pinentry subcommand
-exec "$(dirname "$0")/../MacOS/frittata" pinentry

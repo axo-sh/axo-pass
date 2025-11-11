@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "frittata",
+  "productName": "Axo Pass",
   "version": "0.1.0",
   "identifier": "com.breakfastlabs.frittata",
   "build": {
@@ -9,6 +9,7 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
+  "mainBinaryName": "axo-pass",
   "plugins": {
     "cli": {
       "subcommands": {
@@ -120,12 +121,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "./misc/frittata-pinentry": "frittata-pinentry",
-      "./misc/frittata-ssh-askpass": "frittata-ssh-askpass"
-    },
     "macOS": {
-      "entitlements": "./misc/entitlements.plist"
+      "entitlements": "./misc/entitlements.plist",
+      "files": {
+        "./bin/ap-pinentry": "./misc/ap-pinentry",
+        "./bin/ap-ssh-askpass": "./misc/ap-ssh-askpass"
+      }
     }
   }
 }

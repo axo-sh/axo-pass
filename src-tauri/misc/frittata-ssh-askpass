@@ -1,4 +1,0 @@
-#!/bin/sh
-# This script executes the frittata binary with the --ssh-askpass flag
-
-exec "$(dirname "$0")/../MacOS/frittata" ssh-askpass --prompt "$1"
