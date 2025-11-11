@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tokio::sync::oneshot;
 
-use crate::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
-use crate::pinentry;
+use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
+use crate::app::protocols::pinentry::server::PinentryServerHandler;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, Serialize, Debug)]
@@ -42,10 +42,8 @@ impl PasswordRequest for GetPinRequest {
     }
 }
 
-// Type alias for the pinentry-specific state
 pub type PinentryState = RequestState<GetPinRequest>;
 
-// Pinentry handler that integrates with Tauri
 pub struct PinentryHandler {
     password_handler: PasswordRequestHandler<GetPinRequest>,
     exit_sender: Option<oneshot::Sender<()>>,
@@ -62,7 +60,7 @@ impl PinentryHandler {
 }
 
 #[async_trait::async_trait]
-impl pinentry::PinentryHandler for PinentryHandler {
+impl PinentryServerHandler for PinentryHandler {
     fn signal_exit(&mut self) {
         if let Some(sender) = self.exit_sender.take() {
             let _ = sender.send(());

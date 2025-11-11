@@ -2,7 +2,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use clap::{Parser, Subcommand, command};
-use frittata_lib::cli::{cmd_generic_password, cmd_managed_keys};
+use frittata_lib::cli::commands::{keychain_generic_password, keychain_managed_keys};
 
 #[derive(Parser, Debug)]
 #[command(name = "ap")]
@@ -38,10 +38,10 @@ async fn main() {
         AxoPassCommand::SshAskpass => run_axo("ssh-askpass"),
         AxoPassCommand::Keychain(keychain) => match keychain.subcommand {
             KeychainSubcommand::ManagedKeys => {
-                cmd_managed_keys::cmd_list_managed_keys().await;
+                keychain_managed_keys::cmd_list_managed_keys().await;
             },
             KeychainSubcommand::GenericPassword => {
-                cmd_generic_password::cmd_list_generic_passwords().await;
+                keychain_generic_password::cmd_list_generic_passwords().await;
             },
         },
     }

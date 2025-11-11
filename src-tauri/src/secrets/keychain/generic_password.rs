@@ -15,7 +15,7 @@ use objc2_security::{
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
-use crate::la_context::evaluate_local_la_context;
+use crate::core::la_context::evaluate_local_la_context;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;

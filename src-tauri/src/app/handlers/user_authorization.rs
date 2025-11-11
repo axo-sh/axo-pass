@@ -1,6 +1,6 @@
-use crate::password_request::PasswordResponse;
-use crate::pinentry_handler::PinentryState;
-use crate::ssh_askpass_handler::AskPassState;
+use crate::app::password_request::PasswordResponse;
+use crate::app::protocols::pinentry::PinentryState;
+use crate::app::protocols::ssh_askpass::AskPassState;
 
 #[tauri::command]
 pub async fn send_pinentry_response(

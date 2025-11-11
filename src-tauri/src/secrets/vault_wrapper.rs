@@ -11,7 +11,6 @@ use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use uuid::Uuid;
 
-use crate::app::vault::schemas::VaultSchema;
 use crate::secrets::errors::Error;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
@@ -25,7 +24,7 @@ pub struct VaultWrapper {
     pub key: String,
     pub path: PathBuf,
     pub cipher: Option<Aes256Gcm>,
-    vault: Vault,
+    pub vault: Vault,
 }
 
 impl VaultWrapper {
@@ -381,20 +380,5 @@ pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
             Ok(ManagedKey::create(VAULT_ENCRYPTION_KEY_LABEL).map_err(Error::KeyCreationFailed)?)
         },
         Err(e) => Err(Error::KeyRetrievalFailed(e)),
-    }
-}
-
-impl From<&VaultWrapper> for VaultSchema {
-    fn from(vw: &VaultWrapper) -> Self {
-        VaultSchema {
-            key: vw.key.clone(),
-            title: vw.vault.name.clone(),
-            data: vw
-                .vault
-                .data
-                .iter()
-                .map(|(key, item)| (key.clone(), item.into()))
-                .collect(),
-        }
     }
 }

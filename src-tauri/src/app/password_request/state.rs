@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tokio::sync::oneshot;
 
-use super::types::{PasswordRequest, PasswordResponse, RequestEvent};
+use crate::app::password_request::{PasswordRequest, PasswordResponse, RequestEvent};
 
 /// Shared state for password requests
 #[derive(Clone)]

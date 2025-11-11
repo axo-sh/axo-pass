@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
-use crate::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
+use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, Debug, Serialize)]

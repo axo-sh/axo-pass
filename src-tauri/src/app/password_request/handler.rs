@@ -3,8 +3,7 @@ use serde::Serialize;
 use tauri::Emitter;
 use tokio::sync::oneshot;
 
-use super::state::RequestState;
-use super::types::{PasswordRequest, PasswordResponse, RequestEvent};
+use crate::app::password_request::{PasswordRequest, PasswordResponse, RequestEvent, RequestState};
 use crate::secrets::keychain::errors::KeychainError;
 
 /// Generic password request handler, contains state machine logic for

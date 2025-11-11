@@ -9,7 +9,7 @@ use objc2_security::{
     kSecUseAuthenticationContext, kSecValueRef,
 };
 
-use crate::la_context::THREAD_LA_CONTEXT;
+use crate::core::la_context::THREAD_LA_CONTEXT;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::ManagedKey;

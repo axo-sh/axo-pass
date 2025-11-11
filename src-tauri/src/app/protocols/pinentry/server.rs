@@ -9,7 +9,7 @@ pub struct PinentryServer<R, W> {
 }
 
 #[async_trait::async_trait]
-pub trait PinentryHandler: Send + Sync {
+pub trait PinentryServerHandler: Send + Sync {
     /// GETPIN handler
     async fn get_pin(
         &mut self,
@@ -41,7 +41,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
 
     // Run the server loop, handling commands until BYE QUIT or EOF. Very basic
     // implementation
-    pub async fn run<H: PinentryHandler>(&mut self, handler: &mut H) -> io::Result<()> {
+    pub async fn run<H: PinentryServerHandler>(&mut self, handler: &mut H) -> io::Result<()> {
         let mut description: Option<String> = None;
         let mut prompt: Option<String> = None;
         let mut keyinfo: Option<String> = None;

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
-use crate::app::vault::schemas::VaultSchema;
+use crate::app::handlers::vault::schemas::VaultSchema;
 use crate::secrets::vault_wrapper::{
     DEFAULT_VAULT, VaultWrapper, get_vault_encryption_key, normalize_key,
 };

@@ -4,6 +4,7 @@ use serde::Serialize;
 use typeshare::typeshare;
 
 use crate::secrets::vault::VaultItem;
+use crate::secrets::vault_wrapper::VaultWrapper;
 
 #[derive(Serialize, Debug, Clone)]
 #[typeshare]
@@ -12,6 +13,21 @@ pub struct VaultSchema {
     pub title: Option<String>,
     #[typeshare(serialized_as = "HashMap<String, VaultItemSchema>")]
     pub data: BTreeMap<String, VaultItemSchema>,
+}
+
+impl From<&VaultWrapper> for VaultSchema {
+    fn from(vw: &VaultWrapper) -> Self {
+        VaultSchema {
+            key: vw.key.clone(),
+            title: vw.vault.name.clone(),
+            data: vw
+                .vault
+                .data
+                .iter()
+                .map(|(key, item)| (key.clone(), item.into()))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Debug, Clone)]

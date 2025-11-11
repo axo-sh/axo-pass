@@ -13,7 +13,7 @@ use objc2_security::{
 };
 use secrecy::SecretString;
 
-use crate::la_context::THREAD_LA_CONTEXT;
+use crate::core::la_context::THREAD_LA_CONTEXT;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 

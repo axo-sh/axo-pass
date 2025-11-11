@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    frittata_lib::run()
+    frittata_lib::app::run();
 }

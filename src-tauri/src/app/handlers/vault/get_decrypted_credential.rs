@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
-use crate::app::vault::with_unlocked_vault;
+use crate::app::handlers::vault::with_unlocked_vault;
 
 #[typeshare]
 #[derive(Deserialize, Debug)]

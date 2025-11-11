@@ -1,24 +1,17 @@
-mod app_state;
-pub mod passwords;
-pub mod user_authorization;
-pub mod vault;
-
 use std::path::PathBuf;
 
-pub use app_state::AppState;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::password_request::RequestEvent;
-use crate::pinentry_handler::{GetPinRequest, PinentryState};
-use crate::ssh_askpass_handler::{AskPassState, AskPasswordRequest};
+use crate::app::password_request::RequestEvent;
+use crate::app::protocols::pinentry::{GetPinRequest, PinentryState};
+use crate::app::protocols::ssh_askpass::{AskPassState, AskPasswordRequest};
 
 // App mode enum
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum AppMode {
     App,
-    Cli,
     Pinentry,
     SshAskpass,
 }
@@ -60,6 +53,5 @@ pub async fn get_mode(
             let pending_event = state.get_pending_event();
             Ok(AppModeAndState::SshAskpass(pending_event))
         },
-        _ => Err("Unsupported mode".to_string()),
     }
 }
