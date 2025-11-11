@@ -28,8 +28,13 @@ where
         .get_vault_mut(vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
 
-    vw.unlock()
-        .map_err(|e| format!("Failed to unlock vault: {e}"))?;
+    vw.unlock().map_err(|e| match e {
+        // Error::VaultLocked => "Vault is locked".to_string(),
+        other => {
+            log::debug!("Failed to unlock vault: {:?}", other);
+            "Failed to unlock vault.".to_string()
+        },
+    })?;
 
     let result = f(vw)?;
     vw.save()
