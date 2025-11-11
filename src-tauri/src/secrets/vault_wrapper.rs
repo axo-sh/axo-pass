@@ -49,7 +49,7 @@ impl VaultWrapper {
     pub fn load(vault_dir: &Path, vault_key: Option<&str>) -> Result<VaultWrapper, Error> {
         let vault_key = vault_key.unwrap_or(DEFAULT_VAULT);
         let vault_file_path = vault_dir.join(vault_key).with_extension("json");
-        log::debug!("Reading vault from file: {:?}", vault_file_path);
+        log::debug!("Reading vault from file: {}", vault_file_path.display());
         let vault_data = fs::read_to_string(&vault_file_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 Error::VaultNotFound
