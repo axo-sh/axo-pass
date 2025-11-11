@@ -120,11 +120,7 @@ pub fn run() {
                 }
             } else {
                 app.handle().manage(AppMode::App);
-                let app_data_dir = app
-                    .path()
-                    .app_data_dir()
-                    .map_err(|e| format!("Failed to get app data directory: {e}"))?;
-                app.handle().manage(Mutex::new(AppState::new(app_data_dir)));
+                app.handle().manage(Mutex::new(AppState::new()));
             }
 
             let app_mode = app.handle().state::<AppMode>();

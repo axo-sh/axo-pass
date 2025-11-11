@@ -342,6 +342,7 @@ dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
  "clap",
+ "dirs",
  "inquire",
  "log",
  "objc2 0.6.3",

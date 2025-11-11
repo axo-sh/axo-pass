@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::dirs::vaults_dir;
 use crate::secrets::errors::Error;
 use crate::secrets::vault_wrapper::VaultWrapper;
 
@@ -12,10 +13,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(app_data_dir: PathBuf) -> Self {
-        let vaults_dir = app_data_dir.join("vaults");
+    pub fn new() -> Self {
+        let vaults_dir = vaults_dir();
         let vaults = Self::discover_vaults(&vaults_dir);
-        Self { vaults, vaults_dir }
+        Self {
+            vaults,
+            vaults_dir: vaults_dir.to_owned(),
+        }
     }
 
     fn discover_vaults(vaults_dir: &Path) -> HashMap<String, VaultWrapper> {
