@@ -99,6 +99,7 @@ pub fn run() {
         .plugin(log_plugin.build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_cli::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             let cli_matches = app.cli().matches().ok();
             if let Some(subcommand) = cli_matches.as_ref().and_then(|m| m.subcommand.as_deref()) {

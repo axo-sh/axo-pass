@@ -1,6 +1,7 @@
 import React from 'react';
 
 import {IconTrash} from '@tabler/icons-react';
+import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {observer} from 'mobx-react';
 import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
@@ -159,7 +160,19 @@ const SecretCredentialList: React.FC<{
               <div className={secretItem()}>
                 <div>
                   <code className={secretItemValue}>{cred.title}</code>
-                  <code className={secretItemDesc}>
+                  <code
+                    className={secretItemDesc}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await writeText(`axo://${vault.key}/${itemKey}/${credKey}`);
+
+                        toast.success('Copied reference to clipboard.');
+                      } catch (err) {
+                        toast.error(`Failed to copy to clipboard: ${String(err)}`);
+                      }
+                    }}
+                  >
                     axo://{vault.key}/{itemKey}/{credKey}
                   </code>
                 </div>
