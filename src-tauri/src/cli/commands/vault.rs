@@ -5,7 +5,7 @@ use inquire::Password;
 use secrecy::SecretString;
 
 use crate::core::dirs::vaults_dir;
-use crate::secrets::vault_wrapper::{DEFAULT_VAULT, VaultWrapper};
+use crate::secrets::vault_wrapper::VaultWrapper;
 
 #[derive(Parser, Debug)]
 pub struct VaultCommand {
@@ -51,7 +51,8 @@ impl VaultCommand {
     }
 
     fn load_vault(&self, vault_key: Option<&str>) -> Result<VaultWrapper, String> {
-        let mut vw = VaultWrapper::load(&vaults_dir(), vault_key.or(self.vault.as_deref()))
+        let vault_key = vault_key.or(self.vault.as_deref());
+        let mut vw = VaultWrapper::load(&vaults_dir(), vault_key)
             .map_err(|e| format!("Failed to load vault: {e}"))?;
         vw.unlock()
             .map_err(|e| format!("Failed to unlock vault: {e}"))?;
@@ -77,12 +78,12 @@ impl VaultCommand {
     fn cmd_list_items(&self) -> Result<(), String> {
         let vw = self.load_vault(None)?;
 
-        println!("Vault: {} (default vault)", vw.key);
+        println!("Vault: {}", vw.key);
         let items = vw.list_items();
         let mut has_items = false;
         for (item_key, item_value) in items {
             for (cred_key, _cred_value) in item_value.credentials.iter() {
-                println!("axo://{}/{}/{}", DEFAULT_VAULT, item_key, cred_key);
+                println!("axo://{}/{}/{}", vw.key, item_key, cred_key);
             }
             has_items = true;
         }
