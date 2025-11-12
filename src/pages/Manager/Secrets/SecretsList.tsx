@@ -1,6 +1,5 @@
 import React from 'react';
 
-import {IconEdit, IconTrash} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {toast} from 'sonner';
 
@@ -9,9 +8,9 @@ import {deleteItem} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {Flex} from '@/components/Flex';
+import {SecretItem} from '@/pages/Manager/Secrets/SecretsListItem';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
-import {secretItem, secretsList} from '@/pages/Manager/Secrets.css';
+import {secretsList} from '@/pages/Manager/Secrets.css';
 
 type Props = {
   vault: VaultSchema;
@@ -56,35 +55,6 @@ export const SecretsList: React.FC<Props> = observer((props) => {
 });
 
 SecretsList.displayName = 'SecretsList';
-
-const SecretItem: React.FC<Props & {onDelete: (itemKey: string) => void; itemKey: string}> =
-  observer(({vault, onEdit, onDelete, itemKey}) => {
-    const entry = vault.data[itemKey];
-    return (
-      <div className={secretItem({clickable: true})} onClick={() => onEdit(itemKey)}>
-        <div>{entry.title}</div>
-        <Flex gap={0.5}>
-          <button
-            className={button({size: 'iconSmall', variant: 'clear'})}
-            onClick={() => onEdit(itemKey)}
-          >
-            <IconEdit size={16} />
-          </button>
-          <button
-            className={button({size: 'iconSmall', variant: 'secondaryError'})}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(itemKey);
-            }}
-          >
-            <IconTrash size={16} />
-          </button>
-        </Flex>
-      </div>
-    );
-  });
-
-SecretItem.displayName = 'SecretItem';
 
 type DialogProps = {
   vault: VaultSchema;
