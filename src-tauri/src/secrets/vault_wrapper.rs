@@ -16,7 +16,7 @@ use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vault::{Vault, VaultItem, VaultItemCredential, VaultSecret};
 
-pub const DEFAULT_VAULT: &str = "default-vault";
+pub const DEFAULT_VAULT: &str = "default";
 
 const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
