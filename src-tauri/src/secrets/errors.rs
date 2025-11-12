@@ -5,8 +5,8 @@ use crate::secrets::keychain::errors::KeychainError;
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
-    #[error("Vault not found")]
-    VaultNotFound,
+    #[error("Vault {0} not found")]
+    VaultNotFound(String),
 
     #[error("Vault is locked")]
     VaultLocked,
@@ -38,9 +38,15 @@ pub enum Error {
     #[error("Failed to save vault: {0}")]
     VaultWriteError(#[source] std::io::Error),
 
+    #[error("Invalid vault item reference: {0}")]
+    InvalidVaultItemReference(String),
+
     #[error("Failed to create new encryption: {0}")]
     KeyCreationFailed(KeychainError),
 
     #[error("Could not retrieve key from keychain: {0}")]
     KeyRetrievalFailed(KeychainError),
+
+    #[error("Could not retrieve secret {0} from vault: {1}")]
+    SecretRetrievalFailed(String, #[source] anyhow::Error),
 }

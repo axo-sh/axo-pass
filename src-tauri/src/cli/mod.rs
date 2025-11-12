@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, command};
 use color_print::cwriteln;
 use log::LevelFilter;
 
+use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::vault::VaultCommand;
 
@@ -19,6 +20,7 @@ struct AxoPassCli {
 enum AxoPassCommand {
     Keychain(KeychainCommand),
     Vault(VaultCommand),
+    Inject(InjectCommand),
 }
 
 pub async fn run() {
@@ -33,5 +35,6 @@ pub async fn run() {
     match cli.command {
         AxoPassCommand::Keychain(keychain) => keychain.execute().await,
         AxoPassCommand::Vault(vault) => vault.execute().await,
+        AxoPassCommand::Inject(inject) => inject.execute().await,
     }
 }

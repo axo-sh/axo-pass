@@ -52,7 +52,7 @@ impl VaultWrapper {
         log::debug!("Reading vault from file: {}", vault_file_path.display());
         let vault_data = fs::read_to_string(&vault_file_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
-                Error::VaultNotFound
+                Error::VaultNotFound(vault_key.to_string())
             } else {
                 Error::VaultReadError(e)
             }
@@ -68,6 +68,9 @@ impl VaultWrapper {
     }
 
     pub fn unlock(&mut self) -> Result<(), Error> {
+        if self.cipher.is_some() {
+            return Ok(());
+        }
         let managed_key = get_vault_encryption_key()?;
         self.unlock_with_key(managed_key)
     }
@@ -105,20 +108,15 @@ impl VaultWrapper {
         let item_key = url
             .path_segments()
             .and_then(|segments| segments.into_iter().next())
-            .ok_or_else(|| anyhow!("URL missing item key: {}", url))?;
+            .ok_or_else(|| anyhow!("reference missing item key: {}", url))?;
         let credential_key = url
             .path_segments()
             .and_then(|mut segments| {
                 segments.next();
                 segments.next()
             })
-            .ok_or_else(|| anyhow!("URL missing credential key: {}", url))?;
-
-        log::debug!(
-            "Getting secret for item_key='{}' credential_key='{}'",
-            item_key,
-            credential_key
-        );
+            .ok_or_else(|| anyhow!("reference missing credential key: {}", url))?;
+        log::debug!("Parsed reference {item_key}/{credential_key}");
         let secret = self.get_secret(item_key, credential_key)?;
         Ok(secret)
     }

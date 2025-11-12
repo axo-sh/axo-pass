@@ -68,4 +68,29 @@ impl VaultsManager {
     pub fn get_vault(&mut self, name: &str) -> Result<&VaultWrapper, Error> {
         self.get_vault_mut(name).map(|v| &*v)
     }
+
+    pub fn get_secret_by_url(&mut self, item_url: &str) -> Result<Option<String>, Error> {
+        let Ok(u) = url::Url::parse(item_url) else {
+            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
+        };
+        if u.scheme() != "axo" {
+            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
+        }
+        let Some(vault_key) = u.host_str().clone() else {
+            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
+        };
+        let Some(vault) = self.vaults.get_mut(vault_key) else {
+            return Err(Error::VaultNotFound(vault_key.to_string()));
+        };
+        vault.unlock().inspect_err(|e| {
+            log::error!("Error unlocking vault {vault_key}: {e:?}");
+        })?;
+        match vault.get_secret_by_url(u) {
+            Ok(secret) => Ok(secret),
+            Err(e) => {
+                log::error!("Error retrieving {item_url}: {e:?}");
+                Err(Error::SecretRetrievalFailed(item_url.to_string(), e))
+            },
+        }
+    }
 }
