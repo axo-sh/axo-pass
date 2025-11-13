@@ -22,6 +22,28 @@ export const navLinks = style({
   gap: 1,
 });
 
+export const navLogo = style({
+  display: 'flex',
+  gap: spacing(1),
+  alignItems: 'center',
+  fontWeight: 600,
+  lineHeight: 1,
+  fontFamily: vars.fonts.monospace,
+  letterSpacing: '-0.04em',
+  fontSize: vars.scale.md,
+  padding: spacing(1 / 2, 3 / 4),
+  marginBottom: spacing(1),
+});
+
+export const navLogoAxo = style({
+  color: colorVar.dim50,
+});
+
+globalStyle(`${navLogo} svg`, {
+  position: 'relative',
+  top: 1.5,
+});
+
 export const navLink = style({
   textDecoration: 'none',
   color: colorVar.text,

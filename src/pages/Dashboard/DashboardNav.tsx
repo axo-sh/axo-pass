@@ -6,6 +6,7 @@ import {
   IconForms,
   IconKeyFilled,
   IconSettingsFilled,
+  IconTriangle,
 } from '@tabler/icons-react';
 import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
@@ -16,6 +17,8 @@ import {
   nav,
   navLink,
   navLinks,
+  navLogo,
+  navLogoAxo,
   navNestedLink,
   navNestedLinks,
 } from '@/pages/Dashboard/DashboardNav.css';
@@ -32,6 +35,12 @@ export const DashboardNav: React.FC = observer(() => {
 
   return (
     <nav className={nav}>
+      <div className={navLogo}>
+        <IconTriangle size={16} strokeWidth={5} />
+        <div>
+          <span className={navLogoAxo}>axo</span>pass
+        </div>
+      </div>
       <ul className={navLinks}>
         <DashboardNavSection
           title={
