@@ -77,7 +77,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
   }
 
   return (
-    <Layout>
+    <Layout className={passwordRequest}>
       <LayoutTitle icon={IconCircleKeyFilled} centered>
         {serviceName} Password Required
       </LayoutTitle>

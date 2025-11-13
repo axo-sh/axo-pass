@@ -137,7 +137,8 @@ const lightDarkScheme = (light: ColorScheme, dark: ColorScheme) => ({
   '--dark30': lightDark(light['--dark30'], dark['--dark30']),
 });
 
-export const accentScheme = scheme(palette.purple[400], palette.white);
+export const accent = palette.purple[400];
+export const accentScheme = scheme(accent, palette.white);
 
 export const greyScheme = lightDarkScheme(
   scheme(palette.grey[200], palette.grey[800]),
