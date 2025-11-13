@@ -23,9 +23,9 @@ export const layoutDrag = style({
 export const layoutContent = recipe({
   base: {
     flexGrow: 1,
-    padding: spacing(1, 2, 2),
     display: 'flex',
     flexDirection: 'column',
+    overflow: 'hidden',
   },
   variants: {
     centered: {
@@ -87,5 +87,5 @@ export const layoutDescription = recipe({
 });
 
 globalStyle(`${layoutTitle.classNames.base}:has(+ ${layoutDescription.classNames.base})`, {
-  marginBottom: 0,
+  marginBottom: spacing(1 / 2),
 });

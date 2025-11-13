@@ -9,10 +9,9 @@ import {Flex} from '@/components/Flex';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
 import {textInput} from '@/components/Input.css';
-import {Loader} from '@/components/Loader';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
-import {pinentryDescription} from '@/pages/PasswordRequest.css';
+import {passwordRequest, pinentryDescription} from '@/pages/PasswordRequest.css';
 
 type Props = {
   request: PasswordRequestData & {
@@ -63,17 +62,14 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
 
   if (request.attempting_saved_password) {
     return (
-      <Layout>
+      <Layout className={passwordRequest}>
         <LayoutTitle icon={IconCircleKeyFilled} centered>
           Password Required
         </LayoutTitle>
         <Flex column>
           {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
-          <Card>
+          <Card loading>
             <p>Requesting authentication to unlock your saved passphrase...</p>
-            <Flex justify="end">
-              <Loader />
-            </Flex>
           </Card>
         </Flex>
       </Layout>

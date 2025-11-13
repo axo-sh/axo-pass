@@ -36,6 +36,7 @@ globalStyle('html, body', {
   color: colorVar.text,
   colorScheme: 'light dark',
   vars: greyScheme,
+  overscrollBehavior: 'none',
 });
 
 globalStyle('*, *::after, *::before', {

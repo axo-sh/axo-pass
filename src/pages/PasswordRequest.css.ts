@@ -4,6 +4,10 @@ import {vars} from '@/App.css';
 import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
+export const passwordRequest = style({
+  padding: spacing(0, 2, 2),
+});
+
 export const pinentryDescription = style({
   fontSize: vars.scale.xs,
   fontFamily: vars.fonts.monospace,

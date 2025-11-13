@@ -7,6 +7,7 @@ import {useDialog} from '@/components/Dialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
 import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
+import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
 import {AddSecretDialog} from '@/pages/Manager/Secrets/AddSecret';
 import {CombinedList} from '@/pages/Manager/Secrets/CombinedList';
 import {EditSecretDialog} from '@/pages/Manager/Secrets/EditSecret';
@@ -87,18 +88,35 @@ export const Secrets: React.FC<{
 
   return (
     <>
-      <Toolbar>
-        <button
-          className={button({variant: 'clear', size: 'small'})}
-          onClick={addSecretDialog.open}
-        >
-          + Add secret
-        </button>
-        <FlexSpacer />
-        <Toggle onChange={(checked) => setShowCombined(checked)} checked={showFlat} toggleSize={16}>
-          Flat view
-        </Toggle>
-      </Toolbar>
+      <DashboardContentHeader
+        title={vaultKey === 'all' ? 'Secrets' : `Vault: ${vaultKey}`}
+        description={
+          vaultKey === 'all' ? (
+            'Your stored vault secrets. These are encrypted and can be decrypted.'
+          ) : (
+            <div>
+              Secrets in the <code>{vaultKey}</code> vault.
+            </div>
+          )
+        }
+      >
+        <Toolbar>
+          <button
+            className={button({variant: 'clear', size: 'small'})}
+            onClick={addSecretDialog.open}
+          >
+            + Add secret
+          </button>
+          <FlexSpacer />
+          <Toggle
+            onChange={(checked) => setShowCombined(checked)}
+            checked={showFlat}
+            toggleSize={16}
+          >
+            Flat view
+          </Toggle>
+        </Toolbar>
+      </DashboardContentHeader>
 
       {showFlat ? (
         <CombinedList

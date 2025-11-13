@@ -10,8 +10,11 @@ export const nav = style({
   borderRightColor: colorVar.light20,
 
   paddingTop: spacing(1),
+  paddingLeft: spacing(2),
   paddingRight: spacing(3 / 2),
   fontSize: vars.scale.nav,
+  overflowY: 'scroll',
+  borderBottom: '4px solid purple',
 });
 
 export const navLinks = style({
