@@ -26,16 +26,17 @@ export const rowLabelStyle = style({
 
 export const rowDescStyle = style({
   color: `color-mix(in srgb, ${colorVar.text} 50%, transparent)`,
+  lineHeight: 1.4,
   fontSize: vars.scale.sm,
 });
 
 export const rowContentStyle = style({
-  marginTop: spacing(1 / 4),
+  marginTop: spacing(1 / 2),
 });
 
 export const rowErrorStyle = style({
-  marginTop: spacing(0.5),
-  lineHeight: 1.6,
+  marginTop: spacing(1 / 2),
+  lineHeight: 1.4,
   fontSize: vars.scale.xs,
   vars: errorScheme,
 });
