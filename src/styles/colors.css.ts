@@ -101,6 +101,8 @@ export const colorVar = {
   dark10: createGlobalVar('dark10'),
   dark20: createGlobalVar('dark20'),
   dark30: createGlobalVar('dark30'),
+  dim75: `color-mix(in srgb, currentColor 75%, transparent)`,
+  dim50: `color-mix(in srgb, currentColor 50%, transparent)`,
 };
 
 export const baseVar = colorVar.base;

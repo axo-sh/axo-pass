@@ -77,7 +77,7 @@ export const dialogSubtitle = style({
   marginTop: spacing(1 / 4),
   fontFamily: vars.fonts.monospace,
   fontSize: vars.scale.sm,
-  color: `color-mix(in srgb, ${colorVar.text} 75%, transparent)`,
+  color: colorVar.dim75,
   lineHeight: 1.3,
 });
 

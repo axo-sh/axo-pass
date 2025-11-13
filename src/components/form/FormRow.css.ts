@@ -25,7 +25,7 @@ export const rowLabelStyle = style({
 });
 
 export const rowDescStyle = style({
-  color: `color-mix(in srgb, ${colorVar.text} 50%, transparent)`,
+  color: colorVar.dim50,
   lineHeight: 1.4,
   fontSize: vars.scale.sm,
 });

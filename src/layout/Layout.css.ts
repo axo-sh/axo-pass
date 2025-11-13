@@ -71,7 +71,7 @@ export const layoutDescription = recipe({
   base: {
     marginBottom: spacing(2),
     fontSize: vars.scale.sm,
-    color: `color-mix(in srgb, ${colorVar.text} 75%, transparent)`,
+    color: colorVar.dim75,
     opacity: 0.75,
     display: 'flex',
     flexDirection: 'column',
