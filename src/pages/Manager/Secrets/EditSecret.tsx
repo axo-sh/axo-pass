@@ -174,6 +174,7 @@ const SecretCredentialList: React.FC<{
       <Card sectioned>
         {credKeys.map((credKey) => {
           const cred = credentials[credKey];
+          const itemReference = `axo://${itemKey.vaultKey}/${itemKey.itemKey}/${credKey}`;
           return (
             <CardSection key={credKey}>
               <div className={secretItem()}>
@@ -184,15 +185,14 @@ const SecretCredentialList: React.FC<{
                     onClick={async (e) => {
                       e.stopPropagation();
                       try {
-                        await writeText(`axo://${itemKey.vaultKey}/${itemKey.itemKey}/${credKey}`);
-
+                        writeText(itemReference);
                         toast.success('Copied reference to clipboard.');
                       } catch (err) {
                         toast.error(`Failed to copy to clipboard: ${String(err)}`);
                       }
                     }}
                   >
-                    axo://{itemKey.vaultKey}/{itemKey.itemKey}/{credKey}
+                    {itemReference}
                   </code>
                 </div>
                 <Flex gap={0.5} align="stretch">
