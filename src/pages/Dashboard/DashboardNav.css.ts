@@ -14,7 +14,6 @@ export const nav = style({
   paddingRight: spacing(3 / 2),
   fontSize: vars.scale.nav,
   overflowY: 'scroll',
-  borderBottom: '4px solid purple',
 });
 
 export const navLinks = style({
