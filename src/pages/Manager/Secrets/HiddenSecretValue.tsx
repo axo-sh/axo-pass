@@ -5,14 +5,13 @@ import {getDecryptedVaultItemCredential} from '@/client';
 import {button} from '@/components/Button.css';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {secretItemValue, secretItemValueCode} from '@/pages/Manager/Secrets.css';
+import type {CredentialKey} from '@/utils/CredentialKey';
 
 type Props = {
-  vaultKey: string;
-  itemKey: string;
-  credKey: string;
+  credKey: CredentialKey;
 };
 
-export const HiddenSecretValue: React.FC<Props> = ({vaultKey, itemKey, credKey}) => {
+export const HiddenSecretValue: React.FC<Props> = ({credKey}) => {
   const [revealed, setRevealed] = React.useState(false);
   const [decryptedCred, setDecryptedCred] = React.useState<DecryptedCredential | null>(null);
 
@@ -27,9 +26,9 @@ export const HiddenSecretValue: React.FC<Props> = ({vaultKey, itemKey, credKey})
 
     try {
       const cred = await getDecryptedVaultItemCredential({
-        vault_key: vaultKey,
-        item_key: itemKey,
-        credential_key: credKey,
+        vault_key: credKey.vaultKey,
+        item_key: credKey.itemKey,
+        credential_key: credKey.credKey,
       });
       setDecryptedCred(cred);
       setRevealed(true);

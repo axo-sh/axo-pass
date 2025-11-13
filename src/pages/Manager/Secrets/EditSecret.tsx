@@ -6,11 +6,11 @@ import {observer} from 'mobx-react';
 import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
 
-import type {CredentialUpdate, VaultSchema} from '@/binding';
+import type {CredentialUpdate, VaultItemSchema} from '@/binding';
 import {updateItem} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card, CardSection} from '@/components/Card';
-import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
+import {Dialog, DialogActions, type DialogHandle, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {flex} from '@/components/Flex.css';
@@ -25,39 +25,65 @@ import {
   secretItemValue,
   secretsList,
 } from '@/pages/Manager/Secrets.css';
+import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
 
 type Props = {
-  vault: VaultSchema;
-  itemKey: string;
+  itemKey: ItemKey;
   isOpen: boolean;
   onClose: () => void;
 };
 
-export const EditSecret: React.FC<Props> = observer(({vault, isOpen, onClose, itemKey}) => {
+export const EditSecretDialog: React.FC<Props> = observer(({itemKey, isOpen, onClose}) => {
   const vaultStore = useVaultStore();
-  const entry = vault.data[itemKey];
   const addCredentialDialog = useDialog();
+  const item = vaultStore.getItem(itemKey);
+  if (!item) {
+    return null;
+  }
+  return (
+    <>
+      <Dialog
+        title={item.title}
+        subtitle={itemKey.itemKey}
+        isOpen={isOpen}
+        onClose={onClose}
+        size="wide"
+      >
+        <EditSecret item={item} itemKey={itemKey} addCredentialDialog={addCredentialDialog} />
+      </Dialog>
+      <AddCredentialDialog
+        isOpen={addCredentialDialog.isOpen}
+        onClose={addCredentialDialog.onClose}
+        itemKey={itemKey}
+      />
+    </>
+  );
+});
+
+type EditSecretProps = {
+  item: VaultItemSchema;
+  itemKey: ItemKey;
+  addCredentialDialog: DialogHandle;
+};
+
+const EditSecret: React.FC<EditSecretProps> = observer(({item, itemKey, addCredentialDialog}) => {
+  const vaultStore = useVaultStore();
   const [isEditing, setIsEditing] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const errorDialog = useErrorDialog();
 
   const form = useForm<SecretFormData>({
     defaultValues: {
-      label: entry.title,
-      id: itemKey,
+      label: item.title,
     },
   });
 
-  // Reset form when entry changes or dialog closes
   React.useEffect(() => {
-    if (isOpen) {
-      form.reset({
-        label: entry.title,
-        id: itemKey,
-      });
-      setIsEditing(false);
-    }
-  }, [isOpen, entry.title, itemKey, form]);
+    form.reset({
+      label: item.title,
+    });
+    setIsEditing(false);
+  }, [item.title, itemKey, form]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -66,17 +92,15 @@ export const EditSecret: React.FC<Props> = observer(({vault, isOpen, onClose, it
   const handleCancelEdit = () => {
     setIsEditing(false);
     form.reset({
-      label: entry.title,
-      id: itemKey,
+      label: item.title,
     });
   };
 
   const handleSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
-      // Convert credentials to the format expected by updateItem
       const credentials: Record<string, CredentialUpdate> = {};
-      Object.entries(entry.credentials).forEach(([key, cred]) => {
+      Object.entries(item.credentials).forEach(([key, cred]) => {
         // no value means don't update the secret value
         credentials[key] = {
           title: cred.title,
@@ -84,12 +108,12 @@ export const EditSecret: React.FC<Props> = observer(({vault, isOpen, onClose, it
       });
 
       await updateItem({
-        vault_key: vault.key,
-        item_key: itemKey,
+        vault_key: itemKey.vaultKey,
+        item_key: itemKey.vaultKey,
         item_title: data.label,
         credentials: credentials,
       });
-      await vaultStore.reload(vault.key);
+      await vaultStore.reload(itemKey.vaultKey);
       toast.success('Secret updated.');
       setIsEditing(false);
     } catch (err) {
@@ -99,55 +123,50 @@ export const EditSecret: React.FC<Props> = observer(({vault, isOpen, onClose, it
     }
   };
 
-  return (
-    <>
-      <Dialog title={entry.title} subtitle={itemKey} isOpen={isOpen} onClose={onClose} size="wide">
-        {isEditing ? (
-          <SecretForm
-            form={form}
-            onSubmit={handleSubmit}
-            onCancel={handleCancelEdit}
-            isSubmitting={isSubmitting}
-            submitLabel="Save changes"
-            mode="edit"
-          />
-        ) : (
-          <div className={secretsList()}>
-            <div className={secretItem()}>
-              <SecretCredentialList
-                vault={vault}
-                itemKey={itemKey}
-                showAddCredentialDialog={addCredentialDialog.open}
-              />
-            </div>
-            <DialogActions>
-              <button className={button({variant: 'clear'})} onClick={handleEdit}>
-                Edit
-              </button>
-            </DialogActions>
-          </div>
-        )}
-      </Dialog>
-      <AddCredentialDialog
-        isOpen={addCredentialDialog.isOpen}
-        onClose={addCredentialDialog.onClose}
-        vaultKey={vault.key}
-        itemKey={itemKey}
+  if (isEditing) {
+    return (
+      <SecretForm
+        form={form}
+        onSubmit={handleSubmit}
+        onCancel={handleCancelEdit}
+        isSubmitting={isSubmitting}
+        submitLabel="Save changes"
+        mode="edit"
       />
-    </>
+    );
+  }
+
+  return (
+    <div className={secretsList()}>
+      <div className={secretItem()}>
+        <SecretCredentialList
+          itemKey={itemKey}
+          showAddCredentialDialog={addCredentialDialog.open}
+        />
+      </div>
+      <DialogActions>
+        <button className={button({variant: 'clear'})} onClick={handleEdit}>
+          Edit
+        </button>
+      </DialogActions>
+    </div>
   );
 });
 
 EditSecret.displayName = 'EditSecret';
 
 const SecretCredentialList: React.FC<{
-  vault: VaultSchema;
-  itemKey: string;
+  itemKey: ItemKey;
   showAddCredentialDialog: () => void;
-}> = observer(({vault, itemKey, showAddCredentialDialog}) => {
+}> = observer(({itemKey, showAddCredentialDialog}) => {
+  const vaultStore = useVaultStore();
   const dialog = useDialog();
-  const [selectedCredKey, setSelectedCredKey] = React.useState<string | null>(null);
-  const item = vault.data[itemKey];
+  const [selectedCredKey, setSelectedCredKey] = React.useState<CredentialKey | null>(null);
+  const item = vaultStore.getItem(itemKey);
+  if (!item) {
+    return null;
+  }
+
   const credentials = item.credentials;
   const credKeys = Object.keys(credentials);
   return (
@@ -165,7 +184,7 @@ const SecretCredentialList: React.FC<{
                     onClick={async (e) => {
                       e.stopPropagation();
                       try {
-                        await writeText(`axo://${vault.key}/${itemKey}/${credKey}`);
+                        await writeText(`axo://${itemKey.vaultKey}/${itemKey.itemKey}/${credKey}`);
 
                         toast.success('Copied reference to clipboard.');
                       } catch (err) {
@@ -173,15 +192,15 @@ const SecretCredentialList: React.FC<{
                       }
                     }}
                   >
-                    axo://{vault.key}/{itemKey}/{credKey}
+                    axo://{itemKey.vaultKey}/{itemKey.itemKey}/{credKey}
                   </code>
                 </div>
                 <Flex gap={0.5} align="stretch">
-                  <HiddenSecretValue vaultKey={vault.key} itemKey={itemKey} credKey={credKey} />
+                  <HiddenSecretValue credKey={{...itemKey, credKey}} />
                   <button
                     className={button({size: 'iconSmall', variant: 'secondaryError'})}
                     onClick={() => {
-                      setSelectedCredKey(credKey);
+                      setSelectedCredKey({...itemKey, credKey});
                       dialog.open();
                     }}
                   >
@@ -206,9 +225,7 @@ const SecretCredentialList: React.FC<{
 
       {selectedCredKey && (
         <DeleteCredentialDialog
-          vault={vault}
-          itemKey={itemKey}
-          credentialKey={selectedCredKey}
+          credKey={selectedCredKey}
           isOpen={dialog.isOpen}
           onClose={() => {
             setSelectedCredKey(null);

@@ -1,30 +1,83 @@
-import type React from 'react';
+import React from 'react';
 
 import {
+  IconChevronDown,
+  IconChevronRight,
   IconForms,
-  IconHexagonalPrism,
   IconKeyFilled,
   IconSettingsFilled,
 } from '@tabler/icons-react';
+import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
 
-import {nav, navLink, navLinks} from '@/pages/Dashboard/DashboardNav.css';
+import {button} from '@/components/Button.css';
+import {Flex} from '@/components/Flex';
+import {
+  nav,
+  navLink,
+  navLinks,
+  navNestedLink,
+  navNestedLinks,
+} from '@/pages/Dashboard/DashboardNav.css';
+import {AddVaultDialog, type AddVaultDialogHandle} from '@/pages/Manager/Secrets/AddVaultDialog';
+import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 
-export const DashboardNav: React.FC = () => {
+export const DashboardNav: React.FC = observer(() => {
+  const vaultStore = useVaultStore();
+  const addVaultDialogRef = React.useRef<AddVaultDialogHandle>(null);
+
+  const openAddVaultDialog = () => {
+    addVaultDialogRef.current?.open();
+  };
+
   return (
     <nav className={nav}>
       <ul className={navLinks}>
-        <li>
-          <Link className={navLink} href="/dashboard/envs">
-            {/* alt: world */}
-            <IconHexagonalPrism size={18} /> Environments
-          </Link>
-        </li>
-        <li>
-          <Link className={navLink} href="/dashboard/secrets">
-            <IconForms size={18} /> Secrets
-          </Link>
-        </li>
+        <DashboardNavSection
+          title={
+            <Link className={navLink} href="/dashboard/secrets">
+              <IconForms size={18} /> Secrets
+            </Link>
+          }
+        >
+          {vaultStore.vaultKeys.length > 0 && (
+            <ul className={navNestedLinks}>
+              <li>
+                <Link className={navNestedLink} href="/dashboard/secrets/all">
+                  all
+                </Link>
+              </li>
+              {vaultStore.vaultKeys.map((key) => (
+                <li key={key} style={{marginTop: '0.25rem'}}>
+                  <Link className={navNestedLink} href={`/dashboard/secrets/${key}`}>
+                    {key}
+                  </Link>
+                </li>
+              ))}
+              <li>
+                <button
+                  onClick={openAddVaultDialog}
+                  className={button({variant: 'clear', size: 'small'})}
+                >
+                  + Add Vault
+                </button>
+              </li>
+            </ul>
+          )}
+
+          <AddVaultDialog
+            ref={addVaultDialogRef}
+            onSubmit={async (name, key) => {
+              try {
+                await vaultStore.addVault(name, key);
+                await vaultStore.reload(key);
+              } catch (error) {
+                console.error('Failed to add vault:', error);
+              }
+            }}
+          />
+        </DashboardNavSection>
+
         <li>
           <Link className={navLink} href="/dashboard/gpg">
             <IconKeyFilled size={18} /> GPG
@@ -37,5 +90,33 @@ export const DashboardNav: React.FC = () => {
         </li>
       </ul>
     </nav>
+  );
+});
+
+type Props = {
+  title: React.ReactNode;
+  children: React.ReactNode;
+};
+
+const DashboardNavSection: React.FC<Props> = ({title, children}) => {
+  const [show, setShow] = React.useState(true);
+  return (
+    <li>
+      <Flex justify="between" align="center" gap={1 / 4}>
+        {title}
+
+        <button
+          className={button({size: 'iconSmall', variant: 'clear'})}
+          onClick={() => setShow(!show)}
+        >
+          {show ? (
+            <IconChevronDown size={14} strokeWidth={3} />
+          ) : (
+            <IconChevronRight size={14} strokeWidth={3} />
+          )}
+        </button>
+      </Flex>
+      {show && children}
+    </li>
   );
 };

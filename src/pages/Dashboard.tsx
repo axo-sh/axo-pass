@@ -1,7 +1,5 @@
 import {Redirect, Route, Switch} from 'wouter';
 
-import {button} from '@/components/Button.css';
-import {useDialog} from '@/components/Dialog';
 import {Layout} from '@/layout/Layout';
 import {LayoutDescription} from '@/layout/LayoutDescription';
 import {LayoutTitle} from '@/layout/LayoutTitle';
@@ -11,38 +9,34 @@ import {GPGSecrets} from '@/pages/Manager/GPGSecrets';
 import {Secrets} from '@/pages/Manager/Secrets';
 
 export const Dashboard = () => {
-  const addSecretDialog = useDialog();
-
   return (
     <Layout>
       <div className={dashboard}>
         <DashboardNav />
         <div className={dashboardContent}>
           <Switch>
-            <Route path="/dashboard/envs">
-              <LayoutTitle>Environments</LayoutTitle>
-              <LayoutDescription>Placeholder for environment page.</LayoutDescription>
-            </Route>
             <Route path="/dashboard/secrets">
-              <LayoutTitle
-                action={
-                  <button className={button({variant: 'clear'})} onClick={addSecretDialog.open}>
-                    Add secret
-                  </button>
-                }
-              >
-                Secrets
-              </LayoutTitle>
+              <LayoutTitle>Secrets</LayoutTitle>
               <LayoutDescription>
                 Your stored vault secrets. These are encrypted and can be decrypted.
               </LayoutDescription>
-              <Secrets addSecretDialog={addSecretDialog} />
+              <Secrets vaultKey="all" />
+            </Route>
+            <Route path="/dashboard/secrets/:vaultKey">
+              {(params) => (
+                <>
+                  <LayoutTitle>Vault: {params.vaultKey}</LayoutTitle>
+                  <LayoutDescription>Secrets in the {params.vaultKey} vault.</LayoutDescription>
+                  <Secrets vaultKey={params.vaultKey} />
+                </>
+              )}
             </Route>
             <Route path="/dashboard/gpg">
-              <LayoutTitle>GPG</LayoutTitle>
+              <LayoutTitle>Keys</LayoutTitle>
               <LayoutDescription>
                 {/* Run <code>gpg --list-secret-keys --with-keygrip</code> to see them. */}
-                Key IDs for stored GPG passphrases correspond to key grips in GPG.
+                Stored GPG and SSH key passphrases. IDs correspond to GPG key grips and SSH key
+                fingerprint. Passphrases cannot be added directly here, only via GPG or SSH.
               </LayoutDescription>
               <GPGSecrets />
             </Route>

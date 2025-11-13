@@ -14,6 +14,7 @@ export const vars = createGlobalTheme(':root', {
     xxs: '.75rem', // 9.75
     xs: '.875rem', // 11.375
     sm: '1rem', // 13px
+    nav: '1.1rem', // ~14.3px
     md: '1.25rem', // 16.25
     lg: '1.5rem',
     xl: '2.25rem',

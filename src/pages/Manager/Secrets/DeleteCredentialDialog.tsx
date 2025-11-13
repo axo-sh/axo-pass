@@ -1,37 +1,29 @@
 import {toast} from 'sonner';
 
-import type {VaultSchema} from '@/binding';
 import {deleteCredential} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import type {CredentialKey} from '@/utils/CredentialKey';
 
 type Props = {
-  vault: VaultSchema;
-  itemKey: string;
-  credentialKey: string;
+  credKey: CredentialKey;
   isOpen: boolean;
   onClose: () => void;
 };
 
-export const DeleteCredentialDialog: React.FC<Props> = ({
-  vault,
-  itemKey,
-  credentialKey,
-  isOpen,
-  onClose,
-}) => {
+export const DeleteCredentialDialog: React.FC<Props> = ({credKey, isOpen, onClose}) => {
   const vaultStore = useVaultStore();
   const errorDialog = useErrorDialog();
   const onDelete = async () => {
     try {
       await deleteCredential({
-        vault_key: vault.key,
-        item_key: itemKey,
-        credential_key: credentialKey,
+        vault_key: credKey.vaultKey,
+        item_key: credKey.itemKey,
+        credential_key: credKey.credKey,
       });
-      await vaultStore.reload(vault.key);
+      await vaultStore.reload(credKey.vaultKey);
       toast.success('Credential deleted.');
       onClose();
     } catch (err) {

@@ -1,5 +1,6 @@
 import React from 'react';
 
+import type {VaultSchema} from '@/binding';
 import {getVault, initVault} from '@/client';
 import {button} from '@/components/Button.css';
 import {useDialog} from '@/components/Dialog';
@@ -8,23 +9,48 @@ import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
 import {AddSecretDialog} from '@/pages/Manager/Secrets/AddSecret';
 import {CombinedList} from '@/pages/Manager/Secrets/CombinedList';
-import {EditSecret} from '@/pages/Manager/Secrets/EditSecret';
+import {EditSecretDialog} from '@/pages/Manager/Secrets/EditSecret';
 import {SecretsList} from '@/pages/Manager/Secrets/SecretsList';
-import {VaultContext, VaultStore} from '@/pages/Manager/Secrets/VaultStore';
-import {useClient} from '@/utils/useClient';
+import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import type {ItemKey} from '@/utils/CredentialKey';
 
-export const Secrets: React.FC<{addSecretDialog: ReturnType<typeof useDialog>}> = ({
-  addSecretDialog,
-}) => {
-  const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
-  const [selectedVaultKey, _setSelectedVaultKey] = React.useState<string>('default-vault');
+export const Secrets: React.FC<{
+  vaultKey: string;
+}> = ({vaultKey}) => {
+  const addSecretDialog = useDialog();
+  const [selectedItemKey, setSelectedItemKey] = React.useState<ItemKey | null>(null);
   const [showFlat, setShowCombined] = React.useState<boolean>(false);
-  const {ready, result, error} = useClient(async () => {
-    const {vault} = await getVault();
-    const store = new VaultStore();
-    store.vaults.set(vault.key, vault);
-    return store;
-  });
+  const vaultStore = useVaultStore();
+  const [ready, setReady] = React.useState(false);
+  const [vaults, setVaults] = React.useState<VaultSchema[]>([]);
+  const [error, setError] = React.useState<unknown>(null);
+
+  React.useEffect(() => {
+    const loadVaults = async () => {
+      setReady(false);
+      setError(null);
+      try {
+        if (vaultKey === 'all') {
+          const loadedVaults = [];
+          for (const key of vaultStore.vaultKeys) {
+            const {vault} = await getVault(key);
+            vaultStore.vaults.set(vault.key, vault);
+            loadedVaults.push(vault);
+          }
+          setVaults(loadedVaults);
+        } else {
+          const {vault} = await getVault(vaultKey);
+          vaultStore.vaults.set(vault.key, vault);
+          setVaults([vault]);
+        }
+      } catch (err) {
+        setError(err);
+      } finally {
+        setReady(true);
+      }
+    };
+    loadVaults();
+  }, [vaultKey, vaultStore]);
 
   const editSecretDialog = useDialog();
 
@@ -36,8 +62,8 @@ export const Secrets: React.FC<{addSecretDialog: ReturnType<typeof useDialog>}> 
           <h2>Vault not found.</h2>
           <button
             onClick={async () => {
-              await initVault();
-              window.location.reload();
+              await initVault({});
+              await vaultStore.loadVaultKeys();
             }}
             className={button({size: 'large'})}
           >
@@ -50,17 +76,24 @@ export const Secrets: React.FC<{addSecretDialog: ReturnType<typeof useDialog>}> 
   }
 
   if (!ready) {
-    return <p>Loading vault...</p>;
+    return <div />;
   }
 
-  const vault = result?.vaults.get(selectedVaultKey);
-  if (!vault) {
+  if (!vaults || vaults.length === 0) {
     return <p>No stored vault found.</p>;
   }
 
+  const vaultKeys = vaultKey === 'all' ? vaultStore.vaultKeys : [vaultKey];
+
   return (
-    <VaultContext.Provider value={result}>
+    <>
       <Toolbar>
+        <button
+          className={button({variant: 'clear', size: 'small'})}
+          onClick={addSecretDialog.open}
+        >
+          + Add secret
+        </button>
         <FlexSpacer />
         <Toggle onChange={(checked) => setShowCombined(checked)} checked={showFlat} toggleSize={16}>
           Flat view
@@ -69,37 +102,34 @@ export const Secrets: React.FC<{addSecretDialog: ReturnType<typeof useDialog>}> 
 
       {showFlat ? (
         <CombinedList
-          vault={vault}
-          onEdit={(keyId) => {
-            setSelectedKey(keyId);
+          selectedVaults={vaultKeys}
+          onEdit={(item) => {
+            setSelectedItemKey(item);
             editSecretDialog.open();
           }}
         />
       ) : (
         <SecretsList
-          vault={vault}
-          onEdit={(keyId) => {
-            setSelectedKey(keyId);
+          selectedVaults={vaultKeys}
+          onEdit={(item) => {
+            setSelectedItemKey(item);
             editSecretDialog.open();
           }}
         />
       )}
-      {selectedKey && editSecretDialog.isOpen && (
-        <EditSecret
-          vault={vault}
-          itemKey={selectedKey}
+
+      {selectedItemKey && editSecretDialog.isOpen && (
+        <EditSecretDialog
+          itemKey={selectedItemKey}
           isOpen
           onClose={() => {
             editSecretDialog.onClose();
-            setSelectedKey(null);
+            setSelectedItemKey(null);
           }}
         />
       )}
-      <AddSecretDialog
-        isOpen={addSecretDialog.isOpen}
-        onClose={addSecretDialog.onClose}
-        vaultKey={vault.key}
-      />
-    </VaultContext.Provider>
+
+      <AddSecretDialog isOpen={addSecretDialog.isOpen} onClose={addSecretDialog.onClose} />
+    </>
   );
 };

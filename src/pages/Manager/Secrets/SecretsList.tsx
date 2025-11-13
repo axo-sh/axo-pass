@@ -3,7 +3,6 @@ import React from 'react';
 import {observer} from 'mobx-react';
 import {toast} from 'sonner';
 
-import type {VaultSchema} from '@/binding';
 import {deleteItem} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
@@ -11,29 +10,32 @@ import {useErrorDialog} from '@/components/ErrorDialog';
 import {SecretItem} from '@/pages/Manager/Secrets/SecretsListItem';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {secretsList} from '@/pages/Manager/Secrets.css';
+import type {ItemKey} from '@/utils/CredentialKey';
 
 type Props = {
-  vault: VaultSchema;
-  onEdit: (keyId: string) => void;
+  selectedVaults: string[];
+  onEdit: (itemKey: ItemKey) => void;
 };
 
-export const SecretsList: React.FC<Props> = observer((props) => {
+export const SecretsList: React.FC<Props> = observer(({selectedVaults, onEdit}) => {
+  const vaultStore = useVaultStore();
   const deleteSecretDialog = useDialog();
-  const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = React.useState<ItemKey | null>(null);
+  const secrets = vaultStore.listSecretsForSelectedVaults(selectedVaults);
 
   return (
     <>
       <div className={secretsList({clickable: true})}>
-        {Object.keys(props.vault.data).map((key) => {
+        {secrets.map((itemKey) => {
           return (
             <SecretItem
-              key={key}
-              itemKey={key}
+              key={itemKey.itemKey}
+              itemKey={itemKey}
+              onEdit={onEdit}
               onDelete={() => {
-                setSelectedKey(key);
+                setSelectedKey(itemKey);
                 deleteSecretDialog.open();
               }}
-              {...props}
             />
           );
         })}
@@ -41,7 +43,6 @@ export const SecretsList: React.FC<Props> = observer((props) => {
 
       {selectedKey && deleteSecretDialog.isOpen && (
         <DeleteSecretDialog
-          vault={props.vault}
           itemKey={selectedKey}
           isOpen
           onClose={() => {
@@ -57,19 +58,18 @@ export const SecretsList: React.FC<Props> = observer((props) => {
 SecretsList.displayName = 'SecretsList';
 
 type DialogProps = {
-  vault: VaultSchema;
-  itemKey: string;
+  itemKey: ItemKey;
   isOpen: boolean;
   onClose: () => void;
 };
 
-const DeleteSecretDialog: React.FC<DialogProps> = ({vault, itemKey, isOpen, onClose}) => {
+const DeleteSecretDialog: React.FC<DialogProps> = ({itemKey, isOpen, onClose}) => {
   const vaultStore = useVaultStore();
   const errorDialog = useErrorDialog();
   const onDelete = async () => {
     try {
-      await deleteItem({vault_key: vault.key, item_key: itemKey});
-      await vaultStore.reload(vault.key);
+      await deleteItem({vault_key: itemKey.vaultKey, item_key: itemKey.itemKey});
+      await vaultStore.reload(itemKey.vaultKey);
       toast.success('Secret deleted.');
       onClose();
     } catch (err) {

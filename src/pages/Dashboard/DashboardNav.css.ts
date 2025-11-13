@@ -9,9 +9,9 @@ export const nav = style({
   borderRightStyle: 'solid',
   borderRightColor: colorVar.light20,
 
-  paddingTop: spacing(4),
-  paddingRight: spacing(2),
-  fontSize: vars.scale.sm,
+  paddingTop: spacing(1),
+  paddingRight: spacing(3 / 2),
+  fontSize: vars.scale.nav,
 });
 
 export const navLinks = style({
@@ -19,7 +19,7 @@ export const navLinks = style({
   padding: 0,
   margin: 0,
   display: 'grid',
-  gap: spacing(1 / 4),
+  gap: 1,
 });
 
 export const navLink = style({
@@ -29,6 +29,7 @@ export const navLink = style({
   alignItems: 'center',
   gap: spacing(3 / 4),
   padding: spacing(1 / 2, 3 / 4),
+  flexGrow: 1,
   borderRadius: 8,
   transition: 'background-color 0.2s, color 0.2s',
   ':hover': {
@@ -39,4 +40,26 @@ export const navLink = style({
 
 globalStyle(`${navLink} svg`, {
   opacity: 0.3,
+});
+
+export const navNestedLinks = style({
+  listStyle: 'none',
+  padding: 0,
+  margin: 0,
+  marginLeft: spacing(2.25),
+  marginBottom: spacing(1),
+  display: 'grid',
+  gap: 1,
+});
+
+export const navNestedLink = style({
+  display: 'block',
+  textDecoration: 'none',
+  padding: spacing(1 / 4, 3 / 4),
+  borderRadius: 8,
+  transition: 'background-color 0.2s, color 0.2s',
+  ':hover': {
+    color: colorVar.text,
+    backgroundColor: colorVar.light10,
+  },
 });

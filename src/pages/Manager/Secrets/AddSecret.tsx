@@ -12,10 +12,9 @@ import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 type AddSecretDialogProps = {
   isOpen: boolean;
   onClose: () => void;
-  vaultKey: string;
 };
 
-export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose, vaultKey}) => {
+export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose}) => {
   const vaultStore = useVaultStore();
   const form = useForm<SecretFormData>({
     defaultValues: {
@@ -35,12 +34,13 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose
   const onSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
+      // TODO: allow selecting vault
       await addItem({
-        vault_key: vaultKey,
+        vault_key: 'default',
         item_title: data.label,
         item_key: data.id,
       });
-      await vaultStore.reload(vaultKey);
+      await vaultStore.reload('default');
       toast.success('Secret created.');
       onClose();
     } catch (err) {

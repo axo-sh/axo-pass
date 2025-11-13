@@ -5,6 +5,7 @@ import {getMode} from '@/client';
 import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
 import {Dashboard} from '@/pages/Dashboard';
+import {VaultContext, VaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {PinentryScreen} from '@/pages/PinentryScreen';
 import {SshAskpassScreen} from '@/pages/SshAskpassScreen';
 
@@ -13,22 +14,23 @@ import '@/App.css.ts';
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppModeAndState | null>(null);
   const [loading, setLoading] = useState(true);
+  const [vaultStore] = useState(() => new VaultStore());
 
-  // Initialize the app by getting the mode
   useEffect(() => {
-    const initializeApp = async () => {
+    (async () => {
       try {
         const appMode = await getMode();
         setMode(appMode);
+        if ('app' in appMode) {
+          await vaultStore.loadVaultKeys();
+        }
       } catch (error) {
         console.error('Error getting app mode:', error);
       } finally {
         setLoading(false);
       }
-    };
-
-    initializeApp();
-  }, []);
+    })();
+  }, [vaultStore]);
 
   if (loading) {
     return (
@@ -59,7 +61,9 @@ const App: React.FC = () => {
   // Main app mode
   return (
     <ErrorDialogProvider>
-      <Dashboard />
+      <VaultContext.Provider value={vaultStore}>
+        <Dashboard />
+      </VaultContext.Provider>
     </ErrorDialogProvider>
   );
 };

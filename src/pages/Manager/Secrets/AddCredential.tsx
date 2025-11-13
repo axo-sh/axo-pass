@@ -12,13 +12,13 @@ import {FormRow} from '@/components/form/FormRow';
 import {InputField} from '@/components/form/Input';
 import {textInput} from '@/components/Input.css';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import type {ItemKey} from '@/utils/CredentialKey';
 import {nameToSlug} from '@/utils/nameToSlug';
 
 type AddCredentialDialogProps = {
   isOpen: boolean;
   onClose: () => void;
-  vaultKey: string;
-  itemKey: string;
+  itemKey: ItemKey;
 };
 
 type F = {
@@ -28,7 +28,7 @@ type F = {
 };
 
 export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
-  ({isOpen, onClose, vaultKey, itemKey}) => {
+  ({isOpen, onClose, itemKey}) => {
     const vaultStore = useVaultStore();
     const form = useForm<F>({
       defaultValues: {
@@ -59,13 +59,13 @@ export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
       setIsSubmitting(true);
       try {
         await addCredential({
-          vault_key: vaultKey,
-          item_key: itemKey,
+          vault_key: itemKey.vaultKey,
+          item_key: itemKey.itemKey,
           credential_title: data.label,
           credential_key: data.id,
           credential_value: data.value,
         });
-        await vaultStore.reload(vaultKey);
+        await vaultStore.reload(itemKey.vaultKey);
         onClose();
       } catch (err) {
         errorDialog.showError('Failed to add credential', String(err));

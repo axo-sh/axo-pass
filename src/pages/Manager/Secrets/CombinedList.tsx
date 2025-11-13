@@ -1,52 +1,54 @@
 import React from 'react';
 
-import type {VaultSchema} from '@/binding';
 import {useDialog} from '@/components/Dialog';
 import {CombinedListItem} from '@/pages/Manager/Secrets/CombinedListItem';
 import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
+import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {secretsList} from '@/pages/Manager/Secrets.css';
+import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
 
 type Props = {
-  vault: VaultSchema;
-  onEdit: (keyId: string) => void;
+  selectedVaults: string[];
+  onEdit: (item: ItemKey) => void;
 };
 
-export const CombinedList: React.FC<Props> = ({vault, onEdit}) => {
+export const CombinedList: React.FC<Props> = ({selectedVaults, onEdit}) => {
   const deleteCredentialDialog = useDialog();
-  const [selectedCredentialKey, setSelectedCredentialKey] = React.useState<[string, string] | null>(
+  const [selectedCredentialKey, setSelectedCredentialKey] = React.useState<CredentialKey | null>(
     null,
   );
-  const flattenedItems = Object.keys(vault.data).flatMap((itemKey) => {
-    const item = vault.data[itemKey];
-    return Object.keys(item.credentials).map((credKey) => {
-      return {itemKey, credKey};
-    });
+  const vaultStore = useVaultStore();
+  const secrets = vaultStore.listSecretsForSelectedVaults(selectedVaults);
+  const hasMultipleVaults = selectedVaults.length > 1;
+  const flatCreds: CredentialKey[] = [];
+  secrets.forEach(({vaultKey, itemKey}) => {
+    const entry = vaultStore.getItem({vaultKey, itemKey});
+    for (const credKey of Object.keys(entry?.credentials || [])) {
+      flatCreds.push({vaultKey, itemKey, credKey});
+    }
   });
 
-  const onDelete = (itemKey: string, credKey: string) => {
-    setSelectedCredentialKey([itemKey, credKey]);
+  const onDelete = (credKey: CredentialKey) => {
+    setSelectedCredentialKey(credKey);
     deleteCredentialDialog.open();
   };
 
   return (
     <>
       <div className={secretsList({clickable: true})}>
-        {flattenedItems.map(({itemKey, credKey}) => (
+        {flatCreds.map((credKey) => (
           <CombinedListItem
-            key={`${itemKey}/${credKey}`}
-            vaultKey={vault.key}
+            key={`${credKey.itemKey}/${credKey.credKey}`}
+            hasMultipleVaults={hasMultipleVaults}
             onEdit={onEdit}
             onDelete={onDelete}
-            itemKey={itemKey}
             credKey={credKey}
           />
         ))}
       </div>
       {selectedCredentialKey && (
         <DeleteCredentialDialog
-          vault={vault}
-          itemKey={selectedCredentialKey[0]}
-          credentialKey={selectedCredentialKey[1]}
+          credKey={selectedCredentialKey}
           isOpen={deleteCredentialDialog.isOpen}
           onClose={() => {
             deleteCredentialDialog.onClose();

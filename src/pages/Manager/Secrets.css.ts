@@ -57,9 +57,7 @@ export const secretItemLabel = style({
 });
 
 export const secretItemValue = style({
-  display: 'flex',
-  alignItems: 'center',
-  gap: spacing(0.25),
+  display: 'block',
   fontFamily: vars.fonts.monospace,
   fontWeight: 600,
   fontSize: vars.scale.sm,
@@ -70,6 +68,10 @@ export const secretItemValue = style({
     whiteSpace: 'normal',
     wordBreak: 'break-all',
   },
+});
+
+export const secretItemValueVault = style({
+  color: colorVar.dim50,
 });
 
 export const secretItemValueCode = style({
