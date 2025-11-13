@@ -41,7 +41,7 @@ export const Dashboard = () => {
             </DashboardContent>
           </Route>
           <Route>
-            <Redirect to="/dashboard/envs" />
+            <Redirect to="/dashboard/secrets" />
           </Route>
         </Switch>
       </div>
