@@ -2,8 +2,9 @@ project_name = "axo-pass"
 env_file = ".env.local"
 
 [tasks]
-dev = "cargo tauri dev"
+dev = "tauri dev"
 build = "cargo-tauri build -b app"
+icon = "tauri icon ./src-tauri/misc/app-icon.png"
 types = "typeshare ./src-tauri --lang=typescript --output-file=src/binding.ts"
 start = "./src-tauri/target/release/bundle/macos/Axo\\ Pass.app/Contents/MacOS/axo-pass"
 biome-assist = "npx @biomejs/biome check --formatter-enabled=false --linter-enabled=false"

@@ -1,0 +1,7 @@
+*.ico
+Square*
+StoreLogo.png
+*.png
+android/
+ios/
+*.icns
