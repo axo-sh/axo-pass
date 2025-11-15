@@ -148,7 +148,11 @@ export const Secrets: React.FC<{
         />
       )}
 
-      <AddSecretDialog isOpen={addSecretDialog.isOpen} onClose={addSecretDialog.onClose} />
+      <AddSecretDialog
+        vaultKey={vaultKey}
+        isOpen={addSecretDialog.isOpen}
+        onClose={addSecretDialog.onClose}
+      />
     </>
   );
 };

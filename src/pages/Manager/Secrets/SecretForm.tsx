@@ -8,9 +8,11 @@ import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
 import {InputField} from '@/components/form/Input';
 import {textInput} from '@/components/Input.css';
+import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {nameToSlug} from '@/utils/nameToSlug';
 
 export type SecretFormData = {
+  vaultKey: string;
   label: string;
   id: string;
 };
@@ -21,7 +23,7 @@ type SecretFormProps = {
   onCancel: () => void;
   isSubmitting: boolean;
   submitLabel?: string;
-  mode: 'add' | 'edit';
+  isExistingSecret: boolean;
 };
 
 export const SecretForm: React.FC<SecretFormProps> = ({
@@ -30,19 +32,20 @@ export const SecretForm: React.FC<SecretFormProps> = ({
   onCancel,
   isSubmitting,
   submitLabel,
-  mode,
+  isExistingSecret,
 }) => {
+  const vaultStore = useVaultStore();
   const labelValue = form.watch('label');
 
   React.useEffect(() => {
     // Only auto-generate ID in add mode when the ID field hasn't been manually edited
-    if (mode === 'add') {
+    if (!isExistingSecret) {
       const idField = form.getFieldState('id');
       if (!idField.isDirty && labelValue) {
         form.setValue('id', nameToSlug(labelValue));
       }
     }
-  }, [labelValue, form, mode]);
+  }, [labelValue, form, isExistingSecret]);
 
   return (
     <Form form={form} onSubmit={form.handleSubmit(onSubmit)}>
@@ -65,8 +68,26 @@ export const SecretForm: React.FC<SecretFormProps> = ({
               type="text"
               className={textInput({monospace: true})}
               {...field}
-              disabled={mode === 'edit'}
+              disabled={isExistingSecret}
             />
+          </FormRow>
+        )}
+      </InputField>
+
+      <InputField<SecretFormData> name="vaultKey">
+        {(field, error) => (
+          <FormRow
+            label="Vault"
+            description="The vault where this secret will be stored"
+            error={error}
+          >
+            <select {...field} disabled={isExistingSecret}>
+              {vaultStore.vaultKeys.map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
           </FormRow>
         )}
       </InputField>

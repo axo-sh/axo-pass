@@ -131,7 +131,7 @@ const EditSecret: React.FC<EditSecretProps> = observer(({item, itemKey, addCrede
         onCancel={handleCancelEdit}
         isSubmitting={isSubmitting}
         submitLabel="Save changes"
-        mode="edit"
+        isExistingSecret
       />
     );
   }

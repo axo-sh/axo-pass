@@ -10,16 +10,18 @@ import {SecretForm, type SecretFormData} from '@/pages/Manager/Secrets/SecretFor
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 
 type AddSecretDialogProps = {
+  vaultKey: string;
   isOpen: boolean;
   onClose: () => void;
 };
 
-export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose}) => {
+export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({vaultKey, isOpen, onClose}) => {
   const vaultStore = useVaultStore();
   const form = useForm<SecretFormData>({
     defaultValues: {
       label: '',
       id: '',
+      vaultKey: vaultKey === 'all' ? '' : vaultKey,
     },
   });
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -34,13 +36,12 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose
   const onSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
-      // TODO: allow selecting vault
       await addItem({
-        vault_key: 'default',
+        vault_key: data.vaultKey,
         item_title: data.label,
         item_key: data.id,
       });
-      await vaultStore.reload('default');
+      await vaultStore.reload(data.vaultKey);
       toast.success('Secret created.');
       onClose();
     } catch (err) {
@@ -58,7 +59,7 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({isOpen, onClose
         onCancel={onClose}
         isSubmitting={isSubmitting}
         submitLabel="Create secret"
-        mode="add"
+        isExistingSecret={false}
       />
     </Dialog>
   );
