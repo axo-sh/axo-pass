@@ -46,7 +46,7 @@ globalStyle('*, *::after, *::before', {
 globalStyle('pre, code', {
   fontFamily: vars.fonts.monospace,
   fontSize: vars.scale.xs,
-  fontWeight: 'bold',
+  fontWeight: 500,
 });
 
 globalStyle('dialog::backdrop', {
