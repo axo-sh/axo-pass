@@ -1,5 +1,6 @@
 import {globalStyle, style} from '@vanilla-extract/css';
 
+import {vars} from '@/App.css';
 import {layoutDescription, layoutTitle} from '@/layout/Layout.css';
 import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
@@ -27,4 +28,18 @@ globalStyle(`${dashboardContentHeader} ${layoutTitle()}`, {
 
 globalStyle(`${dashboardContentHeader} ${layoutDescription()}`, {
   marginBottom: spacing(1),
+});
+
+export const dashboardSectionHeader = style({});
+
+export const dashboardSectionHeaderH2 = style({
+  margin: 0,
+  padding: 0,
+  fontSize: vars.scale.md,
+});
+
+export const dashboardSection = style({});
+
+globalStyle(`${dashboardSection} + ${dashboardSection}`, {
+  marginTop: spacing(2),
 });
