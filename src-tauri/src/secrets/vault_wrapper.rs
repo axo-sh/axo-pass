@@ -104,6 +104,34 @@ impl VaultWrapper {
         Ok(())
     }
 
+    pub fn set_vault_key(&mut self, new_vault_key: String) -> Result<(), Error> {
+        // validate vault name
+        if !VAULT_KEY_REGEX.is_match(&new_vault_key) {
+            return Err(Error::InvalidVaultKey(new_vault_key));
+        }
+
+        let vault_dir = self
+            .path
+            .parent()
+            .expect("Vault path has no parent directory");
+        let new_path = vault_dir.join(new_vault_key.clone()).with_extension("json");
+
+        // move the vault file
+        if let Err(err) = std::fs::rename(&self.path, &new_path) {
+            return Err(Error::VaultKeyUpdateFailed(err));
+        }
+
+        // update the vault
+        self.key = new_vault_key;
+        self.path = new_path;
+        self.save()?;
+        Ok(())
+    }
+
+    pub fn set_vault_name(&mut self, new_name: String) {
+        self.vault.name = Some(new_name);
+    }
+
     pub fn get_secret_by_url(&self, url: url::Url) -> anyhow::Result<Option<String>> {
         let item_key = url
             .path_segments()
@@ -359,6 +387,9 @@ impl VaultWrapper {
 
 static WHITESPACE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+").unwrap());
+
+static VAULT_KEY_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^[a-z][a-z0-9-_][a-z0-9]+$").unwrap());
 
 pub fn normalize_key(key: &str) -> String {
     WHITESPACE_REGEX

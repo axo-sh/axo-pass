@@ -11,6 +11,7 @@ pub mod get_decrypted_credential;
 pub mod get_vault;
 pub mod schemas;
 pub mod update_item;
+pub mod update_vault;
 
 pub fn with_unlocked_vault<F, R>(
     state: &tauri::State<'_, Mutex<AppState>>,

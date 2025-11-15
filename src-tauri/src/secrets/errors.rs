@@ -38,6 +38,9 @@ pub enum Error {
     #[error("Failed to save vault: {0}")]
     VaultWriteError(#[source] std::io::Error),
 
+    #[error("Failed to update vault key: {0}")]
+    VaultKeyUpdateFailed(#[source] std::io::Error),
+
     #[error("Invalid vault item reference: {0}")]
     InvalidVaultItemReference(String),
 
@@ -49,4 +52,13 @@ pub enum Error {
 
     #[error("Could not retrieve secret {0} from vault: {1}")]
     SecretRetrievalFailed(String, #[source] anyhow::Error),
+
+    #[error("Invalid vault key, only the following characters allowed: a-zA-Z0-9-_: {0}")]
+    InvalidVaultKey(String),
+}
+
+impl From<Error> for String {
+    fn from(err: Error) -> Self {
+        err.to_string()
+    }
 }
