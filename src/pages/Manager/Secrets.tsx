@@ -1,7 +1,8 @@
 import React from 'react';
 
-import type {VaultSchema} from '@/binding';
-import {getVault, initVault} from '@/client';
+import {observer} from 'mobx-react';
+
+import {initVault} from '@/client';
 import {button} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
@@ -16,34 +17,31 @@ import {SecretsList} from '@/pages/Manager/Secrets/SecretsList';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import type {ItemKey} from '@/utils/CredentialKey';
 
-export const Secrets: React.FC<{
+type Props = {
   vaultKey: string;
-}> = ({vaultKey}) => {
+};
+
+export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
   const addSecretDialog = useDialog();
   const [selectedItemKey, setSelectedItemKey] = React.useState<ItemKey | null>(null);
   const [showFlat, setShowCombined] = React.useState<boolean>(false);
   const vaultStore = useVaultStore();
   const [ready, setReady] = React.useState(false);
-  const [vaults, setVaults] = React.useState<VaultSchema[]>([]);
   const [error, setError] = React.useState<unknown>(null);
+
+  const showAllVaults = vaultKey === 'all';
 
   React.useEffect(() => {
     const loadVaults = async () => {
       setReady(false);
       setError(null);
       try {
-        if (vaultKey === 'all') {
-          const loadedVaults = [];
+        if (showAllVaults) {
           for (const key of vaultStore.vaultKeys) {
-            const {vault} = await getVault(key);
-            vaultStore.vaults.set(vault.key, vault);
-            loadedVaults.push(vault);
+            vaultStore.reload(key);
           }
-          setVaults(loadedVaults);
         } else {
-          const {vault} = await getVault(vaultKey);
-          vaultStore.vaults.set(vault.key, vault);
-          setVaults([vault]);
+          vaultStore.reload(vaultKey);
         }
       } catch (err) {
         setError(err);
@@ -81,18 +79,18 @@ export const Secrets: React.FC<{
     return <div />;
   }
 
-  if (!vaults || vaults.length === 0) {
+  if (vaultStore.vaults.size === 0) {
     return <p>No stored vault found.</p>;
   }
 
-  const vaultKeys = vaultKey === 'all' ? vaultStore.vaultKeys : [vaultKey];
+  const vaultKeys = showAllVaults ? vaultStore.vaultKeys : [vaultKey];
 
   return (
     <>
       <DashboardContentHeader
-        title={vaultKey === 'all' ? 'Secrets' : `Vault: ${vaultKey}`}
+        title={showAllVaults ? 'Secrets' : `Vault: ${vaultKey}`}
         description={
-          vaultKey === 'all' ? (
+          showAllVaults ? (
             'Your stored vault secrets. These are encrypted and can be decrypted.'
           ) : (
             <div>
@@ -155,4 +153,4 @@ export const Secrets: React.FC<{
       />
     </>
   );
-};
+});
