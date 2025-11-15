@@ -76,7 +76,7 @@ impl VaultsManager {
         if u.scheme() != "axo" {
             return Err(Error::InvalidVaultItemReference(item_url.to_string()));
         }
-        let Some(vault_key) = u.host_str().clone() else {
+        let Some(vault_key) = u.host_str() else {
             return Err(Error::InvalidVaultItemReference(item_url.to_string()));
         };
         let Some(vault) = self.vaults.get_mut(vault_key) else {
