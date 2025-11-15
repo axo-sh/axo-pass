@@ -5,13 +5,14 @@ import {
   IconChevronRight,
   IconForms,
   IconKeyFilled,
+  IconPlus,
   IconSettingsFilled,
   IconTriangle,
 } from '@tabler/icons-react';
 import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
 
-import {button} from '@/components/Button.css';
+import {button, buttonIconLeft} from '@/components/Button.css';
 import {Flex} from '@/components/Flex';
 import {
   nav,
@@ -63,7 +64,8 @@ export const DashboardNav: React.FC = observer(() => {
                   onClick={openAddVaultDialog}
                   className={button({variant: 'clear', size: 'small'})}
                 >
-                  + Add Vault
+                  <IconPlus className={buttonIconLeft} />
+                  Add Vault
                 </button>
               </li>
             </ul>

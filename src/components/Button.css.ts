@@ -1,4 +1,4 @@
-import {globalStyle} from '@vanilla-extract/css';
+import {globalStyle, style, styleVariants} from '@vanilla-extract/css';
 import {calc} from '@vanilla-extract/css-utils';
 import {type RecipeVariants, recipe} from '@vanilla-extract/recipes';
 
@@ -12,91 +12,97 @@ export type ButtonVariants = NonNullable<Required<RecipeVariants<typeof button>>
 
 export type ButtonVariant = ButtonVariants['variant'];
 
-export const button = recipe({
-  base: {
-    position: 'relative',
-    display: 'inline-flex',
-    padding: spacing(2 / 3, 1),
-    cursor: 'pointer',
-    fontSize: vars.scale.sm,
-    textAlign: 'center',
-    textDecoration: 'none',
-    fontWeight: 600,
-    borderRadius: 6,
-    lineHeight: 1,
-    alignItems: 'center',
-    transition: 'all 75ms ease-out',
-    whiteSpace: 'nowrap',
-    justifyContent: 'center',
-    boxShadow: '0 2px 2px rgba(0, 0, 0, 0.07)',
-    background: colorVar.dark10,
-    border: `1px solid ${colorVar.dark10}`,
-    color: colorVar.text,
-    outline: 'none',
-    userSelect: 'none',
+const defaultButton = style({
+  position: 'relative',
+  display: 'inline-flex',
+  padding: spacing(2 / 3, 1),
+  cursor: 'pointer',
+  fontSize: vars.scale.sm,
+  textAlign: 'center',
+  textDecoration: 'none',
+  fontWeight: 600,
+  borderRadius: 6,
+  lineHeight: 1,
+  alignItems: 'center',
+  transition: 'all 75ms ease-out',
+  whiteSpace: 'nowrap',
+  justifyContent: 'center',
+  boxShadow: '0 2px 2px rgba(0, 0, 0, 0.07)',
+  background: colorVar.dark10,
+  border: `1px solid ${colorVar.dark10}`,
+  color: colorVar.text,
+  outline: 'none',
+  userSelect: 'none',
+  ':active': {
+    boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
+    background: colorVar.dark30,
+  },
+  ':hover': {
+    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+    background: colorVar.dark20,
+  },
+});
+
+const buttonVariants = styleVariants({
+  default: {
+    vars: accentScheme,
+  },
+  clear: {
+    background: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(255,255,255,0.05)',
     ':active': {
+      outline: 'none',
       boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
-      background: colorVar.dark30,
+      background: colorVar.light20,
     },
     ':hover': {
-      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
-      background: colorVar.dark20,
+      outline: 'none',
+      background: 'rgba(255,255,255,0.04)',
+      borderColor: colorVar.light20,
+      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+    },
+    vars: greyScheme,
+  },
+  error: {
+    vars: errorScheme,
+    background: colorVar.base,
+  },
+  secondaryError: {
+    borderColor: colorVar.light20,
+    ':hover': {
+      vars: errorScheme,
+      borderColor: colorVar.base,
+      background: colorVar.base,
     },
   },
+});
+
+const sizeVariants = styleVariants({
+  small: {
+    fontSize: vars.scale.xs,
+    padding: '6px 10px',
+  },
+  iconSmall: {
+    fontSize: vars.scale.xs,
+    padding: spacing(0.5),
+  },
+  default: {},
+  large: {
+    fontSize: vars.scale.sm,
+    padding: '10px 16px',
+  },
+});
+
+// note: defaultButton must be declared before buttonVariants/sizeVariants
+// so that the latter take precedence
+export const button = recipe({
+  base: defaultButton,
   defaultVariants: {
     variant: 'default',
   },
-
   variants: {
-    variant: {
-      default: {
-        vars: accentScheme,
-      },
-      clear: {
-        background: 'rgba(255,255,255,0.05)',
-        borderColor: 'rgba(255,255,255,0.05)',
-        ':active': {
-          outline: 'none',
-          boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
-          background: colorVar.light20,
-        },
-        ':hover': {
-          outline: 'none',
-          background: 'rgba(255,255,255,0.04)',
-          borderColor: colorVar.light20,
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-        },
-        vars: greyScheme,
-      },
-      error: {
-        vars: errorScheme,
-        background: colorVar.base,
-      },
-      secondaryError: {
-        borderColor: colorVar.light20,
-        ':hover': {
-          vars: errorScheme,
-          borderColor: colorVar.base,
-          background: colorVar.base,
-        },
-      },
-    },
-    size: {
-      small: {
-        fontSize: vars.scale.xs,
-        padding: '6px 10px',
-      },
-      iconSmall: {
-        fontSize: vars.scale.xs,
-        padding: spacing(0.5),
-        border: 'none',
-      },
-      default: {},
-      large: {
-        fontSize: vars.scale.sm,
-        padding: '10px 16px',
-      },
-    },
+    variant: buttonVariants,
+    size: sizeVariants,
   },
 });
 
@@ -117,4 +123,14 @@ globalStyle(`${button.classNames.base} ${loader()}`, {
   left: 0,
   right: 0,
   bottom: 0,
+});
+
+export const buttonIconLeft = style({});
+
+globalStyle(`${sizeVariants.small} ${buttonIconLeft}`, {
+  width: 12,
+  height: 12,
+  marginLeft: spacing(-1 / 2),
+  marginRight: spacing(1 / 3),
+  strokeWidth: 3,
 });
