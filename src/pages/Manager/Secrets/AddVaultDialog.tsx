@@ -69,7 +69,7 @@ export const AddVaultDialog = React.forwardRef<AddVaultDialogHandle, Props>(({on
 
         <InputField<FormData> name="vault_key">
           {(field, error) => (
-            <FormRow label="Vault Key" error={error}>
+            <FormRow label="Vault ID" error={error}>
               <input type="text" className={textInput()} required {...field} />
             </FormRow>
           )}
