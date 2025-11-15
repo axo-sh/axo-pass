@@ -4,6 +4,7 @@ import {IconTrash} from '@tabler/icons-react';
 
 import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryType} from '@/client';
 import {button} from '@/components/Button.css';
+import {Code} from '@/components/Code';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {
   secretItem,
@@ -95,7 +96,7 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
   return (
     <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete the passphrase for the {keyType} with key grip ID{' '}
-      <code>{entry.key_id}</code> stored in your system keychain? You will need to re-enter the
+      <Code>{entry.key_id}</Code> stored in your system keychain? You will need to re-enter the
       passphrase the next time you use the {keyType}.
       <DialogActions>
         <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>

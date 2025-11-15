@@ -3,6 +3,7 @@ import React from 'react';
 import type {VaultSchema} from '@/binding';
 import {getVault, initVault} from '@/client';
 import {button} from '@/components/Button.css';
+import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
 import {Toggle} from '@/components/Toggle';
@@ -95,7 +96,7 @@ export const Secrets: React.FC<{
             'Your stored vault secrets. These are encrypted and can be decrypted.'
           ) : (
             <div>
-              Secrets in the <code>{vaultKey}</code> vault.
+              Secrets in the <Code>{vaultKey}</Code> vault.
             </div>
           )
         }
