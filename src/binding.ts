@@ -16,6 +16,10 @@ export interface AddItemRequest {
   item_key: string;
 }
 
+export interface AppSettingsResponse {
+  helper_bin_path?: string;
+}
+
 export interface CredentialUpdate {
   title?: string;
   value?: string;

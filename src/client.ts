@@ -3,6 +3,7 @@ import {invoke} from '@tauri-apps/api/core';
 import type {
   AddCredentialRequest,
   AddItemRequest,
+  AppSettingsResponse,
   DecryptedCredential,
   DecryptedCredentialRequest,
   DeleteCredentialRequest,
@@ -152,4 +153,8 @@ export const addCredential = async (request: AddCredentialRequest): Promise<void
 
 export const deleteCredential = async (request: DeleteCredentialRequest): Promise<void> => {
   return await invoke<void>('delete_credential', {request});
+};
+
+export const getAppSettings = async (): Promise<AppSettingsResponse> => {
+  return await invoke<AppSettingsResponse>('get_app_settings');
 };

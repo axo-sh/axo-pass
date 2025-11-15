@@ -386,6 +386,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-log",
  "tauri-plugin-opener",
+ "tauri-utils",
  "thiserror 2.0.17",
  "tokio",
  "typeshare",
