@@ -29,7 +29,7 @@ export const SecretsList: React.FC<Props> = observer(({selectedVaults, onEdit}) 
         {secrets.map((itemKey) => {
           return (
             <SecretItem
-              key={itemKey.itemKey}
+              key={`${itemKey.vaultKey}/${itemKey.itemKey}`}
               itemKey={itemKey}
               onEdit={onEdit}
               onDelete={() => {
