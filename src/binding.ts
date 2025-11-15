@@ -81,7 +81,7 @@ export interface VaultItemSchema {
 
 export interface VaultSchema {
   key: string;
-  title?: string;
+  name?: string;
   data: Record<string, VaultItemSchema>;
 }
 

@@ -10,7 +10,7 @@ use crate::secrets::vault_wrapper::VaultWrapper;
 #[typeshare]
 pub struct VaultSchema {
     pub key: String,
-    pub title: Option<String>,
+    pub name: Option<String>,
     #[typeshare(serialized_as = "HashMap<String, VaultItemSchema>")]
     pub data: BTreeMap<String, VaultItemSchema>,
 }
@@ -19,7 +19,7 @@ impl From<&VaultWrapper> for VaultSchema {
     fn from(vw: &VaultWrapper) -> Self {
         VaultSchema {
             key: vw.key.clone(),
-            title: vw.vault.name.clone(),
+            name: vw.vault.name.clone(),
             data: vw
                 .vault
                 .data
