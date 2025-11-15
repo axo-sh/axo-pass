@@ -70,10 +70,10 @@ export const navNestedLinks = style({
   listStyle: 'none',
   padding: 0,
   margin: 0,
-  marginLeft: spacing(2.25),
+  marginLeft: 28, // custom indent to align with icon indent
   marginBottom: spacing(1),
   display: 'grid',
-  gap: 1,
+  gap: spacing(1 / 4),
 });
 
 export const navNestedLink = style({

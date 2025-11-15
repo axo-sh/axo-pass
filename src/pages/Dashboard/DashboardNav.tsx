@@ -51,13 +51,8 @@ export const DashboardNav: React.FC = observer(() => {
         >
           {vaultStore.vaultKeys.length > 0 && (
             <ul className={navNestedLinks}>
-              <li>
-                <Link className={navNestedLink} href="/dashboard/secrets/all">
-                  all
-                </Link>
-              </li>
               {vaultStore.vaultKeys.map((key) => (
-                <li key={key} style={{marginTop: '0.25rem'}}>
+                <li key={key}>
                   <Link className={navNestedLink} href={`/dashboard/secrets/${key}`}>
                     {key}
                   </Link>
