@@ -12,7 +12,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <ErrorBoundary
       fallbackRender={() => {
         return (
-          <Layout>
+          <Layout centered>
             <h2>Something went wrong.</h2>
           </Layout>
         );
