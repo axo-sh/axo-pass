@@ -19,7 +19,7 @@ pub struct VaultCommand {
 #[derive(Subcommand, Debug)]
 enum VaultSubcommand {
     Get {
-        get_item_url: String,
+        item_reference: String,
     },
     List,
     Set {
@@ -32,8 +32,8 @@ enum VaultSubcommand {
 impl VaultCommand {
     pub async fn execute(&self) {
         match &self.subcommand {
-            VaultSubcommand::Get { get_item_url } => {
-                self.cmd_get_item_by_url(get_item_url.clone())
+            VaultSubcommand::Get { item_reference } => {
+                self.cmd_get_item_by_url(item_reference.clone())
                     .expect("Failed to get item");
             },
             VaultSubcommand::List => {

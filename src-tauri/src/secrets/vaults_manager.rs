@@ -15,9 +15,8 @@ pub struct VaultsManager {
 impl VaultsManager {
     pub fn new() -> Self {
         let vaults_dir = vaults_dir();
-        let vaults = Self::discover_vaults(&vaults_dir);
         Self {
-            vaults,
+            vaults: Self::discover_vaults(&vaults_dir),
             vaults_dir: vaults_dir.to_owned(),
         }
     }
@@ -50,23 +49,23 @@ impl VaultsManager {
         self.vaults.keys().cloned()
     }
 
-    pub fn get_vault_mut(&mut self, name: &str) -> Result<&mut VaultWrapper, Error> {
-        if !self.vaults.contains_key(name) {
+    pub fn get_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {
+        if !self.vaults.contains_key(key) {
             log::debug!(
                 "Vault not loaded, reading vault from vaults dir: {}",
                 self.vaults_dir.display()
             );
-            let vw = VaultWrapper::load(&self.vaults_dir, Some(name)).inspect_err(|e| {
+            let vw = VaultWrapper::load(&self.vaults_dir, Some(key)).inspect_err(|e| {
                 log::error!("Error reading vault: {:?}", e);
             })?;
-            self.vaults.insert(name.to_string(), vw);
+            self.vaults.insert(key.to_string(), vw);
         }
 
-        Ok(self.vaults.get_mut(name).unwrap())
+        Ok(self.vaults.get_mut(key).unwrap())
     }
 
-    pub fn get_vault(&mut self, name: &str) -> Result<&VaultWrapper, Error> {
-        self.get_vault_mut(name).map(|v| &*v)
+    pub fn get_vault(&mut self, key: &str) -> Result<&VaultWrapper, Error> {
+        self.get_vault_mut(key).map(|v| &*v)
     }
 
     pub fn get_secret_by_url(&mut self, item_url: &str) -> Result<Option<String>, Error> {
