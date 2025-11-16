@@ -82,9 +82,9 @@ export const SecretForm: React.FC<SecretFormProps> = ({
             error={error}
           >
             <select {...field} disabled={isExistingSecret}>
-              {vaultStore.vaultKeys.map((key) => (
+              {vaultStore.vaultKeys.map(({name, key}) => (
                 <option key={key} value={key}>
-                  {key}
+                  {name || key}
                 </option>
               ))}
             </select>

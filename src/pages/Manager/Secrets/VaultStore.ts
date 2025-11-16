@@ -2,13 +2,13 @@ import React from 'react';
 
 import {action, makeObservable, observable, runInAction} from 'mobx';
 
-import type {VaultSchema} from '@/binding';
+import type {VaultInfo, VaultSchema} from '@/binding';
 import {getVault, initVault, listVaults} from '@/client';
 import type {ItemKey} from '@/utils/CredentialKey';
 
 export class VaultStore {
   vaults: Map<string, VaultSchema>;
-  vaultKeys: string[];
+  vaultKeys: VaultInfo[];
 
   constructor() {
     this.vaults = new Map();
@@ -17,6 +17,7 @@ export class VaultStore {
       vaults: observable,
       vaultKeys: observable,
       loadVaultKeys: action,
+      reloadAll: action,
       reload: action,
       addVault: action,
     });
@@ -26,7 +27,11 @@ export class VaultStore {
     // note: listVaults returns just the keys (for the sidebar)
     const vaultKeys = await listVaults();
     runInAction(() => {
-      this.vaultKeys = vaultKeys.sort();
+      this.vaultKeys = vaultKeys.sort((a, b) => {
+        const nameA = a.name || a.key;
+        const nameB = b.name || b.key;
+        return nameA.localeCompare(nameB);
+      });
     });
   }
 
@@ -34,6 +39,12 @@ export class VaultStore {
     return this.vaults.get(vaultKey)?.data[itemKey];
   }
 
+  async reloadAll() {
+    await this.loadVaultKeys();
+    for (const {key} of this.vaultKeys) {
+      await this.reload(key);
+    }
+  }
   async reload(vaultKey: string) {
     const {vault} = await getVault(vaultKey);
     const existingVault = this.vaults.get(vault.key);

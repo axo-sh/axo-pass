@@ -91,8 +91,15 @@ pub async fn get_vault(
 
 #[derive(Serialize)]
 #[typeshare]
+pub struct VaultInfo {
+    pub name: Option<String>,
+    pub key: String,
+}
+
+#[derive(Serialize)]
+#[typeshare]
 pub struct ListVaultsResponse {
-    pub vaults: Vec<String>,
+    pub vaults: Vec<VaultInfo>,
 }
 
 #[tauri::command]
@@ -100,9 +107,24 @@ pub async fn list_vaults(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<ListVaultsResponse, String> {
     log::debug!("command: list_vaults");
-    let state = state
+    let mut state = state
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
-    let vaults: Vec<String> = state.vaults.vault_keys().collect();
+
+    let vault_keys: Vec<String> = state.vaults.vault_keys().collect();
+
+    let mut vaults: Vec<VaultInfo> = vault_keys
+        .iter()
+        .map(|k| VaultInfo {
+            name: state
+                .vaults
+                .get_vault(k.as_str())
+                .ok()
+                .and_then(|vw| vw.vault.name.clone()),
+            key: k.to_string(),
+        })
+        .collect();
+
+    vaults.sort_by_cached_key(|v| v.name.clone().unwrap_or_else(|| v.key.clone()));
     Ok(ListVaultsResponse { vaults })
 }

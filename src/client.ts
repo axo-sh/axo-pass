@@ -11,6 +11,7 @@ import type {
   InitVaultRequest,
   ListVaultsResponse,
   UpdateItemRequest,
+  VaultInfo,
   VaultResponse,
 } from '@/binding';
 
@@ -115,7 +116,7 @@ export const getVault = async (vaultKey?: string): Promise<VaultResponse> => {
   });
 };
 
-export const listVaults = async (): Promise<string[]> => {
+export const listVaults = async (): Promise<VaultInfo[]> => {
   return (await invoke<ListVaultsResponse>('list_vaults')).vaults;
 };
 

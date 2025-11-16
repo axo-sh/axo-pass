@@ -22,6 +22,7 @@ import {
   navLogoAxo,
   navNestedLink,
   navNestedLinks,
+  navNestedLinksAction,
 } from '@/pages/Dashboard/DashboardNav.css';
 import {AddVaultDialog, type AddVaultDialogHandle} from '@/pages/Manager/Secrets/AddVaultDialog';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
@@ -52,14 +53,14 @@ export const DashboardNav: React.FC = observer(() => {
         >
           {vaultStore.vaultKeys.length > 0 && (
             <ul className={navNestedLinks}>
-              {vaultStore.vaultKeys.map((key) => (
+              {vaultStore.vaultKeys.map(({key, name}) => (
                 <li key={key}>
                   <Link className={navNestedLink} href={`/dashboard/secrets/${key}`}>
-                    {key}
+                    {name || key}
                   </Link>
                 </li>
               ))}
-              <li>
+              <li className={navNestedLinksAction}>
                 <button
                   onClick={openAddVaultDialog}
                   className={button({variant: 'clear', size: 'small'})}

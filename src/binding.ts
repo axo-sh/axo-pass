@@ -58,8 +58,13 @@ export interface InitVaultRequest {
   vault_key?: string;
 }
 
+export interface VaultInfo {
+  name?: string;
+  key: string;
+}
+
 export interface ListVaultsResponse {
-  vaults: string[];
+  vaults: VaultInfo[];
 }
 
 export interface UpdateItemRequest {

@@ -82,8 +82,13 @@ export const navNestedLink = style({
   padding: spacing(1 / 4, 3 / 4),
   borderRadius: 8,
   transition: 'background-color 0.2s, color 0.2s',
+  fontSize: vars.scale.sm,
   ':hover': {
     color: colorVar.text,
     backgroundColor: colorVar.light10,
   },
+});
+
+export const navNestedLinksAction = style({
+  marginTop: spacing(1 / 2),
 });

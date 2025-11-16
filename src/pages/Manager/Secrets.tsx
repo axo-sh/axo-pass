@@ -37,9 +37,7 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
       setError(null);
       try {
         if (showAllVaults) {
-          for (const key of vaultStore.vaultKeys) {
-            vaultStore.reload(key);
-          }
+          vaultStore.reloadAll();
         } else {
           vaultStore.reload(vaultKey);
         }
@@ -83,12 +81,12 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
     return <p>No stored vault found.</p>;
   }
 
-  const vaultKeys = showAllVaults ? vaultStore.vaultKeys : [vaultKey];
+  const vaultKeys = showAllVaults ? vaultStore.vaultKeys.map(({key}) => key) : [vaultKey];
 
   return (
     <>
       <DashboardContentHeader
-        title={showAllVaults ? 'Secrets' : `Vault: ${vaultKey}`}
+        title={showAllVaults ? 'Secrets' : `${vaultStore.vaults.get(vaultKey)?.name || vaultKey}`}
         description={
           showAllVaults ? (
             'Your stored vault secrets. These are encrypted and can be decrypted.'
