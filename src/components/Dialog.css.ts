@@ -49,7 +49,6 @@ export const dialogClose = style({
   alignItems: 'center',
   justifyContent: 'center',
   lineHeight: 1,
-  cursor: 'pointer',
   userSelect: 'none',
   opacity: 0.5,
   transition: 'opacity 0.2s ease-in-out',

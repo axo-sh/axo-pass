@@ -37,7 +37,6 @@ export const secretItem = recipe({
         margin: spacing(0, -0.5, 0, -1),
         // with an icon on the right, it looks better if we pad the left more
         borderRadius: 8,
-        cursor: 'pointer',
         ':hover': {
           backgroundColor: colorVar.light10,
         },

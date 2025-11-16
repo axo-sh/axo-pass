@@ -10,7 +10,6 @@ export const toggle = style({
   display: 'flex',
   alignItems: 'center',
   gap: spacing(0.5),
-  cursor: 'pointer',
   WebkitUserSelect: 'none',
   vars: {
     [toggleSize]: '24px',

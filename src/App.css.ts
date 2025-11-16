@@ -41,6 +41,7 @@ globalStyle('html, body', {
 
 globalStyle('*, *::after, *::before', {
   boxSizing: 'border-box',
+  cursor: 'default',
 });
 
 globalStyle('pre, code', {

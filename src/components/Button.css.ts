@@ -16,7 +16,6 @@ const defaultButton = style({
   position: 'relative',
   display: 'inline-flex',
   padding: spacing(2 / 3, 1),
-  cursor: 'pointer',
   fontSize: vars.scale.sm,
   textAlign: 'center',
   textDecoration: 'none',
