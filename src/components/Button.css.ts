@@ -130,7 +130,7 @@ export const buttonIconLeft = style({});
 globalStyle(`${sizeVariants.small} ${buttonIconLeft}`, {
   width: 12,
   height: 12,
-  marginLeft: spacing(-1 / 2),
+  marginLeft: spacing(-1 / 3),
   marginRight: spacing(1 / 3),
   strokeWidth: 3,
 });
