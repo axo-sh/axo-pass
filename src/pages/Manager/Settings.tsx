@@ -30,6 +30,11 @@ export const Settings: React.FC = () => {
           export SSH_ASKPASS_REQUIRE=force
         </CodeBlock>
       </DashboardSection>
+
+      <DashboardSection title="Vaults">
+        Vaults are saved to the directory below. You can back up or sync this folder as needed.
+        <CodeBlock canCopy>{result?.vaults_dir}</CodeBlock>
+      </DashboardSection>
     </>
   );
 };

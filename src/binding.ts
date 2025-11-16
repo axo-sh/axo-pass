@@ -18,6 +18,7 @@ export interface AddItemRequest {
 
 export interface AppSettingsResponse {
   helper_bin_path?: string;
+  vaults_dir: string;
 }
 
 export interface CredentialUpdate {
