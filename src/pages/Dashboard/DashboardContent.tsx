@@ -14,14 +14,20 @@ export const DashboardContent: React.FC<Props> = ({children}) => {
 
 type HeaderProps = {
   title: string;
+  titleAction?: React.ReactNode;
   description?: React.ReactNode;
   children?: React.ReactNode;
 };
 
-export const DashboardContentHeader: React.FC<HeaderProps> = ({title, description, children}) => {
+export const DashboardContentHeader: React.FC<HeaderProps> = ({
+  title,
+  titleAction,
+  description,
+  children,
+}) => {
   return (
     <div className={dashboardContentHeader}>
-      <LayoutTitle>{title}</LayoutTitle>
+      <LayoutTitle action={titleAction}>{title}</LayoutTitle>
       {description && <LayoutDescription>{description}</LayoutDescription>}
       {children}
     </div>

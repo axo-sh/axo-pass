@@ -1,7 +1,8 @@
 import React from 'react';
 
-import {IconPlus} from '@tabler/icons-react';
+import {IconPlus, IconSettings} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
+import {Link} from 'wouter';
 
 import {initVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
@@ -88,6 +89,16 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
     <>
       <DashboardContentHeader
         title={showAllVaults ? 'Secrets' : `${vaultStore.vaults.get(vaultKey)?.name || vaultKey}`}
+        titleAction={
+          !showAllVaults && (
+            <Link
+              href={`/dashboard/secrets/${vaultKey}/settings`}
+              className={button({variant: 'clear', size: 'iconSmall'})}
+            >
+              <IconSettings size={16} />
+            </Link>
+          )
+        }
         description={
           showAllVaults ? (
             'Your stored vault secrets. These are encrypted and can be decrypted.'

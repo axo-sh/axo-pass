@@ -11,6 +11,7 @@ import type {
   InitVaultRequest,
   ListVaultsResponse,
   UpdateItemRequest,
+  UpdateVaultRequest,
   VaultInfo,
   VaultResponse,
 } from '@/binding';
@@ -158,4 +159,8 @@ export const deleteCredential = async (request: DeleteCredentialRequest): Promis
 
 export const getAppSettings = async (): Promise<AppSettingsResponse> => {
   return await invoke<AppSettingsResponse>('get_app_settings');
+};
+
+export const updateVault = async (request: UpdateVaultRequest): Promise<void> => {
+  return await invoke<void>('update_vault', {request});
 };

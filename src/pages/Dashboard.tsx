@@ -7,6 +7,8 @@ import {dashboard} from '@/pages/Dashboard.css';
 import {GPGSecrets} from '@/pages/Manager/GPGSecrets';
 import {Secrets} from '@/pages/Manager/Secrets';
 import {Settings} from '@/pages/Manager/Settings';
+import {VaultSettings} from '@/pages/Manager/VaultSettings';
+import {VaultView} from '@/pages/Manager/VaultView';
 
 export const Dashboard = () => {
   return (
@@ -20,6 +22,9 @@ export const Dashboard = () => {
             </Route>
             <Route path="/dashboard/secrets/:vaultKey">
               {(params) => <Secrets vaultKey={params.vaultKey} />}
+            </Route>
+            <Route path="/dashboard/secrets/:vaultKey/settings">
+              <VaultView>{(vault) => <VaultSettings vault={vault} />}</VaultView>
             </Route>
             <Route path="/dashboard/gpg">
               <DashboardContentHeader

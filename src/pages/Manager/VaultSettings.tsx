@@ -1,0 +1,94 @@
+import {IconChevronLeft} from '@tabler/icons-react';
+import {useForm} from 'react-hook-form';
+import {toast} from 'sonner';
+import {Link} from 'wouter';
+
+import type {VaultSchema} from '@/binding';
+import {updateVault} from '@/client';
+import {button, buttonIconLeft} from '@/components/Button.css';
+import {useErrorDialog} from '@/components/ErrorDialog';
+import {Form} from '@/components/form/Form';
+import {FormRow} from '@/components/form/FormRow';
+import {InputField} from '@/components/form/Input';
+import {textInput} from '@/components/Input.css';
+import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
+import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+
+type Props = {
+  vault: VaultSchema;
+};
+
+type F = {
+  vault_name: string;
+  vault_key: string;
+};
+
+export const VaultSettings: React.FC<Props> = ({vault}) => {
+  const store = useVaultStore();
+  const errorDialog = useErrorDialog();
+  const form = useForm<F>({
+    defaultValues: {
+      vault_name: vault.name,
+      vault_key: vault.key,
+    },
+  });
+
+  const handleSubmit = form.handleSubmit(async (data: F) => {
+    try {
+      await updateVault({
+        vault_key: vault.key,
+        new_name: data.vault_name,
+        new_vault_key: data.vault_key,
+      });
+
+      toast.success('Vault updated.');
+
+      await store.reloadAll();
+
+      // replace state?
+      history.replaceState(null, '', `/dashboard/secrets/${data.vault_key}/settings`);
+    } catch (err) {
+      errorDialog.showError(null, String(err));
+    }
+  });
+
+  return (
+    <>
+      <DashboardContentHeader
+        title={vault.name || vault.key}
+        titleAction={
+          <Link
+            className={button({variant: 'clear', size: 'small'})}
+            href={`/dashboard/secrets/${vault.key}`}
+          >
+            <IconChevronLeft className={buttonIconLeft} /> Back to vault
+          </Link>
+        }
+      />
+
+      <Form form={form} onSubmit={handleSubmit}>
+        <InputField<F> name="vault_name">
+          {(field, error) => (
+            <FormRow label="Vault Name" error={error}>
+              <input type="text" className={textInput()} required {...field} />
+            </FormRow>
+          )}
+        </InputField>
+
+        <InputField<F> name="vault_key">
+          {(field, error) => (
+            <FormRow label="Vault ID" error={error}>
+              <input type="text" className={textInput({monospace: true})} required {...field} />
+            </FormRow>
+          )}
+        </InputField>
+
+        <FormRow>
+          <button type="submit" className={button({variant: 'default'})}>
+            Save changes
+          </button>
+        </FormRow>
+      </Form>
+    </>
+  );
+};
