@@ -26,13 +26,15 @@ export const secretItem = recipe({
     display: 'grid',
     gridTemplateColumns: '1fr auto',
     alignItems: 'center',
+    fontSize: vars.scale.md,
     gap: spacing(1 / 8),
+    lineHeight: 1.2,
   },
   variants: {
     clickable: {
       true: {
-        padding: spacing(0.5, 0.5, 0.5, 0.75),
-        margin: spacing(0, -0.5, 0, -0.75),
+        padding: spacing(0.5, 0.5, 0.5, 1),
+        margin: spacing(0, -0.5, 0, -1),
         // with an icon on the right, it looks better if we pad the left more
         borderRadius: 8,
         cursor: 'pointer',
@@ -86,6 +88,7 @@ export const secretItemValueCode = style({
 
 export const secretItemDesc = style({
   fontSize: vars.scale.xs,
-  color: colorVar.light30,
+  fontWeight: 500,
+  color: colorVar.dim50,
   fontFamily: vars.fonts.monospace,
 });

@@ -7,7 +7,7 @@ import {DialogActions} from '@/components/Dialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
 import {InputField} from '@/components/form/Input';
-import {textInput} from '@/components/Input.css';
+import {selectInput, textInput} from '@/components/Input.css';
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {nameToSlug} from '@/utils/nameToSlug';
 
@@ -81,7 +81,7 @@ export const SecretForm: React.FC<SecretFormProps> = ({
             description="The vault where this secret will be stored"
             error={error}
           >
-            <select {...field} disabled={isExistingSecret}>
+            <select className={selectInput} {...field} disabled={isExistingSecret}>
               {vaultStore.vaultKeys.map(({name, key}) => (
                 <option key={key} value={key}>
                   {name || key}

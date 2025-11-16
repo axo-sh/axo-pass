@@ -26,12 +26,10 @@ export const navLinks = style({
 
 export const navLogo = style({
   display: 'flex',
-  gap: spacing(1),
+  gap: spacing(3 / 4),
   alignItems: 'center',
   fontWeight: 600,
   lineHeight: 1,
-  fontFamily: vars.fonts.monospace,
-  letterSpacing: '-0.04em',
   fontSize: vars.scale.md,
   padding: spacing(1 / 2, 3 / 4),
   marginBottom: spacing(1),
@@ -44,6 +42,10 @@ export const navLogoAxo = style({
 globalStyle(`${navLogo} svg`, {
   position: 'relative',
   top: 1.5,
+  display: 'inline-block',
+  // navLogo is size 14 but other icons are size 18, so add a bit of margin to align
+  marginLeft: 2,
+  marginRight: 2,
 });
 
 export const navLink = style({

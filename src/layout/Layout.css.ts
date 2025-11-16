@@ -66,6 +66,8 @@ export const layoutTitleIcon = style({
 export const layoutTitleContent = style({
   minHeight: 30, // account for button
   flexGrow: 1,
+  display: 'flex',
+  alignItems: 'center',
 });
 
 export const layoutDescription = recipe({

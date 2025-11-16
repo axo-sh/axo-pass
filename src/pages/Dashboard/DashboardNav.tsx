@@ -39,9 +39,6 @@ export const DashboardNav: React.FC = observer(() => {
     <nav className={nav}>
       <div className={navLogo}>
         <IconTriangle size={16} strokeWidth={5} />
-        <div>
-          <span className={navLogoAxo}>axo</span>pass
-        </div>
       </div>
       <ul className={navLinks}>
         <DashboardNavSection
