@@ -1,9 +1,10 @@
 import React from 'react';
 
+import {IconPlus} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 
 import {initVault} from '@/client';
-import {button} from '@/components/Button.css';
+import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
@@ -98,13 +99,6 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
         }
       >
         <Toolbar>
-          <button
-            className={button({variant: 'clear', size: 'small'})}
-            onClick={addSecretDialog.open}
-          >
-            + Add secret
-          </button>
-          <FlexSpacer />
           <Toggle
             onChange={(checked) => setShowCombined(checked)}
             checked={showFlat}
@@ -112,6 +106,14 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
           >
             Flat view
           </Toggle>
+          <FlexSpacer />
+          <button
+            className={button({variant: 'clear', size: 'small'})}
+            onClick={addSecretDialog.open}
+          >
+            <IconPlus className={buttonIconLeft} />
+            Add secret
+          </button>
         </Toolbar>
       </DashboardContentHeader>
 
