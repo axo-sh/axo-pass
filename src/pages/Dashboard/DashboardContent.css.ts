@@ -27,7 +27,7 @@ globalStyle(`${dashboardContentHeader} ${layoutTitle()}`, {
 });
 
 globalStyle(`${dashboardContentHeader} ${layoutDescription()}`, {
-  marginBottom: spacing(1),
+  marginBottom: spacing(3 / 2),
 });
 
 export const dashboardSectionHeader = style({});
