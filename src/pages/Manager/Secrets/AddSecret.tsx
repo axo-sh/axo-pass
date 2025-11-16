@@ -33,6 +33,12 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({vaultKey, isOpe
     }
   }, [isOpen, form.reset]);
 
+  React.useEffect(() => {
+    if (vaultKey !== 'all') {
+      form.setValue('vaultKey', vaultKey);
+    }
+  }, [vaultKey, form]);
+
   const onSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
