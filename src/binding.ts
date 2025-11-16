@@ -68,6 +68,12 @@ export interface UpdateItemRequest {
   credentials: Record<string, CredentialUpdate>;
 }
 
+export interface UpdateVaultRequest {
+  vault_key: string;
+  new_vault_key?: string;
+  new_name?: string;
+}
+
 export interface VaultItemCredentialSchema {
   id: string;
   title?: string;
