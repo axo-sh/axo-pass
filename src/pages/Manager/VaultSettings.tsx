@@ -61,7 +61,7 @@ export const VaultSettings: React.FC<Props> = ({vault}) => {
             className={button({variant: 'clear', size: 'small'})}
             href={`/dashboard/secrets/${vault.key}`}
           >
-            <IconChevronLeft className={buttonIconLeft} /> Back to vault
+            <IconChevronLeft className={buttonIconLeft} /> Back to Vault
           </Link>
         }
       />
@@ -85,7 +85,7 @@ export const VaultSettings: React.FC<Props> = ({vault}) => {
 
         <FormRow>
           <button type="submit" className={button({variant: 'default'})}>
-            Save changes
+            Save Changes
           </button>
         </FormRow>
       </Form>

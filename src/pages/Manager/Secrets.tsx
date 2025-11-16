@@ -115,7 +115,7 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
             checked={showFlat}
             toggleSize={16}
           >
-            Flat view
+            Flat View
           </Toggle>
           <FlexSpacer />
           <button
@@ -123,7 +123,7 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
             onClick={addSecretDialog.open}
           >
             <IconPlus className={buttonIconLeft} />
-            Add secret
+            Add Secret
           </button>
         </Toolbar>
       </DashboardContentHeader>

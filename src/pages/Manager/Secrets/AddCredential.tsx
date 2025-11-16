@@ -119,7 +119,7 @@ export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
               className={button({variant: 'default', size: 'large'})}
               disabled={isSubmitting}
             >
-              {isSubmitting ? 'Adding...' : 'Add credential'}
+              {isSubmitting ? 'Adding...' : 'Add Credential'}
             </button>
           </DialogActions>
         </Form>
