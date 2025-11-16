@@ -11,9 +11,10 @@ export const Settings: React.FC = () => {
     return null;
   }
   const appBundlePath = result?.helper_bin_path || '<appPath>';
+  const escapedAppBundlePath = appBundlePath.replace(/ /g, '\\ ');
   return (
     <>
-      <DashboardContentHeader title="Settings" description="Placeholder for settings." />
+      <DashboardContentHeader title="Settings" />
 
       <DashboardSection title="GPG">
         <div>
@@ -29,6 +30,10 @@ export const Settings: React.FC = () => {
           <br />
           export SSH_ASKPASS_REQUIRE=force
         </CodeBlock>
+      </DashboardSection>
+
+      <DashboardSection title="CLI">
+        <CodeBlock canCopy>alias ap="{escapedAppBundlePath}/MacOS/ap"</CodeBlock>
       </DashboardSection>
 
       <DashboardSection title="Vaults">
