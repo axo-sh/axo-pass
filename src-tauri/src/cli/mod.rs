@@ -9,6 +9,7 @@ use log::LevelFilter;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::vault::VaultCommand;
+use crate::core::build_sha;
 
 #[derive(Parser, Debug)]
 struct AxoPassCli {
@@ -21,6 +22,7 @@ enum AxoPassCommand {
     Keychain(KeychainCommand),
     Vault(VaultCommand),
     Inject(InjectCommand),
+    Info,
 }
 
 pub async fn run() {
@@ -36,5 +38,9 @@ pub async fn run() {
         AxoPassCommand::Keychain(keychain) => keychain.execute().await,
         AxoPassCommand::Vault(vault) => vault.execute().await,
         AxoPassCommand::Inject(inject) => inject.execute().await,
+        AxoPassCommand::Info => {
+            println!("Built at: {}", build_sha::BUILT_AT);
+            println!("Build: {}", build_sha::BUILD_SHA);
+        },
     }
 }
