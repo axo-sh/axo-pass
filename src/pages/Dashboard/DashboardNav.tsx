@@ -19,7 +19,6 @@ import {
   navLink,
   navLinks,
   navLogo,
-  navLogoAxo,
   navNestedLink,
   navNestedLinks,
   navNestedLinksAction,
