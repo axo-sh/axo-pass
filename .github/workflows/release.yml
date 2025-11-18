@@ -23,3 +23,45 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - name: generate app icons
+        run: npm run tauri icon ./src-tauri/misc/app-icon.png
+
+      - name: create the apple api key file
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          echo "$APPLE_API_KEY_CONTENT" > AuthKey_$APPLE_API_KEY.p8
+          echo "APPLE_API_KEY_PATH=$(pwd)/AuthKey_$APPLE_API_KEY.p8" >> $GITHUB_ENV
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing and notarization secrets
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # APPLE_API_KEY_PATH is set in the previous step
+          # Build metadata
+          TAURI_APP_BUILD_SHA: ${{ github.sha }}
+          TAURI_APP_BUILT_AT: ${{ github.event.head_commit.timestamp }}
+
+        with:
+          tagName: app-v__VERSION__
+          releaseName: 'Axo Pass v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true
+          prerelease: true
+          args: '--target aarch64-apple-darwin'
