@@ -149,7 +149,7 @@ impl ItemCommand {
         let item_key = item_reference.item;
 
         let Some(credential_key) = item_reference.credential else {
-            return Err(format!("Credential key must be specified",));
+            return Err("Credential key must be specified".to_string());
         };
 
         match vw.get_secret(&item_key, &credential_key) {
@@ -171,7 +171,7 @@ impl ItemCommand {
         let vault_key = vw.key.clone();
         cprintln!("<dim>Vault: {vault_key}</dim>");
 
-        let mut items: Vec<_> = vw.list_items().into_iter().collect();
+        let mut items: Vec<_> = vw.list_items().collect();
         items.sort_by_key(|(_item_key, item_value)| item_value.title.to_lowercase());
 
         let mut has_items = false;
@@ -199,7 +199,7 @@ impl ItemCommand {
 
         let item_key = item_reference.item;
         let Some(credential_key) = item_reference.credential else {
-            return Err(format!("Credential key must be specified",));
+            return Err("Credential key must be specified".to_string());
         };
 
         let secret = match secret_value {

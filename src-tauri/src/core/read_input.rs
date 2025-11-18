@@ -14,12 +14,12 @@ pub enum ReadError {
 
 pub fn read_file_or_stdin(file_path: &Option<PathBuf>) -> Result<Vec<u8>, ReadError> {
     if let Some(path) = file_path {
-        std::fs::read(path).map_err(|e| ReadError::FileReadError(e))
+        std::fs::read(path).map_err(ReadError::FileReadError)
     } else {
         let mut buffer = Vec::new();
         std::io::stdin()
             .read_to_end(&mut buffer)
-            .map_err(|e| ReadError::FailedToReadStdin(e))?;
+            .map_err(ReadError::FailedToReadStdin)?;
         Ok(buffer)
     }
 }
