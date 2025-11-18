@@ -9,11 +9,26 @@ pub async fn cmd_list_managed_keys() {
         .with_key_class(managed_key::KeyClass::Public)
         .list()
         .unwrap();
-    for key in keys {
-        if let Some(pub_key) = key.public_key() {
-            println!("Found key: {:?} pub={}", key, b64.encode(pub_key));
-        } else {
-            println!("Found key: {:?}", key);
+
+    if keys.is_empty() {
+        println!("No managed keys found");
+        return;
+    }
+
+    for (i, key) in keys.iter().enumerate() {
+        println!("Label: {}", key.label.as_deref().unwrap_or("<unknown>"));
+        if std::env::var("FRITTATA_DEBUG").is_ok() {
+            // https://developer.apple.com/documentation/security/ksecattrapplicationlabel
+            println!(
+                "kSecAttrApplicationLabel: {}",
+                key.app_label().as_deref().unwrap_or("<none>")
+            );
         }
+        if let Some(pub_key) = key.public_key() {
+            println!("Public Key:\n{}", b64.encode(pub_key));
+        }
+        if i < keys.len() - 1 {
+            println!("---");
+        };
     }
 }

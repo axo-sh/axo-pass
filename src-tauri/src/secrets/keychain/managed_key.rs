@@ -25,7 +25,7 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::alg;
 
 pub struct ManagedKey {
-    label: Option<String>,
+    pub label: Option<String>,
     sec_key: Retained<SecKey>,
 }
 
