@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use regex::Regex;
 
+use crate::core::read_input::read_file_or_stdin;
 use crate::secrets::vaults_manager::VaultsManager;
 
 #[derive(Parser, Debug)]
@@ -17,23 +18,11 @@ pub struct InjectCommand {
 
 impl InjectCommand {
     pub async fn execute(&self) {
-        let input_data = match &self.input_file {
-            Some(input_path) => match std::fs::read_to_string(input_path) {
-                Ok(content) => content,
-                Err(e) => {
-                    log::error!("Failed to read input file {}: {e}", input_path.display());
-                    return;
-                },
-            },
-            None => {
-                let mut buffer = String::new();
-                match io::stdin().read_to_string(&mut buffer) {
-                    Ok(_) => buffer,
-                    Err(e) => {
-                        log::error!("Failed to read from stdin: {e}");
-                        return;
-                    },
-                }
+        let input_data = match read_file_or_stdin(&self.input_file) {
+            Ok(data) => String::from_utf8_lossy(&data).to_string(),
+            Err(e) => {
+                log::error!("{e}");
+                return;
             },
         };
 
