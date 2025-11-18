@@ -11,6 +11,7 @@ use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::core::build_sha;
+use crate::core::dirs::vaults_dir;
 
 #[derive(Parser, Debug)]
 struct AxoPassCli {
@@ -51,8 +52,9 @@ pub async fn run() {
         },
         AxoPassCommand::Inject(inject) => inject.execute().await,
         AxoPassCommand::Info => {
-            println!("Built at: {}", build_sha::BUILT_AT);
-            println!("Build: {}", build_sha::BUILD_SHA);
+            println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
+            println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
+            println!("Vault dir: {}", vaults_dir().display());
         },
     }
 }
