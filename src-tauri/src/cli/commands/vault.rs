@@ -4,6 +4,7 @@ use color_print::cprintln;
 use crate::secrets::vaults_manager::VaultsManager;
 
 #[derive(Parser, Debug)]
+#[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
 pub struct VaultCommand {
     #[command(subcommand)]
     subcommand: VaultSubcommand,

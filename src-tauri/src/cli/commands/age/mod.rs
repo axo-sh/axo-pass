@@ -4,6 +4,7 @@ use crate::age::crypto::{age_decrypt, age_encrypt};
 use crate::age::recipients::{age_keygen, delete_recipient, list_recipients};
 
 #[derive(Parser, Debug)]
+#[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
 pub struct AgeCommand {
     #[command(subcommand)]
     subcommand: AgeSubcommand,
@@ -11,14 +12,14 @@ pub struct AgeCommand {
 
 #[derive(Subcommand, Debug)]
 enum AgeSubcommand {
-    // Encrypt a file
+    /// Encrypt a file
     Encrypt {
         #[arg(short, long, required = true)]
         recipient: Vec<String>,
         file_path: Option<String>,
     },
 
-    // Decrypt a file
+    /// Decrypt a file
     Decrypt {
         #[arg(short, long, required = true)]
         recipient: Option<String>,
@@ -38,7 +39,7 @@ enum AgeSubcommand {
     ListRecipients,
 
     /// Delete a recipient by name
-    DeleteKey { recipient: String },
+    Delete { recipient: String },
 }
 
 impl AgeCommand {
@@ -72,7 +73,7 @@ impl AgeCommand {
             AgeSubcommand::ListRecipients => {
                 list_recipients().await;
             },
-            AgeSubcommand::DeleteKey { recipient } => {
+            AgeSubcommand::Delete { recipient } => {
                 if let Err(err) = delete_recipient(recipient) {
                     log::error!("{err}");
                     std::process::exit(1);

@@ -11,6 +11,7 @@ use crate::core::dirs::vaults_dir;
 use crate::secrets::vault_wrapper::VaultWrapper;
 
 #[derive(Parser, Debug)]
+#[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
 pub struct ItemCommand {
     #[command(subcommand)]
     subcommand: ItemSubcommand,

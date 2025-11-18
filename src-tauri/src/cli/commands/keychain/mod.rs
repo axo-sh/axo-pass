@@ -4,6 +4,7 @@ pub mod generic_password;
 pub mod managed_keys;
 
 #[derive(Parser, Debug)]
+#[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
 pub struct KeychainCommand {
     #[command(subcommand)]
     subcommand: KeychainSubcommand,
