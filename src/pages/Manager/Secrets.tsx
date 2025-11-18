@@ -8,6 +8,7 @@ import {initVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
+import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
 import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
@@ -25,6 +26,7 @@ type Props = {
 
 export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
   const addSecretDialog = useDialog();
+  const errorDialog = useErrorDialog();
   const [selectedItemKey, setSelectedItemKey] = React.useState<ItemKey | null>(null);
   const [showFlat, setShowCombined] = React.useState<boolean>(false);
   const vaultStore = useVaultStore();
@@ -62,8 +64,12 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
           <h2>Vault not found.</h2>
           <button
             onClick={async () => {
-              await initVault({});
-              await vaultStore.loadVaultKeys();
+              try {
+                await initVault({});
+                await vaultStore.loadVaultKeys();
+              } catch (err) {
+                errorDialog.showError(null, String(err));
+              }
             }}
             className={button({size: 'large'})}
           >

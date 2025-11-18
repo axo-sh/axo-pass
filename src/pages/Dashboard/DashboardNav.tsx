@@ -13,6 +13,7 @@ import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
 
 import {button, buttonIconLeft} from '@/components/Button.css';
+import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {
   nav,
@@ -27,6 +28,7 @@ import {AddVaultDialog, type AddVaultDialogHandle} from '@/pages/Manager/Secrets
 import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 
 export const DashboardNav: React.FC = observer(() => {
+  const errorDialog = useErrorDialog();
   const vaultStore = useVaultStore();
   const addVaultDialogRef = React.useRef<AddVaultDialogHandle>(null);
 
@@ -75,7 +77,7 @@ export const DashboardNav: React.FC = observer(() => {
                 await vaultStore.addVault(name, key);
                 await vaultStore.reload(key);
               } catch (error) {
-                console.error('Failed to add vault:', error);
+                errorDialog.showError(null, String(error));
               }
             }}
           />
