@@ -11,6 +11,7 @@ pub struct VaultCommand {
 
 #[derive(Subcommand, Debug)]
 enum VaultSubcommand {
+    /// List vaults
     List,
 }
 

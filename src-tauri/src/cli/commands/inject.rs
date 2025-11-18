@@ -10,6 +10,7 @@ use crate::secrets::vaults_manager::VaultsManager;
 pub struct InjectCommand {
     #[arg(long = "input", short = 'i')]
     pub input_file: Option<PathBuf>,
+
     #[arg(long = "output", short = 'o')]
     pub output_file: Option<PathBuf>,
 }

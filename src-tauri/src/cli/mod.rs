@@ -23,14 +23,20 @@ struct AxoPassCli {
 enum AxoPassCommand {
     /// Commands for managing vaults
     Vault(VaultCommand),
+
     /// Commands for managing items and credentials
     Item(ItemCommand),
+
     /// Get a item credential's secret
     Read { item_reference: ItemReference },
+
     /// Inject secrets into a file
     Inject(InjectCommand),
 
+    /// Commands for managing items stored in keychain
     Keychain(KeychainCommand),
+
+    /// Show version and build
     Info,
 }
 

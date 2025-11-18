@@ -53,13 +53,16 @@ impl FromStr for ItemReference {
 
 #[derive(Subcommand, Debug)]
 enum ItemSubcommand {
+    /// List items in the vault
     List,
-    Get {
-        item_reference: ItemReference,
-    },
-    Read {
-        item_reference: ItemReference,
-    },
+
+    /// Get item by reference, item_key or {item_key}/{credential_key}
+    Get { item_reference: ItemReference },
+
+    /// Read secret value by reference or {item_key}/{credential_key}
+    Read { item_reference: ItemReference },
+
+    /// Set secret value by reference or {item_key}/{credential_key}
     Set {
         item_reference: ItemReference,
         secret_value: Option<SecretString>,
