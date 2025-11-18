@@ -172,6 +172,10 @@ impl VaultWrapper {
         self.vault.data.iter()
     }
 
+    pub fn get_item(&self, item_key: &str) -> Option<&VaultItem> {
+        self.vault.data.get(item_key)
+    }
+
     pub fn add_item(&mut self, item_title: String, item_key: String) {
         self.vault
             .data

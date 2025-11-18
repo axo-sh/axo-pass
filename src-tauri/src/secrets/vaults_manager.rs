@@ -45,8 +45,12 @@ impl VaultsManager {
         vaults
     }
 
-    pub fn vault_keys(&self) -> impl Iterator<Item = String> + '_ {
+    pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {
         self.vaults.keys().cloned()
+    }
+
+    pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultWrapper)> {
+        self.vaults.iter()
     }
 
     pub fn get_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {

@@ -111,7 +111,7 @@ pub async fn list_vaults(
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
 
-    let vault_keys: Vec<String> = state.vaults.vault_keys().collect();
+    let vault_keys: Vec<String> = state.vaults.iter_vault_keys().collect();
 
     let mut vaults: Vec<VaultInfo> = vault_keys
         .iter()

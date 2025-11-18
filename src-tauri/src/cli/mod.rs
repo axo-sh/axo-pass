@@ -7,6 +7,7 @@ use color_print::cwriteln;
 use log::LevelFilter;
 
 use crate::cli::commands::inject::InjectCommand;
+use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::core::build_sha;
@@ -19,9 +20,16 @@ struct AxoPassCli {
 
 #[derive(Subcommand, Debug)]
 enum AxoPassCommand {
-    Keychain(KeychainCommand),
+    /// Commands for managing vaults
     Vault(VaultCommand),
+    /// Commands for managing items and credentials
+    Item(ItemCommand),
+    /// Get a item credential's secret
+    Read { item_reference: ItemReference },
+    /// Inject secrets into a file
     Inject(InjectCommand),
+
+    Keychain(KeychainCommand),
     Info,
 }
 
@@ -37,6 +45,10 @@ pub async fn run() {
     match cli.command {
         AxoPassCommand::Keychain(keychain) => keychain.execute().await,
         AxoPassCommand::Vault(vault) => vault.execute().await,
+        AxoPassCommand::Item(item) => item.execute().await,
+        AxoPassCommand::Read { item_reference } => {
+            ItemCommand::cmd_read(&item_reference, None).unwrap();
+        },
         AxoPassCommand::Inject(inject) => inject.execute().await,
         AxoPassCommand::Info => {
             println!("Built at: {}", build_sha::BUILT_AT);
