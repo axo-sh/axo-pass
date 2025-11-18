@@ -86,7 +86,30 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
   }
 
   if (vaultStore.vaults.size === 0) {
-    return <p>No stored vault found.</p>;
+    return (
+      <>
+        <DashboardContentHeader
+          title="Secrets"
+          description={'Your stored vault secrets. These are encrypted and can be decrypted.'}
+        />
+        <Flex column align="center" justify="center">
+          <h2>No vaults found.</h2>
+          <button
+            onClick={async () => {
+              try {
+                await initVault({});
+                await vaultStore.loadVaultKeys();
+              } catch (err) {
+                errorDialog.showError(null, String(err));
+              }
+            }}
+            className={button({size: 'large'})}
+          >
+            Create New Vault
+          </button>
+        </Flex>
+      </>
+    );
   }
 
   const vaultKeys = showAllVaults ? vaultStore.vaultKeys.map(({key}) => key) : [vaultKey];

@@ -42,14 +42,19 @@ export const DashboardNav: React.FC = observer(() => {
         <IconTriangle size={16} strokeWidth={5} />
       </div>
       <ul className={navLinks}>
-        <DashboardNavSection
-          title={
-            <Link className={navLink} href="/dashboard/secrets">
-              <IconForms size={18} /> Secrets
-            </Link>
-          }
-        >
-          {vaultStore.vaultKeys.length > 0 && (
+        {vaultStore.vaultKeys.length === 0 && (
+          <Link className={navLink} href="/dashboard/secrets">
+            <IconForms size={18} /> Secrets
+          </Link>
+        )}
+        {vaultStore.vaultKeys.length > 0 && (
+          <DashboardNavSection
+            title={
+              <Link className={navLink} href="/dashboard/secrets">
+                <IconForms size={18} /> Secrets
+              </Link>
+            }
+          >
             <ul className={navNestedLinks}>
               {vaultStore.vaultKeys.map(({key, name}) => (
                 <li key={key}>
@@ -68,20 +73,19 @@ export const DashboardNav: React.FC = observer(() => {
                 </button>
               </li>
             </ul>
-          )}
-
-          <AddVaultDialog
-            ref={addVaultDialogRef}
-            onSubmit={async (name, key) => {
-              try {
-                await vaultStore.addVault(name, key);
-                await vaultStore.reload(key);
-              } catch (error) {
-                errorDialog.showError(null, String(error));
-              }
-            }}
-          />
-        </DashboardNavSection>
+            <AddVaultDialog
+              ref={addVaultDialogRef}
+              onSubmit={async (name, key) => {
+                try {
+                  await vaultStore.addVault(name, key);
+                  await vaultStore.reload(key);
+                } catch (error) {
+                  errorDialog.showError(null, String(error));
+                }
+              }}
+            />
+          </DashboardNavSection>
+        )}
 
         <li>
           <Link className={navLink} href="/dashboard/gpg">
