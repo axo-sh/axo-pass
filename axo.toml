@@ -1,13 +1,20 @@
 project_name = "axo-pass"
 env_file = ".env.local"
 
+[profiles]
+release = "axo.release.toml"
+
 [tasks]
 dev = "tauri dev"
-build = "TAURI_APP_BUILD_SHA=$(git rev-parse head) TAURI_APP_BUILT_AT=$(date) cargo-tauri build -b app"
+build = """\
+  TAURI_APP_BUILD_SHA=$(git rev-parse head) \
+  TAURI_APP_BUILT_AT=$(date) \
+  cargo-tauri build -b app \
+"""
 icon = "tauri icon ./src-tauri/misc/app-icon.png"
 types = [
   "typeshare ./src-tauri --lang=typescript --output-file=src/binding.ts",
-  "npx @biomejs/biome check --write src/binding.ts"
+  "npx @biomejs/biome check --write src/binding.ts",
 ]
 start = "./src-tauri/target/release/bundle/macos/Axo\\ Pass.app/Contents/MacOS/axo-pass"
 biome-assist = "npx @biomejs/biome check --formatter-enabled=false --linter-enabled=false"
@@ -16,9 +23,8 @@ logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
 fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 test = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 
-
 [packages]
 "nodejs/node" = "^25.0.0"
 
 [env]
-FRITTATA_DEBUG="1"
+FRITTATA_DEBUG = "1"

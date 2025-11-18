@@ -1,0 +1,36 @@
+[tasks]
+build = """\
+  TAURI_APP_BUILD_SHA=$(git rev-parse head) \
+  TAURI_APP_BUILT_AT=$(date) \
+  cargo-tauri build -b app \
+"""
+
+notary-history = """\
+  xcrun notarytool history \
+    --issuer=$APPLE_API_ISSUER \
+    --key-id=$APPLE_API_KEY \
+    --key=$APPLE_API_KEY_PATH \
+"""
+
+notary-info = """\
+  xcrun notarytool info \
+    --issuer=$APPLE_API_ISSUER \
+    --key-id=$APPLE_API_KEY \
+    --key=$APPLE_API_KEY_PATH \
+"""
+
+notary-log = """\
+  xcrun notarytool log \
+    --issuer=$APPLE_API_ISSUER \
+    --key-id=$APPLE_API_KEY \
+    --key=$APPLE_API_KEY_PATH \
+"""
+
+[env]
+APPLE_TEAM_ID = "75J48AQ5LF"
+APPLE_SIGNING_IDENTITY = "Developer ID Application: Breakfast Labs, LLC (75J48AQ5LF)"
+APPLE_CERTIFICATE = "axo://frittata/apple/apple_certificate"
+APPLE_CERTIFICATE_PASSWORD = "axo://frittata/apple/apple_certificate_password"
+APPLE_API_ISSUER = "axo://frittata/apple/apple_api_issuer"
+APPLE_API_KEY = "axo://frittata/apple/apple_api_key"
+APPLE_API_KEY_PATH = "~/.appstoreconnect/private_keys/AuthKey_4WU23BTSL5.p8"
