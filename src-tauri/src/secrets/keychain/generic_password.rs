@@ -12,7 +12,7 @@ use objc2_security::{
     kSecAttrAccessControl, kSecAttrAccessibleWhenUnlocked, kSecAttrAccount, kSecAttrService,
     kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain, kSecValueData,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::core::la_context::evaluate_local_la_context;
@@ -29,6 +29,8 @@ pub enum PasswordEntryType {
     GPGKey,
     #[serde(rename = "ssh_key")]
     SSHKey,
+    #[serde(rename = "age_key")]
+    AgeKey,
     Other,
 }
 
@@ -54,10 +56,18 @@ impl PasswordEntry {
         }
     }
 
+    pub fn age(name: &str) -> Self {
+        PasswordEntry {
+            password_type: PasswordEntryType::AgeKey,
+            key_id: name.to_string(),
+        }
+    }
+
     pub fn account(&self) -> String {
         match self.password_type {
             PasswordEntryType::GPGKey => format!("gpg-key-{}", self.key_id),
             PasswordEntryType::SSHKey => format!("ssh-key-{}", self.key_id),
+            PasswordEntryType::AgeKey => format!("age-key-{}", self.key_id),
             PasswordEntryType::Other => self.key_id.clone(),
         }
     }
@@ -84,6 +94,11 @@ impl FromStr for PasswordEntry {
         } else if let Some(key_id) = account.strip_prefix("ssh-key-") {
             Ok(PasswordEntry {
                 password_type: PasswordEntryType::SSHKey,
+                key_id: key_id.to_string(),
+            })
+        } else if let Some(key_id) = account.strip_prefix("age-key-") {
+            Ok(PasswordEntry {
+                password_type: PasswordEntryType::AgeKey,
                 key_id: key_id.to_string(),
             })
         } else {
@@ -157,22 +172,28 @@ impl PasswordEntry {
         }
     }
 
-    pub fn save_password(&self, password: &str) -> Result<(), KeychainError> {
-        log::debug!("Saving generic-password for key_id: {self:?}");
+    pub fn save_password(&self, password: SecretString) -> Result<(), KeychainError> {
+        log::debug!(
+            "Saving {:?}({}) as generic-password",
+            self.password_type,
+            self.key_id
+        );
         let attrs = Self::common_attrs(Some(&self.account()));
         unsafe {
             attrs.add(kSecAttrAccessControl, &*create_access_control_flags()?);
-            attrs.add(kSecValueData, &CFData::from_bytes(password.as_bytes()));
+            attrs.add(
+                kSecValueData,
+                &CFData::from_bytes(password.expose_secret().as_bytes()),
+            );
         }
         let res = unsafe {
-            // let mut cf_error_ptr: *mut CFError = ptr::null_mut();
             let mut ret: *const CFType = ptr::null();
             SecItemAdd(attrs.as_opaque(), &mut ret)
         };
         if res != errSecSuccess {
             return Err(KeychainError::AddFailed(res.to_string()));
         }
-        log::debug!("Password saved successfully to keychain!");
+        log::debug!("{:?} saved successfully to keychain", self.password_type);
         Ok(())
     }
 

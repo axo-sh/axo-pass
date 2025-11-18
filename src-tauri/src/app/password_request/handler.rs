@@ -105,7 +105,7 @@ where
                             if let Some((value, save_to_keychain)) = response.into_password() {
                                 if save_to_keychain && let Some(entry) = req.entry() {
                                     log::debug!("Saving password to keychain for {entry:?}");
-                                    match entry.save_password(&value) {
+                                    match entry.save_password(value.clone().into()) {
                                         Ok(()) => {
                                             log::debug!("Successfully saved password to keychain");
                                         },

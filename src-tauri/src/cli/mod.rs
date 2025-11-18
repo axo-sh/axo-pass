@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, command};
 use color_print::cwriteln;
 use log::LevelFilter;
 
+use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
@@ -36,6 +37,9 @@ enum AxoPassCommand {
     /// Commands for managing items stored in keychain
     Keychain(KeychainCommand),
 
+    /// Commands for age encryption
+    Age(AgeCommand),
+
     /// Show version and build
     Info,
 }
@@ -57,6 +61,7 @@ pub async fn run() {
             ItemCommand::cmd_read(&item_reference, None).unwrap();
         },
         AxoPassCommand::Inject(inject) => inject.execute().await,
+        AxoPassCommand::Age(age) => age.execute().await,
         AxoPassCommand::Info => {
             println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
             println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
