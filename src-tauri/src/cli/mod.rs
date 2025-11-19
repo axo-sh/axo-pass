@@ -15,13 +15,13 @@ use crate::core::build_sha;
 use crate::core::dirs::vaults_dir;
 
 #[derive(Parser, Debug)]
-struct AxoPassCli {
+pub struct AxoPassCli {
     #[command(subcommand)]
-    command: AxoPassCommand,
+    pub command: Option<AxoPassCommand>,
 }
 
 #[derive(Subcommand, Debug)]
-enum AxoPassCommand {
+pub enum AxoPassCommand {
     /// Commands for managing vaults
     Vault(VaultCommand),
 
@@ -44,6 +44,33 @@ enum AxoPassCommand {
     Info,
 }
 
+impl AxoPassCommand {
+    pub async fn execute(&self) {
+        if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
+            env_logger::builder()
+                .filter_level(LevelFilter::Debug)
+                .format(|buf, record| cwriteln!(buf, "<dim>{}</dim>", record.args()))
+                .init();
+        }
+
+        match self {
+            AxoPassCommand::Keychain(keychain) => keychain.execute().await,
+            AxoPassCommand::Vault(vault) => vault.execute().await,
+            AxoPassCommand::Item(item) => item.execute().await,
+            AxoPassCommand::Read { item_reference } => {
+                ItemCommand::cmd_read(item_reference, None).unwrap();
+            },
+            AxoPassCommand::Inject(inject) => inject.execute().await,
+            AxoPassCommand::Age(age) => age.execute().await,
+            AxoPassCommand::Info => {
+                println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
+                println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
+                println!("Vault dir: {}", vaults_dir().display());
+            },
+        }
+    }
+}
+
 pub async fn run() {
     if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
         env_logger::builder()
@@ -54,18 +81,10 @@ pub async fn run() {
 
     let cli = AxoPassCli::parse();
     match cli.command {
-        AxoPassCommand::Keychain(keychain) => keychain.execute().await,
-        AxoPassCommand::Vault(vault) => vault.execute().await,
-        AxoPassCommand::Item(item) => item.execute().await,
-        AxoPassCommand::Read { item_reference } => {
-            ItemCommand::cmd_read(&item_reference, None).unwrap();
-        },
-        AxoPassCommand::Inject(inject) => inject.execute().await,
-        AxoPassCommand::Age(age) => age.execute().await,
-        AxoPassCommand::Info => {
-            println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
-            println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
-            println!("Vault dir: {}", vaults_dir().display());
+        Some(command) => command.execute().await,
+        None => {
+            eprintln!("No command provided. Use --help for usage information.");
+            std::process::exit(1);
         },
     }
 }

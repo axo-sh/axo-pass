@@ -1,4 +1,6 @@
 #!/bin/sh
-# This script executes the axo-pass binary with the --ssh-askpass flag
-
+# ssh-askpass helper script, ssh-askpass does not accept args
+# Usage: Add the following to your shell config:
+#   export SSH_ASKPASS="/path/to/ap-ssh-askpass"
+#   export SSH_ASKPASS_REQUIRE=force
 exec "$(dirname "$0")/../MacOS/axo-pass" ssh-askpass --prompt "$1"

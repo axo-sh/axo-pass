@@ -1,23 +1,30 @@
 mod app_mode;
 mod app_state;
 mod handlers;
-mod parser;
 mod password_request;
 mod protocols;
 
 use std::sync::Mutex;
 
+use clap::Subcommand;
 use tauri::Manager;
-use tauri_plugin_cli::CliExt;
 use tokio::sync::oneshot;
 
 use crate::app::app_mode::AppMode;
 use crate::app::app_state::AppState;
-use crate::app::parser::get_arg;
 use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryState};
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
 
 const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AxoAppCommand {
+    #[command(hide = true)]
+    Pinentry,
+
+    #[command(hide = true)]
+    SshAskpass { prompt: String },
+}
 
 fn run_pinentry_mode(app_handle: tauri::AppHandle) {
     let state = PinentryState::default();
@@ -77,7 +84,7 @@ fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, prompt: String) {
     });
 }
 
-pub fn run() {
+pub fn run(cmd: Option<AxoAppCommand>) {
     let mut log_plugin = tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(tauri_plugin_log::Target::new(
@@ -101,27 +108,21 @@ pub fn run() {
         .plugin(tauri_plugin_cli::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
-            let cli_matches = app.cli().matches().ok();
-            if let Some(subcommand) = cli_matches.as_ref().and_then(|m| m.subcommand.as_deref()) {
-                match subcommand.name.as_str() {
-                    "pinentry" => {
-                        log::debug!("Running in pinentry mode");
-                        app.handle().manage(AppMode::Pinentry);
-                        run_pinentry_mode(app.handle().clone());
-                    },
-                    "ssh-askpass" => {
-                        log::debug!("Running in SSH askpass mode");
-                        app.handle().manage(AppMode::SshAskpass);
-                        let prompt = get_arg(subcommand, "prompt")?;
-                        run_ssh_askpass_mode(app.handle().clone(), prompt);
-                    },
-                    command => {
-                        return Err(format!("Unknown command: {}", command).into());
-                    },
-                }
-            } else {
-                app.handle().manage(AppMode::App);
-                app.handle().manage(Mutex::new(AppState::new()));
+            match cmd {
+                Some(AxoAppCommand::Pinentry) => {
+                    log::debug!("Running in pinentry mode");
+                    app.handle().manage(AppMode::Pinentry);
+                    run_pinentry_mode(app.handle().clone());
+                },
+                Some(AxoAppCommand::SshAskpass { prompt }) => {
+                    log::debug!("Running in SSH askpass mode");
+                    app.handle().manage(AppMode::SshAskpass);
+                    run_ssh_askpass_mode(app.handle().clone(), prompt);
+                },
+                None => {
+                    app.handle().manage(AppMode::App);
+                    app.handle().manage(Mutex::new(AppState::new()));
+                },
             }
 
             let app_mode = app.handle().state::<AppMode>();

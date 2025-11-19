@@ -124,6 +124,7 @@
     "macOS": {
       "entitlements": "./misc/entitlements.plist",
       "files": {
+        "./bin/ap": "./misc/ap",
         "./bin/ap-pinentry": "./misc/ap-pinentry",
         "./bin/ap-ssh-askpass": "./misc/ap-ssh-askpass"
       }

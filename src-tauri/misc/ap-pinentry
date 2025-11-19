@@ -1,3 +1,5 @@
 #!/bin/sh
-# This script executes the axo-pass binary with the pinentry subcommand
+# pinentry helper script, pinentry does not accept args
+# Usage: Add the following line to your ~/.gnupg/gpg-agent.conf:
+#   pinentry-program /path/to/this/file
 exec "$(dirname "$0")/../MacOS/axo-pass" pinentry
