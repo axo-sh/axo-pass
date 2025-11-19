@@ -34,7 +34,7 @@ globalStyle('html, body', {
   textRendering: 'optimizeLegibility',
   background: colorVar.base,
   color: colorVar.text,
-  colorScheme: 'light dark',
+  colorScheme: 'dark', // todo: 'light dark'
   vars: greyScheme,
   overscrollBehavior: 'none',
 });
