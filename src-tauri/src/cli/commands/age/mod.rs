@@ -36,7 +36,7 @@ enum AgeSubcommand {
     },
 
     /// List all saved recipients
-    ListRecipients,
+    Recipients,
 
     /// Delete a recipient by name
     Delete { recipient: String },
@@ -70,7 +70,7 @@ impl AgeCommand {
             AgeSubcommand::Keygen { name, show } => {
                 age_keygen(name, show).await;
             },
-            AgeSubcommand::ListRecipients => {
+            AgeSubcommand::Recipients => {
                 list_recipients().await;
             },
             AgeSubcommand::Delete { recipient } => {
