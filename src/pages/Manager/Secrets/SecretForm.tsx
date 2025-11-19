@@ -8,7 +8,7 @@ import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
 import {InputField} from '@/components/form/Input';
 import {selectInput, textInput} from '@/components/Input.css';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {nameToSlug} from '@/utils/nameToSlug';
 
 export type SecretFormData = {

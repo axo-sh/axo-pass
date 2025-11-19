@@ -5,7 +5,7 @@ import {observer} from 'mobx-react';
 
 import {button} from '@/components/Button.css';
 import {Flex} from '@/components/Flex';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {secretItem} from '@/pages/Manager/Secrets.css';
 import type {ItemKey} from '@/utils/CredentialKey';
 

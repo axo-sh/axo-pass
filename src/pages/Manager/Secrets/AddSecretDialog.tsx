@@ -6,8 +6,8 @@ import {toast} from 'sonner';
 import {addItem} from '@/client';
 import {Dialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {SecretForm, type SecretFormData} from '@/pages/Manager/Secrets/SecretForm';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 
 type AddSecretDialogProps = {
   vaultKey: string;

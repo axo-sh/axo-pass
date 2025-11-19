@@ -4,7 +4,7 @@ import {deleteCredential} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
 import type {CredentialKey} from '@/utils/CredentialKey';
 
 type Props = {

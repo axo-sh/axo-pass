@@ -4,8 +4,8 @@ import type {AppModeAndState} from '@/client';
 import {getMode} from '@/client';
 import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
+import {VaultContext, VaultStore} from '@/mobx/VaultStore';
 import {Dashboard} from '@/pages/Dashboard';
-import {VaultContext, VaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {PinentryScreen} from '@/pages/PinentryScreen';
 import {SshAskpassScreen} from '@/pages/SshAskpassScreen';
 

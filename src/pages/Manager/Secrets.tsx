@@ -12,12 +12,12 @@ import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
 import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
-import {AddSecretDialog} from '@/pages/Manager/Secrets/AddSecret';
+import {AddSecretDialog} from '@/pages/Manager/Secrets/AddSecretDialog';
 import {CombinedList} from '@/pages/Manager/Secrets/CombinedList';
-import {EditSecretDialog} from '@/pages/Manager/Secrets/EditSecret';
+import {EditSecretDialog} from '@/pages/Manager/Secrets/EditSecretDialog';
 import {SecretsList} from '@/pages/Manager/Secrets/SecretsList';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import type {ItemKey} from '@/utils/CredentialKey';
 
 type Props = {

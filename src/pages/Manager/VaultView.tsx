@@ -4,7 +4,7 @@ import {useParams} from 'wouter';
 
 import type {VaultSchema} from '@/binding';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
 
 type Props = {
   children: (vault: VaultSchema) => React.ReactNode;

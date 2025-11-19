@@ -7,8 +7,8 @@ import {deleteItem} from '@/client';
 import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {SecretItem} from '@/pages/Manager/Secrets/SecretsListItem';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
+import {SecretItem} from '@/pages/Manager/Secrets/SecretsList/SecretsListItem';
 import {secretsList} from '@/pages/Manager/Secrets.css';
 import type {ItemKey} from '@/utils/CredentialKey';
 

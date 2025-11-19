@@ -1,9 +1,9 @@
 import React from 'react';
 
 import {useDialog} from '@/components/Dialog';
-import {CombinedListItem} from '@/pages/Manager/Secrets/CombinedListItem';
+import {useVaultStore} from '@/mobx/VaultStore';
+import {CombinedListItem} from '@/pages/Manager/Secrets/CombinedList/CombinedListItem';
 import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {secretsList} from '@/pages/Manager/Secrets.css';
 import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
 

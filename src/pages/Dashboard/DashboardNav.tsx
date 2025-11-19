@@ -15,6 +15,7 @@ import {Link} from 'wouter';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {
   nav,
   navLink,
@@ -25,7 +26,6 @@ import {
   navNestedLinksAction,
 } from '@/pages/Dashboard/DashboardNav.css';
 import {AddVaultDialog, type AddVaultDialogHandle} from '@/pages/Manager/Secrets/AddVaultDialog';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 
 export const DashboardNav: React.FC = observer(() => {
   const errorDialog = useErrorDialog();

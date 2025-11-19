@@ -14,11 +14,11 @@ import {Dialog, DialogActions, type DialogHandle, useDialog} from '@/components/
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {flex} from '@/components/Flex.css';
-import {AddCredentialDialog} from '@/pages/Manager/Secrets/AddCredential';
+import {useVaultStore} from '@/mobx/VaultStore';
 import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
+import {AddCredentialDialog} from '@/pages/Manager/Secrets/EditSecretDialog/AddCredential';
 import {HiddenSecretValue} from '@/pages/Manager/Secrets/HiddenSecretValue';
 import {SecretForm, type SecretFormData} from '@/pages/Manager/Secrets/SecretForm';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
 import {
   secretItem,
   secretItemDesc,

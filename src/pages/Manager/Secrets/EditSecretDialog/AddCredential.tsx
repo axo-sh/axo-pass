@@ -11,7 +11,7 @@ import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
 import {InputField} from '@/components/form/Input';
 import {textInput} from '@/components/Input.css';
-import {useVaultStore} from '@/pages/Manager/Secrets/VaultStore';
+import {useVaultStore} from '@/mobx/VaultStore';
 import type {ItemKey} from '@/utils/CredentialKey';
 import {nameToSlug} from '@/utils/nameToSlug';
 
