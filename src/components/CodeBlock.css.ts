@@ -6,6 +6,7 @@ import {spacing} from '@/styles/utils';
 
 export const codeBlockPre = style({
   position: 'relative',
+  margin: 0,
   whiteSpace: 'pre-wrap',
   padding: spacing(1, 1.25),
   background: colorVar.light10,

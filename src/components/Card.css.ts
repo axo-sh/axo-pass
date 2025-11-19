@@ -13,6 +13,7 @@ export const card = recipe({
     borderColor: colorVar.light20,
     background: colorVar.light05,
     borderRadius: 8,
+    overflow: 'hidden',
   },
   variants: {
     sectioned: {

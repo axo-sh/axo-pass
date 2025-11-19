@@ -9,11 +9,12 @@ import {button} from '@/components/Button.css';
 import {codeBlockCopy, codeBlockPre, codeBlockPreCode} from '@/components/CodeBlock.css';
 
 type Props = {
-  children: React.ReactNode;
+  className?: string;
   canCopy?: boolean;
+  children: React.ReactNode;
 };
 
-export const CodeBlock: React.FC<Props> = ({canCopy, children}) => {
+export const CodeBlock: React.FC<Props> = ({className, canCopy, children}) => {
   const codeRef = useRef<HTMLElement | null>(null);
   const [copied, setCopied] = React.useState(false);
   const onCopyClick = () => {
@@ -31,7 +32,7 @@ export const CodeBlock: React.FC<Props> = ({canCopy, children}) => {
   const CopyIcon = copied ? IconCheck : IconCopy;
 
   return (
-    <pre className={codeBlockPre}>
+    <pre className={className || codeBlockPre}>
       {canCopy && (
         <button
           className={cx(button({variant: 'clear', size: 'iconSmall'}), codeBlockCopy)}

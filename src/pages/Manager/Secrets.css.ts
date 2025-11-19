@@ -85,6 +85,16 @@ export const secretItemValueCode = style({
   vars: accentScheme,
 });
 
+export const secretItemCredentialSecret = style({
+  margin: spacing(0.5, 0, 0, 0),
+  border: `1px solid ${colorVar.light10}`,
+  lineHeight: 1.2,
+  borderRadius: 6,
+  vars: accentScheme,
+  overflow: 'scroll',
+  padding: spacing(1, 1.25),
+});
+
 export const secretItemDesc = style({
   fontSize: vars.scale.xs,
   fontWeight: 500,

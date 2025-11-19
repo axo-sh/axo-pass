@@ -1,7 +1,5 @@
 import React from 'react';
 
-import {IconTrash} from '@tabler/icons-react';
-import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {observer} from 'mobx-react';
 import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
@@ -9,23 +7,14 @@ import {toast} from 'sonner';
 import type {CredentialUpdate, VaultItemSchema} from '@/binding';
 import {updateItem} from '@/client';
 import {button} from '@/components/Button.css';
-import {Card, CardSection} from '@/components/Card';
 import {Dialog, DialogActions, type DialogHandle, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
-import {Flex} from '@/components/Flex';
-import {flex} from '@/components/Flex.css';
 import {useVaultStore} from '@/mobx/VaultStore';
-import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
 import {AddCredentialDialog} from '@/pages/Manager/Secrets/EditSecretDialog/AddCredential';
-import {HiddenSecretValue} from '@/pages/Manager/Secrets/HiddenSecretValue';
+import {SecretCredentialList} from '@/pages/Manager/Secrets/EditSecretDialog/SecretCredentialsList';
 import {SecretForm, type SecretFormData} from '@/pages/Manager/Secrets/SecretForm';
-import {
-  secretItem,
-  secretItemDesc,
-  secretItemValue,
-  secretsList,
-} from '@/pages/Manager/Secrets.css';
-import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
+import {secretItem, secretsList} from '@/pages/Manager/Secrets.css';
+import type {ItemKey} from '@/utils/CredentialKey';
 
 type Props = {
   itemKey: ItemKey;
@@ -154,87 +143,3 @@ const EditSecret: React.FC<EditSecretProps> = observer(({item, itemKey, addCrede
 });
 
 EditSecret.displayName = 'EditSecret';
-
-const SecretCredentialList: React.FC<{
-  itemKey: ItemKey;
-  showAddCredentialDialog: () => void;
-}> = observer(({itemKey, showAddCredentialDialog}) => {
-  const vaultStore = useVaultStore();
-  const dialog = useDialog();
-  const [selectedCredKey, setSelectedCredKey] = React.useState<CredentialKey | null>(null);
-  const item = vaultStore.getItem(itemKey);
-  if (!item) {
-    return null;
-  }
-
-  const credentials = item.credentials;
-  const credKeys = Object.keys(credentials);
-  return (
-    <>
-      <Card sectioned>
-        {credKeys.map((credKey) => {
-          const cred = credentials[credKey];
-          const itemReference = `axo://${itemKey.vaultKey}/${itemKey.itemKey}/${credKey}`;
-          return (
-            <CardSection key={credKey}>
-              <div className={secretItem()}>
-                <div>
-                  <code className={secretItemValue}>{cred.title}</code>
-                  <code
-                    className={secretItemDesc}
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      try {
-                        writeText(itemReference);
-                        toast.success('Copied reference to clipboard.');
-                      } catch (err) {
-                        toast.error(`Failed to copy to clipboard: ${String(err)}`);
-                      }
-                    }}
-                  >
-                    {itemReference}
-                  </code>
-                </div>
-                <Flex gap={0.5} align="stretch">
-                  <HiddenSecretValue credKey={{...itemKey, credKey}} />
-                  <button
-                    className={button({size: 'iconSmall', variant: 'secondaryError'})}
-                    onClick={() => {
-                      setSelectedCredKey({...itemKey, credKey});
-                      dialog.open();
-                    }}
-                  >
-                    <IconTrash size={14} />
-                  </button>
-                </Flex>
-              </div>
-            </CardSection>
-          );
-        })}
-        <CardSection className={flex({justify: 'end'})}>
-          <button
-            className={button({size: 'small', variant: 'clear'})}
-            onClick={() => {
-              showAddCredentialDialog();
-            }}
-          >
-            + Add Credential
-          </button>
-        </CardSection>
-      </Card>
-
-      {selectedCredKey && (
-        <DeleteCredentialDialog
-          credKey={selectedCredKey}
-          isOpen={dialog.isOpen}
-          onClose={() => {
-            setSelectedCredKey(null);
-            dialog.onClose();
-          }}
-        />
-      )}
-    </>
-  );
-});
-
-SecretCredentialList.displayName = 'SecretCredentialList';
