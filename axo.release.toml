@@ -2,7 +2,7 @@
 build = """\
   TAURI_APP_BUILD_SHA=$(git rev-parse head) \
   TAURI_APP_BUILT_AT=$(date) \
-  cargo-tauri build -b app -vv \
+  cargo-tauri build -b app \
     --config src-tauri/tauri.conf.release.json \
 """
 
