@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "macOS": {
+      "files": {
+        "embedded.provisionprofile": "./misc/axo-pass.provisionprofile"
+      }
+    }
+  }
+}
