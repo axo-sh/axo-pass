@@ -14,9 +14,9 @@ pub async fn age_keygen(name: &str, show: &Option<bool>) {
         eprintln!("Error saving key to keychain: {e}");
         std::process::exit(1);
     }
-    println!("Recipient: {}", identity.to_public());
+    cprintln!("<green>Recipient</green>: {}", identity.to_public());
     if show.unwrap_or(false) {
-        println!("Secret: {}", identity_str.expose_secret());
+        println!("<green>Secret</green>: {}", identity_str.expose_secret());
     }
 }
 
@@ -31,7 +31,7 @@ pub async fn list_recipients() {
             if age_entries.is_empty() {
                 println!("No age recipients found in keychain");
             } else {
-                println!("Age recipients:");
+                cprintln!("<green>Age recipients:</green>");
                 for entry in age_entries {
                     let entry_name = entry.key_id.clone();
                     match entry.get_password() {

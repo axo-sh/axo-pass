@@ -63,6 +63,7 @@ impl AxoPassCommand {
             AxoPassCommand::Inject(inject) => inject.execute().await,
             AxoPassCommand::Age(age) => age.execute().await,
             AxoPassCommand::Info => {
+                println!("ap {}", env!("CARGO_PKG_VERSION"));
                 println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
                 println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
                 println!("Vault dir: {}", vaults_dir().display());

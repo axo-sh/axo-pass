@@ -27,9 +27,14 @@ impl VaultCommand {
 
     fn cmd_list_vaults(&self) {
         let vm = VaultsManager::new();
+        cprintln!("<green>Vaults:</green>");
+        if vm.iter_vault_keys().next() == None {
+            println!("<no vaults>");
+            return;
+        }
         for (vault_key, vw) in vm.iter_vaults() {
             let vault_name = vw.vault.name.as_deref().unwrap_or("<unnamed>");
-            cprintln!("{vault_name} <dim>{vault_key}</dim>");
+            cprintln!("  <blue>{vault_name}</blue> {vault_key}");
         }
     }
 }

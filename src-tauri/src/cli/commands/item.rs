@@ -132,9 +132,14 @@ impl ItemCommand {
                         "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
                     ));
                 };
-                println!("Credential: {}", credential_key);
-                println!("Title: {}", credential.title.as_deref().unwrap_or("<none>"));
-                println!("Reference: axo://{vault_key}/{item_key}/{credential_key}");
+                cprintln!("<green>Credential</green>: {}", credential_key);
+                cprintln!(
+                    "<green>Title</green>: {}",
+                    credential.title.as_deref().unwrap_or("<none>")
+                );
+                cprintln!(
+                    "<green>Reference</green>: axo://{vault_key}/{item_key}/{credential_key}"
+                );
             },
         }
         Ok(())
@@ -170,7 +175,7 @@ impl ItemCommand {
     fn cmd_list_items(&self) -> Result<(), String> {
         let vw = Self::unlock_vault(self.vault.clone())?;
         let vault_key = vw.key.clone();
-        cprintln!("<dim>Vault: {vault_key}</dim>");
+        cprintln!("<green>Vault</green>: <blue>{vault_key}</blue>");
 
         let mut items: Vec<_> = vw.list_items().collect();
         items.sort_by_key(|(_item_key, item_value)| item_value.title.to_lowercase());
@@ -179,7 +184,7 @@ impl ItemCommand {
         for (item_key, item_value) in items {
             for (cred_key, cred_value) in item_value.credentials.iter() {
                 let cred_title = cred_value.title.as_deref().unwrap_or("<untitled>");
-                cprintln!("{cred_title} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>");
+                cprintln!("  {cred_title} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>");
             }
             has_items = true;
         }
