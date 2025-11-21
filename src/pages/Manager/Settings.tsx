@@ -21,10 +21,16 @@ export const Settings: React.FC = () => {
           Add the following to <Code>~/.gnupg/gpg-agent.conf</Code>:
         </div>
         <CodeBlock canCopy>pinentry-program {appBundlePath}/bin/ap-pinentry</CodeBlock>
+        <div>
+          Run <Code>gpgconf --reload gpg-agent</Code> to apply the changes.
+        </div>
       </DashboardSection>
 
       <DashboardSection title="SSH">
-        <div>Add the following to your shell configuration (e.g. .zshrc or .bashrc):</div>
+        <div>
+          Add the following to your shell configuration (e.g. <Code>.zshrc</Code> or{' '}
+          <Code>.bashrc</Code>):
+        </div>
         <CodeBlock canCopy>
           export SSH_ASKPASS="{appBundlePath}/bin/ap-ssh-askpass"
           <br />

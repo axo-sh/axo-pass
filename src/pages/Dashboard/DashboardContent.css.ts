@@ -1,6 +1,7 @@
 import {globalStyle, style} from '@vanilla-extract/css';
 
 import {vars} from '@/App.css';
+import {flex, gapVar} from '@/components/Flex.css';
 import {layoutDescription, layoutTitle} from '@/layout/Layout.css';
 import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
@@ -38,7 +39,12 @@ export const dashboardSectionHeaderH2 = style({
   fontSize: vars.scale.md,
 });
 
-export const dashboardSection = style({});
+export const dashboardSection = style([
+  flex({direction: 'column'}),
+  {
+    vars: {[gapVar]: spacing(3 / 4)},
+  },
+]);
 
 globalStyle(`${dashboardSection} + ${dashboardSection}`, {
   marginTop: spacing(2),
