@@ -39,7 +39,11 @@ export const Settings: React.FC = () => {
       </DashboardSection>
 
       <DashboardSection title="CLI">
-        <CodeBlock canCopy>alias ap="{escapedAppBundlePath}/MacOS/ap"</CodeBlock>
+        <div>
+          Install the `ap` command to be able to interact with Axo Pass from the command line.
+        </div>
+        <div>Add the following to your shell configuration (e.g. .zshrc or .bashrc):</div>
+        <CodeBlock canCopy>alias ap="{escapedAppBundlePath}/bin/ap"</CodeBlock>
       </DashboardSection>
 
       <DashboardSection title="Vaults">
