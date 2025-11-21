@@ -116,6 +116,8 @@ const getKeyTypeShort = (type: PasswordEntryType) => {
       return 'GPG';
     case 'ssh_key':
       return 'SSH';
+    case 'age_key':
+      return 'Age';
     default:
       return 'Other';
   }
@@ -127,6 +129,8 @@ const getKeyType = (type: PasswordEntryType) => {
       return 'GPG key';
     case 'ssh_key':
       return 'SSH key';
+    case 'age_key':
+      return 'Age key';
     default:
       return 'key';
   }

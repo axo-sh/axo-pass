@@ -100,7 +100,7 @@ export const getMode = async (): Promise<AppModeAndState> => {
   return await invoke<AppModeAndState>('get_mode');
 };
 
-export type PasswordEntryType = 'gpg_key' | 'ssh_key' | 'other';
+export type PasswordEntryType = 'gpg_key' | 'ssh_key' | 'age_key' | 'other';
 
 export type PasswordEntry = {
   password_type: PasswordEntryType;
