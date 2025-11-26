@@ -27,6 +27,10 @@ pub struct VaultWrapper {
     pub vault: Vault,
 }
 
+fn vault_file_path(vault_dir: &Path, vault_key: &str) -> PathBuf {
+    vault_dir.join(format!("{vault_key}.json"))
+}
+
 impl VaultWrapper {
     pub fn new_vault(
         name: Option<String>,
@@ -35,7 +39,7 @@ impl VaultWrapper {
         user_encryption_key: ManagedKey,
     ) -> Result<Self, Error> {
         let vault = Vault::new(name, user_encryption_key)?;
-        let vault_path = vault_dir.join(vault_key).with_extension("json");
+        let vault_path = vault_file_path(vault_dir, vault_key);
         let vault_wrapper = Self {
             key: vault_key.to_string(),
             path: vault_path,
@@ -48,9 +52,9 @@ impl VaultWrapper {
 
     pub fn load(vault_dir: &Path, vault_key: Option<&str>) -> Result<VaultWrapper, Error> {
         let vault_key = vault_key.unwrap_or(DEFAULT_VAULT);
-        let vault_file_path = vault_dir.join(vault_key).with_extension("json");
-        log::debug!("Reading vault from file: {}", vault_file_path.display());
-        let vault_data = fs::read_to_string(&vault_file_path).map_err(|e| {
+        let vault_path = vault_file_path(vault_dir, vault_key);
+        log::debug!("Reading vault from file: {}", vault_path.display());
+        let vault_data = fs::read_to_string(&vault_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 Error::VaultNotFound(vault_key.to_string())
             } else {
@@ -61,7 +65,7 @@ impl VaultWrapper {
             serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)?;
         Ok(VaultWrapper {
             key: vault_key.to_string(),
-            path: vault_file_path,
+            path: vault_path,
             cipher: None,
             vault,
         })
@@ -114,7 +118,7 @@ impl VaultWrapper {
             .path
             .parent()
             .expect("Vault path has no parent directory");
-        let new_path = vault_dir.join(new_vault_key.clone()).with_extension("json");
+        let new_path = vault_file_path(vault_dir, &new_vault_key);
 
         // move the vault file
         if let Err(err) = std::fs::rename(&self.path, &new_path) {
