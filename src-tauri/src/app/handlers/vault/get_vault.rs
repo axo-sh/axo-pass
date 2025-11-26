@@ -46,7 +46,7 @@ pub async fn init_vault(
         .or_else(|| request.vault_name.clone().map(|name| normalize_key(&name)))
         .unwrap_or_else(|| DEFAULT_VAULT.to_string());
 
-    let mut vw = VaultWrapper::new_vault(
+    let vw = VaultWrapper::new_vault(
         request.vault_name,
         &state.vaults.vaults_dir,
         &vault_key,
@@ -55,14 +55,6 @@ pub async fn init_vault(
     .map_err(|e| format!("Failed to create new vault: {e}",))?;
 
     log::debug!("Vault created, saving new vault to disk...");
-    vw.add_secret(
-        "test item",
-        "test-item",
-        "cred item",
-        "cred_item",
-        "super-secret-value".into(),
-    )
-    .map_err(|e| format!("Failed to add test secret to vault: {e}"))?;
     vw.save()
         .map_err(|e| format!("Failed to save vault: {e}"))?;
     Ok(VaultResponse {
