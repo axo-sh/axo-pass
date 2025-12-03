@@ -408,7 +408,7 @@ static WHITESPACE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\s+").unwrap());
 
 static VAULT_KEY_REGEX: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"^[a-z][a-z0-9-_][a-z0-9]+$").unwrap());
+    LazyLock::new(|| regex::Regex::new(r"^[a-z][a-z0-9-_]+[a-z0-9]$").unwrap());
 
 pub fn validate_key(key: &str) -> bool {
     VAULT_KEY_REGEX.is_match(key)
