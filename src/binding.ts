@@ -94,6 +94,7 @@ export interface VaultItemSchema {
 export interface VaultSchema {
   key: string;
   name?: string;
+  path: string;
   data: Record<string, VaultItemSchema>;
 }
 

@@ -6,6 +6,7 @@ import {Link} from 'wouter';
 import type {VaultSchema} from '@/binding';
 import {updateVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
+import {CodeBlock} from '@/components/CodeBlock';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
@@ -13,6 +14,7 @@ import {InputField} from '@/components/form/Input';
 import {textInput} from '@/components/Input.css';
 import {useVaultStore} from '@/mobx/VaultStore';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
+import {DashboardSection} from '@/pages/Dashboard/DashboardSection';
 
 type Props = {
   vault: VaultSchema;
@@ -66,29 +68,35 @@ export const VaultSettings: React.FC<Props> = ({vault}) => {
         }
       />
 
-      <Form form={form} onSubmit={handleSubmit}>
-        <InputField<F> name="vault_name">
-          {(field, error) => (
-            <FormRow label="Vault Name" error={error}>
-              <input type="text" className={textInput()} required {...field} />
-            </FormRow>
-          )}
-        </InputField>
+      <DashboardSection title="Details">
+        <Form form={form} onSubmit={handleSubmit}>
+          <InputField<F> name="vault_name">
+            {(field, error) => (
+              <FormRow label="Vault Name" error={error}>
+                <input type="text" className={textInput()} required {...field} />
+              </FormRow>
+            )}
+          </InputField>
 
-        <InputField<F> name="vault_key">
-          {(field, error) => (
-            <FormRow label="Vault ID" error={error}>
-              <input type="text" className={textInput({monospace: true})} required {...field} />
-            </FormRow>
-          )}
-        </InputField>
+          <InputField<F> name="vault_key">
+            {(field, error) => (
+              <FormRow label="Vault ID" error={error}>
+                <input type="text" className={textInput({monospace: true})} required {...field} />
+              </FormRow>
+            )}
+          </InputField>
 
-        <FormRow>
-          <button type="submit" className={button({variant: 'default'})}>
-            Save Changes
-          </button>
-        </FormRow>
-      </Form>
+          <FormRow>
+            <button type="submit" className={button({variant: 'default'})}>
+              Save Changes
+            </button>
+          </FormRow>
+        </Form>
+      </DashboardSection>
+
+      <DashboardSection title="Path">
+        <CodeBlock canCopy>{vault.path}</CodeBlock>
+      </DashboardSection>
     </>
   );
 };

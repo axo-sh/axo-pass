@@ -11,6 +11,7 @@ use crate::secrets::vault_wrapper::VaultWrapper;
 pub struct VaultSchema {
     pub key: String,
     pub name: Option<String>,
+    pub path: String,
     #[typeshare(serialized_as = "HashMap<String, VaultItemSchema>")]
     pub data: BTreeMap<String, VaultItemSchema>,
 }
@@ -20,6 +21,7 @@ impl From<&VaultWrapper> for VaultSchema {
         VaultSchema {
             key: vw.key.clone(),
             name: vw.vault.name.clone(),
+            path: vw.path.to_string_lossy().to_string(),
             data: vw
                 .vault
                 .data
