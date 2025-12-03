@@ -93,6 +93,7 @@ export const secretItemCredentialSecret = style({
   vars: accentScheme,
   overflow: 'scroll',
   padding: spacing(1, 1.25),
+  whiteSpace: 'pre-wrap',
 });
 
 export const secretItemDesc = style({

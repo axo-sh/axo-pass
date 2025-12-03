@@ -46,7 +46,7 @@ export const dashboardSectionHeaderH2 = style({
 });
 
 export const dashboardSection = style([
-  flex({direction: 'column'}),
+  flex({direction: 'column', align: 'start'}),
   {
     vars: {[gapVar]: spacing(3 / 4)},
   },

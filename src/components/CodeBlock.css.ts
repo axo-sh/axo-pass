@@ -11,6 +11,7 @@ export const codeBlockPre = style({
   padding: spacing(1, 1.25),
   background: colorVar.light10,
   borderRadius: 6,
+  width: '100%',
 });
 
 export const codeBlockPreCode = style({
