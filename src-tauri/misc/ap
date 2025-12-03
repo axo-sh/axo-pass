@@ -1,8 +1,12 @@
 #!/bin/sh
 # This script executes the axo-pass binary with the help flag if
 # no args are provided, so that it doesn't open the GUI by default.
+
+# Get the real path of this script, resolving all symlinks
+SCRIPT_DIR="$(cd -P "$(dirname "$(readlink -f "$0")")" && pwd)"
+
 if [ $# -eq 0 ]; then
-  exec "$(dirname "$0")/../MacOS/axo-pass" --help
+  exec "$SCRIPT_DIR/../MacOS/axo-pass" --help
 else
-  exec "$(dirname "$0")/../MacOS/axo-pass" "$@"
+  exec "$SCRIPT_DIR/../MacOS/axo-pass" "$@"
 fi
