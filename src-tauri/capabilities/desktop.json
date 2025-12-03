@@ -1,6 +1,13 @@
 {
   "identifier": "desktop-capability",
-  "platforms": ["macOS"],
-  "windows": ["main"],
-  "permissions": ["cli:default"]
+  "platforms": [
+    "macOS"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "cli:default",
+    "updater:default"
+  ]
 }
