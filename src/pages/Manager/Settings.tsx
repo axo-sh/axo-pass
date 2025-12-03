@@ -44,6 +44,9 @@ export const Settings: React.FC = () => {
         </div>
         <div>Add the following to your shell configuration (e.g. .zshrc or .bashrc):</div>
         <CodeBlock canCopy>alias ap="{escapedAppBundlePath}/bin/ap"</CodeBlock>
+
+        <div>Alternatively, you can symlink the binary to a directory in your PATH, e.g.:</div>
+        <CodeBlock canCopy>ln -s "{escapedAppBundlePath}/bin/ap" /usr/local/bin/ap</CodeBlock>
       </DashboardSection>
 
       <DashboardSection title="Vaults">
