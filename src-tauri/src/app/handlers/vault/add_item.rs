@@ -28,7 +28,8 @@ pub async fn add_item(
         .get_vault_mut(&request.vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
 
-    vw.add_item(request.item_title, request.item_key);
+    vw.add_item(request.item_title, request.item_key)
+        .map_err(|e| format!("Failed to add item: {e}"))?;
     vw.save()
         .map_err(|e| format!("Failed to save vault: {e}"))?;
 

@@ -180,15 +180,20 @@ impl VaultWrapper {
         self.vault.data.get(item_key)
     }
 
-    pub fn add_item(&mut self, item_title: String, item_key: String) {
+    pub fn add_item(&mut self, item_title: String, item_key: String) -> Result<(), Error> {
+        let item_key = normalize_key(&item_key);
+        if !validate_key(&item_key) {
+            return Err(Error::InvalidItemKey(item_key));
+        }
         self.vault
             .data
-            .entry(normalize_key(&item_key))
+            .entry(item_key)
             .or_insert_with(|| VaultItem {
                 id: Uuid::new_v4(),
                 title: item_title.trim().to_string(),
                 credentials: BTreeMap::new(),
             });
+        Ok(())
     }
 
     pub fn update_item(
@@ -261,7 +266,13 @@ impl VaultWrapper {
         // normalize values
         let item_title = item_title.trim();
         let item_key = normalize_key(item_key);
+        if !validate_key(&item_key) {
+            return Err(Error::InvalidItemKey(item_key));
+        }
         let cred_key = normalize_key(cred_key);
+        if !validate_key(&cred_key) {
+            return Err(Error::InvalidCredentialKey(cred_key));
+        }
 
         // get ids and encrypt credential value
         let (item_id, cred_id) = self
@@ -398,6 +409,10 @@ static WHITESPACE_REGEX: LazyLock<regex::Regex> =
 
 static VAULT_KEY_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^[a-z][a-z0-9-_][a-z0-9]+$").unwrap());
+
+pub fn validate_key(key: &str) -> bool {
+    VAULT_KEY_REGEX.is_match(key)
+}
 
 pub fn normalize_key(key: &str) -> String {
     WHITESPACE_REGEX

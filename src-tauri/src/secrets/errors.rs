@@ -56,8 +56,14 @@ pub enum Error {
     #[error("Could not retrieve secret {0} from vault: {1}")]
     SecretRetrievalFailed(String, #[source] anyhow::Error),
 
-    #[error("Invalid vault key, only the following characters allowed: a-zA-Z0-9-_: {0}")]
+    #[error("Invalid vault key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidVaultKey(String),
+
+    #[error("Invalid item key, only a-zA-Z0-9-_ allowed: {0}")]
+    InvalidItemKey(String),
+
+    #[error("Invalid credential key, only a-zA-Z0-9-_ allowed: {0}")]
+    InvalidCredentialKey(String),
 }
 
 impl From<Error> for String {
