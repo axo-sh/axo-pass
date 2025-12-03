@@ -22,7 +22,7 @@ impl VaultsManager {
         }
     }
 
-    pub fn new_vault(
+    pub fn add_vault(
         &mut self,
         name: Option<String>,
         vault_key: String,

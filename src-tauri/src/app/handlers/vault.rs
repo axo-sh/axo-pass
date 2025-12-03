@@ -5,12 +5,12 @@ use crate::secrets::vault_wrapper::VaultWrapper;
 
 pub mod add_credential;
 pub mod add_item;
+pub mod add_vault;
 pub mod delete_credential;
 pub mod delete_item;
 pub mod delete_vault;
 pub mod get_decrypted_credential;
 pub mod get_vault;
-pub mod new_vault;
 pub mod schemas;
 pub mod update_item;
 pub mod update_vault;

@@ -121,8 +121,8 @@ export const listVaults = async (): Promise<VaultInfo[]> => {
   return (await invoke<ListVaultsResponse>('list_vaults')).vaults;
 };
 
-export const newVault = async (request: NewVaultRequest): Promise<void> => {
-  return await invoke<void>('new_vault', {request});
+export const addVault = async (request: NewVaultRequest): Promise<void> => {
+  return await invoke<void>('add_vault', {request});
 };
 
 export const deletePassword = async (entry: PasswordEntry): Promise<void> => {

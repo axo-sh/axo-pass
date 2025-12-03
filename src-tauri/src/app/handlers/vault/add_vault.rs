@@ -15,11 +15,11 @@ pub struct NewVaultRequest {
 }
 
 #[tauri::command]
-pub async fn new_vault(
+pub async fn add_vault(
     request: NewVaultRequest,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<VaultResponse, String> {
-    log::debug!("command: new_vault");
+    log::debug!("command: add_vault");
     let mut state = state
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
@@ -33,7 +33,7 @@ pub async fn new_vault(
 
     let vw = state
         .vaults
-        .new_vault(request.vault_name, vault_key)
+        .add_vault(request.vault_name, vault_key)
         .map_err(|e| format!("Failed to create new vault: {e}"))?;
 
     Ok(VaultResponse { vault: vw.into() })
