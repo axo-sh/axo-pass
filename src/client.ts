@@ -164,3 +164,7 @@ export const getAppSettings = async (): Promise<AppSettingsResponse> => {
 export const updateVault = async (request: UpdateVaultRequest): Promise<void> => {
   return await invoke<void>('update_vault', {request});
 };
+
+export const deleteVault = async (vaultKey: string): Promise<void> => {
+  return await invoke<void>('delete_vault', {request: {vault_key: vaultKey}});
+};

@@ -7,6 +7,7 @@ pub mod add_credential;
 pub mod add_item;
 pub mod delete_credential;
 pub mod delete_item;
+pub mod delete_vault;
 pub mod get_decrypted_credential;
 pub mod get_vault;
 pub mod schemas;

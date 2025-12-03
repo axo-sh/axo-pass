@@ -41,6 +41,9 @@ pub enum Error {
     #[error("Failed to update vault key: {0}")]
     VaultKeyUpdateFailed(#[source] std::io::Error),
 
+    #[error("Failed to delete vault: {0}")]
+    VaultDeleteError(#[source] std::io::Error),
+
     #[error("Invalid vault item reference: {0}")]
     InvalidVaultItemReference(String),
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::core::dirs::vaults_dir;
 use crate::secrets::errors::Error;
@@ -70,6 +71,21 @@ impl VaultsManager {
 
     pub fn get_vault(&mut self, key: &str) -> Result<&VaultWrapper, Error> {
         self.get_vault_mut(key).map(|v| &*v)
+    }
+
+    pub fn delete_vault(&mut self, key: &str) -> Result<(), Error> {
+        // remove from in-memory map
+        let Some(vw) = self.vaults.remove(key) else {
+            return Err(Error::VaultNotFound(key.to_string()));
+        };
+
+        // macOS 15+ "trash" to move the file to the trash instead of deleting it
+        // permanently
+        Command::new("trash")
+            .arg(&vw.path)
+            .output()
+            .map_err(|e| Error::VaultDeleteError(e))?;
+        Ok(())
     }
 
     pub fn get_secret_by_url(&mut self, item_url: &str) -> Result<Option<String>, Error> {

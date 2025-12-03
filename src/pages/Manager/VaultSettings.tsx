@@ -7,6 +7,7 @@ import type {VaultSchema} from '@/binding';
 import {updateVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {CodeBlock} from '@/components/CodeBlock';
+import {useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
@@ -15,6 +16,7 @@ import {textInput} from '@/components/Input.css';
 import {useVaultStore} from '@/mobx/VaultStore';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
 import {DashboardSection} from '@/pages/Dashboard/DashboardSection';
+import {DeleteVaultDialog} from '@/pages/Manager/DeleteVaultDialog';
 
 type Props = {
   vault: VaultSchema;
@@ -28,6 +30,7 @@ type F = {
 export const VaultSettings: React.FC<Props> = ({vault}) => {
   const store = useVaultStore();
   const errorDialog = useErrorDialog();
+  const deleteDialog = useDialog();
   const form = useForm<F>({
     defaultValues: {
       vault_name: vault.name,
@@ -67,7 +70,6 @@ export const VaultSettings: React.FC<Props> = ({vault}) => {
           </Link>
         }
       />
-
       <DashboardSection title="Details">
         <Form form={form} onSubmit={handleSubmit}>
           <InputField<F> name="vault_name">
@@ -93,10 +95,18 @@ export const VaultSettings: React.FC<Props> = ({vault}) => {
           </FormRow>
         </Form>
       </DashboardSection>
-
       <DashboardSection title="Path">
         <CodeBlock canCopy>{vault.path}</CodeBlock>
       </DashboardSection>
+
+      <DashboardSection title="Delete Vault">
+        <div>Deleting a repository will move the vault file to Trash on your Mac.</div>
+        <button className={button({variant: 'error'})} onClick={() => deleteDialog.open()}>
+          Delete
+        </button>
+      </DashboardSection>
+
+      <DeleteVaultDialog vault={vault} dialog={deleteDialog} />
     </>
   );
 };
