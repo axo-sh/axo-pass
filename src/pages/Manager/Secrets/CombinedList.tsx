@@ -4,6 +4,7 @@ import {useDialog} from '@/components/Dialog';
 import {useVaultStore} from '@/mobx/VaultStore';
 import {CombinedListItem} from '@/pages/Manager/Secrets/CombinedList/CombinedListItem';
 import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
+import {EmptyVaultMessage} from '@/pages/Manager/Secrets/SecretsList/EmptyVaultMessage';
 import {secretsList} from '@/pages/Manager/Secrets.css';
 import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
 
@@ -32,6 +33,10 @@ export const CombinedList: React.FC<Props> = ({selectedVaults, onEdit}) => {
     setSelectedCredentialKey(credKey);
     deleteCredentialDialog.open();
   };
+
+  if (flatCreds.length === 0) {
+    return <EmptyVaultMessage />;
+  }
 
   return (
     <>

@@ -8,6 +8,7 @@ import {button} from '@/components/Button.css';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {useVaultStore} from '@/mobx/VaultStore';
+import {EmptyVaultMessage} from '@/pages/Manager/Secrets/SecretsList/EmptyVaultMessage';
 import {SecretItem} from '@/pages/Manager/Secrets/SecretsList/SecretsListItem';
 import {secretsList} from '@/pages/Manager/Secrets.css';
 import type {ItemKey} from '@/utils/CredentialKey';
@@ -22,6 +23,10 @@ export const SecretsList: React.FC<Props> = observer(({selectedVaults, onEdit}) 
   const deleteSecretDialog = useDialog();
   const [selectedKey, setSelectedKey] = React.useState<ItemKey | null>(null);
   const secrets = vaultStore.listSecretsForSelectedVaults(selectedVaults);
+
+  if (secrets.length === 0) {
+    return <EmptyVaultMessage />;
+  }
 
   return (
     <>
