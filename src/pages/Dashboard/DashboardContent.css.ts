@@ -3,7 +3,7 @@ import {globalStyle, style} from '@vanilla-extract/css';
 import {vars} from '@/App.css';
 import {flex, gapVar} from '@/components/Flex.css';
 import {layoutDescription, layoutTitle} from '@/layout/Layout.css';
-import {colorVar} from '@/styles/colors.css';
+import {accentScheme, colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const dashboardContent = style({
@@ -31,11 +31,17 @@ globalStyle(`${dashboardContentHeader} ${layoutDescription()}`, {
   marginBottom: spacing(3 / 2),
 });
 
-export const dashboardSectionHeader = style({});
+export const dashboardSectionHeader = style({
+  borderLeft: `6px solid ${colorVar.base}`,
+  paddingLeft: spacing(3 / 4),
+  margin: spacing(1 / 2, 0),
+  vars: accentScheme,
+});
 
 export const dashboardSectionHeaderH2 = style({
   margin: 0,
   padding: 0,
+  lineHeight: 1,
   fontSize: vars.scale.md,
 });
 
