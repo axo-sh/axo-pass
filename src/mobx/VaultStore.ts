@@ -3,7 +3,7 @@ import React from 'react';
 import {action, makeObservable, observable, runInAction} from 'mobx';
 
 import type {VaultInfo, VaultSchema} from '@/binding';
-import {getVault, initVault, listVaults} from '@/client';
+import {getVault, listVaults, newVault} from '@/client';
 import type {ItemKey} from '@/utils/CredentialKey';
 
 export class VaultStore {
@@ -58,7 +58,7 @@ export class VaultStore {
   }
 
   async addVault(name: string, key: string) {
-    await initVault({vault_name: name, vault_key: key});
+    await newVault({vault_name: name, vault_key: key});
     await this.loadVaultKeys();
   }
 

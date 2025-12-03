@@ -5,16 +5,7 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::vault::schemas::VaultSchema;
-use crate::secrets::vault_wrapper::{
-    DEFAULT_VAULT, VaultWrapper, get_vault_encryption_key, normalize_key,
-};
-
-#[derive(Deserialize)]
-#[typeshare]
-pub struct InitVaultRequest {
-    vault_name: Option<String>,
-    vault_key: Option<String>,
-}
+use crate::secrets::vault_wrapper::{DEFAULT_VAULT, VaultWrapper};
 
 #[derive(Deserialize)]
 #[typeshare]
@@ -26,40 +17,6 @@ pub struct GetVaultRequest {
 #[typeshare]
 pub struct VaultResponse {
     pub vault: VaultSchema,
-}
-
-#[tauri::command]
-pub async fn init_vault(
-    request: InitVaultRequest,
-    state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<VaultResponse, String> {
-    log::debug!("command: init_vault with test values");
-    let state = state
-        .lock()
-        .map_err(|e| format!("Failed to lock app state: {e}"))?;
-
-    let user_encryption_key = get_vault_encryption_key()
-        .map_err(|e| format!("Failed to get vault encryption key: {e}"))?;
-
-    let vault_key = request
-        .vault_key
-        .or_else(|| request.vault_name.clone().map(|name| normalize_key(&name)))
-        .unwrap_or_else(|| DEFAULT_VAULT.to_string());
-
-    let vw = VaultWrapper::new_vault(
-        request.vault_name,
-        &state.vaults.vaults_dir,
-        &vault_key,
-        user_encryption_key,
-    )
-    .map_err(|e| format!("Failed to create new vault: {e}",))?;
-
-    log::debug!("Vault created, saving new vault to disk...");
-    vw.save()
-        .map_err(|e| format!("Failed to save vault: {e}"))?;
-    Ok(VaultResponse {
-        vault: (&vw).into(),
-    })
 }
 
 #[tauri::command]

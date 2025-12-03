@@ -10,6 +10,7 @@ pub mod delete_item;
 pub mod delete_vault;
 pub mod get_decrypted_credential;
 pub mod get_vault;
+pub mod new_vault;
 pub mod schemas;
 pub mod update_item;
 pub mod update_vault;

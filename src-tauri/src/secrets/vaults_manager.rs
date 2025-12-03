@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::core::dirs::vaults_dir;
 use crate::secrets::errors::Error;
-use crate::secrets::vault_wrapper::VaultWrapper;
+use crate::secrets::vault_wrapper::{VaultWrapper, get_vault_encryption_key};
 
 #[derive(Default)]
 pub struct VaultsManager {
@@ -20,6 +20,22 @@ impl VaultsManager {
             vaults: Self::discover_vaults(&vaults_dir),
             vaults_dir: vaults_dir.to_owned(),
         }
+    }
+
+    pub fn new_vault(
+        &mut self,
+        name: Option<String>,
+        vault_key: String,
+    ) -> Result<&VaultWrapper, Error> {
+        let user_encryption_key = get_vault_encryption_key()?;
+
+        let vw = VaultWrapper::new_vault(name, &self.vaults_dir, &vault_key, user_encryption_key)?;
+
+        log::debug!("Vault created, saving new vault to disk...");
+        vw.save()?;
+
+        self.vaults.insert(vault_key.clone(), vw);
+        Ok(self.vaults.get(&vault_key).unwrap())
     }
 
     fn discover_vaults(vaults_dir: &Path) -> HashMap<String, VaultWrapper> {

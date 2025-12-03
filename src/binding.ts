@@ -49,12 +49,11 @@ export interface DeleteItemRequest {
   item_key: string;
 }
 
-export interface GetVaultRequest {
-  vault_key?: string;
+export interface DeleteVaultRequest {
+  vault_key: string;
 }
 
-export interface InitVaultRequest {
-  vault_name?: string;
+export interface GetVaultRequest {
   vault_key?: string;
 }
 
@@ -65,6 +64,11 @@ export interface VaultInfo {
 
 export interface ListVaultsResponse {
   vaults: VaultInfo[];
+}
+
+export interface NewVaultRequest {
+  vault_name?: string;
+  vault_key?: string;
 }
 
 export interface UpdateItemRequest {

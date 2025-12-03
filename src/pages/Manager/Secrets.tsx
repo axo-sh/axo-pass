@@ -4,7 +4,7 @@ import {IconPlus, IconSettings} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {Link} from 'wouter';
 
-import {initVault} from '@/client';
+import {newVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
@@ -65,7 +65,7 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
           <button
             onClick={async () => {
               try {
-                await initVault({});
+                await newVault({});
                 await vaultStore.loadVaultKeys();
               } catch (err) {
                 errorDialog.showError(null, String(err));
@@ -97,7 +97,7 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
           <button
             onClick={async () => {
               try {
-                await initVault({});
+                await newVault({});
                 await vaultStore.loadVaultKeys();
               } catch (err) {
                 errorDialog.showError(null, String(err));

@@ -175,7 +175,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::settings::get_app_settings,
             handlers::vault::update_vault::update_vault,
             handlers::vault::delete_vault::delete_vault,
-            handlers::vault::get_vault::init_vault,
+            handlers::vault::new_vault::new_vault,
             handlers::vault::get_vault::get_vault,
             handlers::vault::get_vault::list_vaults,
             handlers::vault::get_decrypted_credential::get_decrypted_credential,
