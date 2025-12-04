@@ -2,10 +2,10 @@ import React from 'react';
 
 import {useDialog} from '@/components/Dialog';
 import {useVaultStore} from '@/mobx/VaultStore';
-import {CombinedListItem} from '@/pages/Manager/Secrets/CombinedList/CombinedListItem';
+import {CredentialItem} from '@/pages/Manager/Secrets/CredentialItem';
 import {DeleteCredentialDialog} from '@/pages/Manager/Secrets/DeleteCredentialDialog';
 import {EmptyVaultMessage} from '@/pages/Manager/Secrets/SecretsList/EmptyVaultMessage';
-import {secretsList} from '@/pages/Manager/Secrets.css';
+import {secretItemValue, secretItemValueVault, secretsList} from '@/pages/Manager/Secrets.css';
 import type {CredentialKey, ItemKey} from '@/utils/CredentialKey';
 
 type Props = {
@@ -42,13 +42,19 @@ export const CombinedList: React.FC<Props> = ({selectedVaults, onEdit}) => {
     <>
       <div className={secretsList({clickable: true})}>
         {flatCreds.map((credKey) => (
-          <CombinedListItem
-            key={`${credKey.itemKey}/${credKey.credKey}`}
-            hasMultipleVaults={hasMultipleVaults}
-            onEdit={onEdit}
-            onDelete={onDelete}
+          <CredentialItem
+            key={`${credKey.vaultKey}/${credKey.itemKey}/${credKey.credKey}`}
             credKey={credKey}
-          />
+            onClick={onEdit}
+            onDelete={onDelete}
+          >
+            <code className={secretItemValue}>
+              {hasMultipleVaults && (
+                <span className={secretItemValueVault}>{credKey.vaultKey}/</span>
+              )}
+              {credKey.itemKey}/{credKey.credKey}
+            </code>
+          </CredentialItem>
         ))}
       </div>
       {selectedCredentialKey && (

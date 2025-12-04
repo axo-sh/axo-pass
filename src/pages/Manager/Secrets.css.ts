@@ -75,16 +75,6 @@ export const secretItemValueVault = style({
   color: colorVar.dim50,
 });
 
-export const secretItemValueCode = style({
-  display: 'inline-block',
-  padding: spacing(1 / 2, 2 / 3),
-  fontFamily: vars.fonts.monospace,
-  border: `1px solid ${colorVar.light10}`,
-  lineHeight: 1,
-  borderRadius: 6,
-  vars: accentScheme,
-});
-
 export const secretItemCredentialSecret = style({
   margin: spacing(0.5, 0, 0, 0),
   border: `1px solid ${colorVar.light10}`,
