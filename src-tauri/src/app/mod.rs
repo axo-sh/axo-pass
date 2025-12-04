@@ -1,8 +1,10 @@
 mod app_mode;
 mod app_state;
+mod config;
 mod handlers;
 mod password_request;
 mod protocols;
+mod updates;
 
 use std::sync::Mutex;
 
@@ -14,6 +16,7 @@ use crate::app::app_mode::AppMode;
 use crate::app::app_state::AppState;
 use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryState};
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
+use crate::app::updates::check_for_updates;
 
 const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
 
@@ -107,6 +110,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_cli::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             match cmd {
                 Some(AxoAppCommand::Pinentry) => {
@@ -122,6 +126,12 @@ pub fn run(cmd: Option<AxoAppCommand>) {
                 None => {
                     app.handle().manage(AppMode::App);
                     app.handle().manage(Mutex::new(AppState::new()));
+
+                    // check for updates on startup
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        check_for_updates(app_handle).await;
+                    });
                 },
             }
 
