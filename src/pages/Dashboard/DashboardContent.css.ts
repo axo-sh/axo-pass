@@ -9,6 +9,7 @@ import {spacing} from '@/styles/utils';
 export const dashboardContent = style({
   paddingLeft: spacing(2),
   paddingRight: spacing(2),
+  paddingBottom: spacing(4),
   overflowY: 'scroll',
   overflowX: 'hidden',
 });

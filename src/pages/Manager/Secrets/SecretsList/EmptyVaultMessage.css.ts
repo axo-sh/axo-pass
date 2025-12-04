@@ -11,5 +11,5 @@ export const emptyVault = style({
 
 export const emptyVaultIcon = style({
   marginTop: spacing(1),
-  marginBottom: spacing(2),
+  marginBottom: spacing(1),
 });
