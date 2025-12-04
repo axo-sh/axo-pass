@@ -32,7 +32,7 @@ pub async fn cmd_list_managed_keys() {
             cprintln!("<green>Public Key:</green>\n{}", b64.encode(pub_key));
         }
         if i < keys.len() - 1 {
-            println!("");
+            println!();
         };
     }
 }

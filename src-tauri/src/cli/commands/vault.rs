@@ -28,7 +28,7 @@ impl VaultCommand {
     fn cmd_list_vaults(&self) {
         let vm = VaultsManager::new();
         cprintln!("<green>Vaults:</green>");
-        if vm.iter_vault_keys().next() == None {
+        if vm.iter_vault_keys().next().is_none() {
             println!("<no vaults>");
             return;
         }

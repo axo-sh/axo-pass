@@ -104,7 +104,7 @@ impl VaultsManager {
         Command::new("trash")
             .arg(&vw.path)
             .output()
-            .map_err(|e| Error::VaultDeleteError(e))?;
+            .map_err(Error::VaultDeleteError)?;
         Ok(())
     }
 
