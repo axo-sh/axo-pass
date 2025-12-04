@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -10,16 +10,23 @@ pub enum ReadError {
 
     #[error("Error reading from stdin: {0}")]
     FailedToReadStdin(#[source] std::io::Error),
+
+    #[error("No input provided via file or stdin")]
+    NoInputProvided,
 }
 
 pub fn read_file_or_stdin(file_path: &Option<PathBuf>) -> Result<Vec<u8>, ReadError> {
     if let Some(path) = file_path {
-        std::fs::read(path).map_err(ReadError::FileReadError)
-    } else {
+        return std::fs::read(path).map_err(ReadError::FileReadError);
+    }
+
+    if !std::io::stdin().is_terminal() {
         let mut buffer = Vec::new();
         std::io::stdin()
             .read_to_end(&mut buffer)
             .map_err(ReadError::FailedToReadStdin)?;
-        Ok(buffer)
+        return Ok(buffer);
     }
+
+    Err(ReadError::NoInputProvided)
 }
