@@ -95,6 +95,10 @@
           }
         }
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0QjA5NDQyQ0VEODJBMzQKUldRMEt0ak9RcFN3NU8xM0Y3L0F5NEtCUHpkdnVkaVV5d29lYnhaTjlLRmd5T291dUhkbTBEN2wK",
+      "endpoints": ["https://axo.sh/releases.json"]
     }
   },
   "app": {
