@@ -1,13 +1,17 @@
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::app::updates::{UpdateCheckRecord, UpdateCheckResult};
 use crate::core::dirs::app_data_dir;
+use crate::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 
 const CONFIG_FILENAME: &str = "config.toml";
+
+pub static APP_CONFIG: LazyLock<Mutex<AppConfig>> =
+    LazyLock::new(|| Mutex::new(AppConfig::load_or_create()));
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AppConfig {
@@ -20,7 +24,7 @@ impl AppConfig {
         app_data_dir().join(CONFIG_FILENAME)
     }
 
-    pub fn load_or_create() -> Self {
+    fn load_or_create() -> Self {
         let path = Self::config_path();
         if path.exists() {
             match fs::read_to_string(&path) {

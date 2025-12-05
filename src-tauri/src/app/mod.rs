@@ -1,10 +1,9 @@
 mod app_mode;
 mod app_state;
-mod config;
+
 mod handlers;
 mod password_request;
 mod protocols;
-mod updates;
 
 use std::sync::Mutex;
 
@@ -16,7 +15,7 @@ use crate::app::app_mode::AppMode;
 use crate::app::app_state::AppState;
 use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryState};
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
-use crate::app::updates::check_for_updates;
+use crate::core::updates::check_for_updates;
 
 const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
 
