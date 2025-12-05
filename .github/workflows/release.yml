@@ -60,7 +60,12 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           # APPLE_API_KEY_PATH is set in the previous step
+
+          # Update metadata
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Build metadata
+
           TAURI_APP_BUILD_SHA: ${{ github.sha }}
           TAURI_APP_BUILT_AT: ${{ github.event.head_commit.timestamp }}
 
