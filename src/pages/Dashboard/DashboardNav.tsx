@@ -4,9 +4,10 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconForms,
+  IconHelpSquareRoundedFilled,
   IconKeyFilled,
   IconPlus,
-  IconSettingsFilled,
+  IconTerminal2,
   IconTriangle,
 } from '@tabler/icons-react';
 import {observer} from 'mobx-react-lite';
@@ -19,6 +20,7 @@ import {useVaultStore} from '@/mobx/VaultStore';
 import {
   nav,
   navLink,
+  navLinkSeparator,
   navLinks,
   navLogo,
   navNestedLink,
@@ -94,8 +96,19 @@ export const DashboardNav: React.FC = observer(() => {
         </li>
         <li>
           <Link className={navLink} href="/dashboard/settings">
-            <IconSettingsFilled size={18} /> Settings
+            <IconTerminal2 size={18} /> Setup
           </Link>
+        </li>
+        <li className={navLinkSeparator} />
+        <li>
+          <a
+            className={navLink}
+            href="https://tally.so/r/QKKXQk"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            <IconHelpSquareRoundedFilled size={18} /> Feedback
+          </a>
         </li>
       </ul>
     </nav>

@@ -15,7 +15,7 @@ export const Settings: React.FC = () => {
   const escapedAppBundlePath = appBundlePath.replace(/ /g, '\\ ');
   return (
     <>
-      <DashboardContentHeader title="Settings" />
+      <DashboardContentHeader title="Setup Axo Pass" />
 
       <DashboardSection title="GPG">
         <div>

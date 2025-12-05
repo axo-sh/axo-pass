@@ -65,6 +65,14 @@ export const navLink = style({
   },
 });
 
+export const navLinkSeparator = style({
+  borderTopWidth: 1,
+  borderTopStyle: 'solid',
+  borderTopColor: colorVar.light20,
+  marginTop: spacing(1),
+  marginBottom: spacing(1),
+});
+
 globalStyle(`${navLink} svg`, {
   opacity: 0.3,
 });
