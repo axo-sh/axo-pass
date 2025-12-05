@@ -184,6 +184,8 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::settings::get_app_settings,
             handlers::updates::check_updates,
             handlers::updates::get_update_status,
+            handlers::updates::get_update_check_disabled,
+            handlers::updates::set_update_check_disabled,
             handlers::vault::update_vault::update_vault,
             handlers::vault::delete_vault::delete_vault,
             handlers::vault::add_vault::add_vault,

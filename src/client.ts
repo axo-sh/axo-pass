@@ -177,3 +177,12 @@ export const getUpdateStatus = async (): Promise<UpdateStatusResponse> => {
 export const checkUpdates = async (): Promise<UpdateStatusResponse> => {
   return await invoke<UpdateStatusResponse>('check_updates');
 };
+
+export const getUpdateCheckDisabled = async (): Promise<boolean> => {
+  const response = await invoke<{disabled: boolean}>('get_update_check_disabled');
+  return response.disabled;
+};
+
+export const setUpdateCheckDisabled = async (disabled: boolean): Promise<void> => {
+  return await invoke<void>('set_update_check_disabled', {disabled});
+};

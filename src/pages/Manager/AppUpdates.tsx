@@ -1,17 +1,25 @@
 import React from 'react';
 
 import {IconRefresh} from '@tabler/icons-react';
+import {toast} from 'sonner';
 
 import type {UpdateStatusResponse} from '@/binding';
-import {checkUpdates, getUpdateStatus} from '@/client';
+import {
+  checkUpdates,
+  getUpdateCheckDisabled,
+  getUpdateStatus,
+  setUpdateCheckDisabled,
+} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {Loader} from '@/components/Loader';
+import {Toggle} from '@/components/Toggle';
 import {updateCheckDate} from '@/pages/Manager/AppUpdates.css';
 import {useClient} from '@/utils/useClient';
 
 export const AppUpdates: React.FC = () => {
   const {result, reload} = useClient(getUpdateStatus);
+  const {result: updateCheckDisabled, reload: reloadDisabled} = useClient(getUpdateCheckDisabled);
   const [checking, setChecking] = React.useState(false);
 
   const handleCheckUpdates = async () => {
@@ -24,7 +32,15 @@ export const AppUpdates: React.FC = () => {
     }
   };
 
-  if (!result) {
+  const handleToggleAutoUpdate = async (checked: boolean) => {
+    await setUpdateCheckDisabled(!checked);
+    await reloadDisabled();
+    toast.success(
+      checked ? 'Automatic update checks enabled.' : 'Automatic update checks disabled.',
+    );
+  };
+
+  if (!result || updateCheckDisabled === undefined) {
     return <Loader />;
   }
 
@@ -41,6 +57,9 @@ export const AppUpdates: React.FC = () => {
           Check for Updates
         </button>
       </div>
+      <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate}>
+        Automatically check for updates
+      </Toggle>
     </>
   );
 };

@@ -71,6 +71,10 @@ export interface NewVaultRequest {
   vault_key?: string;
 }
 
+export interface UpdateCheckDisabledStatusResponse {
+  disabled: boolean;
+}
+
 export interface UpdateItemRequest {
   vault_key: string;
   item_key: string;

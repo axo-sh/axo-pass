@@ -67,3 +67,32 @@ pub async fn get_update_status() -> Result<UpdateStatusResponse, String> {
         .map_err(|e| format!("Failed to acquire config lock: {e}"))?;
     Ok(UpdateStatusResponse::from(config.updates.as_ref()))
 }
+
+#[derive(Serialize, Debug)]
+#[typeshare]
+pub struct UpdateCheckDisabledStatusResponse {
+    pub disabled: bool,
+}
+
+#[tauri::command]
+pub async fn get_update_check_disabled() -> Result<UpdateCheckDisabledStatusResponse, String> {
+    let config = APP_CONFIG
+        .lock()
+        .map_err(|e| format!("Failed to acquire config lock: {e}"))?;
+    Ok(UpdateCheckDisabledStatusResponse {
+        disabled: config.update_check_disabled.unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub async fn set_update_check_disabled(disabled: bool) -> Result<(), String> {
+    log::debug!("command: set_update_check_disabled={disabled}");
+    let mut config = APP_CONFIG
+        .lock()
+        .map_err(|e| format!("Failed to acquire config lock: {e}"))?;
+    config.update_check_disabled = Some(disabled);
+    config
+        .save()
+        .map_err(|e| format!("Failed to save config: {e}"))?;
+    Ok(())
+}
