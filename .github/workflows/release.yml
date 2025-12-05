@@ -72,7 +72,7 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: 'Axo Pass v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseBody: 'Download the .dmg file below to install Axo Pass on your Mac.'
           releaseDraft: true
           prerelease: true
           args: '--target aarch64-apple-darwin --config src-tauri/tauri.conf.release.json'
