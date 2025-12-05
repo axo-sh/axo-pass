@@ -1,8 +1,9 @@
 pub mod commands;
 
-use std::io::Write;
+use std::io::{self, Write};
 
-use clap::{Parser, Subcommand, command};
+use clap::{CommandFactory, Parser, Subcommand, command};
+use clap_complete::{Shell, generate};
 use color_print::cwriteln;
 use log::LevelFilter;
 
@@ -42,6 +43,12 @@ pub enum AxoPassCommand {
 
     /// Show version and build
     Info,
+
+    #[command(hide = true)]
+    Complete {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 impl AxoPassCommand {
@@ -67,6 +74,14 @@ impl AxoPassCommand {
                 println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));
                 println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
                 println!("Vault dir: {}", vaults_dir().display());
+            },
+            AxoPassCommand::Complete { shell } => {
+                /*
+                add the following to ~/.zshrc:
+                source <(ap complete zsh)
+                */
+                let mut cmd = AxoPassCli::command();
+                generate(*shell, &mut cmd, "ap", &mut io::stdout());
             },
         }
     }

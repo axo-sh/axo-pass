@@ -57,6 +57,7 @@ color-print = "0.3.7"
 tauri-plugin-clipboard-manager = "2"
 tauri-utils = "2.8.0"
 time = { version = "0.3.44", features = ["serde", "serde-well-known"] }
+clap_complete = "4.5.61"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
