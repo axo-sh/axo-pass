@@ -64,8 +64,8 @@ jobs:
           # Update metadata
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Build metadata
 
+          # Build metadata
           TAURI_APP_BUILD_SHA: ${{ github.sha }}
           TAURI_APP_BUILT_AT: ${{ github.event.head_commit.timestamp }}
 
@@ -75,4 +75,4 @@ jobs:
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: true
-          args: '--target aarch64-apple-darwin'
+          args: '--target aarch64-apple-darwin --config src-tauri/tauri.conf.release.json'
