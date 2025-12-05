@@ -49,8 +49,7 @@ pub struct Vault {
     #[serde_as(as = "Base64")]
     pub file_key: Vec<u8>, // encrypted file key
 
-    #[serde(flatten)]
-    pub data: BTreeMap<String, VaultItem>,
+    pub items: BTreeMap<String, VaultItem>,
 }
 
 impl Vault {
@@ -69,7 +68,7 @@ impl Vault {
             id: vault_id,
             name,
             file_key: file_key.into_bytes(),
-            data: BTreeMap::new(),
+            items: BTreeMap::new(),
         })
     }
 }

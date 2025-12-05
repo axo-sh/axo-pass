@@ -173,11 +173,11 @@ impl VaultWrapper {
     }
 
     pub fn list_items(&self) -> impl Iterator<Item = (&String, &VaultItem)> {
-        self.vault.data.iter()
+        self.vault.items.iter()
     }
 
     pub fn get_item(&self, item_key: &str) -> Option<&VaultItem> {
-        self.vault.data.get(item_key)
+        self.vault.items.get(item_key)
     }
 
     pub fn add_item(&mut self, item_title: String, item_key: String) -> Result<(), Error> {
@@ -186,7 +186,7 @@ impl VaultWrapper {
             return Err(Error::InvalidItemKey(item_key));
         }
         self.vault
-            .data
+            .items
             .entry(item_key)
             .or_insert_with(|| VaultItem {
                 id: Uuid::new_v4(),
@@ -206,7 +206,7 @@ impl VaultWrapper {
         let mut encrypted_values: BTreeMap<String, String> = BTreeMap::new();
         let item = self
             .vault
-            .data
+            .items
             .get(item_key)
             .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
 
@@ -224,7 +224,7 @@ impl VaultWrapper {
         // Now update the item with mutable access
         let item = self
             .vault
-            .data
+            .items
             .get_mut(item_key)
             .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
 
@@ -249,7 +249,7 @@ impl VaultWrapper {
     }
 
     pub fn delete_item(&mut self, item_key: &str) -> anyhow::Result<()> {
-        if self.vault.data.remove(item_key).is_none() {
+        if self.vault.items.remove(item_key).is_none() {
             log::debug!("Did not find item {item_key} to delete");
         };
         Ok(())
@@ -277,7 +277,7 @@ impl VaultWrapper {
         // get ids and encrypt credential value
         let (item_id, cred_id) = self
             .vault
-            .data
+            .items
             .get(&item_key)
             .map(|i| {
                 (
@@ -295,7 +295,7 @@ impl VaultWrapper {
         // get the entry in data or create it
         let entry = self
             .vault
-            .data
+            .items
             .entry(item_key.clone())
             .and_modify(|i| {
                 // Only update title if a non-empty title is provided
@@ -333,7 +333,7 @@ impl VaultWrapper {
         let Some(cipher) = &self.cipher else {
             return Err(Error::VaultLocked);
         };
-        let Some(item) = self.vault.data.get(item_key) else {
+        let Some(item) = self.vault.items.get(item_key) else {
             return Ok(None);
         };
         let Some(cred) = item.credentials.get(credential_key) else {
@@ -373,7 +373,7 @@ impl VaultWrapper {
     ) -> anyhow::Result<Option<&VaultItemCredential>> {
         let item = self
             .vault
-            .data
+            .items
             .get(item_key)
             .ok_or_else(|| anyhow!("Item {item_key} not found."))?;
 
@@ -392,7 +392,7 @@ impl VaultWrapper {
     ) -> anyhow::Result<()> {
         let item = self
             .vault
-            .data
+            .items
             .get_mut(item_key)
             .ok_or_else(|| anyhow!("Item {item_key} not found."))?;
 

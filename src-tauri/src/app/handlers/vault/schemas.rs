@@ -24,7 +24,7 @@ impl From<&VaultWrapper> for VaultSchema {
             path: vw.path.to_string_lossy().to_string(),
             data: vw
                 .vault
-                .data
+                .items
                 .iter()
                 .map(|(key, item)| (key.clone(), item.into()))
                 .collect(),
