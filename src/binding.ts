@@ -105,3 +105,27 @@ export interface VaultSchema {
 export interface VaultResponse {
   vault: VaultSchema;
 }
+
+export type UpdateStatusResponse =
+  | {
+      status: 'update_available';
+      data: {
+        version: string;
+        checked_at_rfc3339: string;
+      };
+    }
+  | {
+      status: 'up_to_date';
+      data: {
+        version: string;
+        checked_at_rfc3339: string;
+      };
+    }
+  | {
+      status: 'error';
+      data: {
+        error: string;
+        checked_at_rfc3339: string;
+      };
+    }
+  | {status: 'not_checked'; data?: undefined};

@@ -11,6 +11,7 @@ import type {
   ListVaultsResponse,
   NewVaultRequest,
   UpdateItemRequest,
+  UpdateStatusResponse,
   UpdateVaultRequest,
   VaultInfo,
   VaultResponse,
@@ -167,4 +168,12 @@ export const updateVault = async (request: UpdateVaultRequest): Promise<void> =>
 
 export const deleteVault = async (vaultKey: string): Promise<void> => {
   return await invoke<void>('delete_vault', {request: {vault_key: vaultKey}});
+};
+
+export const getUpdateStatus = async (): Promise<UpdateStatusResponse> => {
+  return await invoke<UpdateStatusResponse>('get_update_status');
+};
+
+export const checkUpdates = async (): Promise<UpdateStatusResponse> => {
+  return await invoke<UpdateStatusResponse>('check_updates');
 };

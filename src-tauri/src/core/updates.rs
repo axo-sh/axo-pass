@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tauri_plugin_updater::UpdaterExt;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use crate::core::config::APP_CONFIG;
 
@@ -19,22 +19,30 @@ pub enum UpdateCheckResult {
     Error { error: String },
 }
 
-pub async fn check_for_updates(app_handle: tauri::AppHandle) {
+pub async fn check_for_updates(app_handle: tauri::AppHandle, force: bool) {
     // Check updates in a block to release the lock early
-    if let Ok(config) = APP_CONFIG.lock() {
-        if config.update_check_disabled.unwrap_or(false) {
-            log::debug!("Skipping update check: Update checks are disabled.");
+    let now = OffsetDateTime::now_utc();
+    if force {
+        if let Ok(config) = APP_CONFIG.lock()
+            && let Some(ref updates) = config.updates
+            && now - updates.checked_at < Duration::minutes(5)
+        {
+            log::debug!("Skipping update check: too soon after last check.");
             return;
         }
+    } else if let Ok(config) = APP_CONFIG.lock() {
+        if config.update_check_disabled.unwrap_or(false) {
+            log::debug!("Skipping update check: Update checks are disabled.");
+        }
         if let Some(ref updates) = config.updates
-            && updates.checked_at.date() == OffsetDateTime::now_utc().date()
+            && updates.checked_at.date() == now.date()
         {
             log::debug!("Skipping update check: Already checked today.");
             if let UpdateCheckResult::UpdateAvailable { version } = &updates.result {
                 log::info!("Update available (cached): {version}");
             }
-            return;
         }
+        return;
     } else {
         log::warn!("Failed to acquire config lock for update check.");
         return;

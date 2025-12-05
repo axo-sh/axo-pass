@@ -3,6 +3,7 @@ import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
 import {DashboardSection} from '@/pages/Dashboard/DashboardSection';
+import {AppUpdates} from '@/pages/Manager/AppUpdates';
 import {useClient} from '@/utils/useClient';
 
 export const Settings: React.FC = () => {
@@ -52,6 +53,10 @@ export const Settings: React.FC = () => {
       <DashboardSection title="Vaults">
         Vaults are saved to the directory below. You can back up or sync this folder as needed.
         <CodeBlock canCopy>{result?.vaults_dir}</CodeBlock>
+      </DashboardSection>
+
+      <DashboardSection title="Updates">
+        <AppUpdates />
       </DashboardSection>
     </>
   );

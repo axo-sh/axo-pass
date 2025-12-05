@@ -129,7 +129,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
                     // check for updates on startup
                     let app_handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
-                        check_for_updates(app_handle).await;
+                        check_for_updates(app_handle, false).await;
                     });
                 },
             }
@@ -182,6 +182,8 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::user_authorization::send_pinentry_response,
             handlers::user_authorization::send_askpass_response,
             handlers::settings::get_app_settings,
+            handlers::updates::check_updates,
+            handlers::updates::get_update_status,
             handlers::vault::update_vault::update_vault,
             handlers::vault::delete_vault::delete_vault,
             handlers::vault::add_vault::add_vault,
