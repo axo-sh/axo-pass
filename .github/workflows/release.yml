@@ -70,8 +70,8 @@ jobs:
           TAURI_APP_BUILT_AT: ${{ github.event.head_commit.timestamp }}
 
         with:
-          tagName: app-v__VERSION__
-          releaseName: 'Axo Pass v__VERSION__'
+          tagName: v__VERSION__
+          releaseName: 'v__VERSION__'
           releaseBody: 'Download the .dmg file below to install Axo Pass on your Mac.'
           releaseDraft: true
           prerelease: false
