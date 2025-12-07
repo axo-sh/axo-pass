@@ -4,7 +4,6 @@ import {IconPlus, IconSettings} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {Link} from 'wouter';
 
-import {addVault} from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {useDialog} from '@/components/Dialog';
@@ -15,10 +14,12 @@ import {Toolbar} from '@/components/Toolbar';
 import {useVaultStore} from '@/mobx/VaultStore';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
 import {AddSecretDialog} from '@/pages/Manager/Secrets/AddSecretDialog';
+import {AddVaultDialog, type AddVaultDialogHandle} from '@/pages/Manager/Secrets/AddVaultDialog';
 import {CombinedList} from '@/pages/Manager/Secrets/CombinedList';
 import {EditSecretDialog} from '@/pages/Manager/Secrets/EditSecretDialog';
 import {SecretsList} from '@/pages/Manager/Secrets/SecretsList';
 import type {ItemKey} from '@/utils/CredentialKey';
+import {useClient} from '@/utils/useClient';
 
 type Props = {
   vaultKey: string;
@@ -27,32 +28,22 @@ type Props = {
 export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
   const addSecretDialog = useDialog();
   const errorDialog = useErrorDialog();
+  const vaultStore = useVaultStore();
+  const addVaultDialogRef = React.useRef<AddVaultDialogHandle>(null);
+
   const [selectedItemKey, setSelectedItemKey] = React.useState<ItemKey | null>(null);
   const [showFlat, setShowCombined] = React.useState<boolean>(false);
-  const vaultStore = useVaultStore();
-  const [ready, setReady] = React.useState(false);
-  const [error, setError] = React.useState<unknown>(null);
 
   const showAllVaults = vaultKey === 'all';
 
-  React.useEffect(() => {
-    const loadVaults = async () => {
-      setReady(false);
-      setError(null);
-      try {
-        if (showAllVaults) {
-          vaultStore.reloadAll();
-        } else {
-          vaultStore.reload(vaultKey);
-        }
-      } catch (err) {
-        setError(err);
-      } finally {
-        setReady(true);
-      }
-    };
-    loadVaults();
-  }, [vaultKey, vaultStore]);
+  const {ready, error} = useClient(async () => {
+    if (showAllVaults) {
+      await vaultStore.reloadAll();
+    } else {
+      await vaultStore.reload(vaultKey);
+    }
+    return true;
+  });
 
   const editSecretDialog = useDialog();
 
@@ -62,19 +53,6 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
       return (
         <Flex column align="center" justify="center">
           <h2>Vault not found.</h2>
-          <button
-            onClick={async () => {
-              try {
-                await addVault({});
-                await vaultStore.loadVaultKeys();
-              } catch (err) {
-                errorDialog.showError(null, String(err));
-              }
-            }}
-            className={button({size: 'large'})}
-          >
-            Create new vault
-          </button>
         </Flex>
       );
     }
@@ -95,19 +73,25 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
         <Flex column align="center" justify="center">
           <h2>No vaults found.</h2>
           <button
-            onClick={async () => {
-              try {
-                await addVault({});
-                await vaultStore.loadVaultKeys();
-              } catch (err) {
-                errorDialog.showError(null, String(err));
-              }
+            onClick={() => {
+              addVaultDialogRef.current?.open();
             }}
             className={button({size: 'large'})}
           >
             Create New Vault
           </button>
         </Flex>
+        <AddVaultDialog
+          ref={addVaultDialogRef}
+          onSubmit={async (name, key) => {
+            try {
+              await vaultStore.addVault(name, key);
+              await vaultStore.reload(key);
+            } catch (error) {
+              errorDialog.showError(null, String(error));
+            }
+          }}
+        />
       </>
     );
   }

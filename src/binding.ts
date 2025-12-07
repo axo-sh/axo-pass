@@ -68,7 +68,7 @@ export interface ListVaultsResponse {
 
 export interface NewVaultRequest {
   vault_name?: string;
-  vault_key?: string;
+  vault_key: string;
 }
 
 export interface UpdateCheckDisabledStatusResponse {

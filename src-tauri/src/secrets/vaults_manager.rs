@@ -5,7 +5,9 @@ use std::process::Command;
 
 use crate::core::dirs::vaults_dir;
 use crate::secrets::errors::Error;
-use crate::secrets::vault_wrapper::{VaultWrapper, get_vault_encryption_key, validate_key};
+use crate::secrets::vault_wrapper::{
+    VaultWrapper, get_vault_encryption_key, normalize_key, validate_key,
+};
 
 #[derive(Default)]
 pub struct VaultsManager {
@@ -25,8 +27,9 @@ impl VaultsManager {
     pub fn add_vault(
         &mut self,
         name: Option<String>,
-        vault_key: String,
+        vault_key: &str,
     ) -> Result<&VaultWrapper, Error> {
+        let vault_key = normalize_key(vault_key);
         if !validate_key(&vault_key) {
             return Err(Error::InvalidVaultKey(vault_key));
         }

@@ -5,13 +5,12 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::vault::get_vault::VaultResponse;
-use crate::secrets::vault_wrapper::normalize_key;
 
 #[derive(Deserialize)]
 #[typeshare]
 pub struct NewVaultRequest {
     vault_name: Option<String>,
-    vault_key: Option<String>,
+    vault_key: String,
 }
 
 #[tauri::command]
@@ -24,16 +23,9 @@ pub async fn add_vault(
         .lock()
         .map_err(|e| format!("Failed to lock app state: {e}"))?;
 
-    let Some(vault_key) = request
-        .vault_key
-        .or_else(|| request.vault_name.clone().map(|name| normalize_key(&name)))
-    else {
-        return Err("Vault key is required".to_string());
-    };
-
     let vw = state
         .vaults
-        .add_vault(request.vault_name, vault_key)
+        .add_vault(request.vault_name, &request.vault_key)
         .map_err(|e| format!("Failed to create new vault: {e}"))?;
 
     Ok(VaultResponse { vault: vw.into() })
