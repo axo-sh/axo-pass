@@ -20,13 +20,19 @@ type Props = {
     key_path?: string | null;
   };
   onResponse: (response: PasswordResponse) => void;
-  serviceName?: string;
+  serviceName?: 'GPG' | 'SSH' | 'Key';
 };
 
 export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceName = 'Key'}) => {
   const [inputValue, setInputValue] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [saveToKeychain, setSaveToKeychain] = React.useState(true);
+
+  // Get the key identifier (either key_id or key_path)
+  const keyIdentifier = request.key_id || request.key_path;
+  const description = request.description;
+  const passwordStr = serviceName === 'GPG' ? 'Passphrase' : 'Password';
+  const prompt = request.prompt || `Enter ${passwordStr}`;
 
   const handleSubmit = async (success: boolean) => {
     try {
@@ -50,26 +56,21 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
     try {
       onResponse('use_saved_password');
     } catch (error) {
-      console.error('Error using saved password:', error);
-      alert(`Error using saved password: ${error}`);
+      console.error('Error using saved passphrase:', error);
+      alert(`Error using saved ${passwordStr.toLowerCase()}: ${error}`);
     }
   };
-
-  // Get the key identifier (either key_id or key_path)
-  const keyIdentifier = request.key_id || request.key_path;
-  const description = request.description;
-  const prompt = request.prompt || 'Enter password';
 
   if (request.attempting_saved_password) {
     return (
       <Layout className={passwordRequest}>
         <LayoutTitle icon={IconCircleKeyFilled} centered>
-          Password Required
+          {serviceName} {passwordStr} Required
         </LayoutTitle>
         <Flex column>
           {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
           <Card loading>
-            <p>Requesting authentication to unlock your saved passphrase...</p>
+            <p>Requesting authentication to unlock your saved {passwordStr.toLowerCase()}...</p>
           </Card>
         </Flex>
       </Layout>
@@ -79,14 +80,14 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
   return (
     <Layout className={passwordRequest}>
       <LayoutTitle icon={IconCircleKeyFilled} centered>
-        {serviceName} Password Required
+        {serviceName} {passwordStr} Required
       </LayoutTitle>
       <Flex column>
         {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
 
         {request.has_saved_password && (
           <Card>
-            <p>A password is saved for this key in your keychain.</p>
+            <p>A {passwordStr.toLowerCase()} is saved for this key in your keychain.</p>
             <Flex justify="end">
               <button className={button()} onClick={() => handleUseSavedPassword()}>
                 Unlock
@@ -123,7 +124,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
                   checked={saveToKeychain}
                   onChange={(e) => setSaveToKeychain(e.target.checked)}
                 />
-                <span>Save password to keychain</span>
+                <span>Save {passwordStr.toLowerCase()} to keychain</span>
               </Flex>
             </Card>
           )}
@@ -147,7 +148,7 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
                 checked={showPassword}
                 onChange={(e) => setShowPassword(e.target.checked)}
               />
-              Show password
+              Show {passwordStr.toLowerCase()}
             </Flex>
           </Flex>
         </Form>
