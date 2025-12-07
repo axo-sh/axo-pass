@@ -32,6 +32,12 @@ export class VaultStore {
         const nameB = b.name || b.key;
         return nameA.localeCompare(nameB);
       });
+      // remove deleted vaults
+      for (const [key] of this.vaults) {
+        if (!vaultKeys.find((vk) => vk.key === key)) {
+          this.vaults.delete(key);
+        }
+      }
     });
   }
 
