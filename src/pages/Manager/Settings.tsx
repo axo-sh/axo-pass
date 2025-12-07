@@ -61,7 +61,7 @@ export const Settings: React.FC = () => {
         <CodeBlock canCopy>alias ap="{escapedAppBundlePath}/bin/ap"</CodeBlock>
 
         <div>Alternatively, you can symlink the binary to a directory in your PATH, e.g.:</div>
-        <CodeBlock canCopy>ln -s "{escapedAppBundlePath}/bin/ap" /usr/local/bin/ap</CodeBlock>
+        <CodeBlock canCopy>ln -s "{appBundlePath}/bin/ap" /usr/local/bin/ap</CodeBlock>
 
         <div>
           For <Code>zsh</Code> autocomplete, add the following to your <Code>~/.zshrc</Code>:
