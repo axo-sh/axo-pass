@@ -2,7 +2,7 @@ import React from 'react';
 
 import {IconPlus, IconSettings} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
-import {Link} from 'wouter';
+import {Link, useLocation} from 'wouter';
 
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
@@ -26,6 +26,7 @@ type Props = {
 };
 
 export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
+  const [, setLocation] = useLocation();
   const addSecretDialog = useDialog();
   const errorDialog = useErrorDialog();
   const vaultStore = useVaultStore();
@@ -87,6 +88,8 @@ export const Secrets: React.FC<Props> = observer(({vaultKey}) => {
             try {
               await vaultStore.addVault(name, key);
               await vaultStore.reload(key);
+              // navigate to the new vault
+              setLocation(`/dashboard/secrets/${key}`);
             } catch (error) {
               errorDialog.showError(null, String(error));
             }
