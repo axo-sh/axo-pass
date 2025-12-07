@@ -5,10 +5,11 @@ import {colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const nav = style({
+  display: 'flex',
+  flexDirection: 'column',
   borderRightWidth: 1,
   borderRightStyle: 'solid',
   borderRightColor: colorVar.light20,
-
   paddingTop: spacing(1),
   paddingLeft: spacing(2),
   paddingRight: spacing(3 / 2),
@@ -20,8 +21,11 @@ export const nav = style({
 export const navLinks = style({
   listStyle: 'none',
   padding: 0,
+  paddingBottom: spacing(1),
   margin: 0,
-  display: 'grid',
+  display: 'flex',
+  flexDirection: 'column',
+  flexGrow: 1,
   gap: 1,
 });
 
@@ -56,7 +60,6 @@ export const navLink = style({
   alignItems: 'center',
   gap: spacing(3 / 4),
   padding: spacing(1 / 2, 3 / 4),
-  flexGrow: 1,
   borderRadius: 8,
   transition: 'background-color 0.2s, color 0.2s',
   ':hover': {
@@ -65,11 +68,16 @@ export const navLink = style({
   },
 });
 
+export const navLinkSmall = style({
+  fontSize: vars.scale.sm,
+  padding: spacing(1 / 4, 3 / 4),
+});
+
 export const navLinkSeparator = style({
-  borderTopWidth: 1,
-  borderTopStyle: 'solid',
-  borderTopColor: colorVar.light20,
-  marginTop: spacing(1),
+  flexGrow: 1,
+  borderBottomWidth: 1,
+  borderBottomStyle: 'solid',
+  borderBottomColor: colorVar.light10,
   marginBottom: spacing(1),
 });
 

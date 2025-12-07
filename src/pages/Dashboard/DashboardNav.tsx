@@ -1,15 +1,18 @@
 import React from 'react';
 
 import {
+  IconBrandDiscordFilled,
+  IconBrandGithubFilled,
   IconChevronDown,
   IconChevronRight,
   IconForms,
   IconHelpSquareRoundedFilled,
-  IconKeyFilled,
+  IconKey,
   IconPlus,
   IconTerminal2,
   IconTriangle,
 } from '@tabler/icons-react';
+import cx from 'classnames';
 import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
 
@@ -21,6 +24,7 @@ import {
   nav,
   navLink,
   navLinkSeparator,
+  navLinkSmall,
   navLinks,
   navLogo,
   navNestedLink,
@@ -91,7 +95,7 @@ export const DashboardNav: React.FC = observer(() => {
 
         <li>
           <Link className={navLink} href="/dashboard/gpg">
-            <IconKeyFilled size={18} /> GPG
+            <IconKey size={18} /> Keys
           </Link>
         </li>
         <li>
@@ -102,12 +106,32 @@ export const DashboardNav: React.FC = observer(() => {
         <li className={navLinkSeparator} />
         <li>
           <a
-            className={navLink}
+            className={cx(navLink, navLinkSmall)}
             href="https://tally.so/r/QKKXQk"
             target="_blank"
             rel="noreferrer noopener"
           >
             <IconHelpSquareRoundedFilled size={18} /> Feedback
+          </a>
+        </li>
+        <li>
+          <a
+            className={cx(navLink, navLinkSmall)}
+            href="https://github.com/axo-sh/axo-pass"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            <IconBrandGithubFilled size={18} /> GitHub
+          </a>
+        </li>
+        <li>
+          <a
+            className={cx(navLink, navLinkSmall)}
+            href="https://discord.gg/H6YQRnhb6j"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            <IconBrandDiscordFilled size={18} /> Discord
           </a>
         </li>
       </ul>
