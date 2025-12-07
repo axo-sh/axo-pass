@@ -116,7 +116,7 @@ export const buttonInner = recipe({
   },
 });
 
-globalStyle(`${button.classNames.base} ${loader()}`, {
+globalStyle(`${button.classNames.base} ${loader.classNames.base}`, {
   position: 'absolute',
   top: 0,
   left: 0,

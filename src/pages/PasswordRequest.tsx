@@ -122,17 +122,15 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
             />
           </FormRow>
 
-          {keyIdentifier && !request.has_saved_password && (
-            <Card>
-              <Flex gap={1 / 2} align="center">
-                <input
-                  type="checkbox"
-                  checked={saveToKeychain}
-                  onChange={(e) => setSaveToKeychain(e.target.checked)}
-                />
-                <span>Save {passwordStr.toLowerCase()} to keychain</span>
-              </Flex>
-            </Card>
+          {keyIdentifier && (
+            <Flex gap={1 / 2} align="center">
+              <input
+                type="checkbox"
+                checked={saveToKeychain}
+                onChange={(e) => setSaveToKeychain(e.target.checked)}
+              />
+              <span>Save {passwordStr.toLowerCase()} to keychain</span>
+            </Flex>
           )}
 
           <Flex gap={1 / 2} justify="between">

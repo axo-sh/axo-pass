@@ -9,11 +9,12 @@ type Props = React.PropsWithChildren<{
   className?: string;
   loading?: boolean;
   sectioned?: boolean;
+  error?: boolean;
 }>;
 
-export const Card: React.FC<Props> = ({sectioned, loading, className, children}) => {
+export const Card: React.FC<Props> = ({sectioned, loading, error, className, children}) => {
   return (
-    <div className={cx(card({sectioned}), loading ? loaderBorder : '', className)}>
+    <div className={cx(card({sectioned, error}), loading ? loaderBorder : '', className)}>
       <div className={cardContent}>{children}</div>
     </div>
   );

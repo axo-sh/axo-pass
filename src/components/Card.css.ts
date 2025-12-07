@@ -2,7 +2,7 @@ import {globalStyle, style} from '@vanilla-extract/css';
 import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
-import {colorVar} from '@/styles/colors.css';
+import {colorVar, errorScheme} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const card = recipe({
@@ -19,6 +19,11 @@ export const card = recipe({
     sectioned: {
       true: {
         padding: 0,
+      },
+    },
+    error: {
+      true: {
+        vars: errorScheme,
       },
     },
   },

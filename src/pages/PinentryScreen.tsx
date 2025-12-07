@@ -1,6 +1,5 @@
 import {useEffect, useState} from 'react';
 
-import {IconSquareCheckFilled} from '@tabler/icons-react';
 import {listen} from '@tauri-apps/api/event';
 
 import {type PasswordResponse, type PinentryRequest, sendPinentryResponse} from '@/client';
@@ -47,11 +46,11 @@ export const PinentryScreen = ({initialRequest}: PinentryScreenProps) => {
   }
 
   if ('success' in request) {
+    // show loader because while we have successfully fetched the password, pinentry et al may
+    // report it as incorrect
     return (
       <Layout centered>
-        <LayoutTitle centered icon={IconSquareCheckFilled}>
-          Succeeded
-        </LayoutTitle>
+        <Loader />
       </Layout>
     );
   }
