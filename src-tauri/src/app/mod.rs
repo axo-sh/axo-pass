@@ -87,21 +87,23 @@ fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, prompt: String) {
 }
 
 pub fn run(cmd: Option<AxoAppCommand>) {
-    let mut log_plugin = tauri_plugin_log::Builder::new()
-        .clear_targets()
-        .target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::LogDir {
-                file_name: Some("frittata".to_string()),
-            },
-        ))
-        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
-        .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-        .level(log::LevelFilter::Debug);
+    // logs to file located at
+    // ~/Library/Logs/com.breakfastlabs.frittata/frittata.log
+    let mut log_plugin = tauri_plugin_log::Builder::new().clear_targets();
 
     if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
-        log_plugin = log_plugin.target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::Stderr,
-        ));
+        log_plugin = log_plugin
+            .target(tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::Stderr,
+            ))
+            .target(tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir {
+                    file_name: Some("frittata".to_string()),
+                },
+            ))
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
+            .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+            .level(log::LevelFilter::Debug);
     }
 
     tauri::Builder::default()
