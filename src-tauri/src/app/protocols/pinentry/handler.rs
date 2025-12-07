@@ -72,6 +72,7 @@ impl PinentryServerHandler for PinentryHandler {
         desc: Option<&str>,
         prompt: Option<&str>,
         keyinfo: Option<&str>,
+        skip_saved_password: bool,
     ) -> std::io::Result<String> {
         // use keyinfo (GPG key grip from SETKEYINFO), or else try to extract key ID
         // from desc
@@ -94,7 +95,7 @@ impl PinentryServerHandler for PinentryHandler {
             prompt: prompt.map(String::from),
             key_id: key_id.clone(),
             has_saved_password,
-            attempting_saved_password: has_saved_password,
+            attempting_saved_password: has_saved_password && !skip_saved_password,
         };
 
         self.password_handler
