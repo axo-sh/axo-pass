@@ -46,6 +46,9 @@ export const AppUpdates: React.FC = () => {
 
   return (
     <>
+      <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate} toggleSize={16}>
+        Automatically check for updates
+      </Toggle>
       <UpdateStatusDisplay result={result} />
       <div>
         <button
@@ -57,9 +60,6 @@ export const AppUpdates: React.FC = () => {
           Check for Updates
         </button>
       </div>
-      <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate}>
-        Automatically check for updates
-      </Toggle>
     </>
   );
 };
