@@ -21,7 +21,7 @@ export const nav = style({
 export const navLinks = style({
   listStyle: 'none',
   padding: 0,
-  paddingBottom: spacing(1),
+  paddingBottom: spacing(3 / 2),
   margin: 0,
   display: 'flex',
   flexDirection: 'column',
@@ -71,6 +71,7 @@ export const navLink = style({
 export const navLinkSmall = style({
   fontSize: vars.scale.sm,
   padding: spacing(1 / 4, 3 / 4),
+  opacity: 0.8,
 });
 
 export const navLinkSeparator = style({
