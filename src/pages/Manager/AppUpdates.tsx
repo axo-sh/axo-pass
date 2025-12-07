@@ -12,6 +12,7 @@ import {
 } from '@/client';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
+import {Flex} from '@/components/Flex';
 import {Loader} from '@/components/Loader';
 import {Toggle} from '@/components/Toggle';
 import {updateCheckDate} from '@/pages/Manager/AppUpdates.css';
@@ -46,20 +47,20 @@ export const AppUpdates: React.FC = () => {
 
   return (
     <>
-      <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate} toggleSize={16}>
-        Automatically check for updates
-      </Toggle>
-      <UpdateStatusDisplay result={result} />
-      <div>
+      <Flex gap={1 / 2}>
+        <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate} toggleSize={16}>
+          Automatically Check (once per day)
+        </Toggle>
         <button
           className={button({variant: 'clear', size: 'small'})}
           onClick={handleCheckUpdates}
           disabled={checking}
         >
           <IconRefresh className={buttonIconLeft} />
-          Check for Updates
+          Check Now
         </button>
-      </div>
+      </Flex>
+      <UpdateStatusDisplay result={result} />
     </>
   );
 };
@@ -75,7 +76,15 @@ export const UpdateStatusDisplay: React.FC<Props> = ({result}) => {
       return (
         <div>
           <div>
-            Update available: <Code>{data.version}</Code>
+            Update <Code>{data.version}</Code> available.{' '}
+            <a
+              href="https://github.com/axo-sh/axo-pass/releases/latest"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Download from GitHub
+            </a>{' '}
+            &rarr;
           </div>
           <div className={updateCheckDate}>Last checked: {formatDate(data.checked_at_rfc3339)}</div>
         </div>
