@@ -24,7 +24,8 @@ export const Settings: React.FC = () => {
         </div>
         <CodeBlock canCopy>pinentry-program {appBundlePath}/bin/ap-pinentry</CodeBlock>
         <div>
-          Run <Code>gpgconf --reload gpg-agent</Code> to apply the changes.
+          Run <Code>gpgconf --reload gpg-agent</Code> to apply the changes, then test it by running
+          <Code>echo test | gpg -as -</Code> (or clicking the button below).
         </div>
         <div>
           <button
