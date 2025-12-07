@@ -197,6 +197,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::vault::update_item::update_item,
             handlers::vault::add_credential::add_credential,
             handlers::vault::delete_credential::delete_credential,
+            handlers::gpg::gpg_test::gpg_test_integration,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

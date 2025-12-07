@@ -1,4 +1,5 @@
-import {getAppSettings} from '@/client';
+import {getAppSettings, gpgTestIntegration} from '@/client';
+import {button} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
@@ -24,6 +25,14 @@ export const Settings: React.FC = () => {
         <CodeBlock canCopy>pinentry-program {appBundlePath}/bin/ap-pinentry</CodeBlock>
         <div>
           Run <Code>gpgconf --reload gpg-agent</Code> to apply the changes.
+        </div>
+        <div>
+          <button
+            className={button({variant: 'clear', size: 'small'})}
+            onClick={() => gpgTestIntegration()}
+          >
+            Test GPG Integration
+          </button>
         </div>
       </DashboardSection>
 

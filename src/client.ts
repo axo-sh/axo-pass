@@ -186,3 +186,7 @@ export const getUpdateCheckDisabled = async (): Promise<boolean> => {
 export const setUpdateCheckDisabled = async (disabled: boolean): Promise<void> => {
   return await invoke<void>('set_update_check_disabled', {disabled});
 };
+
+export const gpgTestIntegration = async (): Promise<void> => {
+  return await invoke<void>('gpg_test_integration');
+};
