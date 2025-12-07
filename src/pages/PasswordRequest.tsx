@@ -85,15 +85,21 @@ export const PasswordRequest: React.FC<Props> = ({request, onResponse, serviceNa
       <Flex column>
         {description && <Card className={pinentryDescription}>{description.trim()}</Card>}
 
-        {request.has_saved_password && (
-          <Card>
-            <p>A {passwordStr.toLowerCase()} is saved for this key in your keychain.</p>
-            <Flex justify="end">
-              <button className={button()} onClick={() => handleUseSavedPassword()}>
-                Unlock
-              </button>
-            </Flex>
+        {request.error_message ? (
+          <Card error>
+            <p>Error: {request.error_message}</p>
           </Card>
+        ) : (
+          request.has_saved_password && (
+            <Card>
+              <p>A {passwordStr.toLowerCase()} is saved for this key in your keychain.</p>
+              <Flex justify="end">
+                <button className={button()} onClick={() => handleUseSavedPassword()}>
+                  Unlock
+                </button>
+              </Flex>
+            </Card>
+          )
         )}
 
         <Form

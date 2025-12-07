@@ -16,7 +16,7 @@ pub trait PinentryServerHandler: Send + Sync {
         desc: Option<&str>,
         prompt: Option<&str>,
         keyinfo: Option<&str>,
-        skip_saved_password: bool,
+        error_message: Option<&str>,
     ) -> io::Result<String>;
 
     /// CONFIRM handler
@@ -46,11 +46,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
         let mut description: Option<String> = None;
         let mut prompt: Option<String> = None;
         let mut keyinfo: Option<String> = None;
-        // Currently unused fields
-        let mut _error_msg: Option<String> = None;
+        let mut error_message: Option<String> = None;
         let mut _title: Option<String> = None;
-        // Set when bad passphrase error is received
-        let mut skip_saved_password = false;
 
         let mut buf = String::new();
 
@@ -81,14 +78,14 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                             description.as_deref(),
                             prompt.as_deref(),
                             keyinfo.as_deref(),
-                            skip_saved_password,
+                            error_message.as_deref(),
                         )
                         .await
                     {
                         Ok(pin) => {
                             self.send_data(pin.as_bytes()).await?;
                             self.send_ok(None).await?;
-                            skip_saved_password = false;
+                            error_message = None;
                         },
                         Err(e) => {
                             self.send_error(256, &format!("get_pin failed: {}", e))
@@ -137,11 +134,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
 
                 "SETERROR" => {
                     if let Some(err) = args {
-                        let decoded = percent_decode_str(err).decode_utf8_lossy();
-                        if decoded.contains("Bad Passphrase") {
-                            skip_saved_password = true;
-                        }
-                        _error_msg = Some(decoded.into_owned());
+                        error_message =
+                            Some(percent_decode_str(err).decode_utf8_lossy().into_owned());
                     }
                     self.send_ok(None).await?;
                 },
@@ -169,7 +163,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                     description = None;
                     prompt = None;
                     keyinfo = None;
-                    _error_msg = None;
+                    error_message = None;
                     _title = None;
                     self.send_ok(None).await?;
                 },

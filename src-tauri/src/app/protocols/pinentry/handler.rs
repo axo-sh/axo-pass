@@ -15,6 +15,7 @@ pub struct GetPinRequest {
     key_id: Option<String>,          // extracted GPG key ID
     has_saved_password: bool,        // whether a password is already saved for this key
     attempting_saved_password: bool, // whether we're prompting for saved password
+    error_message: Option<String>,
 }
 
 // Implement PasswordRequest trait for GetPinRequest
@@ -72,7 +73,7 @@ impl PinentryServerHandler for PinentryHandler {
         desc: Option<&str>,
         prompt: Option<&str>,
         keyinfo: Option<&str>,
-        skip_saved_password: bool,
+        error_message: Option<&str>,
     ) -> std::io::Result<String> {
         // use keyinfo (GPG key grip from SETKEYINFO), or else try to extract key ID
         // from desc
@@ -90,9 +91,13 @@ impl PinentryServerHandler for PinentryHandler {
             .and_then(|key_id| PasswordEntry::gpg(key_id).exists().ok())
             .unwrap_or(false);
 
+        // Skip saved password if there's an error message (e.g., bad passphrase)
+        let skip_saved_password = error_message.is_some();
+
         let request = GetPinRequest {
             description: desc.map(String::from),
             prompt: prompt.map(String::from),
+            error_message: error_message.map(String::from),
             key_id: key_id.clone(),
             has_saved_password,
             attempting_saved_password: has_saved_password && !skip_saved_password,

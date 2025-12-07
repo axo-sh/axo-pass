@@ -22,6 +22,7 @@ export type PasswordRequestData = {
   key_id: string | null;
   has_saved_password: boolean;
   attempting_saved_password: boolean;
+  error_message?: string;
 };
 
 // Pinentry-specific request
