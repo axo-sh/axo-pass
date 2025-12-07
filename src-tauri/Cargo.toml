@@ -1,6 +1,6 @@
 [package]
 name = "axo-pass"
-version = "0.1.2"
+version = "0.1.3"
 description = "macos touch id secrets manager"
 authors = ["octavore"]
 edition = "2024"
