@@ -1,6 +1,8 @@
-# [Axo Pass](https://axo.sh)
+# Axo Pass
 
 The Touch ID secrets manager for macOS dev environments.
+
+[Download the latest release DMG here.](https://github.com/octavore/axo-pass/releases)
 
 ## Features
 
@@ -11,9 +13,15 @@ The Touch ID secrets manager for macOS dev environments.
 - Full-featured command-line interface
 - Free and open source
 
-## Quickstart
+[Roadmap →](https://axo.sh)
 
-[Download the latest release DMG here.](https://github.com/octavore/axo-pass/releases)
+## Screenshots
+
+![Screenshot 1](https://axo.sh/assets/screenshot-1.jpg)
+
+![Screenshot 2](https://axo.sh/assets/screenshot-2.jpg)
+
+## Setup
 
 ### GPG Integration
 
@@ -41,7 +49,7 @@ See the `ap` section below.
 Run the following to make the `ap` command available in your shell.
 
 ```shell
-ln -s "/Applications/Axo\ Pass.app/Contents/bin/ap" /usr/local/bin/ap
+ln -s "/Applications/Axo Pass.app/Contents/bin/ap" /usr/local/bin/ap
 ```
 
 ```
@@ -77,7 +85,6 @@ Below is an example of a vault json file.
   "id": "<uuid>",
   "name": "Axo Pass",
   "file_key": "<base64 ciphertext>", // Base64-encoded key encrypted by user's vault-encryption-key
-
   // map of items
   "items": {
     "github-api": {
@@ -95,3 +102,9 @@ Below is an example of a vault json file.
   }
 }
 ```
+
+## Development
+
+Todo. This app requires codesigning (and notarization for distribution), and
+Touch ID will not work without codesigning. If you're interested in hacking on
+this, reach out to me (octavore) on the Discord.
