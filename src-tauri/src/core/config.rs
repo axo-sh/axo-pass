@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -13,10 +14,22 @@ const CONFIG_FILENAME: &str = "config.toml";
 pub static APP_CONFIG: LazyLock<Mutex<AppConfig>> =
     LazyLock::new(|| Mutex::new(AppConfig::load_or_create()));
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
+    #[serde(default = "uuid::Uuid::new_v4")]
+    pub id: uuid::Uuid,
     pub update_check_disabled: Option<bool>,
     pub updates: Option<UpdateCheckRecord>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            id: uuid::Uuid::new_v4(),
+            update_check_disabled: None,
+            updates: None,
+        }
+    }
 }
 
 impl AppConfig {
@@ -26,22 +39,21 @@ impl AppConfig {
 
     fn load_or_create() -> Self {
         let path = Self::config_path();
-        if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(contents) => match toml::from_str(&contents) {
-                    Ok(config) => return config,
-                    Err(e) => {
-                        log::warn!("Failed to parse config file: {}", e);
-                    },
-                },
-                Err(e) => {
-                    log::warn!("Failed to read config file: {}", e);
-                },
-            }
-        }
-        let config = Self::default();
+        let config: AppConfig = if path.exists() {
+            fs::read_to_string(&path)
+                .context("reading config file")
+                .and_then(|data| toml::from_str(&data).context("parsing config file"))
+                .unwrap_or_else(|e| {
+                    log::warn!("Failed to load config file: {e:#}");
+                    Self::default()
+                })
+        } else {
+            log::debug!("Creating new config file at {}", path.display());
+            Self::default()
+        };
+
         if let Err(e) = config.save() {
-            log::warn!("Failed to save initial config: {}", e);
+            log::warn!("Failed to save initial config: {e}");
         }
         config
     }
