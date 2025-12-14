@@ -11,10 +11,10 @@ use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use uuid::Uuid;
 
-use crate::secrets::errors::Error;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
-use crate::secrets::vault::{Vault, VaultItem, VaultItemCredential, VaultSecret};
+use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::vault::{Vault, VaultItem, VaultItemCredential, VaultSecret};
 
 pub const DEFAULT_VAULT: &str = "default";
 

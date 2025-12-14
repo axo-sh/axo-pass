@@ -8,7 +8,7 @@ use regex::Regex;
 use secrecy::SecretString;
 
 use crate::core::dirs::vaults_dir;
-use crate::secrets::vault_wrapper::VaultWrapper;
+use crate::secrets::vaults::VaultWrapper;
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]

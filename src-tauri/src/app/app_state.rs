@@ -1,4 +1,4 @@
-use crate::secrets::vaults_manager::VaultsManager;
+use crate::secrets::vaults::VaultsManager;
 
 #[derive(Default)]
 pub struct AppState {

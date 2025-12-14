@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use crate::app::AppState;
-use crate::secrets::vault_wrapper::VaultWrapper;
+use crate::secrets::vaults::VaultWrapper;
 
 pub mod add_credential;
 pub mod add_item;

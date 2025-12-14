@@ -9,8 +9,8 @@ use serde_with::base64::Base64;
 use serde_with::serde_as;
 use uuid::Uuid;
 
-use crate::secrets::errors::Error;
 use crate::secrets::keychain::managed_key::ManagedKey;
+use crate::secrets::vaults::errors::Error;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VaultSecret(pub String);

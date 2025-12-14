@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::secrets::vault::VaultItem;
-use crate::secrets::vault_wrapper::VaultWrapper;
+use crate::secrets::vaults::{VaultItem, VaultWrapper};
 
 #[derive(Serialize, Debug, Clone)]
 #[typeshare]

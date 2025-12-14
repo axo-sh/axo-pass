@@ -6,7 +6,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::AppState;
-use crate::secrets::vault_wrapper::VaultWrapper;
+use crate::secrets::vaults::VaultWrapper;
 
 #[derive(Deserialize)]
 #[typeshare]

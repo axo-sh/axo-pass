@@ -5,7 +5,7 @@ use clap::Parser;
 use regex::Regex;
 
 use crate::core::read_input::read_file_or_stdin;
-use crate::secrets::vaults_manager::VaultsManager;
+use crate::secrets::vaults::VaultsManager;
 
 #[derive(Parser, Debug)]
 pub struct InjectCommand {

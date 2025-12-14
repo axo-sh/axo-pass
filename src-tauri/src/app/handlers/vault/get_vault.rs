@@ -5,7 +5,7 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::vault::schemas::VaultSchema;
-use crate::secrets::vault_wrapper::{DEFAULT_VAULT, VaultWrapper};
+use crate::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
 
 #[derive(Deserialize)]
 #[typeshare]

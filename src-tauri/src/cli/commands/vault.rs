@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use color_print::cprintln;
 
-use crate::secrets::vaults_manager::VaultsManager;
+use crate::secrets::vaults::VaultsManager;
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]

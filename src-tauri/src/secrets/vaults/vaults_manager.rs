@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::dirs::vaults_dir;
-use crate::secrets::errors::Error;
-use crate::secrets::vault_wrapper::{
+use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::vault_wrapper::{
     VaultWrapper, get_vault_encryption_key, normalize_key, validate_key,
 };
 
