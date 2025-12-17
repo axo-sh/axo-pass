@@ -8,15 +8,16 @@ export const passwordRequest = style({
   padding: spacing(0, 2, 2),
 });
 
-export const pinentryDescription = style({
+export const passwordRequestDescription = style({
   fontSize: vars.scale.xs,
   fontFamily: vars.fonts.monospace,
   fontWeight: 600,
-  whiteSpace: 'pre',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'break-word',
   overflowY: 'scroll',
 });
 
-export const keyId = style({
+export const passwordRequestKeyId = style({
   fontFamily: vars.fonts.monospace,
   fontWeight: 500,
   fontSize: vars.scale.sm,
@@ -24,7 +25,7 @@ export const keyId = style({
   padding: spacing(0.5),
   background: colorVar.base,
   borderRadius: 8,
-  textOverflow: 'ellipsis',
-  overflow: 'hidden',
+  overflowWrap: 'break-word',
+  wordBreak: 'break-all',
   display: 'block',
 });

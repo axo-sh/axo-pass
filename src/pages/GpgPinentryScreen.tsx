@@ -2,18 +2,24 @@ import {useEffect, useState} from 'react';
 
 import {listen} from '@tauri-apps/api/event';
 
-import {type PasswordResponse, type PinentryRequest, sendPinentryResponse} from '@/client';
+import {
+  type GpgGetPinRequest,
+  type PasswordResponse,
+  type RequestEvent,
+  sendPinentryResponse,
+} from '@/client';
 import {button} from '@/components/Button.css';
 import {Loader} from '@/components/Loader';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
-import {PasswordRequest} from '@/pages/PasswordRequest';
+import {GpgPasswordRequest} from '@/pages/PasswordRequest/GpgPasswordRequest';
 
+type PinentryRequest = RequestEvent<GpgGetPinRequest>;
 type PinentryScreenProps = {
   initialRequest?: PinentryRequest | null;
 };
 
-export const PinentryScreen = ({initialRequest}: PinentryScreenProps) => {
+export const GpgPinentryScreen = ({initialRequest}: PinentryScreenProps) => {
   const [request, setRequest] = useState<PinentryRequest | null>(initialRequest ?? null);
 
   // Listen for pinentry request events
@@ -56,9 +62,7 @@ export const PinentryScreen = ({initialRequest}: PinentryScreenProps) => {
   }
 
   if ('get_password' in request) {
-    return (
-      <PasswordRequest request={request.get_password} onResponse={handleSubmit} serviceName="GPG" />
-    );
+    return <GpgPasswordRequest request={request.get_password} onResponse={handleSubmit} />;
   }
 
   if ('confirm' in request) {

@@ -5,8 +5,8 @@ use tauri::{AppHandle, Manager};
 use tauri_utils::platform::current_exe;
 
 use crate::app::password_request::RequestEvent;
-use crate::app::protocols::pinentry::{GetPinRequest, PinentryState};
-use crate::app::protocols::ssh_askpass::{AskPassState, AskPasswordRequest};
+use crate::app::protocols::pinentry::{GpgGetPinRequest, PinentryState};
+use crate::app::protocols::ssh_askpass::{AskPassState, SshAskPassRequest};
 
 // App mode enum
 #[derive(Serialize, Clone, Debug)]
@@ -21,8 +21,8 @@ pub enum AppMode {
 #[serde(rename_all = "snake_case")]
 pub enum AppModeAndState {
     App { helper_bin_path: Option<PathBuf> },
-    Pinentry(Option<RequestEvent<GetPinRequest>>),
-    SshAskpass(Option<RequestEvent<AskPasswordRequest>>),
+    GpgPinentry(Option<RequestEvent<GpgGetPinRequest>>),
+    SshAskpass(Option<RequestEvent<SshAskPassRequest>>),
 }
 
 #[tauri::command]
@@ -42,7 +42,7 @@ pub async fn get_mode(
         AppMode::Pinentry => {
             let state = app_handle.state::<PinentryState>();
             let pending_event = state.get_pending_event();
-            Ok(AppModeAndState::Pinentry(pending_event))
+            Ok(AppModeAndState::GpgPinentry(pending_event))
         },
         AppMode::SshAskpass => {
             let state = app_handle.state::<AskPassState>();

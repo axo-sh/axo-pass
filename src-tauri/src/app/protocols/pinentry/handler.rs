@@ -7,19 +7,19 @@ use crate::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "snake_case")]
-pub struct GetPinRequest {
+pub struct GpgGetPinRequest {
     description: Option<String>,
     prompt: Option<String>,
+    error_message: Option<String>,
 
-    /* additional fields that we populate for the frontend */
+    /* common fields that we populate for the frontend */
     key_id: Option<String>,          // extracted GPG key ID
     has_saved_password: bool,        // whether a password is already saved for this key
     attempting_saved_password: bool, // whether we're prompting for saved password
-    error_message: Option<String>,
 }
 
 // Implement PasswordRequest trait for GetPinRequest
-impl PasswordRequest for GetPinRequest {
+impl PasswordRequest for GpgGetPinRequest {
     fn entry(&self) -> Option<PasswordEntry> {
         self.key_id
             .as_ref()
@@ -43,10 +43,10 @@ impl PasswordRequest for GetPinRequest {
     }
 }
 
-pub type PinentryState = RequestState<GetPinRequest>;
+pub type PinentryState = RequestState<GpgGetPinRequest>;
 
 pub struct PinentryHandler {
-    password_handler: PasswordRequestHandler<GetPinRequest>,
+    password_handler: PasswordRequestHandler<GpgGetPinRequest>,
     exit_sender: Option<oneshot::Sender<()>>,
 }
 
@@ -94,7 +94,7 @@ impl PinentryServerHandler for PinentryHandler {
         // Skip saved password if there's an error message (e.g., bad passphrase)
         let skip_saved_password = error_message.is_some();
 
-        let request = GetPinRequest {
+        let request = GpgGetPinRequest {
             description: desc.map(String::from),
             prompt: prompt.map(String::from),
             error_message: error_message.map(String::from),

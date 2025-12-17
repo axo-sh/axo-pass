@@ -8,15 +8,18 @@ use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, Requ
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, Debug, Serialize)]
-pub struct AskPasswordRequest {
-    pub key_path: Option<String>,
-    pub key_id: Option<String>,
-    pub has_saved_password: bool,
-    pub attempting_saved_password: bool,
+#[serde(rename_all = "snake_case")]
+pub struct SshAskPassRequest {
+    pub key_path: Option<String>, // ssh key path
+
+    /* common fields that we populate for the frontend */
+    pub key_id: Option<String>,          // ssh fingerprint
+    pub has_saved_password: bool,        // whether a password is already saved for this key
+    pub attempting_saved_password: bool, // whether we're prompting for saved password
 }
 
-// Implement PasswordRequest trait for AskPasswordRequest
-impl PasswordRequest for AskPasswordRequest {
+// Implement PasswordRequest trait for SshAskPassRequest
+impl PasswordRequest for SshAskPassRequest {
     fn entry(&self) -> Option<PasswordEntry> {
         self.key_id
             .as_ref()
@@ -41,11 +44,11 @@ impl PasswordRequest for AskPasswordRequest {
 }
 
 // Type alias for the SSH askpass-specific state
-pub type AskPassState = RequestState<AskPasswordRequest>;
+pub type AskPassState = RequestState<SshAskPassRequest>;
 
 /// SSH askpass handler that integrates with Tauri
 pub struct SshAskpassHandler {
-    password_handler: PasswordRequestHandler<AskPasswordRequest>,
+    password_handler: PasswordRequestHandler<SshAskPassRequest>,
     exit_sender: Option<oneshot::Sender<()>>,
 }
 
@@ -63,7 +66,7 @@ impl SshAskpassHandler {
         // Parse the prompt to extract key path if available
         log::debug!("ssh-askpass: {}", prompt.trim());
         // Create a password request
-        let mut request = AskPasswordRequest {
+        let mut request = SshAskPassRequest {
             key_path: None,
             key_id: None,
             has_saved_password: false,

@@ -6,7 +6,7 @@ import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
 import {VaultContext, VaultStore} from '@/mobx/VaultStore';
 import {Dashboard} from '@/pages/Dashboard';
-import {PinentryScreen} from '@/pages/PinentryScreen';
+import {GpgPinentryScreen} from '@/pages/GpgPinentryScreen';
 import {SshAskpassScreen} from '@/pages/SshAskpassScreen';
 
 import '@/App.css.ts';
@@ -42,10 +42,10 @@ const App: React.FC = () => {
     );
   }
 
-  if (mode && 'pinentry' in mode) {
+  if (mode && 'gpg_pinentry' in mode) {
     return (
       <ErrorDialogProvider>
-        <PinentryScreen initialRequest={mode.pinentry} />
+        <GpgPinentryScreen initialRequest={mode.gpg_pinentry} />
       </ErrorDialogProvider>
     );
   }

@@ -3,12 +3,14 @@ import {useEffect, useState} from 'react';
 import {IconSquareCheckFilled} from '@tabler/icons-react';
 import {listen} from '@tauri-apps/api/event';
 
-import type {AskPassRequest, PasswordResponse} from '@/client';
+import type {PasswordResponse, RequestEvent, SshAskPassRequest} from '@/client';
 import {sendAskpassResponse} from '@/client';
 import {Loader} from '@/components/Loader';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
-import {PasswordRequest} from '@/pages/PasswordRequest';
+import {SshPasswordRequest} from '@/pages/PasswordRequest/SshPasswordRequest';
+
+type AskPassRequest = RequestEvent<SshAskPassRequest>;
 
 type SshAskpassScreenProps = {
   initialRequest?: AskPassRequest | null;
@@ -57,9 +59,7 @@ export const SshAskpassScreen = ({initialRequest}: SshAskpassScreenProps) => {
   }
 
   if ('get_password' in request) {
-    return (
-      <PasswordRequest request={request.get_password} onResponse={handleSubmit} serviceName="SSH" />
-    );
+    return <SshPasswordRequest request={request.get_password} onResponse={handleSubmit} />;
   }
 
   return (

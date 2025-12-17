@@ -1,5 +1,5 @@
 mod handler;
 mod server;
 
-pub use handler::{GetPinRequest, PinentryHandler, PinentryState};
+pub use handler::{GpgGetPinRequest, PinentryHandler, PinentryState};
 pub use server::PinentryServer;

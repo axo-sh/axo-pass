@@ -22,24 +22,23 @@ export type PasswordRequestData = {
   key_id: string | null;
   has_saved_password: boolean;
   attempting_saved_password: boolean;
-  error_message?: string;
 };
 
 // Pinentry-specific request
-export type GetPinRequest = PasswordRequestData & {
+export type GpgGetPinRequest = PasswordRequestData & {
   description: string | null;
   prompt: string | null;
+  error_message?: string;
 };
 
 // SSH askpass-specific request
-export type AskPasswordRequest = PasswordRequestData & {
+export type SshAskPassRequest = PasswordRequestData & {
   key_path: string | null;
 };
 
-// Pinentry request events
-export type PinentryRequest =
+export type RequestEvent<R> =
   | {
-      get_password: GetPinRequest;
+      get_password: R;
     }
   | {
       success: string;
@@ -53,15 +52,6 @@ export type PinentryRequest =
       message: {
         description: string | null;
       };
-    };
-
-// SSH askpass request events
-export type AskPassRequest =
-  | {
-      get_password: AskPasswordRequest;
-    }
-  | {
-      success: string;
     };
 
 // Common password response (used by both)
@@ -88,14 +78,14 @@ export const sendAskpassResponse = async (response: PasswordResponse) => {
 export type AppModeAndState =
   | {
       app: {
-        pinentry_program_path: string | null;
+        helper_bin_path: string | null;
       };
     }
   | {
-      pinentry: PinentryRequest | null;
+      gpg_pinentry: RequestEvent<GpgGetPinRequest> | null;
     }
   | {
-      ssh_askpass: AskPassRequest | null;
+      ssh_askpass: RequestEvent<SshAskPassRequest> | null;
     };
 
 export const getMode = async (): Promise<AppModeAndState> => {
