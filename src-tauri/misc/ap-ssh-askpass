@@ -3,4 +3,4 @@
 # Usage: Add the following to your shell config:
 #   export SSH_ASKPASS="/path/to/ap-ssh-askpass"
 #   export SSH_ASKPASS_REQUIRE=force
-exec "$(dirname "$0")/../MacOS/axo-pass" ssh-askpass --prompt "$1"
+exec "$(dirname "$0")/../MacOS/axo-pass" ssh-askpass "$1"

@@ -118,15 +118,22 @@ impl SshAskpassHandler {
     /// Extract key path from SSH askpass prompt
     fn extract_key_path(prompt: &str) -> Option<String> {
         let prompt = prompt.trim();
-        let passphrase_re = regex::Regex::new(
+        let patterns = vec![
+            // eg: ssh-add
             r"^Enter passphrase for (?P<key_path>[^\s]+)(?: \(will confirm each use\))?:$",
-        )
-        .ok()?;
+            // eg: git operations
+            r"^Enter passphrase for key '(?P<key_path>[^\s]+)':$",
+        ];
 
-        passphrase_re
-            .captures(prompt)
-            .and_then(|caps| caps.name("key_path"))
-            .map(|m| m.as_str().to_string())
+        for pattern in patterns {
+            let passphrase_re = regex::Regex::new(pattern).ok()?;
+            if let Some(caps) = passphrase_re.captures(prompt) {
+                if let Some(m) = caps.name("key_path") {
+                    return Some(m.as_str().to_string());
+                }
+            }
+        }
+        None
     }
 }
 
