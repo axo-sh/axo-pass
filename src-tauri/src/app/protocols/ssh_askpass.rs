@@ -130,10 +130,10 @@ impl SshAskpassHandler {
 
         for pattern in patterns {
             let passphrase_re = regex::Regex::new(pattern).ok()?;
-            if let Some(caps) = passphrase_re.captures(prompt) {
-                if let Some(m) = caps.name("key_path") {
-                    return Some(m.as_str().to_string());
-                }
+            if let Some(caps) = passphrase_re.captures(prompt)
+                && let Some(m) = caps.name("key_path")
+            {
+                return Some(m.as_str().to_string());
             }
         }
         None
