@@ -57,6 +57,7 @@ export const navLink = style({
   textDecoration: 'none',
   color: colorVar.text,
   display: 'flex',
+  flexGrow: 1,
   alignItems: 'center',
   gap: spacing(3 / 4),
   padding: spacing(1 / 2, 3 / 4),
