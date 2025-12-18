@@ -7,12 +7,19 @@ type Props = {
   children: React.ReactNode;
   centered?: boolean;
   icon?: Icon;
+  iconStroke?: number;
 };
 
-export const LayoutTitle: React.FC<Props> = ({action, children, centered, icon: IconComponent}) => {
+export const LayoutTitle: React.FC<Props> = ({
+  action,
+  children,
+  centered,
+  icon: IconComponent,
+  iconStroke = 1.5,
+}) => {
   return (
     <h1 className={layoutTitle({centered})}>
-      {IconComponent && <IconComponent className={layoutTitleIcon} size={24} stroke={1.5} />}
+      {IconComponent && <IconComponent className={layoutTitleIcon} size={24} stroke={iconStroke} />}
       <div className={layoutTitleContent}>{children}</div>
       {action}
     </h1>

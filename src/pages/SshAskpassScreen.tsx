@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
 
-import {IconSquareCheckFilled} from '@tabler/icons-react';
+import {IconCheck} from '@tabler/icons-react';
 import {listen} from '@tauri-apps/api/event';
 
 import type {PasswordResponse, RequestEvent, SshAskPassRequest} from '@/client';
@@ -51,7 +51,7 @@ export const SshAskpassScreen = ({initialRequest}: SshAskpassScreenProps) => {
   if ('success' in request) {
     return (
       <Layout centered>
-        <LayoutTitle centered icon={IconSquareCheckFilled}>
+        <LayoutTitle centered icon={IconCheck} iconStroke={3}>
           Succeeded
         </LayoutTitle>
       </Layout>

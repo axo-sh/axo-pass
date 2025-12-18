@@ -6,6 +6,7 @@ mod password_request;
 mod protocols;
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use clap::Subcommand;
 use tauri::Manager;
@@ -17,7 +18,8 @@ use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryS
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
 use crate::core::updates::check_for_updates;
 
-const STD_DELAY: std::time::Duration = tokio::time::Duration::from_millis(200);
+const STD_DELAY: Duration = Duration::from_millis(200);
+const SSH_EXIT_DELAY: Duration = Duration::from_millis(800);
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum AxoAppCommand {
@@ -56,7 +58,6 @@ fn run_pinentry_mode(app_handle: tauri::AppHandle) {
     // Monitor the exit signal and close the window when it's received
     tauri::async_runtime::spawn(async move {
         let _ = exit_rx.await;
-        tokio::time::sleep(STD_DELAY).await;
         log::debug!("Exiting app after pinentry completion");
         app_handle.exit(0);
     });
@@ -80,7 +81,7 @@ fn run_ssh_askpass_mode(app_handle: tauri::AppHandle, prompt: String) {
     // Monitor the exit signal and close the window when it's received
     tauri::async_runtime::spawn(async move {
         let _ = exit_rx.await;
-        tokio::time::sleep(STD_DELAY).await;
+        tokio::time::sleep(SSH_EXIT_DELAY).await;
         log::debug!("Exiting app after SSH askpass completion");
         app_handle.exit(0);
     });
