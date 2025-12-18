@@ -1,13 +1,17 @@
 import type React from 'react';
 
-import {IconCircleKeyFilled} from '@tabler/icons-react';
+import {IconKeyFilled} from '@tabler/icons-react';
 
 import type {PasswordResponse, SshAskPassRequest} from '@/client';
 import {Card, CardLabel} from '@/components/Card';
 import {Flex} from '@/components/Flex';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
-import {passwordRequest, passwordRequestKeyId} from '@/pages/PasswordRequest/PasswordRequest.css';
+import {
+  passwordRequest,
+  passwordRequestContent,
+  passwordRequestKeyId,
+} from '@/pages/PasswordRequest/PasswordRequest.css';
 import {PasswordRequestForm} from '@/pages/PasswordRequest/PasswordRequestForm';
 
 type Props = {
@@ -18,10 +22,10 @@ type Props = {
 export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   return (
     <Layout className={passwordRequest}>
-      <LayoutTitle icon={IconCircleKeyFilled} centered>
+      <LayoutTitle icon={IconKeyFilled} centered>
         SSH Passphrase Required
       </LayoutTitle>
-      <Flex column>
+      <Flex column className={passwordRequestContent}>
         {request.key_path && (
           <Card>
             <CardLabel>SSH Key</CardLabel>

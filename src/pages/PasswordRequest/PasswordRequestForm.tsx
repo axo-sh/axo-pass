@@ -1,12 +1,15 @@
 import React from 'react';
 
+import {IconEye, IconEyeOff, IconFingerprint} from '@tabler/icons-react';
+
 import type {PasswordResponse} from '@/client';
-import {button} from '@/components/Button.css';
+import {button, buttonIconLeft} from '@/components/Button.css';
 import {Card} from '@/components/Card';
+import {Divider} from '@/components/Divider';
 import {Flex} from '@/components/Flex';
+import {AdornedTextInput} from '@/components/form/AdornedTextInput';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
-import {textInput} from '@/components/Input.css';
 
 type Props = {
   prompt: string;
@@ -47,24 +50,12 @@ export const PasswordRequestForm: React.FC<Props> = ({
     try {
       onResponse('use_saved_password');
     } catch (error) {
-      console.error('Error using saved passphrase:', error);
       alert(`Error using saved passphrase: ${error}`);
     }
   };
 
   return (
-    <>
-      {hasSavedPassword && (
-        <Card>
-          <p>A passphrase is saved for this key in your keychain.</p>
-          <Flex justify="end">
-            <button className={button()} onClick={() => handleUseSavedPassword()}>
-              Unlock
-            </button>
-          </Flex>
-        </Card>
-      )}
-
+    <Card>
       <Form
         onSubmit={(e) => {
           e.preventDefault();
@@ -72,53 +63,59 @@ export const PasswordRequestForm: React.FC<Props> = ({
         }}
       >
         <FormRow label={prompt}>
-          <input
-            className={textInput()}
-            id="password-input"
-            type={showPassword ? 'text' : 'password'}
-            value={inputValue}
-            autoCorrect="off"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setInputValue(e.currentTarget.value)}
-            autoFocus={!hasSavedPassword}
-          />
+          <AdornedTextInput
+            rightIcon={showPassword ? IconEyeOff : IconEye}
+            adornmentOnClick={() => setShowPassword(!showPassword)}
+          >
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={inputValue}
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setInputValue(e.currentTarget.value)}
+              autoFocus={!hasSavedPassword}
+            />
+          </AdornedTextInput>
         </FormRow>
 
         {keyIdentifier && (
-          <Flex gap={1 / 2} align="center">
+          <Flex gap={1 / 2} align="center" as="label">
             <input
               type="checkbox"
               checked={saveToKeychain}
               onChange={(e) => setSaveToKeychain(e.target.checked)}
             />
-            <span>Save passphrase to keychain</span>
+            <span>Also save to keychain</span>
           </Flex>
         )}
 
-        <Flex gap={1 / 2} justify="between">
-          <Flex gap={1 / 2} align="center">
-            <button className={button()} type="submit">
-              OK
-            </button>
-            <button
-              className={button({variant: 'clear'})}
-              type="button"
-              onClick={() => handleSubmit(false)}
-            >
-              Cancel
-            </button>
-          </Flex>
-          <Flex align="center" gap={1 / 2} as="label">
-            <input
-              type="checkbox"
-              checked={showPassword}
-              onChange={(e) => setShowPassword(e.target.checked)}
-            />
-            Show passphrase
-          </Flex>
+        <Flex gap={1 / 2} align="center" justify="end">
+          <button
+            className={button({variant: 'clear'})}
+            type="button"
+            onClick={() => handleSubmit(false)}
+          >
+            Cancel
+          </button>
+          <button className={button()} type="submit">
+            OK
+          </button>
         </Flex>
       </Form>
-    </>
+
+      {hasSavedPassword && (
+        <>
+          <Divider>or</Divider>
+          <Flex justify="center">
+            <button className={button()} onClick={() => handleUseSavedPassword()}>
+              <IconFingerprint className={buttonIconLeft} />
+              Use Saved Passphrase
+            </button>
+          </Flex>
+          <div style={{height: 8}} />
+        </>
+      )}
+    </Card>
   );
 };

@@ -14,6 +14,8 @@ export const card = recipe({
     background: colorVar.light05,
     borderRadius: 8,
     overflow: 'hidden',
+    flexShrink: 0,
+    flexGrow: 1,
   },
   variants: {
     sectioned: {

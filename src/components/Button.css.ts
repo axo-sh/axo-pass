@@ -124,7 +124,13 @@ globalStyle(`${button.classNames.base} ${loader.classNames.base}`, {
   bottom: 0,
 });
 
-export const buttonIconLeft = style({});
+export const buttonIconLeft = style({
+  width: 16,
+  height: 16,
+  marginLeft: spacing(-1 / 2),
+  marginRight: spacing(1 / 2),
+  strokeWidth: 3,
+});
 
 globalStyle(`${sizeVariants.small} ${buttonIconLeft}`, {
   width: 12,

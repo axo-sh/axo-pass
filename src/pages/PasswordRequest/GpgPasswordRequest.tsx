@@ -1,6 +1,6 @@
 import type React from 'react';
 
-import {IconCircleKeyFilled} from '@tabler/icons-react';
+import {IconKeyFilled} from '@tabler/icons-react';
 
 import type {GpgGetPinRequest, PasswordResponse} from '@/client';
 import {Card} from '@/components/Card';
@@ -9,6 +9,7 @@ import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
 import {
   passwordRequest,
+  passwordRequestContent,
   passwordRequestDescription,
 } from '@/pages/PasswordRequest/PasswordRequest.css';
 import {PasswordRequestForm} from '@/pages/PasswordRequest/PasswordRequestForm';
@@ -21,10 +22,10 @@ type Props = {
 export const GpgPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   return (
     <Layout className={passwordRequest}>
-      <LayoutTitle icon={IconCircleKeyFilled} centered>
+      <LayoutTitle icon={IconKeyFilled} centered>
         GPG Passphrase Required
       </LayoutTitle>
-      <Flex column>
+      <Flex column className={passwordRequestContent}>
         {request.description && (
           <Card className={passwordRequestDescription}>{request.description.trim()}</Card>
         )}
