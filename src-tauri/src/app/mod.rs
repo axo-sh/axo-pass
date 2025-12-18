@@ -145,7 +145,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
                     // In pinentry/SSH askpass mode: compact fixed size, non-resizable
                     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
                         width: 350.0,
-                        height: 500.0,
+                        height: 350.0,
                     }));
 
                     let _ = window.set_resizable(false);

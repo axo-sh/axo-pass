@@ -13,6 +13,7 @@ import {
   passwordRequestDescription,
 } from '@/pages/PasswordRequest/PasswordRequest.css';
 import {PasswordRequestForm} from '@/pages/PasswordRequest/PasswordRequestForm';
+import {useAutoResizeWindow} from '@/pages/PasswordRequest/useAutoResizeWindow';
 
 type Props = {
   request: GpgGetPinRequest;
@@ -20,8 +21,10 @@ type Props = {
 };
 
 export const GpgPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
+  const containerRef = useAutoResizeWindow<HTMLElement>([request]);
+
   return (
-    <Layout className={passwordRequest}>
+    <Layout ref={containerRef} className={passwordRequest}>
       <LayoutTitle icon={IconKeyFilled} centered>
         GPG Passphrase Required
       </LayoutTitle>

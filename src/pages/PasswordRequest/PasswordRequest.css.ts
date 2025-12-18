@@ -7,6 +7,8 @@ import {spacing} from '@/styles/utils';
 
 export const passwordRequest = style({
   padding: spacing(0, 2, 2),
+  minHeight: 300,
+  height: 'auto',
 });
 
 export const passwordRequestContent = style({
