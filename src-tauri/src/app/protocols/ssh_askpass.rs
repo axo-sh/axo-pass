@@ -11,6 +11,7 @@ use crate::secrets::keychain::generic_password::PasswordEntry;
 #[serde(rename_all = "snake_case")]
 pub struct SshAskPassRequest {
     pub key_path: Option<String>, // ssh key path
+    pub prompt: String,           // original askpass prompt message
 
     /* common fields that we populate for the frontend */
     pub key_id: Option<String>,          // ssh fingerprint
@@ -63,16 +64,18 @@ impl SshAskpassHandler {
 
     /// Run the SSH askpass handler
     pub async fn run(mut self, prompt: String) -> anyhow::Result<()> {
-        // Parse the prompt to extract key path if available
         log::debug!("ssh-askpass: {}", prompt.trim());
-        // Create a password request
+
         let mut request = SshAskPassRequest {
             key_path: None,
+            prompt: prompt.trim().to_string(),
             key_id: None,
             has_saved_password: false,
             attempting_saved_password: false,
         };
 
+        // Parse the prompt to extract key path if available, otherwise we
+        // show the original prompt to the user
         if let Some(key_path) = Self::extract_key_path(&prompt) {
             request.key_path = Some(key_path.clone());
             request.key_id = get_ssh_key_fingerprint(&key_path);

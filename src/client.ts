@@ -34,6 +34,7 @@ export type GpgGetPinRequest = PasswordRequestData & {
 // SSH askpass-specific request
 export type SshAskPassRequest = PasswordRequestData & {
   key_path: string | null;
+  prompt: string;
 };
 
 export type RequestEvent<R> =
@@ -59,6 +60,9 @@ export type PasswordResponse =
   | 'use_saved_password'
   | 'confirmed'
   | 'cancelled'
+  | {
+      response: string;
+    }
   | {
       password: {
         value: string;

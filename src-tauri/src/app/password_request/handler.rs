@@ -101,30 +101,30 @@ where
                 // Wait for user to provide password or request saved password
                 RequestEvent::GetPassword(ref req) => {
                     match self.wait_for_response().await? {
-                        response if response.is_password() => {
-                            if let Some((value, save_to_keychain)) = response.into_password() {
-                                if save_to_keychain && let Some(entry) = req.entry() {
-                                    log::debug!("Saving password to keychain for {entry:?}");
-                                    match entry.save_password(value.clone().into()) {
-                                        Ok(()) => {
-                                            log::debug!("Successfully saved password to keychain");
-                                        },
-                                        Err(e) => {
-                                            log::error!("Failed to save password to keychain: {e}");
-                                        },
-                                    }
+                        PasswordResponse::Response(response) => RequestEvent::Success(response),
+                        PasswordResponse::Password {
+                            value,
+                            save_to_keychain,
+                        } => {
+                            if save_to_keychain && let Some(entry) = req.entry() {
+                                log::debug!("Saving password to keychain for {entry:?}");
+                                match entry.save_password(value.clone().into()) {
+                                    Ok(()) => {
+                                        log::debug!("Successfully saved password to keychain");
+                                    },
+                                    Err(e) => {
+                                        log::error!("Failed to save password to keychain: {e}");
+                                    },
                                 }
-                                RequestEvent::Success(value)
-                            } else {
-                                anyhow::bail!("Password response did not contain value")
                             }
+                            RequestEvent::Success(value)
                         },
-                        response if response.is_use_saved_password() => {
+                        PasswordResponse::UseSavedPassword => {
                             let mut updated_req = req.clone();
                             updated_req.set_attempting_saved_password(true);
                             RequestEvent::GetPassword(updated_req)
                         },
-                        response if response.is_cancelled() => {
+                        PasswordResponse::Cancelled => {
                             // User cancelled in our UI (not keychain prompt)
                             return Ok(None);
                         },
@@ -163,8 +163,8 @@ where
         self.set_pending_event(event);
 
         match self.wait_for_response().await? {
-            response if response.is_confirmed() => Ok(true),
-            response if response.is_cancelled() => Ok(false),
+            PasswordResponse::Confirmed => Ok(true),
+            PasswordResponse::Cancelled => Ok(false),
             _ => anyhow::bail!("Unexpected response type for confirm request"),
         }
     }
@@ -175,7 +175,7 @@ where
         self.set_pending_event(event);
 
         match self.wait_for_response().await? {
-            response if response.is_confirmed() => Ok(()),
+            PasswordResponse::Confirmed => Ok(()),
             _ => anyhow::bail!("Unexpected response type for message request"),
         }
     }

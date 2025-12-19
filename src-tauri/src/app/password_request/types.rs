@@ -26,38 +26,11 @@ pub enum PasswordResponse {
     UseSavedPassword,
     Confirmed,
     Cancelled,
+    Response(String),
     Password {
         value: String,
         save_to_keychain: bool,
     },
-}
-
-impl PasswordResponse {
-    pub fn is_password(&self) -> bool {
-        matches!(self, PasswordResponse::Password { .. })
-    }
-
-    pub fn into_password(self) -> Option<(String, bool)> {
-        match self {
-            PasswordResponse::Password {
-                value,
-                save_to_keychain,
-            } => Some((value, save_to_keychain)),
-            _ => None,
-        }
-    }
-
-    pub fn is_use_saved_password(&self) -> bool {
-        matches!(self, PasswordResponse::UseSavedPassword)
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        matches!(self, PasswordResponse::Cancelled)
-    }
-
-    pub fn is_confirmed(&self) -> bool {
-        matches!(self, PasswordResponse::Confirmed)
-    }
 }
 
 /// Internal state for the password request state machine

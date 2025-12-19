@@ -10,9 +10,11 @@ import {LayoutTitle} from '@/layout/LayoutTitle';
 import {
   passwordRequest,
   passwordRequestContent,
+  passwordRequestDescription,
   passwordRequestKeyId,
 } from '@/pages/PasswordRequest/PasswordRequest.css';
 import {PasswordRequestForm} from '@/pages/PasswordRequest/PasswordRequestForm';
+import {ResponseForm} from '@/pages/PasswordRequest/ResponseForm';
 import {useAutoResizeWindow} from '@/pages/PasswordRequest/useAutoResizeWindow';
 
 type Props = {
@@ -22,7 +24,6 @@ type Props = {
 
 export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   const containerRef = useAutoResizeWindow<HTMLElement>([request]);
-
   return (
     <Layout ref={containerRef} className={passwordRequest}>
       <LayoutTitle icon={IconKeyFilled} centered>
@@ -40,13 +41,26 @@ export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
           <Card loading>
             <p>Requesting authentication to unlock SSH key...</p>
           </Card>
-        ) : (
+        ) : request.key_path ? (
           <PasswordRequestForm
-            prompt={`Enter passphrase for SSH key`}
+            prompt="Enter passphrase for SSH key"
             keyIdentifier={request.key_id || request.key_path}
             hasSavedPassword={request.has_saved_password}
             onResponse={onResponse}
           />
+        ) : (
+          <>
+            <Card className={passwordRequestDescription}>{request.prompt.trim()}</Card>
+            <ResponseForm
+              onResponse={(response) => {
+                if (response !== null) {
+                  onResponse({
+                    response: response.trim(),
+                  });
+                }
+              }}
+            />
+          </>
         )}
       </Flex>
     </Layout>

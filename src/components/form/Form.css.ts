@@ -14,5 +14,6 @@ export const formStyle = style([
 ]);
 
 globalStyle(`${formStyle} :is(input[type=text], input[type=email], input[type=password])`, {
-  width: 300, // TODO: 100% for responsive
+  width: '100%',
+  maxWidth: 300,
 });
