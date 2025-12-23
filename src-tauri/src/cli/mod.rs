@@ -11,6 +11,7 @@ use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
+use crate::cli::commands::ssh_agent::ssh_agent_command::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::core::build_sha;
 use crate::core::dirs::vaults_dir;
@@ -44,6 +45,8 @@ pub enum AxoPassCommand {
     /// Show version and build
     Info,
 
+    SshAgent(SshAgentCommand),
+
     #[command(hide = true)]
     Complete {
         #[arg(value_enum)]
@@ -75,6 +78,7 @@ impl AxoPassCommand {
                 println!("Build: {}", build_sha::BUILD_SHA.unwrap_or("not set"));
                 println!("Vault dir: {}", vaults_dir().display());
             },
+            AxoPassCommand::SshAgent(ssh_agent) => ssh_agent.run().await,
             AxoPassCommand::Complete { shell } => {
                 /*
                 add the following to ~/.zshrc:
