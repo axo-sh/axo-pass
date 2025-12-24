@@ -1,5 +1,6 @@
 pub mod ssh_agent_command;
 mod ssh_agent_session;
+mod stored_credential;
 
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
@@ -11,9 +12,11 @@ use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 
 use crate::cli::commands::ssh_agent::ssh_agent_session::SshAgentSession;
+use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::core::dirs::app_data_dir;
 
 pub struct SshAgentServer {
+    pub credentials: Arc<Mutex<Vec<StoredCredential>>>,
     pub socket_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
@@ -32,6 +35,7 @@ pub enum SshAgentError {
 impl SshAgentServer {
     pub fn new() -> Self {
         SshAgentServer {
+            credentials: Arc::new(Mutex::new(Vec::new())),
             socket_path: Arc::new(Mutex::new(None)),
         }
     }
@@ -60,6 +64,7 @@ impl SshAgentServer {
                 socket_path.display()
             ))
         })?;
+
         fs::set_permissions(&socket_path, Permissions::from_mode(0o600)).map_err(|e| {
             let _ = fs::remove_file(&socket_path);
             SshAgentError::CouldNotCreateSocket(format!(
@@ -69,7 +74,7 @@ impl SshAgentServer {
         })?;
 
         tokio::select! {
-            result = ssh_agent_lib::agent::listen(listener, SshAgentSession::new()) => {
+            result = ssh_agent_lib::agent::listen(listener, SshAgentSession::new(self.credentials.clone())) => {
               if let Err(e) = result {
                 log::error!("axo pass ssh-agent error: {e}");
               }

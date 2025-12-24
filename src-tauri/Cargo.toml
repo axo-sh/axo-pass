@@ -73,6 +73,9 @@ time = { version = "0.3.44", features = [
 ] }
 clap_complete = "4.5.61"
 ssh-agent-lib = "0.5.1"
+libc = "0.2.178"
+ssh-key = "0.6.7"
+rsa = "0.9.9"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
