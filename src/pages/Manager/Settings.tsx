@@ -64,9 +64,10 @@ export const Settings: React.FC = () => {
         <CodeBlock canCopy>ln -s "{appBundlePath}/bin/ap" /usr/local/bin/ap</CodeBlock>
 
         <div>
-          For <Code>zsh</Code> autocomplete, add the following to your <Code>~/.zshrc</Code>:
+          For <Code>zsh</Code> autocomplete and ssh-agent support, add the following to your{' '}
+          <Code>~/.zshrc</Code>:
         </div>
-        <CodeBlock canCopy>source {'<'}(ap complete zsh)</CodeBlock>
+        <CodeBlock canCopy>source {'<'}(ap shellenv zsh)</CodeBlock>
       </DashboardSection>
 
       <DashboardSection title="Vaults">

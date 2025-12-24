@@ -50,7 +50,7 @@ pub enum AxoPassCommand {
     SshAgent(SshAgentCommand),
 
     #[command(hide = true)]
-    Complete {
+    Shellenv {
         #[arg(value_enum)]
         shell: Shell,
     },
@@ -81,13 +81,19 @@ impl AxoPassCommand {
                 println!("Vault dir: {}", vaults_dir().display());
             },
             AxoPassCommand::SshAgent(ssh_agent) => ssh_agent.run().await,
-            AxoPassCommand::Complete { shell } => {
-                /*
-                add the following to ~/.zshrc:
-                source <(ap complete zsh)
-                */
+            AxoPassCommand::Shellenv { shell } => {
+                // add the following to ~/.zshrc:
+                // source <(ap shellenv zsh)
+
+                // add completions
                 let mut cmd = AxoPassCli::command();
                 generate(*shell, &mut cmd, "ap", &mut io::stdout());
+
+                // add ssh agent environment setup (only zsh supported)
+                // todo: add config flag
+                if matches!(shell, Shell::Zsh) {
+                    println!("{}", include_str!("commands/ssh_agent/ssh_agent.zsh"));
+                }
             },
         }
     }
