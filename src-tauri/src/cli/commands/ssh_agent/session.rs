@@ -7,6 +7,7 @@ use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{self, AddIdentity, AddIdentityConstrained, SignRequest, signature};
 use ssh_key::Signature;
 use tokio::sync::Mutex;
+use ssh_key::public::KeyData;
 
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 
@@ -28,6 +29,18 @@ impl SshAgentSession {
         let credential = StoredCredential::from(credential).add_constraints(constraints);
         log::debug!("Adding identity details: {:?}", credential);
         self.state.lock().await.push(credential);
+    }
+
+    pub async fn find_credential(&self, pubkey: &KeyData) -> Option<StoredCredential> {
+        for cred in self.state.lock().await.iter() {
+            log::debug!("Stored credential: {:?}", cred);
+            if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
+                && identity.pubkey == *pubkey
+            {
+                return Some(cred.clone());
+            }
+        }
+        None
     }
 }
 
@@ -61,7 +74,7 @@ impl Session for SshAgentSession {
     }
 
     async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
-        let creds = self.state.lock().await;
+        log::debug!("request: sign with identity");
         match req.flags {
             signature::RSA_SHA2_256 | signature::RSA_SHA2_512 => {
                 todo!("RSA SHA2 signatures");
@@ -69,13 +82,9 @@ impl Session for SshAgentSession {
             _ => {},
         }
 
-        let stored_cred = creds
-            .iter()
-            .find(|c| match TryInto::<proto::Identity>::try_into(*c) {
-                Ok(identity) => identity.pubkey == req.pubkey,
-                _ => false,
-            })
-            .ok_or_else(|| AgentError::Other(anyhow!("Key not found").into()))?;
+        let Some(stored_cred) = self.find_credential(&req.pubkey).await else {
+            return Err(AgentError::Other(anyhow!("Key not found").into()));
+        };
 
         let _ = stored_cred
             .validate()

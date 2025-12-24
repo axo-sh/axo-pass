@@ -15,6 +15,7 @@ pub enum CredentialError {
     Locked,
 }
 
+#[derive(Clone)]
 pub struct StoredCredential {
     pub credential: proto::Credential,
     pub expires_at: Option<UtcDateTime>,
