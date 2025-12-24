@@ -8,19 +8,26 @@ use ssh_agent_lib::proto::{
     self, AddIdentity, AddIdentityConstrained, RemoveIdentity, SignRequest, signature,
 };
 use ssh_key::Signature;
-use tokio::sync::Mutex;
 use ssh_key::public::KeyData;
+use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 
 #[derive(Clone)]
 pub struct SshAgentSession {
     state: Arc<Mutex<Vec<StoredCredential>>>,
+    shutdown_sender: broadcast::Sender<()>,
 }
 
 impl SshAgentSession {
-    pub fn new(state: Arc<Mutex<Vec<StoredCredential>>>) -> Self {
-        SshAgentSession { state }
+    pub fn new(
+        state: Arc<Mutex<Vec<StoredCredential>>>,
+        shutdown_sender: broadcast::Sender<()>,
+    ) -> Self {
+        SshAgentSession {
+            state,
+            shutdown_sender,
+        }
     }
 
     pub async fn add_credential_to_state(
@@ -146,6 +153,12 @@ impl Session for SshAgentSession {
     ) -> Result<Option<proto::Extension>, AgentError> {
         if let Ok(Some(_)) = extension.parse_message::<proto::extension::SessionBind>() {
             log::debug!("todo: implement session bind extension");
+            return Ok(None);
+        }
+
+        if extension.name == "ssh-shutdown@pass.axo.sh" {
+            log::info!("Received shutdown extension, signaling server shutdown");
+            let _ = self.shutdown_sender.send(());
             return Ok(None);
         }
 

@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand, command};
 use color_print::cformat;
 pub use server::SshAgentServer;
 
-use crate::cli::commands::ssh_agent::client::{AgentStatus, get_agent_status};
+use crate::cli::commands::ssh_agent::client::{
+    AgentStatus, StopSshAgentError, get_agent_status, stop_ssh_agent,
+};
 
 #[derive(Parser, Debug)]
 pub struct SshAgentCommand {
@@ -37,8 +39,20 @@ impl SshAgentCommand {
                     log::error!("SSH Agent failed: {e}");
                 }
             },
-            SshAgentSubcommand::Stop => {
-                todo!("stop ssh agent")
+
+            SshAgentSubcommand::Stop => match stop_ssh_agent().await {
+                Ok(_) => {
+                    log::info!("SSH agent stopped.");
+                },
+                Err(e) => match e {
+                    StopSshAgentError::NoSocketFound => {
+                        log::info!("SSH agent is not running.");
+                    },
+                    _ => {
+                        log::error!("{e}");
+                        std::process::exit(1);
+                    },
+                },
             },
             SshAgentSubcommand::Status => match get_agent_status().await {
                 AgentStatus::Running => {

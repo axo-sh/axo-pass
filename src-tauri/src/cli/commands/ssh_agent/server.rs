@@ -3,17 +3,20 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ssh_agent_lib::agent::{Agent, Session};
 use thiserror::Error;
-use tokio::net::UnixListener;
-use tokio::sync::Mutex;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::session::SshAgentSession;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::core::dirs::app_data_dir;
 
+#[derive(Clone)]
 pub struct SshAgentServer {
     pub credentials: Arc<Mutex<Vec<StoredCredential>>>,
     pub socket_path: Arc<Mutex<Option<PathBuf>>>,
+    pub shutdown_sender: broadcast::Sender<()>,
 }
 
 #[derive(Error, Debug)]
@@ -30,9 +33,11 @@ pub enum SshAgentError {
 
 impl SshAgentServer {
     pub fn new() -> Self {
+        let (shutdown_sender, _) = broadcast::channel(1);
         SshAgentServer {
             credentials: Arc::new(Mutex::new(Vec::new())),
             socket_path: Arc::new(Mutex::new(None)),
+            shutdown_sender,
         }
     }
 
@@ -72,14 +77,18 @@ impl SshAgentServer {
             ))
         })?;
 
+        let mut shutdown_rx = self.shutdown_sender.subscribe();
         tokio::select! {
-            result = ssh_agent_lib::agent::listen(listener, SshAgentSession::new(self.credentials.clone())) => {
+            result = ssh_agent_lib::agent::listen(listener, self.clone()) => {
               if let Err(e) = result {
                 log::error!("axo pass ssh-agent error: {e}");
               }
             }
             _ = tokio::signal::ctrl_c() => {
-                log::info!("axo pass ssh-agent: Received Ctrl+C, shutting down gracefully");
+                log::info!("axo pass ssh-agent: Received Ctrl+C, shutting down...");
+            }
+            _ = shutdown_rx.recv() => {
+                log::info!("axo pass ssh-agent: Shutting down...");
             }
         }
         let _ = fs::remove_file(&socket_path);
@@ -89,5 +98,11 @@ impl SshAgentServer {
     pub fn default_socket_path() -> PathBuf {
         // typically: ~/Library/Application Support/Axo Pass/ssh-agent.sock
         app_data_dir().join("ssh-agent.sock")
+    }
+}
+
+impl Agent<UnixListener> for SshAgentServer {
+    fn new_session(&mut self, _socket: &UnixStream) -> impl Session {
+        SshAgentSession::new(self.credentials.clone(), self.shutdown_sender.clone())
     }
 }
