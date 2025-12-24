@@ -40,8 +40,11 @@ impl SshAgentServer {
         if let Some(socket_path) = self.socket_path.lock().await.as_ref() {
             return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
         }
-
         let socket_path = SshAgentServer::default_socket_path();
+        if socket_path.exists() {
+            return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
+        }
+
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 SshAgentError::CouldNotCreateSocket(format!(
@@ -52,7 +55,7 @@ impl SshAgentServer {
         }
         *self.socket_path.lock().await = Some(socket_path.clone());
 
-        log::info!("SSH Agent: Starting on socket {}", socket_path.display());
+        log::debug!("SSH Agent socket path: {}", socket_path.display());
         let listener = UnixListener::bind(&socket_path).map_err(|e| {
             let _ = fs::remove_file(&socket_path);
             SshAgentError::CouldNotCreateSocket(format!(
