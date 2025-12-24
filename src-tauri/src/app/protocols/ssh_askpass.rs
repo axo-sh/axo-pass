@@ -126,9 +126,11 @@ impl SshAskpassHandler {
         let prompt = prompt.trim();
         let patterns = vec![
             // eg: ssh-add
-            r"^Enter passphrase for (?P<key_path>[^\s]+)(?: \(will confirm each use\))?:$",
+            r#"^Enter passphrase for (?P<key_path>[^\s"']+)(?: \(will confirm each use\))?:$"#,
             // eg: git operations
-            r"^Enter passphrase for key '(?P<key_path>[^\s]+)':$",
+            r#"^Enter passphrase for key '(?P<key_path>[^\s"']+)':$"#,
+            // eg: ssh-keygen
+            r#"^Enter passphrase for "(?P<key_path>[^\s"']+)":$"#,
         ];
 
         for pattern in patterns {
