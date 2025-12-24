@@ -4,7 +4,9 @@ use anyhow::anyhow;
 use rsa::signature::SignerMut;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
-use ssh_agent_lib::proto::{self, AddIdentity, AddIdentityConstrained, SignRequest, signature};
+use ssh_agent_lib::proto::{
+    self, AddIdentity, AddIdentityConstrained, RemoveIdentity, SignRequest, signature,
+};
 use ssh_key::Signature;
 use tokio::sync::Mutex;
 use ssh_key::public::KeyData;
@@ -42,6 +44,20 @@ impl SshAgentSession {
         }
         None
     }
+
+    pub async fn remove_credential(&mut self, pubkey: &KeyData) -> Option<StoredCredential> {
+        let mut state = self.state.lock().await;
+        if let Some(pos) = state.iter().position(|cred| {
+            if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred) {
+                identity.pubkey == *pubkey
+            } else {
+                false
+            }
+        }) {
+            return Some(state.remove(pos));
+        }
+        None
+    }
 }
 
 #[ssh_agent_lib::async_trait]
@@ -73,6 +89,19 @@ impl Session for SshAgentSession {
         Ok(())
     }
 
+    async fn remove_identity(&mut self, req: RemoveIdentity) -> Result<(), AgentError> {
+        if self.remove_credential(&req.pubkey).await.is_none() {
+            log::debug!("request: remove ssh identity - key not found");
+        } else {
+            log::debug!("request: remove ssh identity");
+        }
+        Ok(())
+    }
+
+    async fn remove_all_identities(&mut self) -> Result<(), AgentError> {
+        self.state.lock().await.clear();
+        Ok(())
+    }
     async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
         log::debug!("request: sign with identity");
         match req.flags {
