@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, mpsc};
+use std::sync::{LazyLock, Mutex, mpsc};
 
 use anyhow::anyhow;
 use block2::RcBlock;
@@ -9,6 +9,9 @@ use objc2_local_authentication::{LAAccessControlOperation, LAContext, LAError, L
 use objc2_security::SecAccessControl;
 
 use crate::secrets::keychain::errors::KeychainError;
+
+/// Lock to prevent overlapping authentication windows
+static EVALUATE_LA_LOCK: Mutex<()> = Mutex::new(());
 
 thread_local! {
     pub static THREAD_LA_CONTEXT: LazyLock<Retained<LAContext>> = LazyLock::new(|| {
@@ -53,6 +56,10 @@ fn create_la_callback() -> (
 
 // use this to create a one time authentication prompt
 pub fn evaluate_la_context(reason: &str) -> Result<(), KeychainError> {
+    // lock ensures only one authentication prompt at a time. we unwrap/into_inner
+    // so we don't panic if the mutex is poisoned
+    let _guard = EVALUATE_LA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     // "Axo Pass is trying to {reason}."
     let displayed_reason = NSString::from_str(reason);
     let policy = LAPolicy::DeviceOwnerAuthentication; // biometrics or password
@@ -77,6 +84,8 @@ pub fn evaluate_la_context(reason: &str) -> Result<(), KeychainError> {
 pub fn evaluate_local_la_context(
     access_control: Retained<SecAccessControl>,
 ) -> Result<(), KeychainError> {
+    let _guard = EVALUATE_LA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let (evaluate_callback, rx) = create_la_callback();
     let displayed_reason = NSString::from_str("use secure item");
     THREAD_LA_CONTEXT.with(|ctx| unsafe {
