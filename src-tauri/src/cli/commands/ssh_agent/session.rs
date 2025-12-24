@@ -34,6 +34,7 @@ impl SshAgentSession {
 #[ssh_agent_lib::async_trait]
 impl Session for SshAgentSession {
     async fn request_identities(&mut self) -> Result<Vec<proto::Identity>, AgentError> {
+        log::debug!("request: list ssh identities");
         let creds = self.state.lock().await;
         let identities = creds
             .iter()
@@ -43,6 +44,7 @@ impl Session for SshAgentSession {
     }
 
     async fn add_identity(&mut self, req: AddIdentity) -> Result<(), AgentError> {
+        log::debug!("request: add ssh identity");
         self.add_credential_to_state(req.credential, Vec::new())
             .await;
         Ok(())
@@ -52,6 +54,7 @@ impl Session for SshAgentSession {
         &mut self,
         req: AddIdentityConstrained,
     ) -> Result<(), AgentError> {
+        log::debug!("request: add ssh identity with constraints");
         self.add_credential_to_state(req.identity.credential, req.constraints)
             .await;
         Ok(())
