@@ -92,21 +92,3 @@ impl AxoPassCommand {
         }
     }
 }
-
-pub async fn run() {
-    if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
-        env_logger::builder()
-            .filter_level(LevelFilter::Debug)
-            .format(|buf, record| cwriteln!(buf, "<dim>{}</dim>", record.args()))
-            .init();
-    }
-
-    let cli = AxoPassCli::parse();
-    match cli.command {
-        Some(command) => command.execute().await,
-        None => {
-            eprintln!("No command provided. Use --help for usage information.");
-            std::process::exit(1);
-        },
-    }
-}
