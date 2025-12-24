@@ -11,7 +11,7 @@ use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
-use crate::cli::commands::ssh_agent::ssh_agent_command::SshAgentCommand;
+use crate::cli::commands::ssh_agent::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::core::build_sha;
 use crate::core::dirs::vaults_dir;
@@ -31,7 +31,9 @@ pub enum AxoPassCommand {
     Item(ItemCommand),
 
     /// Get a item credential's secret
-    Read { item_reference: ItemReference },
+    Read {
+        item_reference: ItemReference,
+    },
 
     /// Inject secrets into a file
     Inject(InjectCommand),
