@@ -16,6 +16,7 @@ use crate::app::app_mode::AppMode;
 use crate::app::app_state::AppState;
 use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryState};
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
+use crate::core::dirs::log_data_dir;
 use crate::core::updates::check_for_updates;
 
 const STD_DELAY: Duration = Duration::from_millis(200);
@@ -101,8 +102,9 @@ pub fn run(cmd: Option<AxoAppCommand>) {
                 tauri_plugin_log::TargetKind::Stderr,
             ))
             .target(tauri_plugin_log::Target::new(
-                tauri_plugin_log::TargetKind::LogDir {
-                    file_name: Some("frittata".to_string()),
+                tauri_plugin_log::TargetKind::Folder {
+                    path: log_data_dir(),
+                    file_name: Some("app.log".to_string()),
                 },
             ))
             .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
