@@ -4,7 +4,7 @@ mod session;
 mod stored_credential;
 
 use clap::{Parser, Subcommand, command};
-use color_print::cformat;
+use color_print::cprintln;
 pub use server::SshAgentServer;
 
 use crate::cli::commands::ssh_agent::client::{
@@ -58,11 +58,11 @@ impl SshAgentCommand {
 
             SshAgentSubcommand::Stop => match stop_ssh_agent().await {
                 Ok(_) => {
-                    log::info!("SSH agent stopped.");
+                    println!("SSH agent stopped.");
                 },
                 Err(e) => match e {
                     StopSshAgentError::NoSocketFound => {
-                        log::info!("SSH agent is not running.");
+                        println!("SSH agent is not running.");
                     },
                     _ => {
                         log::error!("{e}");
@@ -72,22 +72,16 @@ impl SshAgentCommand {
             },
             SshAgentSubcommand::Status => match get_agent_status().await {
                 AgentStatus::Running => {
-                    log::info!("{}", cformat!("SSH agent status: <green>running</green>"));
+                    cprintln!("SSH agent status: <green>running</green>");
                     std::process::exit(0);
                 },
                 AgentStatus::NotRunning => {
-                    log::info!(
-                        "{}",
-                        cformat!("SSH agent status: <yellow>not running</yellow>")
-                    );
+                    cprintln!("SSH agent status: <yellow>not running</yellow>");
                     std::process::exit(1);
                 },
                 AgentStatus::StaleSocket => {
-                    log::info!(
-                        "{}",
-                        cformat!("SSH agent status: <yellow>not running</yellow>")
-                    );
-                    log::info!("Warning: stale socket found");
+                    cprintln!("SSH agent status: <yellow>not running</yellow>");
+                    println!("Warning: stale socket found");
                     std::process::exit(1);
                 },
             },

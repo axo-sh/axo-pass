@@ -39,7 +39,7 @@ pub async fn check_for_updates(app_handle: tauri::AppHandle, force: bool) {
         {
             log::debug!("Skipping update check: Already checked today.");
             if let UpdateCheckResult::UpdateAvailable { version } = &updates.result {
-                log::info!("Update available (cached): {version}");
+                println!("Update available (cached): {version}");
             }
         }
         return;
@@ -53,40 +53,40 @@ pub async fn check_for_updates(app_handle: tauri::AppHandle, force: bool) {
         Ok(updater) => match updater.check().await {
             Ok(Some(update)) => {
                 let version = update.version.clone();
-                log::info!("Update available: {version}");
+                println!("Update available: {version}");
                 let mut config = APP_CONFIG.lock().unwrap();
                 config.record_update_check(UpdateCheckResult::UpdateAvailable { version });
                 if let Err(e) = config.save() {
-                    log::warn!("Failed to save config after update check: {e}");
+                    eprintln!("Failed to save config after update check: {e}");
                 }
             },
             Ok(None) => {
-                log::debug!("No updates available");
+                eprintln!("No updates available");
                 let mut config = APP_CONFIG.lock().unwrap();
                 config.record_update_check(UpdateCheckResult::UpToDate);
                 if let Err(e) = config.save() {
-                    log::warn!("Failed to save config after update check: {e}");
+                    eprintln!("Failed to save config after update check: {e}");
                 }
             },
             Err(e) => {
-                log::warn!("Failed to check for updates: {e}");
+                eprintln!("Failed to check for updates: {e}");
                 let mut config = APP_CONFIG.lock().unwrap();
                 config.record_update_check(UpdateCheckResult::Error {
                     error: e.to_string(),
                 });
                 if let Err(e) = config.save() {
-                    log::warn!("Failed to save config after update check: {e}");
+                    eprintln!("Failed to save config after update check: {e}");
                 }
             },
         },
         Err(e) => {
-            log::warn!("Failed to get updater: {e}");
+            eprintln!("Failed to get updater: {e}");
             let mut config = APP_CONFIG.lock().unwrap();
             config.record_update_check(UpdateCheckResult::Error {
                 error: e.to_string(),
             });
             if let Err(e) = config.save() {
-                log::warn!("Failed to save config after update check: {e}");
+                eprintln!("Failed to save config after update check: {e}");
             }
         },
     }

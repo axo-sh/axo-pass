@@ -81,14 +81,14 @@ impl SshAgentServer {
         tokio::select! {
             result = ssh_agent_lib::agent::listen(listener, self.clone()) => {
               if let Err(e) = result {
-                log::error!("axo pass ssh-agent error: {e}");
+                log::error!("ssh-agent error: {e}");
               }
             }
             _ = tokio::signal::ctrl_c() => {
-                log::info!("axo pass ssh-agent: Received Ctrl+C, shutting down...");
+                log::info!("ssh-agent: Received Ctrl+C, shutting down...");
             }
             _ = shutdown_rx.recv() => {
-                log::info!("axo pass ssh-agent: Shutting down...");
+                log::info!("ssh-agent: Shutting down...");
             }
         }
         let _ = fs::remove_file(&socket_path);
