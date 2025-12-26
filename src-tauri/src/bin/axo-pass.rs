@@ -36,13 +36,7 @@ enum Command {
 impl AxoPass {
     fn execute(&self) {
         match &self.command {
-            Some(Command::Cli(cmd)) => tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async {
-                    cmd.execute().await;
-                }),
+            Some(Command::Cli(cmd)) => cmd.execute(),
             Some(Command::App(cmd)) => {
                 frittata_lib::app::run(Some(cmd.clone()));
             },

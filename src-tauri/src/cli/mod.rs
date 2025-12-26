@@ -1,11 +1,13 @@
 pub mod commands;
 
-use std::io::{self, Write};
+use std::io;
 
 use clap::{CommandFactory, Parser, Subcommand, command};
 use clap_complete::{Shell, generate};
-use color_print::cwriteln;
-use log::LevelFilter;
+use fork::daemon;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, fmt, reload};
 
 use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::inject::InjectCommand;
@@ -14,7 +16,7 @@ use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::ssh_agent::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::core::build_sha;
-use crate::core::dirs::vaults_dir;
+use crate::core::dirs::{log_data_dir, vaults_dir};
 
 #[derive(Parser, Debug)]
 pub struct AxoPassCli {
@@ -57,14 +59,63 @@ pub enum AxoPassCommand {
 }
 
 impl AxoPassCommand {
-    pub async fn execute(&self) {
-        if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
-            env_logger::builder()
-                .filter_level(LevelFilter::Debug)
-                .format(|buf, record| cwriteln!(buf, "<dim>{}</dim>", record.args()))
+    pub fn execute(&self) {
+        let reload_log = if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
+            let filter = EnvFilter::new("debug,ssh_agent_lib=off");
+            let layer: fmt::Layer<_, _, _, fn() -> Box<dyn io::Write>> = fmt::layer()
+                .with_ansi(true)
+                .with_writer(|| -> Box<dyn io::Write> { Box::new(io::stderr()) });
+            let (layer, reload_layer) = reload::Layer::new(layer);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(layer)
                 .init();
+            Some(reload_layer)
+        } else {
+            None
+        };
+
+        if let AxoPassCommand::SshAgent(ssh_agent) = self
+            && ssh_agent.should_detach()
+        {
+            // if we're not in debug mode, we should detach the ssh process:
+            // do that here before tokio is initialized, otherwise bad things happen:
+            // https://github.com/tokio-rs/tokio/issues/4301
+            if let Err(e) = daemon(false, false) {
+                log::error!("Failed to daemonize SSH agent: {e}");
+                std::process::exit(1);
+            }
+
+            // we are detached now, modify the logger to log to a file: instead
+            if let Some(reload_log) = reload_log {
+                let _ = reload_log
+                    .modify(|layer| {
+                        layer.set_ansi(false);
+                        *layer.writer_mut() = || -> Box<dyn io::Write> {
+                            //  ~/Library/Logs/Axo Pass/agent.log
+                            let file_appender =
+                                tracing_appender::rolling::daily(log_data_dir(), "agent.log");
+                            Box::new(file_appender)
+                        };
+                    })
+                    .inspect_err(|e| {
+                        log::warn!("Failed to modify log destination: {e}");
+                    });
+            }
+            log::info!("SSH agent daemonized successfully.");
         }
 
+        // Initialize tokio runtime
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                self.execute_async().await;
+            });
+    }
+
+    async fn execute_async(&self) {
         match self {
             AxoPassCommand::Keychain(keychain) => keychain.execute().await,
             AxoPassCommand::Vault(vault) => vault.execute().await,

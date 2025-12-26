@@ -18,16 +18,32 @@ pub struct SshAgentCommand {
 }
 
 #[derive(Subcommand, Debug)]
-enum SshAgentSubcommand {
-    Start,
+pub enum SshAgentSubcommand {
+    /// Start the SSH agent
+    Start {
+        /// Debug mode: run SSH agent in the foreground
+        #[arg(short = 'd')]
+        debug: bool,
+    },
+
+    /// Stop SSH agent
     Stop,
+
+    /// Get SSH agent status
     Status,
 }
 
 impl SshAgentCommand {
+    pub fn should_detach(&self) -> bool {
+        match &self.subcommand {
+            SshAgentSubcommand::Start { debug } => !*debug,
+            _ => false,
+        }
+    }
+
     pub async fn run(&self) {
         match &self.subcommand {
-            SshAgentSubcommand::Start => {
+            SshAgentSubcommand::Start { .. } => {
                 if matches!(get_agent_status().await, AgentStatus::Running) {
                     log::info!("SSH agent is already running.");
                     std::process::exit(1);
