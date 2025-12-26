@@ -96,8 +96,8 @@ impl SshAgentServer {
     }
 
     pub fn default_socket_path() -> PathBuf {
-        // typically: ~/Library/Application Support/Axo Pass/ssh-agent.sock
-        app_data_dir().join("ssh-agent.sock")
+        // typically: ~/Library/Application Support/Axo Pass/agent.sock
+        app_data_dir().join("agent.sock")
     }
 }
 

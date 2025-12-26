@@ -1,6 +1,6 @@
 # if our ssh agent is running, make sure we set SSH_AUTH_SOCK accordingly
 function ap_ssh_agent_preexec() {
-    AP_SSH_AUTH_SOCK="$HOME/Library/Application Support/Axo Pass/ssh-agent.sock"
+    AP_SSH_AUTH_SOCK="$HOME/Library/Application Support/Axo Pass/agent.sock"
     lsof "$AP_SSH_AUTH_SOCK" >/dev/null 2>&1
 
     if [[ $? -ne 0 ]]; then
