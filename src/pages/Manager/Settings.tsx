@@ -4,7 +4,7 @@ import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
 import {DashboardContentHeader} from '@/pages/Dashboard/DashboardContent';
 import {DashboardSection} from '@/pages/Dashboard/DashboardSection';
-import {AppUpdates} from '@/pages/Manager/AppUpdates';
+import {AppUpdates} from '@/pages/Manager/Settings/AppUpdates';
 import {useClient} from '@/utils/useClient';
 
 export const Settings: React.FC = () => {

@@ -15,7 +15,7 @@ import {Code} from '@/components/Code';
 import {Flex} from '@/components/Flex';
 import {Loader} from '@/components/Loader';
 import {Toggle} from '@/components/Toggle';
-import {updateCheckDate} from '@/pages/Manager/AppUpdates.css';
+import {updateCheckDate} from '@/pages/Manager/Settings/AppUpdates.css';
 import {useClient} from '@/utils/useClient';
 
 export const AppUpdates: React.FC = () => {
