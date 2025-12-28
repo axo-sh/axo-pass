@@ -18,7 +18,7 @@ export const dashboardContentHeader = style({
   position: 'sticky',
   top: 0,
   margin: spacing(0, -2, 1),
-  padding: spacing(1, 2, 0),
+  padding: spacing(0, 2),
   borderBottom: `1px solid ${colorVar.light20}`,
   backgroundColor: colorVar.base,
   zIndex: 10,

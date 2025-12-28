@@ -3,6 +3,7 @@ import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
 import {colorVar} from '@/styles/colors.css';
+import {navWidth} from '@/pages/Dashboard.css';
 import {spacing} from '@/styles/utils';
 
 export const layout = style({
@@ -18,6 +19,14 @@ export const layoutDrag = style({
   height: 26,
   flex: 0,
   flexShrink: 0,
+});
+
+export const layoutDragFauxNav = style({
+  height: 26,
+  width: navWidth,
+  borderRightWidth: 1,
+  borderRightStyle: 'solid',
+  borderRightColor: colorVar.light20,
 });
 
 export const layoutContent = recipe({

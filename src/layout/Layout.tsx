@@ -2,7 +2,7 @@ import React from 'react';
 
 import cx from 'classnames';
 
-import {layout, layoutContent, layoutDrag} from '@/layout/Layout.css';
+import {layout, layoutContent, layoutDrag, layoutDragFauxNav} from '@/layout/Layout.css';
 
 interface Props {
   centered?: boolean;
@@ -14,7 +14,9 @@ export const Layout = React.forwardRef<HTMLElement, Props>(
   ({centered = false, className, children}, ref) => {
     return (
       <main ref={ref} className={cx(layout, className)}>
-        <div className={layoutDrag} data-tauri-drag-region />
+        <div className={layoutDrag} data-tauri-drag-region>
+          <div className={layoutDragFauxNav} />
+        </div>
         <div className={layoutContent({centered})}>{children}</div>
       </main>
     );
