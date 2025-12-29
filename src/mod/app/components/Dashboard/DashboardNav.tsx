@@ -9,6 +9,7 @@ import {
   IconHelpSquareRoundedFilled,
   IconKey,
   IconPlus,
+  IconSquareAsterisk,
   IconTerminal2,
   IconTriangle,
 } from '@tabler/icons-react';
@@ -95,6 +96,12 @@ export const DashboardNav: React.FC = observer(() => {
             />
           </DashboardNavSection>
         )}
+
+        <li>
+          <Link className={navLink} href="/dashboard/ssh">
+            <IconSquareAsterisk size={18} /> SSH
+          </Link>
+        </li>
 
         <li>
           <Link className={navLink} href="/dashboard/gpg">

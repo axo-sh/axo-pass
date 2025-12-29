@@ -38,11 +38,11 @@ impl SshAgentSession {
         let credential = StoredCredential::from(credential).add_constraints(constraints);
 
         // if credential already exists, remove it first
-        if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential) {
-            if self.find_credential(&identity.pubkey).await.is_some() {
-                log::debug!("Credential already exists, will replace.");
-                self.remove_credential(&identity.pubkey).await;
-            }
+        if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential)
+            && self.find_credential(&identity.pubkey).await.is_some()
+        {
+            log::debug!("Credential already exists, will replace.");
+            self.remove_credential(&identity.pubkey).await;
         }
 
         log::debug!("Adding identity details: {:?}", credential);

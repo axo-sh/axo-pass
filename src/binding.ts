@@ -57,6 +57,27 @@ export interface GetVaultRequest {
   vault_key?: string;
 }
 
+export enum SshKeyType {
+  Rsa = 'rsa',
+  Ed25519 = 'ed25519',
+  Ecdsa = 'ecdsa',
+  Dsa = 'dsa',
+  Unknown = 'unknown',
+}
+
+export interface SshKeyInfo {
+  name: string;
+  path: string;
+  key_type: SshKeyType;
+  has_public_key: boolean;
+  fingerprint?: string;
+  has_saved_password: boolean;
+}
+
+export interface ListSshKeysResponse {
+  keys: SshKeyInfo[];
+}
+
 export interface VaultInfo {
   name?: string;
   key: string;
@@ -69,6 +90,11 @@ export interface ListVaultsResponse {
 export interface NewVaultRequest {
   vault_name?: string;
   vault_key: string;
+}
+
+export interface SaveSshKeyPasswordRequest {
+  fingerprint: string;
+  password: string;
 }
 
 export interface UpdateCheckDisabledStatusResponse {

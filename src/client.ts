@@ -8,8 +8,10 @@ import type {
   DecryptedCredentialRequest,
   DeleteCredentialRequest,
   DeleteItemRequest,
+  ListSshKeysResponse,
   ListVaultsResponse,
   NewVaultRequest,
+  SaveSshKeyPasswordRequest,
   UpdateItemRequest,
   UpdateStatusResponse,
   UpdateVaultRequest,
@@ -184,4 +186,12 @@ export const setUpdateCheckDisabled = async (disabled: boolean): Promise<void> =
 
 export const gpgTestIntegration = async (): Promise<void> => {
   return await invoke<void>('gpg_test_integration');
+};
+
+export const listSshKeys = async (): Promise<ListSshKeysResponse> => {
+  return await invoke<ListSshKeysResponse>('list_ssh_keys');
+};
+
+export const saveSshKeyPassword = async (request: SaveSshKeyPasswordRequest): Promise<void> => {
+  return await invoke<void>('save_ssh_key_password', {request});
 };

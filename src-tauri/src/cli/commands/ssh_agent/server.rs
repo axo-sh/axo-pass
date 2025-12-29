@@ -31,6 +31,12 @@ pub enum SshAgentError {
     CouldNotCreateSocket(String),
 }
 
+impl Default for SshAgentServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SshAgentServer {
     pub fn new() -> Self {
         let (shutdown_sender, _) = broadcast::channel(1);
