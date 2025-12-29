@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-export const useClient = <T>(fetchFn: () => Promise<T>) => {
+export const useClient = <T>(fetchFn: () => Promise<T>, deps: React.DependencyList = []) => {
   const [ready, setReady] = React.useState(false);
   const [result, setResult] = React.useState<T | null>(null);
   const [error, setError] = React.useState<unknown>(null);
@@ -13,11 +13,11 @@ export const useClient = <T>(fetchFn: () => Promise<T>) => {
       setError(err);
     }
     setReady(true);
-  }, []);
+  }, [fetchFn]);
 
   React.useEffect(() => {
     fetch();
-  }, []);
+  }, deps);
 
   return {ready, result, error, reload: fetch};
 };

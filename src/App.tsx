@@ -4,12 +4,14 @@ import type {AppModeAndState} from '@/client';
 import {getMode} from '@/client';
 import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
-import {VaultContext, VaultStore} from '@/mobx/VaultStore';
-import {Dashboard} from '@/pages/Dashboard';
-import {GpgPinentryScreen} from '@/pages/GpgPinentryScreen';
-import {SshAskpassScreen} from '@/pages/SshAskpassScreen';
+import {Dashboard} from '@/mod/app/components/Dashboard/Dashboard';
+import {VaultStore, VaultStoreContext} from '@/mod/app/mobx/VaultStore';
+import {GpgPinentryScreen} from '@/mod/gpg-pinentry/GpgPinentryScreen';
+import {SshAskpassScreen} from '@/mod/ssh-askpass/SshAskpassScreen';
 
 import '@/App.css.ts';
+
+import {AppRouter} from '@/mod/app/AppRouter';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppModeAndState | null>(null);
@@ -61,9 +63,11 @@ const App: React.FC = () => {
   // Main app mode
   return (
     <ErrorDialogProvider>
-      <VaultContext.Provider value={vaultStore}>
-        <Dashboard />
-      </VaultContext.Provider>
+      <VaultStoreContext.Provider value={vaultStore}>
+        <Dashboard>
+          <AppRouter />
+        </Dashboard>
+      </VaultStoreContext.Provider>
     </ErrorDialogProvider>
   );
 };

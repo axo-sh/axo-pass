@@ -2,8 +2,8 @@ import {globalStyle, style} from '@vanilla-extract/css';
 import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
-import {colorVar} from '@/styles/colors.css';
-import {navWidth} from '@/pages/Dashboard.css';
+import {navWidth} from '@/mod/app/components/Dashboard/Dashboard.css';
+import {accentScheme, colorVar} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export const layout = style({
@@ -77,6 +77,24 @@ export const layoutTitleContent = style({
   flexGrow: 1,
   display: 'flex',
   alignItems: 'center',
+});
+
+export const layoutTitlePrefixLink = style({
+  color: colorVar.dim75,
+  textDecoration: 'none',
+  ':hover': {
+    background: colorVar.light20,
+    margin: spacing(-1 / 8, -1 / 4),
+    padding: spacing(1 / 8, 1 / 4),
+    borderRadius: 4,
+  },
+});
+
+export const layoutTitleSeparator = style({
+  margin: spacing(0, 1 / 2),
+  fontWeight: 800,
+  color: colorVar.light05,
+  vars: accentScheme,
 });
 
 export const layoutDescription = recipe({

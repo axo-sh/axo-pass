@@ -1,0 +1,162 @@
+import React from 'react';
+
+import {IconTrash} from '@tabler/icons-react';
+
+import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryType} from '@/client';
+import {button} from '@/components/Button.css';
+import {CodeBlock} from '@/components/CodeBlock';
+import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
+import {DashboardContentHeader} from '@/mod/app/components/Dashboard//DashboardContent';
+import {
+  secretItem,
+  secretItemDetail,
+  secretItemLabel,
+  secretItemValue,
+  secretsList,
+} from '@/styles/secrets.css';
+import {useClient} from '@/utils/useClient';
+
+const GpgSecretsHeader = () => (
+  <DashboardContentHeader
+    title="GPG & SSH Keys"
+    description="Stored GPG and SSH key passphrases. IDs correspond to GPG key grips and SSH key
+                fingerprint. Passphrases cannot be added directly here, only via GPG or SSH."
+  />
+);
+
+export const GPGSecrets: React.FC = () => {
+  const [selectedEntry, setSelectedEntry] = React.useState<PasswordEntry | null>(null);
+  const {ready, result, error, reload} = useClient(async () => (await listPasswords()) || []);
+  const dialog = useDialog();
+
+  if (error) {
+    return (
+      <>
+        <GpgSecretsHeader />
+        <p>Error loading passphrases: {String(error)}</p>
+      </>
+    );
+  }
+
+  if (!ready) {
+    return (
+      <>
+        <GpgSecretsHeader />
+        <p>Loading passphrases...</p>
+      </>
+    );
+  }
+
+  if (result === null || result.length === 0) {
+    return (
+      <>
+        <GpgSecretsHeader />
+        <p>
+          No stored passphrases found. Passphrases will be saved here when you use Touch ID
+          authentication.
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <GpgSecretsHeader />
+      <div className={secretsList()}>
+        {result.map((entry) => (
+          <div key={entry.key_id} className={secretItem()}>
+            <div className={secretItemDetail}>
+              <div className={secretItemLabel}>{getKeyTypeShort(entry.password_type)}</div>
+              <code className={secretItemValue}>{entry.key_id}</code>
+            </div>
+            <button
+              className={button({size: 'iconSmall', variant: 'secondaryError'})}
+              onClick={() => {
+                setSelectedEntry(entry);
+                dialog.open();
+              }}
+            >
+              <IconTrash size={16} />
+            </button>
+          </div>
+        ))}
+        <DeleteSecretDialog
+          isOpen={dialog.isOpen}
+          entry={selectedEntry}
+          onDelete={async () => {
+            if (selectedEntry) {
+              try {
+                await deletePassword(selectedEntry);
+                setSelectedEntry(null);
+                dialog.onClose();
+                reload();
+              } catch (error) {
+                alert(error);
+              }
+            }
+          }}
+          onClose={() => {
+            setSelectedEntry(null);
+            dialog.onClose();
+          }}
+        />
+      </div>
+    </>
+  );
+};
+
+type DialogProps = {
+  entry: PasswordEntry | null;
+  isOpen: boolean;
+  onDelete: () => void;
+  onClose: () => void;
+};
+
+const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onClose}) => {
+  if (!entry) {
+    return null;
+  }
+
+  const keyType = getKeyType(entry.password_type);
+  return (
+    <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
+      <CodeBlock>{entry.key_id}</CodeBlock>
+      Are you sure you want to delete the {keyType} passphrase identified above from your keychain?
+      You will need to re-enter the passphrase the next time you use the {keyType}.
+      <DialogActions>
+        <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
+          Cancel
+        </button>
+        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
+          Delete
+        </button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+const getKeyTypeShort = (type: PasswordEntryType) => {
+  switch (type) {
+    case 'gpg_key':
+      return 'GPG';
+    case 'ssh_key':
+      return 'SSH';
+    case 'age_key':
+      return 'Age';
+    default:
+      return 'Other';
+  }
+};
+
+const getKeyType = (type: PasswordEntryType) => {
+  switch (type) {
+    case 'gpg_key':
+      return 'GPG key';
+    case 'ssh_key':
+      return 'SSH key';
+    case 'age_key':
+      return 'Age key';
+    default:
+      return 'key';
+  }
+};
