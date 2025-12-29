@@ -73,6 +73,15 @@ impl VaultsManager {
         self.vaults.keys().cloned()
     }
 
+    pub fn update_vault_key(&mut self, old_key: &str, new_key: &str) -> Result<(), Error> {
+        if let Some(vw) = self.vaults.remove(old_key) {
+            self.vaults.insert(new_key.to_string(), vw);
+            Ok(())
+        } else {
+            Err(Error::VaultNotFound(old_key.to_string()))
+        }
+    }
+
     pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultWrapper)> {
         self.vaults.iter()
     }
