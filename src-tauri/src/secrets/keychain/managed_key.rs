@@ -22,7 +22,7 @@ pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
 
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::managed_key::shared::alg;
+use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 
 pub struct ManagedKey {
     pub label: Option<String>,
@@ -192,6 +192,26 @@ impl ManagedKey {
                 log::debug!("Error decrypting data with key {self:?}: {:?}", cf_error);
                 None
             }
+        }
+    }
+
+    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, KeychainError> {
+        unsafe {
+            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let res = self
+                .sec_key
+                .signature(sign_alg(), &CFData::from_bytes(data), &mut cf_error_ptr)
+                .map(|sig| sig.as_bytes_unchecked().to_vec());
+            if !cf_error_ptr.is_null() {
+                let cf_error = cf_error_ptr.as_ref().unwrap();
+                return Err(KeychainError::SigningFailed(cf_error.to_string()));
+            }
+            let Some(res) = res else {
+                return Err(KeychainError::SigningFailed(
+                    "No signature returned".to_string(),
+                ));
+            };
+            Ok(res)
         }
     }
 }

@@ -16,4 +16,7 @@ pub enum KeychainError {
 
     #[error("Key creation failed with unexpected error")]
     KeyCreationFailed,
+
+    #[error("Signing failed: {0}")]
+    SigningFailed(String),
 }
