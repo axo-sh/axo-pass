@@ -136,9 +136,14 @@ impl ManagedKey {
 
     #[allow(dead_code)]
     pub fn delete(&self) -> anyhow::Result<()> {
+        if self.label.is_none() {
+            bail!("Cannot delete managed key without label.");
+        }
         unsafe {
-            let query = Self::common_attrs(None);
+            let query = Self::common_attrs(self.label.clone());
             query.add(kSecMatchItemList, &CFArray::from_objects(&[&*self.sec_key]));
+
+            // TODO: query to ensure we only delete the desired item.
             let status = SecItemDelete(query.as_opaque());
             log::debug!("Deleted key status: {}", status);
         }
