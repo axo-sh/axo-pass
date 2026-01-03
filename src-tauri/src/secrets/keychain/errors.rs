@@ -17,6 +17,12 @@ pub enum KeychainError {
     #[error("Key creation failed with unexpected error")]
     KeyCreationFailed,
 
+    #[error("Public key creation failed: {0}")]
+    PublicKeyCreationFailed(anyhow::Error),
+
+    #[error("Public key unavailable: {0}")]
+    PublicKeyUnavailable(String),
+
     #[error("Signing failed: {0}")]
     SigningFailed(String),
 }

@@ -1,5 +1,7 @@
 mod query;
 mod shared;
+mod ssh;
+mod utils;
 
 use std::fmt::Debug;
 use std::ptr;
@@ -20,9 +22,12 @@ use objc2_security::{
 };
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
+pub use ssh::ManagedSshKey;
+use ssh_key::public::KeyData;
 
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
+use crate::secrets::keychain::managed_key::utils::sec1_to_ssh_ecdsa;
 
 pub struct ManagedKey {
     pub label: Option<String>,
@@ -117,20 +122,33 @@ impl ManagedKey {
         }
     }
 
-    pub fn public_key(&self) -> Option<Vec<u8>> {
+    pub fn public_key(&self) -> Result<KeyData, KeychainError> {
+        // note SecKeyCopyExternalRepresentation returns public key in
+        // ANSI X9.63 format (04 || X || Y [ || K])
         unsafe {
             let mut cf_error_ptr: *mut CFError = ptr::null_mut();
-            let pub_key = self.sec_key.public_key()?;
-            let pub_key_ext = pub_key.external_representation(&mut cf_error_ptr)?;
+            let Some(pub_key) = self.sec_key.public_key() else {
+                return Err(KeychainError::PublicKeyUnavailable(
+                    "No public key".to_string(),
+                ));
+            };
+            let pub_key_ext = pub_key.external_representation(&mut cf_error_ptr);
             if !cf_error_ptr.is_null() {
-                log::debug!(
-                    "Error getting public key external representation: {:?}",
-                    cf_error_ptr
-                );
-                return None;
+                return Err(KeychainError::PublicKeyUnavailable(format!(
+                    "Error getting public key: {cf_error_ptr:?}"
+                )));
             }
+            let Some(pub_key_ext) = pub_key_ext else {
+                return Err(KeychainError::PublicKeyUnavailable(
+                    "No public key representation".to_string(),
+                ));
+            };
             let pub_key_bytes = pub_key_ext.as_bytes_unchecked();
-            Some(pub_key_bytes.to_vec())
+            sec1_to_ssh_ecdsa(&pub_key_bytes.to_vec()).map_err(|err| {
+                KeychainError::PublicKeyUnavailable(format!(
+                    "Failed to convert public key to SSH format: {err}"
+                ))
+            })
         }
     }
 

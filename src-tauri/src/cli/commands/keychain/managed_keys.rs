@@ -1,5 +1,3 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use color_print::cprintln;
 
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
@@ -21,15 +19,12 @@ pub async fn cmd_list_managed_keys() {
             "<green>Label:</green> {}",
             key.label.as_deref().unwrap_or("<unknown>")
         );
-        if std::env::var("FRITTATA_DEBUG").is_ok() {
-            // https://developer.apple.com/documentation/security/ksecattrapplicationlabel
-            cprintln!(
-                "<green>kSecAttrApplicationLabel:</green> {}",
-                key.app_label().as_deref().unwrap_or("<none>")
-            );
-        }
-        if let Some(pub_key) = key.public_key() {
-            cprintln!("<green>Public Key:</green>\n{}", b64.encode(pub_key));
+        match key.public_key() {
+            Ok(public_key) => cprintln!(
+                "<green>Public Key:</green> {}",
+                public_key.fingerprint(ssh_key::HashAlg::Sha256)
+            ),
+            Err(e) => cprintln!("<red>Failed to get public key:</red> {e}"),
         }
         if i < keys.len() - 1 {
             println!();
