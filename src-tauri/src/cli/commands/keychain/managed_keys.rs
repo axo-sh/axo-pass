@@ -1,7 +1,8 @@
+use anyhow::anyhow;
 use color_print::cprintln;
 
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
-use crate::secrets::keychain::managed_key::{self, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::{self, ManagedKeyQuery, ManagedSshKey};
 
 pub async fn cmd_list_managed_keys() {
     let keys = ManagedKeyQuery::build()
@@ -29,5 +30,18 @@ pub async fn cmd_list_managed_keys() {
         if i < keys.len() - 1 {
             println!();
         };
+    }
+}
+
+pub async fn cmd_delete_managed_key(label: &str) {
+    // Find the key by label (need to query private keys to be able to delete)
+    if let Err(e) = ManagedSshKey::find(label)
+        .and_then(|ssh_key| ssh_key.ok_or(anyhow!("Key not found")))
+        .and_then(|ssh_key| ssh_key.delete())
+    {
+        cprintln!("<red>Failed to delete key:</red> {e}");
+        std::process::exit(1);
+    } else {
+        cprintln!("<green>Deleted managed key:</green> {label}");
     }
 }
