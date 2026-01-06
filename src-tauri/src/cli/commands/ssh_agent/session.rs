@@ -99,10 +99,7 @@ impl Session for SshAgentSession {
             .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
             .unwrap_or_default();
         for managed_key in managed_keys {
-            identities.push(proto::Identity {
-                pubkey: managed_key.public_key(),
-                comment: managed_key.label(),
-            });
+            identities.push(managed_key.into());
         }
         Ok(identities)
     }

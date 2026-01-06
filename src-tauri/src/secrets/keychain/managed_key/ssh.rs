@@ -3,6 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow, bail};
+use ssh_agent_lib::proto;
 use ssh_encoding::Encode;
 use ssh_key::public::KeyData;
 use ssh_key::{Mpint, Signature};
@@ -26,13 +27,18 @@ pub struct ManagedSshKey {
 }
 
 impl ManagedSshKey {
+    pub fn name(&self) -> String {
+        self.id.simple().to_string()
+    }
+
+    #[allow(dead_code)]
     pub fn label(&self) -> String {
-        format!("id_se_{}", self.id.simple())
+        format!("{SSH_KEY_LABEL_PREFIX}{}", self.name())
     }
 
     pub fn pubkey_path(&self) -> Result<PathBuf, anyhow::Error> {
         let ssh_dir = get_ssh_dir()?;
-        Ok(ssh_dir.join(format!("{}.pub", self.label())))
+        Ok(ssh_dir.join(format!("id_se_{}.pub", self.name())))
     }
 
     pub fn fingerprint(&self) -> ssh_key::Fingerprint {
@@ -165,5 +171,14 @@ impl ManagedSshKey {
             };
         }
         Ok(out)
+    }
+}
+
+impl Into<proto::Identity> for ManagedSshKey {
+    fn into(self) -> proto::Identity {
+        proto::Identity {
+            pubkey: self.public_key.clone(),
+            comment: self.name(),
+        }
     }
 }
