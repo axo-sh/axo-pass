@@ -140,7 +140,7 @@ impl ManagedKey {
                 ));
             };
             let pub_key_bytes = pub_key_ext.as_bytes_unchecked();
-            sec1_to_ssh_ecdsa(&pub_key_bytes.to_vec()).map_err(|err| {
+            sec1_to_ssh_ecdsa(pub_key_bytes).map_err(|err| {
                 KeychainError::PublicKeyUnavailable(format!(
                     "Failed to convert public key to SSH format: {err}"
                 ))
@@ -148,7 +148,6 @@ impl ManagedKey {
         }
     }
 
-    #[allow(dead_code)]
     pub fn delete(&self) -> anyhow::Result<()> {
         if self.label.is_none() {
             bail!("Cannot delete managed key without label.");

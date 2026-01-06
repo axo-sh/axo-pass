@@ -87,17 +87,14 @@ impl ManagedSshKey {
         let managed_key = ManagedKey::create(&label)?;
 
         // get the pubkey in openssh format
-        let pubkey_openssh =
-            ssh_key::PublicKey::new(managed_key.public_key()?, &key_id.to_string())
-                .to_openssh()
-                .map_err(|e| {
-                    KeychainError::PublicKeyCreationFailed(anyhow!(
-                        "Failed to format OpenSSH key: {e}"
-                    ))
-                })?;
+        let pubkey_openssh = ssh_key::PublicKey::new(managed_key.public_key()?, key_id.to_string())
+            .to_openssh()
+            .map_err(|e| {
+                KeychainError::PublicKeyCreationFailed(anyhow!("Failed to format OpenSSH key: {e}"))
+            })?;
 
         // save pubkey_openssh to pubkey_path
-        let pubkey_path = get_ssh_dir()?.join(&format!("id_se_{key_id}.pub"));
+        let pubkey_path = get_ssh_dir()?.join(format!("id_se_{key_id}.pub"));
         fs::write(&pubkey_path, format!("{pubkey_openssh}\n")).map_err(|e| {
             KeychainError::PublicKeyCreationFailed(anyhow!("Failed to write public key: {e}"))
         })?;
@@ -174,11 +171,11 @@ impl ManagedSshKey {
     }
 }
 
-impl Into<proto::Identity> for ManagedSshKey {
-    fn into(self) -> proto::Identity {
+impl From<ManagedSshKey> for proto::Identity {
+    fn from(val: ManagedSshKey) -> Self {
         proto::Identity {
-            pubkey: self.public_key.clone(),
-            comment: self.name(),
+            pubkey: val.public_key.clone(),
+            comment: val.name(),
         }
     }
 }
