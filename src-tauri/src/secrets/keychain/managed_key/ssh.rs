@@ -1,9 +1,11 @@
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use anyhow::{Context, anyhow, bail};
-use ssh_agent_lib::proto;
+use ssh_encoding::Encode;
 use ssh_key::public::KeyData;
+use ssh_key::{Mpint, Signature};
 use uuid::Uuid;
 
 use crate::secrets::keychain::errors::KeychainError;
@@ -13,6 +15,10 @@ use crate::ssh::utils::get_ssh_dir;
 
 const SSH_KEY_LABEL_PREFIX: &str = "ssh-key-";
 
+const ECDSA_P256: ssh_key::Algorithm = ssh_key::Algorithm::Ecdsa {
+    curve: ssh_key::EcdsaCurve::NistP256,
+};
+
 pub struct ManagedSshKey {
     id: Uuid,
     managed_key: ManagedKey,
@@ -20,19 +26,50 @@ pub struct ManagedSshKey {
 }
 
 impl ManagedSshKey {
-    pub fn name(&self) -> String {
-        format!("id_se_{}.pub", self.id.simple())
+    pub fn label(&self) -> String {
+        format!("id_se_{}", self.id.simple())
+    }
+
+    pub fn pubkey_path(&self) -> Result<PathBuf, anyhow::Error> {
+        let ssh_dir = get_ssh_dir()?;
+        Ok(ssh_dir.join(format!("{}.pub", self.label())))
     }
 
     pub fn fingerprint(&self) -> ssh_key::Fingerprint {
         self.public_key.fingerprint(ssh_key::HashAlg::Sha256)
     }
 
+    pub fn public_key(&self) -> KeyData {
+        self.public_key.clone()
+    }
+
+    pub fn sign(&self, data: &[u8]) -> Result<Signature, anyhow::Error> {
+        let der_sig_bytes = self
+            .managed_key
+            .sign(data)
+            .map_err(|e| anyhow!("Failed to sign data: {e}"))?;
+
+        // The Secure Enclave returns ECDSA P-256 signatures in DER/ASN.1 format.
+        // Parse it and encode r and s encoded as MPInts for SSH.
+        let (r, s) = p256::ecdsa::Signature::from_der(&der_sig_bytes)
+            .map_err(|e| anyhow!("Failed to parse DER signature: {e}"))?
+            .split_bytes();
+        let mut ssh_sig_bytes = Vec::new();
+        for component in [r, s] {
+            Mpint::from_positive_bytes(&component)?
+                .encode(&mut ssh_sig_bytes)
+                .map_err(|e| anyhow!("Failed to encode: {e}"))?;
+        }
+
+        Signature::new(ECDSA_P256, ssh_sig_bytes)
+            .map_err(|e| anyhow!("Failed to create SSH signature: {e}"))
+    }
+
     pub fn delete(&self) -> anyhow::Result<()> {
         self.managed_key.delete()?;
 
         // Also try to delete the associated public key file
-        let pubkey_path = get_ssh_dir()?.join(self.name());
+        let pubkey_path = self.pubkey_path()?;
         if pubkey_path.exists() {
             fs::remove_file(&pubkey_path).context("Failed to delete public key file")?;
         }
@@ -98,6 +135,20 @@ impl ManagedSshKey {
         }
     }
 
+    pub fn find_by_pubkey(pubkey: &KeyData) -> Result<Option<ManagedSshKey>, anyhow::Error> {
+        let pubkey_fp = pubkey.fingerprint(ssh_key::HashAlg::Sha256);
+        log::debug!("Looking for managed SSH key with fingerprint: {pubkey_fp}");
+        for managed_key in Self::list()? {
+            let this_fp = managed_key.public_key.fingerprint(ssh_key::HashAlg::Sha256);
+            log::debug!("Checking managed SSH key with fingerprint: {this_fp}");
+            if this_fp == pubkey_fp {
+                log::debug!("Found managed SSH key with matching fingerprint: {pubkey_fp}");
+                return Ok(Some(managed_key));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn list() -> Result<Vec<ManagedSshKey>, anyhow::Error> {
         let managed_keys = ManagedKeyQuery::build()
             .with_key_class(KeyClass::Private)
@@ -118,14 +169,5 @@ impl ManagedSshKey {
             };
         }
         Ok(out)
-    }
-}
-
-impl Into<proto::Identity> for ManagedSshKey {
-    fn into(self) -> proto::Identity {
-        proto::Identity {
-            pubkey: self.public_key.clone(),
-            comment: self.id.simple().to_string(),
-        }
     }
 }

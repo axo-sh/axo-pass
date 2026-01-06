@@ -72,8 +72,10 @@ time = { version = "0.3.44", features = [
 ] }
 clap_complete = "4.5.61"
 ssh-agent-lib = "0.5.1"
+ssh-encoding = "0.2"
 ssh-key = "0.6.7"
 rsa = "0.9.9"
+p256 = "0.13"
 fork = "0.6.0"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = [
