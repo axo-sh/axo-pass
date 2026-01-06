@@ -1,6 +1,6 @@
+mod managed_ssh_key;
 mod query;
 mod shared;
-mod ssh;
 mod utils;
 
 use std::fmt::Debug;
@@ -9,6 +9,7 @@ use std::ptr;
 use anyhow::bail;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
+pub use managed_ssh_key::ManagedSshKey;
 use objc2::rc::Retained;
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType, Type,
@@ -22,7 +23,6 @@ use objc2_security::{
 };
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
-pub use ssh::ManagedSshKey;
 use ssh_key::public::KeyData;
 
 use crate::secrets::keychain::errors::KeychainError;

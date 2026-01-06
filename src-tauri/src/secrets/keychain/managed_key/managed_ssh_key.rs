@@ -175,7 +175,7 @@ impl From<ManagedSshKey> for proto::Identity {
     fn from(val: ManagedSshKey) -> Self {
         proto::Identity {
             pubkey: val.public_key.clone(),
-            comment: val.name(),
+            comment: format!("axo-secure-enclave:{}", &val.name()[0..6]),
         }
     }
 }
