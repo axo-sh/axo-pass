@@ -54,7 +54,7 @@ impl ManagedKey {
     }
 
     pub fn create(label: &str) -> Result<ManagedKey, KeychainError> {
-        log::debug!("Creating new user key with label: {}", label);
+        log::debug!("Creating new user key with label: {label}");
         unsafe {
             let public_attrs = CFMutableDictionary::<CFString, CFType>::empty();
             public_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
@@ -78,11 +78,7 @@ impl ManagedKey {
             if !cf_error_ptr.is_null() {
                 let cf_error = &*cf_error_ptr;
                 // todo: may need to handle error codes
-                log::error!(
-                    "Error creating new managed key with label {}: {:?}",
-                    label,
-                    cf_error
-                );
+                log::error!("Error creating new managed key with label {label}: {cf_error:?}");
                 return Err(KeychainError::Generic(anyhow::anyhow!(
                     cf_error.to_string()
                 )));
@@ -92,7 +88,7 @@ impl ManagedKey {
             };
 
             let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.retain().into());
-            log::debug!("Created new managed key: {:?}", managed_key);
+            log::debug!("Created new managed key: {managed_key:?}");
             Ok(managed_key)
         }
     }
@@ -229,12 +225,9 @@ impl ManagedKey {
                 let cf_error = cf_error_ptr.as_ref().unwrap();
                 return Err(KeychainError::SigningFailed(cf_error.to_string()));
             }
-            let Some(res) = res else {
-                return Err(KeychainError::SigningFailed(
-                    "No signature returned".to_string(),
-                ));
-            };
-            Ok(res)
+            res.ok_or(KeychainError::SigningFailed(
+                "No signature returned".to_string(),
+            ))
         }
     }
 }
