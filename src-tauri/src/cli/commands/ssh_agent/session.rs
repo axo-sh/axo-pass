@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use rsa::signature::SignerMut;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{
@@ -11,7 +10,10 @@ use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
+use crate::cli::commands::ssh_agent::credential::Credential;
+use crate::cli::commands::ssh_agent::managed_credential::ManagedCredential;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
+use crate::secrets::keychain::managed_key::ManagedSshKey;
 
 #[derive(Clone)]
 pub struct SshAgentSession {
@@ -49,15 +51,23 @@ impl SshAgentSession {
         self.state.lock().await.push(credential);
     }
 
-    pub async fn find_credential(&self, pubkey: &KeyData) -> Option<StoredCredential> {
+    pub async fn find_credential(&self, pubkey: &KeyData) -> Option<Box<dyn Credential>> {
         for cred in self.state.lock().await.iter() {
             log::debug!("Stored credential: {:?}", cred);
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
                 && identity.pubkey == *pubkey
             {
-                return Some(cred.clone());
+                return Some(Box::new(cred.clone()));
             }
         }
+        // also look for credential in managed keys
+        if let Some(managed_ssh_key) = ManagedSshKey::find_by_pubkey(pubkey)
+            .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
+            .unwrap_or_default()
+        {
+            return Some(Box::new(ManagedCredential(managed_ssh_key)));
+        }
+
         None
     }
 
@@ -81,10 +91,19 @@ impl Session for SshAgentSession {
     async fn request_identities(&mut self) -> Result<Vec<proto::Identity>, AgentError> {
         log::debug!("request: list ssh identities");
         let creds = self.state.lock().await;
-        let identities = creds
-            .iter()
-            .filter_map(|c| c.try_into().ok())
-            .collect::<Vec<proto::Identity>>();
+        let mut identities = vec![];
+        for identity in creds.iter().filter_map(|c| c.try_into().ok()) {
+            identities.push(identity);
+        }
+        let managed_keys = ManagedSshKey::list()
+            .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
+            .unwrap_or_default();
+        for managed_key in managed_keys {
+            identities.push(proto::Identity {
+                pubkey: managed_key.public_key(),
+                comment: managed_key.label(),
+            });
+        }
         Ok(identities)
     }
 
@@ -118,6 +137,7 @@ impl Session for SshAgentSession {
         self.state.lock().await.clear();
         Ok(())
     }
+
     async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
         log::debug!("request: sign with identity");
         match req.flags {
@@ -131,20 +151,10 @@ impl Session for SshAgentSession {
             return Err(AgentError::Other(anyhow!("Key not found").into()));
         };
 
-        let _ = stored_cred
-            .validate()
-            .map_err(|e| AgentError::Other(Box::new(e))); // validation failed
-
-        let sig = match &stored_cred.credential {
-            proto::Credential::Key { privkey, .. } => {
-                let mut privkey_clone = privkey.clone();
-                privkey_clone.sign(&req.data)
-            },
-            proto::Credential::Cert { .. } => {
-                todo!("signing with certificate not implemented");
-            },
-        };
-        Ok(sig)
+        log::debug!("Signing with identity...");
+        stored_cred
+            .sign(&req.data)
+            .map_err(|e| AgentError::Other(Box::new(e)))
     }
 
     async fn extension(

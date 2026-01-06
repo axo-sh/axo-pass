@@ -1,4 +1,6 @@
 mod client;
+mod credential;
+mod managed_credential;
 mod server;
 mod session;
 mod stored_credential;

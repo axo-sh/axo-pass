@@ -1,19 +1,11 @@
 use std::fmt::Debug;
 
+use rsa::signature::SignerMut;
 use ssh_agent_lib::proto;
-use thiserror::Error;
 use time::{Duration, UtcDateTime};
 
+use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
 use crate::core::la_context::evaluate_la_context;
-
-#[derive(Error, Debug)]
-pub enum CredentialError {
-    #[error("Credential has expired")]
-    Expired,
-
-    #[error("Credential is locked and requires user authentication")]
-    Locked,
-}
 
 #[derive(Clone)]
 pub struct StoredCredential {
@@ -71,6 +63,21 @@ impl StoredCredential {
             }
         }
         Ok(())
+    }
+}
+
+impl Credential for StoredCredential {
+    fn sign(&self, data: &[u8]) -> Result<ssh_key::Signature, CredentialError> {
+        self.validate()?;
+        match &self.credential {
+            proto::Credential::Key { privkey, .. } => privkey.clone().try_sign(data).map_err(|e| {
+                log::error!("Failed to sign data with private key: {e}");
+                CredentialError::SigningFailed
+            }),
+            proto::Credential::Cert { .. } => {
+                todo!();
+            },
+        }
     }
 }
 

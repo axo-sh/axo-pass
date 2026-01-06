@@ -39,10 +39,6 @@ impl ManagedSshKey {
         self.public_key.fingerprint(ssh_key::HashAlg::Sha256)
     }
 
-    pub fn public_key(&self) -> KeyData {
-        self.public_key.clone()
-    }
-
     pub fn sign(&self, data: &[u8]) -> Result<Signature, anyhow::Error> {
         let der_sig_bytes = self
             .managed_key
