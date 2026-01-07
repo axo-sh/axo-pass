@@ -5,6 +5,7 @@ use std::io;
 use clap::{CommandFactory, Parser, Subcommand, command};
 use clap_complete::{Shell, generate};
 use fork::daemon;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt, reload};
@@ -61,7 +62,7 @@ pub enum AxoPassCommand {
 impl AxoPassCommand {
     pub fn execute(&self) {
         let reload_log = if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
-            let filter = EnvFilter::new("debug,ssh_agent_lib=off");
+            let filter = EnvFilter::new("debug,ssh_agent_lib=error");
             let layer: fmt::Layer<_, _, _, fn() -> Box<dyn io::Write>> = fmt::layer()
                 .with_ansi(true)
                 .with_writer(|| -> Box<dyn io::Write> { Box::new(io::stderr()) });
@@ -93,9 +94,13 @@ impl AxoPassCommand {
                         layer.set_ansi(false);
                         *layer.writer_mut() = || -> Box<dyn io::Write> {
                             //  ~/Library/Logs/Axo Pass/agent.log
-                            let file_appender =
-                                tracing_appender::rolling::daily(log_data_dir(), "agent.log");
-                            Box::new(file_appender)
+                            let log_appender = RollingFileAppender::builder()
+                                .max_log_files(7)
+                                .rotation(Rotation::DAILY)
+                                .filename_prefix("agent.log")
+                                .build(log_data_dir())
+                                .unwrap();
+                            Box::new(log_appender)
                         };
                     })
                     .inspect_err(|e| {
