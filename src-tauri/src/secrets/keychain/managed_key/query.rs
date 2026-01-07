@@ -18,6 +18,7 @@ use crate::secrets::keychain::managed_key::shared::KeyClass;
 pub struct ManagedKeyQuery {
     label: Option<String>,
     key_class: Option<KeyClass>,
+    la_context: Option<Retained<LAContext>>,
 }
 
 impl ManagedKeyQuery {
@@ -25,6 +26,7 @@ impl ManagedKeyQuery {
         ManagedKeyQuery {
             label: None,
             key_class: None,
+            la_context: None,
         }
     }
 
@@ -35,6 +37,11 @@ impl ManagedKeyQuery {
 
     pub fn with_key_class(mut self, key_class: KeyClass) -> Self {
         self.key_class = Some(key_class);
+        self
+    }
+
+    pub fn with_la_context(mut self, la_context: &Retained<LAContext>) -> Self {
+        self.la_context = Some(la_context.clone());
         self
     }
 }
@@ -82,10 +89,16 @@ impl KeyChainQuery for ManagedKeyQuery {
             }
 
             // reuse our LAContext
-            THREAD_LA_CONTEXT.with(|thread_la_context| {
-                let la_context = thread_la_context.as_ref() as *const LAContext as *const CFType;
+            if let Some(la_context) = &self.la_context {
+                let la_context = la_context.as_ref() as *const LAContext as *const CFType;
                 query.add(kSecUseAuthenticationContext, &*la_context);
-            });
+            } else {
+                THREAD_LA_CONTEXT.with(|thread_la_context| {
+                    let la_context =
+                        thread_la_context.as_ref() as *const LAContext as *const CFType;
+                    query.add(kSecUseAuthenticationContext, &*la_context);
+                });
+            }
             query
         }
     }

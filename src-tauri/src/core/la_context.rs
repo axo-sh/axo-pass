@@ -102,3 +102,30 @@ pub fn evaluate_local_la_context(
         Err(e) => Err(anyhow!("error evaluating la_context: {e}").into()),
     }
 }
+
+// use this to evaluate access control with a specific LAContext instance,
+// allowing per-key authentication reuse
+pub fn evaluate_la_context_with(
+    la_context: &LAContext,
+    operation: LAAccessControlOperation,
+    access_control: Retained<SecAccessControl>,
+    reason: &str,
+) -> Result<(), KeychainError> {
+    log::debug!("Evaluating access control with provided LAContext");
+    let _guard = EVALUATE_LA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let (evaluate_callback, rx) = create_la_callback();
+    unsafe {
+        la_context.evaluateAccessControl_operation_localizedReason_reply(
+            &access_control,
+            operation,
+            &NSString::from_str(reason),
+            &evaluate_callback,
+        );
+    }
+
+    match rx.recv() {
+        Ok(callback_result) => callback_result,
+        Err(e) => Err(anyhow!("error evaluating la_context: {e}").into()),
+    }
+}

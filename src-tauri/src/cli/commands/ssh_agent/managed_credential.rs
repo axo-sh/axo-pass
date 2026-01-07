@@ -1,3 +1,5 @@
+mod signer;
+
 use ssh_key::Signature;
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
@@ -13,9 +15,6 @@ impl From<ManagedSshKey> for ManagedCredential {
 
 impl Credential for ManagedCredential {
     fn sign(&self, data: &[u8]) -> Result<Signature, CredentialError> {
-        self.0.sign(data).map_err(|e| {
-            log::error!("Failed to sign with managed credential: {e}");
-            CredentialError::SigningFailed
-        })
+        signer::sign_with_managed_key(&self.0.label(), data)
     }
 }

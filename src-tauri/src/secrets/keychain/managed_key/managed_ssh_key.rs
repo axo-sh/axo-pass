@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow, bail};
+use objc2::rc::Retained;
+use objc2_local_authentication::LAContext;
 use ssh_agent_lib::proto;
 use ssh_encoding::Encode;
 use ssh_key::public::KeyData;
@@ -31,9 +33,11 @@ impl ManagedSshKey {
         self.id.simple().to_string()
     }
 
-    #[allow(dead_code)]
     pub fn label(&self) -> String {
-        format!("{SSH_KEY_LABEL_PREFIX}{}", self.name())
+        self.managed_key
+            .label
+            .clone()
+            .unwrap_or(format!("{SSH_KEY_LABEL_PREFIX}{}", self.name()))
     }
 
     pub fn pubkey_path(&self) -> Result<PathBuf, anyhow::Error> {
@@ -109,16 +113,25 @@ impl ManagedSshKey {
     }
 
     pub fn find(label: &str) -> Result<Option<ManagedSshKey>, anyhow::Error> {
+        Self::find_with_la_context(label, None)
+    }
+
+    pub fn find_with_la_context(
+        label: &str,
+        la_context: Option<Retained<LAContext>>,
+    ) -> Result<Option<ManagedSshKey>, anyhow::Error> {
         // strip_prefix returns None if prefix not found
         let Some(key_id) = label.strip_prefix(SSH_KEY_LABEL_PREFIX) else {
             bail!("Invalid label");
         };
-        let key = ManagedKeyQuery::build()
+        let mut query = ManagedKeyQuery::build()
             .with_label(label)
-            .with_key_class(KeyClass::Private)
-            .one();
+            .with_key_class(KeyClass::Private);
+        if let Some(la_context) = &la_context {
+            query = query.with_la_context(la_context);
+        }
 
-        match key {
+        match query.one() {
             Ok(Some(managed_key)) => {
                 let uuid = Uuid::try_parse(key_id).context("Failed to parse key ID as UUID")?;
                 Ok(Some(ManagedSshKey {
