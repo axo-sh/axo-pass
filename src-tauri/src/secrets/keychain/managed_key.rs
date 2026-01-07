@@ -15,8 +15,7 @@ use objc2_core_foundation::{
     CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType, Type,
 };
 use objc2_security::{
-    SecAccessControl, SecAccessControlCreateFlags, SecItemDelete, SecKey, kSecAttrAccessControl,
-    kSecAttrAccessibleWhenUnlockedThisDeviceOnly, kSecAttrApplicationLabel, kSecAttrApplicationTag,
+    SecItemDelete, SecKey, kSecAttrAccessControl, kSecAttrApplicationLabel, kSecAttrApplicationTag,
     kSecAttrIsPermanent, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
     kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecMatchItemList,
     kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseDataProtectionKeychain,
@@ -25,6 +24,7 @@ pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
 use ssh_key::public::KeyData;
 
+use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 use crate::secrets::keychain::managed_key::utils::sec1_to_ssh_ecdsa;
@@ -61,7 +61,9 @@ impl ManagedKey {
 
             let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
             private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
-            private_attrs.add(kSecAttrAccessControl, &*create_access_control_flags()?);
+
+            let access_control = AccessControl::ManagedKey.to_sec_access_control()?;
+            private_attrs.add(kSecAttrAccessControl, &*access_control);
 
             let query = Self::common_attrs(Some(label.to_string()));
             query.add(kSecPublicKeyAttrs, &public_attrs);
@@ -239,27 +241,5 @@ impl Debug for ManagedKey {
             .field("tag", &self.tag())
             .field("is_private", &self.is_private())
             .finish()
-    }
-}
-
-fn create_access_control_flags() -> anyhow::Result<Retained<SecAccessControl>> {
-    unsafe {
-        let mut cf_error_ptr: *mut CFError = ptr::null_mut();
-        // https://developer.apple.com/documentation/security/secaccesscontrolcreateflags/privatekeyusage?language=objc
-        let access_control = SecAccessControl::with_flags(
-            None,
-            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            SecAccessControlCreateFlags::UserPresence
-                | SecAccessControlCreateFlags::PrivateKeyUsage,
-            &mut cf_error_ptr,
-        );
-        if !cf_error_ptr.is_null() {
-            let cf_error = &*cf_error_ptr;
-            bail!("Failed to create SecAccessControl: {cf_error:?}");
-        }
-        let Some(access_control) = access_control else {
-            bail!("Failed to create SecAccessControl: unknown error");
-        };
-        Ok(access_control.into())
     }
 }

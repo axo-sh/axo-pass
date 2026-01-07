@@ -6,16 +6,17 @@ use std::str::FromStr;
 
 use anyhow::anyhow;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFBoolean, CFData, CFError, CFMutableDictionary, CFString, CFType};
+use objc2_core_foundation::{CFBoolean, CFData, CFMutableDictionary, CFString, CFType};
 use objc2_security::{
-    SecAccessControl, SecAccessControlCreateFlags, SecItemAdd, SecItemDelete, errSecSuccess,
-    kSecAttrAccessControl, kSecAttrAccessibleWhenUnlocked, kSecAttrAccount, kSecAttrService,
-    kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain, kSecValueData,
+    SecItemAdd, SecItemDelete, errSecSuccess, kSecAttrAccessControl, kSecAttrAccount,
+    kSecAttrService, kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain,
+    kSecValueData,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::core::la_context::evaluate_local_la_context;
+use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
@@ -134,7 +135,8 @@ impl PasswordEntry {
     }
 
     pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {
-        evaluate_local_la_context(create_access_control_flags()?)
+        let access_control = AccessControl::GenericPassword.to_sec_access_control()?;
+        evaluate_local_la_context(access_control)
             .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
 
         // need authentication: without it, we don't get all items
@@ -179,8 +181,9 @@ impl PasswordEntry {
             self.key_id
         );
         let attrs = Self::common_attrs(Some(&self.account()));
+        let access_control = AccessControl::GenericPassword.to_sec_access_control()?;
         unsafe {
-            attrs.add(kSecAttrAccessControl, &*create_access_control_flags()?);
+            attrs.add(kSecAttrAccessControl, &*access_control);
             attrs.add(
                 kSecValueData,
                 &CFData::from_bytes(password.expose_secret().as_bytes()),
@@ -203,27 +206,5 @@ impl PasswordEntry {
             .with_account(&self.account())
             .one()
             .map(|opt| opt.map(|entry| entry.password))
-    }
-}
-
-fn create_access_control_flags() -> Result<Retained<SecAccessControl>, KeychainError> {
-    unsafe {
-        let mut cf_error_ptr: *mut CFError = ptr::null_mut();
-        // https://developer.apple.com/documentation/security/secaccesscontrolcreateflags/privatekeyusage?language=objc
-        let access_control = SecAccessControl::with_flags(
-            None,
-            // not *thisDeviceOnly to allow password access across device restores
-            kSecAttrAccessibleWhenUnlocked,
-            SecAccessControlCreateFlags::UserPresence,
-            &mut cf_error_ptr,
-        );
-        if !cf_error_ptr.is_null() {
-            let cf_error = &*cf_error_ptr;
-            return Err(anyhow!("Failed to create SecAccessControl: {cf_error:?}").into());
-        }
-        let Some(access_control) = access_control else {
-            return Err(anyhow!("Failed to create SecAccessControl: unknown error").into());
-        };
-        Ok(access_control.into())
     }
 }
