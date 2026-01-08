@@ -1,3 +1,4 @@
+use ssh_agent_lib::proto;
 use ssh_key::Signature;
 use thiserror::Error;
 
@@ -14,5 +15,5 @@ pub enum CredentialError {
 }
 
 pub trait Credential {
-    fn sign(&self, data: &[u8]) -> Result<Signature, CredentialError>;
+    fn sign(&self, req: proto::SignRequest) -> Result<Signature, CredentialError>;
 }

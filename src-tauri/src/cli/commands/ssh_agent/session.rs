@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{
-    self, AddIdentity, AddIdentityConstrained, RemoveIdentity, SignRequest, signature,
+    self, AddIdentity, AddIdentityConstrained, RemoveIdentity, SignRequest,
 };
 use ssh_key::Signature;
 use ssh_key::public::KeyData;
@@ -60,10 +60,10 @@ impl SshAgentSession {
                 return Some(Box::new(cred.clone()));
             }
         }
+
         // also look for credential in managed keys
-        if let Some(managed_ssh_key) = ManagedSshKey::find_by_pubkey(pubkey)
+        if let Ok(Some(managed_ssh_key)) = ManagedSshKey::find_by_pubkey(pubkey)
             .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
-            .unwrap_or_default()
         {
             return Some(Box::new(ManagedCredential(managed_ssh_key)));
         }
@@ -136,22 +136,17 @@ impl Session for SshAgentSession {
     }
 
     async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
-        log::debug!("request: sign with identity");
-        match req.flags {
-            signature::RSA_SHA2_256 | signature::RSA_SHA2_512 => {
-                todo!("RSA SHA2 signatures");
-            },
-            _ => {},
-        }
+        let fingerprint = req.pubkey.fingerprint(ssh_key::HashAlg::Sha256);
 
         let Some(stored_cred) = self.find_credential(&req.pubkey).await else {
+            log::debug!("request: sign with identity {fingerprint} - key not found");
             return Err(AgentError::Other(anyhow!("Key not found").into()));
         };
 
-        log::debug!("Signing with identity...");
+        log::debug!("request: sign with identity {fingerprint}");
         stored_cred
-            .sign(&req.data)
-            .map_err(|e| AgentError::Other(Box::new(e)))
+            .sign(req)
+            .map_err(|e| AgentError::Other(e.into()))
     }
 
     async fn extension(

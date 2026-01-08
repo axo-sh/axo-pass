@@ -1,7 +1,10 @@
+mod rsa_signing;
+
 use std::fmt::Debug;
 
-use rsa::signature::SignerMut;
+use rsa::signature::Signer;
 use ssh_agent_lib::proto;
+use ssh_key::Algorithm;
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
@@ -67,15 +70,27 @@ impl StoredCredential {
 }
 
 impl Credential for StoredCredential {
-    fn sign(&self, data: &[u8]) -> Result<ssh_key::Signature, CredentialError> {
+    fn sign(&self, req: proto::SignRequest) -> Result<ssh_key::Signature, CredentialError> {
         self.validate()?;
         match &self.credential {
-            proto::Credential::Key { privkey, .. } => privkey.clone().try_sign(data).map_err(|e| {
-                log::error!("Failed to sign data with private key: {e}");
-                CredentialError::SigningFailed
-            }),
+            proto::Credential::Key { privkey, .. } => {
+                let key_algorithm = privkey.algorithm().map_err(|e| {
+                    log::error!("Failed to get key algorithm: {e}");
+                    CredentialError::SigningFailed
+                })?;
+
+                // special handling for rsa keys due to bugs in dependencies (see rsa_signing)
+                if matches!(key_algorithm, Algorithm::Rsa { .. }) {
+                    return rsa_signing::sign_rsa(privkey, &req.data, req.flags);
+                };
+
+                privkey.try_sign(&req.data).map_err(|e| {
+                    log::error!("Failed to sign data with private key: {e}");
+                    CredentialError::SigningFailed
+                })
+            },
             proto::Credential::Cert { .. } => {
-                todo!();
+                todo!("Certificate signing not yet implemented");
             },
         }
     }
