@@ -101,7 +101,7 @@ fn sign_with_managed_key_context(
     })?;
 
     let managed_key =
-        ManagedSshKey::find_with_la_context(&managed_key_label, Some(la_context.clone()))
+        ManagedSshKey::find_with_la_context(managed_key_label, Some(la_context.clone()))
             .map_err(|e| {
                 log::debug!("Failed to find managed key {managed_key_label}: {e}");
                 CredentialError::SigningFailed
