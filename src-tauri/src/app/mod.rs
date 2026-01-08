@@ -206,6 +206,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::vault::add_credential::add_credential,
             handlers::vault::delete_credential::delete_credential,
             handlers::ssh::add_managed_ssh_key::add_managed_ssh_key,
+            handlers::ssh::delete_managed_ssh_key::delete_managed_ssh_key,
             handlers::ssh::list_ssh_keys::list_ssh_keys,
             handlers::ssh::save_ssh_key_password::save_ssh_key_password,
             handlers::gpg::gpg_test::gpg_test_integration,
