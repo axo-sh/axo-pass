@@ -8,14 +8,15 @@ interface Props {
   centered?: boolean;
   className?: string;
   children: React.ReactNode;
+  hasFauxNav?: boolean;
 }
 
 export const Layout = React.forwardRef<HTMLElement, Props>(
-  ({centered = false, className, children}, ref) => {
+  ({centered = false, hasFauxNav = false, className, children}, ref) => {
     return (
       <main ref={ref} className={cx(layout, className)}>
         <div className={layoutDrag} data-tauri-drag-region>
-          <div className={layoutDragFauxNav} />
+          {hasFauxNav && <div className={layoutDragFauxNav} data-tauri-drag-region />}
         </div>
         <div className={layoutContent({centered})}>{children}</div>
       </main>

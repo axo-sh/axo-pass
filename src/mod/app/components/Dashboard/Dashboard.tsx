@@ -5,7 +5,7 @@ import {DashboardNav} from '@/mod/app/components/Dashboard/DashboardNav';
 
 export const Dashboard: React.FC<React.PropsWithChildren> = ({children}) => {
   return (
-    <Layout>
+    <Layout hasFauxNav>
       <div className={dashboard}>
         <DashboardNav />
         <DashboardContent>{children}</DashboardContent>
