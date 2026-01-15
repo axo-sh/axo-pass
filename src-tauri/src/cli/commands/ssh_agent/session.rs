@@ -57,7 +57,7 @@ impl SshAgentSession {
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
                 && identity.pubkey == *pubkey
             {
-                return Some(Box::new(cred.clone()));
+                return Some(Box::new(cred.clone()) as _);
             }
         }
 
@@ -65,7 +65,7 @@ impl SshAgentSession {
         if let Ok(Some(managed_ssh_key)) = ManagedSshKey::find_by_pubkey(pubkey)
             .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
         {
-            return Some(Box::new(ManagedCredential(managed_ssh_key)));
+            return Some(Box::new(ManagedCredential(managed_ssh_key)) as _);
         }
 
         None
