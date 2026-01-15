@@ -3,6 +3,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
+use ssh_encoding::Encode;
+use ssh_key::public::KeyData;
 
 pub fn ssh_dir_path() -> Result<PathBuf, anyhow::Error> {
     Ok(dirs::home_dir()
@@ -18,4 +22,24 @@ pub fn get_ssh_dir() -> Result<PathBuf, anyhow::Error> {
             .context("Failed to set .ssh permissions")?;
     }
     Ok(ssh_dir)
+}
+
+pub fn compute_sha256_fingerprint(public_key: &KeyData) -> String {
+    // custom method to generate without the prefix
+    let fp = public_key.fingerprint(ssh_key::HashAlg::Sha256);
+    b64.encode(fp.as_bytes())
+}
+
+pub fn compute_md5_fingerprint(public_key: &KeyData) -> String {
+    let mut encoded = Vec::new();
+    public_key
+        .encode(&mut encoded)
+        .expect("Failed to encode public key");
+
+    let digest = md5::compute(&encoded);
+    digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }

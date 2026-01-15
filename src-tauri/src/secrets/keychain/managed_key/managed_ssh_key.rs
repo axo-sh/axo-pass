@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
-use crate::ssh::utils::get_ssh_dir;
+use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, get_ssh_dir};
 
 const SSH_KEY_LABEL_PREFIX: &str = "ssh-key-";
 
@@ -45,8 +45,12 @@ impl ManagedSshKey {
         Ok(ssh_dir.join(format!("id_se_{}.pub", self.name())))
     }
 
-    pub fn fingerprint(&self) -> ssh_key::Fingerprint {
-        self.public_key.fingerprint(ssh_key::HashAlg::Sha256)
+    pub fn fingerprint_sha256(&self) -> String {
+        compute_sha256_fingerprint(&self.public_key)
+    }
+
+    pub fn fingerprint_md5(&self) -> String {
+        compute_md5_fingerprint(&self.public_key)
     }
 
     pub fn sign(&self, data: &[u8]) -> Result<Signature, anyhow::Error> {

@@ -436,6 +436,7 @@ dependencies = [
  "inquire",
  "log",
  "lru",
+ "md5",
  "objc2 0.6.3",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -3086,6 +3087,12 @@ name = "matches"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2532096657941c2fea9c289d370a250971c689d4f143798ff67113ec042024a5"
+
+[[package]]
+name = "md5"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
 
 [[package]]
 name = "memchr"
