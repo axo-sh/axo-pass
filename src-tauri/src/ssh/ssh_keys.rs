@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail};
@@ -14,7 +15,7 @@ use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, ssh
 pub enum SshKeyType {
     Rsa,
     Ed25519,
-    Ecdsa,
+    Ecdsa, // Managed keys are always this type
     Dsa,
     Unknown,
 }
@@ -35,6 +36,7 @@ pub struct SystemSshKey {
     pub name: String,
     pub path: PathBuf,
     pub public_key_path: Option<PathBuf>,
+    #[allow(dead_code)]
     pub comment: String,
     pub key_type: SshKeyType,
     pub fingerprint_sha256: String,
@@ -56,7 +58,7 @@ impl SystemSshKey {
 
         let mut keys = Vec::new();
         let entries =
-            std::fs::read_dir(&dir).map_err(|e| anyhow!("Failed to read .ssh directory: {e}"))?;
+            fs::read_dir(dir).map_err(|e| anyhow!("Failed to read .ssh directory: {e}"))?;
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file() {

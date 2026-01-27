@@ -56,6 +56,7 @@ fn create_la_callback() -> (
 
 // use this to create a one time authentication prompt
 pub fn evaluate_la_context(reason: &str) -> Result<(), KeychainError> {
+    log::debug!("Evaluating LAContext for reason: {reason}");
     // lock ensures only one authentication prompt at a time. we unwrap/into_inner
     // so we don't panic if the mutex is poisoned
     let _guard = EVALUATE_LA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -84,9 +85,12 @@ pub fn evaluate_la_context(reason: &str) -> Result<(), KeychainError> {
 pub fn evaluate_local_la_context(
     access_control: Retained<SecAccessControl>,
 ) -> Result<(), KeychainError> {
+    log::debug!("Evaluating access control with thread-local LAContext");
     let _guard = EVALUATE_LA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let (evaluate_callback, rx) = create_la_callback();
+
+    // todo: customize reason
     let displayed_reason = NSString::from_str("use secure item");
     THREAD_LA_CONTEXT.with(|ctx| unsafe {
         (**ctx).evaluateAccessControl_operation_localizedReason_reply(

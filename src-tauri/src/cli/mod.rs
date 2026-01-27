@@ -79,6 +79,7 @@ impl AxoPassCommand {
         if let AxoPassCommand::SshAgent(ssh_agent) = self
             && ssh_agent.should_detach()
         {
+            log::debug!("Daemonizing SSH agent process...");
             // if we're not in debug mode, we should detach the ssh process:
             // do that here before tokio is initialized, otherwise bad things happen:
             // https://github.com/tokio-rs/tokio/issues/4301
