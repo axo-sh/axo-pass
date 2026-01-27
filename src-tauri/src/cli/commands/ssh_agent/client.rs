@@ -7,6 +7,7 @@ use thiserror::Error;
 use tokio::net::UnixStream;
 
 use crate::cli::commands::ssh_agent::SshAgentServer;
+use crate::cli::commands::ssh_agent::session::AXO_SHUTDOWN_EXT;
 
 pub enum AgentStatus {
     Running,
@@ -45,7 +46,7 @@ pub async fn stop_ssh_agent() -> Result<(), StopSshAgentError> {
     }
     let stream = UnixStream::connect(&socket_path).await?;
     let request = Extension {
-        name: "ssh-shutdown@pass.axo.sh".to_string(),
+        name: AXO_SHUTDOWN_EXT.to_string(),
         details: Vec::new().into(),
     };
     let _ = Client::new(stream).extension(request).await?;
