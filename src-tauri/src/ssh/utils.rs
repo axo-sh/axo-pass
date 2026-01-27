@@ -30,6 +30,12 @@ pub fn compute_sha256_fingerprint(public_key: &KeyData) -> String {
     b64.encode(fp.as_bytes())
 }
 
+// truncated fingerprint for logging
+pub fn compute_short_sha256_fingerprint(public_key: &KeyData) -> String {
+    let fp = public_key.fingerprint(ssh_key::HashAlg::Sha256);
+    fp.to_string().strip_prefix(fp.prefix()).unwrap()[1..7].to_string() + "..."
+}
+
 pub fn compute_md5_fingerprint(public_key: &KeyData) -> String {
     let mut encoded = Vec::new();
     public_key

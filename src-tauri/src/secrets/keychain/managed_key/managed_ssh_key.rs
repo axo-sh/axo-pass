@@ -45,6 +45,10 @@ impl ManagedSshKey {
         Ok(ssh_dir.join(format!("id_se_{}.pub", self.name())))
     }
 
+    pub fn public_key(&self) -> &KeyData {
+        &self.public_key
+    }
+
     pub fn fingerprint_sha256(&self) -> String {
         compute_sha256_fingerprint(&self.public_key)
     }

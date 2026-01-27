@@ -3,18 +3,22 @@ mod rsa_signing;
 use std::fmt::Debug;
 
 use rsa::signature::Signer;
-use ssh_agent_lib::proto;
+use ssh_agent_lib::proto::{self, extension};
 use ssh_key::Algorithm;
+use ssh_key::public::KeyData;
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
 use crate::core::la_context::evaluate_la_context;
+use crate::ssh::ssh_keys::SshKeyType;
+use crate::ssh::utils::compute_short_sha256_fingerprint;
 
 #[derive(Clone)]
 pub struct StoredCredential {
     pub credential: proto::Credential,
     pub expires_at: Option<UtcDateTime>,
     pub requires_auth: bool,
+    pub dest_constraints: Vec<extension::DestinationConstraint>,
 }
 
 impl StoredCredential {
@@ -30,17 +34,12 @@ impl StoredCredential {
                     self.requires_auth = true;
                 },
                 proto::KeyConstraint::Extension(extension) => {
-                    let key_constraint =
-                        extension.parse_key_constraint::<proto::extension::RestrictDestination>();
-                    if let Ok(Some(rd)) = key_constraint {
-                        log::debug!(
-                            "SSH key restrict-destination constraint: allowed destinations: {:?}",
-                            rd.constraints
-                        );
-                        log::warn!("restrict-destination constraint is not currently enforced");
-                        continue;
+                    if let Ok(Some(restrict_dest)) =
+                        extension.parse_key_constraint::<extension::RestrictDestination>()
+                    {
+                        self.dest_constraints
+                            .extend(restrict_dest.constraints.iter().cloned());
                     }
-                    log::warn!("Unsupported key constraint: {:?}", extension);
                 },
             }
         }
@@ -70,6 +69,25 @@ impl StoredCredential {
 }
 
 impl Credential for StoredCredential {
+    fn key_type(&self) -> SshKeyType {
+        match &self.credential {
+            proto::Credential::Key { privkey, .. } => privkey
+                .algorithm()
+                .map(|a| a.into())
+                .unwrap_or(SshKeyType::Unknown),
+            proto::Credential::Cert { certificate, .. } => {
+                certificate.public_key().algorithm().into()
+            },
+        }
+    }
+
+    fn public_key_data(&self) -> KeyData {
+        match &self.credential {
+            proto::Credential::Key { privkey, .. } => privkey.try_into().clone().unwrap(),
+            proto::Credential::Cert { certificate, .. } => certificate.public_key().clone(),
+        }
+    }
+
     fn sign(&self, req: proto::SignRequest) -> Result<ssh_key::Signature, CredentialError> {
         self.validate()?;
         match &self.credential {
@@ -93,6 +111,10 @@ impl Credential for StoredCredential {
                 todo!("Certificate signing not yet implemented");
             },
         }
+    }
+
+    fn dest_constraints(&self) -> Vec<extension::DestinationConstraint> {
+        self.dest_constraints.clone()
     }
 }
 
@@ -123,36 +145,34 @@ impl From<proto::Credential> for StoredCredential {
             credential,
             expires_at: None,
             requires_auth: false,
+            dest_constraints: Vec::new(),
         }
     }
 }
 
 impl Debug for StoredCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct("StoredCredential");
-
-        s.field(
-            "credential_type",
-            &match &self.credential {
-                proto::Credential::Key { .. } => "Key",
-                proto::Credential::Cert { .. } => "Cert",
+        let mut out = match self.try_into() {
+            Ok(proto::Identity { pubkey, comment }) => {
+                let cred_type = &match &self.credential {
+                    proto::Credential::Key { .. } => "key",
+                    proto::Credential::Cert { .. } => "cert",
+                };
+                format!(
+                    "{} {cred_type} {} {comment}",
+                    &pubkey.algorithm(),
+                    compute_short_sha256_fingerprint(&pubkey)
+                )
             },
-        );
-
-        let identity: Result<proto::Identity, ssh_key::Error> = self.try_into();
-        match identity {
-            Ok(id) => {
-                s.field("algorithm", &id.pubkey.algorithm());
-                let fp = &id.pubkey.fingerprint(ssh_key::HashAlg::Sha256);
-                s.field("fingerprint", &fp.to_string());
-                s.field("comment", &id.comment);
-            },
-            Err(e) => {
-                s.field("public_key_error", &e.to_string());
-            },
+            Err(e) => e.to_string(),
+        };
+        if self.requires_auth {
+            out.push_str(" requires_auth");
+        };
+        if let Some(expiry) = self.expires_at {
+            out.push_str(&format!(" expires_at={}", expiry));
         }
-        s.field("expires_at", &self.expires_at);
-        s.field("requires_auth", &self.requires_auth);
-        s.finish()
+
+        write!(f, "StoredCredential {{ {} }}", out)
     }
 }
