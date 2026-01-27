@@ -104,7 +104,7 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             .target(tauri_plugin_log::Target::new(
                 tauri_plugin_log::TargetKind::Folder {
                     path: log_data_dir(),
-                    file_name: Some("app.log".to_string()),
+                    file_name: Some("app".to_string()),
                 },
             ))
             .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(7))
