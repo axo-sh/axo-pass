@@ -1,11 +1,21 @@
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
 use crate::secrets::keychain::generic_password::PasswordEntry;
+
+static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    // first part: exclude special characters, but also quotes and backslash
+    // second part: allow escaped space
+    let valid_path_char = r#"([^ :!$`&*()'"+/\\]|(\\ ))"#;
+    let path_re_raw = format!("(/{valid_path_char}+)+/?");
+    Regex::new(&path_re_raw).unwrap()
+});
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -124,24 +134,13 @@ impl SshAskpassHandler {
     /// Extract key path from SSH askpass prompt
     fn extract_key_path(prompt: &str) -> Option<String> {
         let prompt = prompt.trim();
-        let patterns = vec![
-            // eg: ssh-add
-            r#"^Enter passphrase for (?P<key_path>[^\s"']+)(?: \(will confirm each use\))?:$"#,
-            // eg: git operations
-            r#"^Enter passphrase for key '(?P<key_path>[^\s"']+)':$"#,
-            // eg: ssh-keygen
-            r#"^Enter passphrase for "(?P<key_path>[^\s"']+)":$"#,
-        ];
 
-        for pattern in patterns {
-            let passphrase_re = regex::Regex::new(pattern).ok()?;
-            if let Some(caps) = passphrase_re.captures(prompt)
-                && let Some(m) = caps.name("key_path")
-            {
-                return Some(m.as_str().to_string());
-            }
+        // if prompt has "enter passphrase", search for key path patterns
+        if prompt.to_lowercase().contains("enter passphrase") {
+            PATH_REGEX.find(prompt).map(|m| m.as_str().to_string())
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -181,5 +180,33 @@ fn get_ssh_key_fingerprint(key_path: &str) -> Option<String> {
             log::error!("Failed to get key ID from ssh-keygen: {err}");
             None
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_regex() {
+        let test_keys = vec![
+            "/Users/example/.ssh/id_ed25519",
+            r#"/Users/foo\ bar/.ssh/id_ed25519"#,
+        ];
+        for key in test_keys {
+            let test_cases = vec![
+                r#"Enter passphrase for {}"#,
+                r#"Enter passphrase for {}:"#,
+                r#"Enter passphrase for key '{}':"#,
+                r#"Enter passphrase for "{}":"#,
+                r#"Enter passphrase for {} (will confirm each use)"#,
+                r#"Enter passphrase for "{}" (will confirm each use)"#,
+            ];
+            for prompt_template in test_cases {
+                let prompt = prompt_template.replace("{}", key);
+                let extracted_path = SshAskpassHandler::extract_key_path(&prompt);
+                assert_eq!(extracted_path.as_deref(), Some(key));
+            }
+        }
     }
 }
