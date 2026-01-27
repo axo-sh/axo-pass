@@ -1,8 +1,9 @@
 use std::io;
+use std::path::Path;
 
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::client::Client;
-use ssh_agent_lib::proto::Extension;
+use ssh_agent_lib::proto::{Extension, Identity};
 use thiserror::Error;
 use tokio::net::UnixStream;
 
@@ -28,7 +29,7 @@ pub async fn get_agent_status() -> AgentStatus {
 }
 
 #[derive(Error, Debug)]
-pub enum StopSshAgentError {
+pub enum SshAgentClientError {
     #[error("Failed to connect to SSH agent: {0}")]
     ConnectionError(#[from] io::Error),
 
@@ -37,12 +38,15 @@ pub enum StopSshAgentError {
 
     #[error("Socket file not found")]
     NoSocketFound,
+
+    #[error("Request error: {0}")]
+    RequestError(String),
 }
 
-pub async fn stop_ssh_agent() -> Result<(), StopSshAgentError> {
+pub async fn stop_ssh_agent() -> Result<(), SshAgentClientError> {
     let socket_path = SshAgentServer::default_socket_path();
     if !socket_path.exists() {
-        return Err(StopSshAgentError::NoSocketFound);
+        return Err(SshAgentClientError::NoSocketFound);
     }
     let stream = UnixStream::connect(&socket_path).await?;
     let request = Extension {
@@ -51,4 +55,38 @@ pub async fn stop_ssh_agent() -> Result<(), StopSshAgentError> {
     };
     let _ = Client::new(stream).extension(request).await?;
     Ok(())
+}
+
+pub async fn list_system_agent_identities() -> Result<Vec<Identity>, SshAgentClientError> {
+    // in the terminal,we set ORIGINAL_SSH_AUTH_SOCK in a preexec hook if our agent
+    // is running
+    let socket_path = std::env::var("ORIGINAL_SSH_AUTH_SOCK")
+        .ok()
+        .or_else(|| std::env::var("SSH_AUTH_SOCK").ok());
+    match socket_path {
+        Some(path) => list_identities_from_agent(path).await,
+        None => Ok(Vec::new()),
+    }
+}
+
+pub async fn list_axo_agent_identities() -> Result<Vec<Identity>, SshAgentClientError> {
+    let socket_path = SshAgentServer::default_socket_path();
+    if !socket_path.exists() {
+        return Ok(Vec::new());
+    }
+    // todo: implement our our protocol we so we can fetch additional
+    // metadata like constraints
+    list_identities_from_agent(&socket_path).await
+}
+
+async fn list_identities_from_agent<P>(socket_path: P) -> Result<Vec<Identity>, SshAgentClientError>
+where
+    P: AsRef<Path>,
+{
+    let stream = UnixStream::connect(&socket_path).await?;
+    let mut client = Client::new(stream);
+    let identities = client.request_identities().await.map_err(|e| {
+        SshAgentClientError::RequestError(format!("Failed to request identities: {e}"))
+    })?;
+    Ok(identities)
 }

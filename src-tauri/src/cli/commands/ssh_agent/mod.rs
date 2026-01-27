@@ -12,8 +12,9 @@ use clap::{Parser, Subcommand, command};
 use color_print::cprintln;
 pub use server::SshAgentServer;
 
-use crate::cli::commands::ssh_agent::client::{
-    AgentStatus, StopSshAgentError, get_agent_status, stop_ssh_agent,
+pub use crate::cli::commands::ssh_agent::client::{
+    AgentStatus, SshAgentClientError, get_agent_status, list_axo_agent_identities,
+    list_system_agent_identities, stop_ssh_agent,
 };
 
 #[derive(Parser, Debug)]
@@ -66,7 +67,7 @@ impl SshAgentCommand {
                     println!("SSH agent stopped.");
                 },
                 Err(e) => match e {
-                    StopSshAgentError::NoSocketFound => {
+                    SshAgentClientError::NoSocketFound => {
                         println!("SSH agent is not running.");
                     },
                     _ => {
