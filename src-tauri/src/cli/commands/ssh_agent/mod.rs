@@ -1,9 +1,12 @@
 mod client;
 mod credential;
+mod destination_constraint;
 mod managed_credential;
 mod server;
 mod session;
+mod session_binding;
 mod stored_credential;
+mod userauth_request;
 
 use clap::{Parser, Subcommand, command};
 use color_print::cprintln;

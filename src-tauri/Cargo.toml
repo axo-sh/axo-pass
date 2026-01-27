@@ -53,7 +53,7 @@ serde_with = { version = "3.16.1", features = [
 ] }
 ssh-agent-lib = "0.5.1"
 ssh-encoding = "0.2"
-ssh-key = "0.6.7"
+ssh-key = { version = "0.6.7", features = ["rsa"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-cli = "2"
 tauri-plugin-clipboard-manager = "2"
