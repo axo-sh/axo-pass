@@ -10,9 +10,7 @@ use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, Requ
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
 static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // first part: exclude special characters, but also quotes and backslash
-    // second part: allow escaped space
-    let valid_path_char = r#"([^ :!$`&*()'"+/\\]|(\\ ))"#;
+    let valid_path_char = r#"[^:!$`&*()'"+/\\]"#;
     let path_re_raw = format!("(/{valid_path_char}+)+/?");
     Regex::new(&path_re_raw).unwrap()
 });
@@ -137,7 +135,9 @@ impl SshAskpassHandler {
 
         // if prompt has "enter passphrase", search for key path patterns
         if prompt.to_lowercase().contains("enter passphrase") {
-            PATH_REGEX.find(prompt).map(|m| m.as_str().to_string())
+            PATH_REGEX
+                .find(prompt)
+                .map(|m| m.as_str().trim().to_string())
         } else {
             None
         }
@@ -191,15 +191,21 @@ mod tests {
     fn test_path_regex() {
         let test_keys = vec![
             "/Users/example/.ssh/id_ed25519",
-            r#"/Users/foo\ bar/.ssh/id_ed25519"#,
+            r#"/Users/foo bar/.ssh/id ed25519"#,
         ];
+
         for key in test_keys {
             let test_cases = vec![
-                r#"Enter passphrase for {}"#,
+                // ssh-add <key>
                 r#"Enter passphrase for {}:"#,
-                r#"Enter passphrase for key '{}':"#,
+                // ssh-add -c <key>
+                r#"Enter passphrase for {} (will confirm each use):"#,
+                // ssh-keygen -y -f <key> (has quotes)
                 r#"Enter passphrase for "{}":"#,
-                r#"Enter passphrase for {} (will confirm each use)"#,
+                // ssh -T git@github.com
+                r#"Enter passphrase for key '{}':"#,
+                // some other variants
+                r#"Enter passphrase for {}"#,
                 r#"Enter passphrase for "{}" (will confirm each use)"#,
             ];
             for prompt_template in test_cases {
