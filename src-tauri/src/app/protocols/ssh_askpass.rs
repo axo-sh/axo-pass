@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -8,6 +7,7 @@ use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
 use crate::secrets::keychain::generic_password::PasswordEntry;
+use crate::ssh::utils::get_ssh_key_fingerprint;
 
 static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     let valid_path_char = r#"[^:!$`&*()'"+/\\]"#;
@@ -141,45 +141,6 @@ impl SshAskpassHandler {
         } else {
             None
         }
-    }
-}
-
-fn get_ssh_key_fingerprint(key_path: &str) -> Option<String> {
-    if !PathBuf::from(&key_path).exists() {
-        return None;
-    }
-
-    match std::process::Command::new("ssh-keygen")
-        .arg("-l")
-        .arg("-E")
-        .arg("sha256")
-        .arg("-f")
-        .arg(key_path)
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success()
-                && let Ok(stdout) = String::from_utf8(output.stdout)
-                && let Some(fingerprint) = stdout.split_whitespace().nth(1)
-            {
-                Some(
-                    fingerprint
-                        .split_once(':')
-                        .map(|(_, fp)| fp.to_string())
-                        .unwrap_or_else(|| fingerprint.to_owned()),
-                )
-            } else {
-                log::error!(
-                    "ssh-keygen failed or produced invalid output: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                None
-            }
-        },
-        Err(err) => {
-            log::error!("Failed to get key ID from ssh-keygen: {err}");
-            None
-        },
     }
 }
 
