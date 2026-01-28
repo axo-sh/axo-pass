@@ -34,7 +34,8 @@
         "noExplicitAny": "off"
       },
       "style": {
-        "noInferrableTypes": "off"
+        "noInferrableTypes": "off",
+        "useBlockStatements": "error"
       },
       "a11y": "off"
     }

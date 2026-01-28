@@ -6,10 +6,14 @@ export function useAutoResizeWindow<T extends HTMLElement>(deps: unknown[] = [])
   const containerRef = useRef<T>(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current) {
+      return;
+    }
 
     const resizeWindow = async () => {
-      if (!containerRef.current) return;
+      if (!containerRef.current) {
+        return;
+      }
 
       // get new height but clamp to [200px, 600px]
       const contentHeight = containerRef.current.scrollHeight;

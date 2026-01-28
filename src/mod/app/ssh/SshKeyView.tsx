@@ -74,7 +74,9 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
   const errorDialog = useErrorDialog();
 
   const handleSavePassword = async () => {
-    if (!sshKey.fingerprint_sha256 || !password.trim()) return;
+    if (!sshKey.fingerprint_sha256 || !password.trim()) {
+      return;
+    }
 
     setSaving(true);
     try {
@@ -141,7 +143,9 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSavePassword();
+                if (e.key === 'Enter') {
+                  handleSavePassword();
+                }
               }}
               autoFocus
             />
