@@ -4,7 +4,7 @@ import {IconLock} from '@tabler/icons-react';
 import {toast} from 'sonner';
 import {Link, useParams} from 'wouter';
 
-import type {SshKeyInfo} from '@/binding';
+import type {SshKeyEntry} from '@/binding';
 import {listSshKeys, saveSshKeyPassword} from '@/client';
 import {button} from '@/components/Button.css';
 import {Card, CardLabel, CardSection} from '@/components/Card';
@@ -63,7 +63,7 @@ export const SshKeyView = () => {
 };
 
 type SSHKeyDetailsProps = {
-  sshKey: SshKeyInfo;
+  sshKey: SshKeyEntry;
   onPasswordSaved: () => void;
 };
 
@@ -74,12 +74,12 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
   const errorDialog = useErrorDialog();
 
   const handleSavePassword = async () => {
-    if (!sshKey.fingerprint || !password.trim()) return;
+    if (!sshKey.fingerprint_sha256 || !password.trim()) return;
 
     setSaving(true);
     try {
       await saveSshKeyPassword({
-        fingerprint: sshKey.fingerprint,
+        fingerprint: sshKey.fingerprint_sha256,
         password: password.trim(),
       });
       toast.success('Password saved to keychain');
@@ -112,18 +112,18 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
         <div>{sshKey.key_type.toUpperCase()}</div>
       </CardSection>
 
-      {sshKey.fingerprint && (
+      {sshKey.fingerprint_sha256 && (
         <CardSection>
           <CardLabel>Fingerprint (SHA256)</CardLabel>
           <div>
-            <Code>{sshKey.fingerprint}</Code>
+            <Code>{sshKey.fingerprint_sha256}</Code>
           </div>
         </CardSection>
       )}
 
       <CardSection>
         <CardLabel>Public Key File</CardLabel>
-        <div>{sshKey.has_public_key ? 'Available' : 'Not found'}</div>
+        <div>{sshKey.public_key ? 'Available' : 'Not found'}</div>
       </CardSection>
 
       <CardSection>
@@ -133,7 +133,7 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
             <IconLock size={16} />
             <span>Password saved in keychain</span>
           </Flex>
-        ) : showPasswordForm && sshKey.fingerprint ? (
+        ) : showPasswordForm && sshKey.fingerprint_sha256 ? (
           <Flex column gap={0.5}>
             <input
               type="password"
@@ -167,7 +167,7 @@ const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
         ) : (
           <Flex gap={0.5} align="center">
             <span>No password saved</span>
-            {sshKey.fingerprint && (
+            {sshKey.fingerprint_sha256 && (
               <button
                 className={button({variant: 'clear', size: 'small'})}
                 onClick={() => setShowPasswordForm(true)}

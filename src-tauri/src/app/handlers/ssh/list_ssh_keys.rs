@@ -22,6 +22,7 @@ pub struct SshKeyEntry {
     pub fingerprint_md5: String,
     pub has_saved_password: bool,
     pub is_managed: bool,
+    #[typeshare(typescript(type = "SshKeyTag[]"))]
     pub tags: BTreeSet<SshKeyTag>,
 }
 

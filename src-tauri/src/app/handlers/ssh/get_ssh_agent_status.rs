@@ -42,6 +42,7 @@ pub enum SshKeyTag {
 pub struct SshAgentIdentity {
     pub fingerprint: String,
     pub comment: String,
+    #[typeshare(typescript(type = "SshKeyTag[]"))]
     pub tags: BTreeSet<SshKeyTag>,
 }
 

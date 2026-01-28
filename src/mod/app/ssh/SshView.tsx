@@ -1,7 +1,7 @@
 import {IconKey, IconLock} from '@tabler/icons-react';
 import {useLocation} from 'wouter';
 
-import type {SshKeyInfo} from '@/binding';
+import type {SshKeyEntry} from '@/binding';
 import {listSshKeys} from '@/client';
 import {Flex} from '@/components/Flex';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
@@ -30,7 +30,7 @@ export const SshView = () => {
     );
   }
 
-  const handleKeyClick = (key: SshKeyInfo) => {
+  const handleKeyClick = (key: SshKeyEntry) => {
     navigate(`/${encodeURIComponent(key.name)}`);
   };
 
@@ -51,7 +51,7 @@ export const SshView = () => {
 };
 
 type SshKeyItemProps = {
-  sshKey: SshKeyInfo;
+  sshKey: SshKeyEntry;
   onClick: () => void;
 };
 
@@ -65,7 +65,9 @@ const SshKeyItem = ({sshKey, onClick}: SshKeyItemProps) => {
           <span className={secretItemDesc}>({sshKey.key_type})</span>
           {sshKey.has_saved_password && <IconLock size={14} title="Password saved" />}
         </Flex>
-        {sshKey.fingerprint && <span className={secretItemDesc}>{sshKey.fingerprint}</span>}
+        {sshKey.fingerprint_sha256 && (
+          <span className={secretItemDesc}>{sshKey.fingerprint_sha256}</span>
+        )}
       </Flex>
     </div>
   );

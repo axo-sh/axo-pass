@@ -16,6 +16,10 @@ export interface AddItemRequest {
   item_key: string;
 }
 
+export interface AddManagedSshKeyRequest {
+  alias?: string;
+}
+
 export interface AppSettingsResponse {
   helper_bin_path?: string;
   vaults_dir: string;
@@ -49,6 +53,10 @@ export interface DeleteItemRequest {
   item_key: string;
 }
 
+export interface DeleteManagedSshKeyRequest {
+  label: string;
+}
+
 export interface DeleteVaultRequest {
   vault_key: string;
 }
@@ -65,17 +73,21 @@ export enum SshKeyType {
   Unknown = 'unknown',
 }
 
-export interface SshKeyInfo {
+export interface SshKeyEntry {
   name: string;
-  path: string;
+  path?: string;
+  public_key?: string;
+  comment?: string;
   key_type: SshKeyType;
-  has_public_key: boolean;
-  fingerprint?: string;
+  fingerprint_sha256: string;
+  fingerprint_md5: string;
   has_saved_password: boolean;
+  is_managed: boolean;
+  tags: SshKeyTag[];
 }
 
 export interface ListSshKeysResponse {
-  keys: SshKeyInfo[];
+  keys: SshKeyEntry[];
 }
 
 export interface VaultInfo {
@@ -95,6 +107,23 @@ export interface NewVaultRequest {
 export interface SaveSshKeyPasswordRequest {
   fingerprint: string;
   password: string;
+}
+
+export interface SshAgentIdentity {
+  fingerprint: string;
+  comment: string;
+  tags: SshKeyTag[];
+}
+
+export enum SshAgentStatus {
+  Running = 'running',
+  NotRunning = 'not_running',
+  StaleSocket = 'stale_socket',
+}
+
+export interface SshAgentStatusResponse {
+  status: SshAgentStatus;
+  identities: SshAgentIdentity[];
 }
 
 export interface UpdateCheckDisabledStatusResponse {
@@ -134,6 +163,12 @@ export interface VaultSchema {
 
 export interface VaultResponse {
   vault: VaultSchema;
+}
+
+export enum SshKeyTag {
+  Transient = 'transient',
+  SystemAgent = 'system_agent',
+  AxoPassAgent = 'axo_pass_agent',
 }
 
 export type UpdateStatusResponse =
