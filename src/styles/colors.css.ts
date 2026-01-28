@@ -107,7 +107,7 @@ export const colorVar = {
 
 export const baseVar = colorVar.base;
 
-export const scheme = (base: string, text?: string) => ({
+const scheme = (base: string, text?: string) => ({
   '--base': base,
   '--text': text || palette.grey[800],
   '--light05': `oklch(from ${baseVar} calc(l + 0.05) calc(c * 0.75) h)`,
