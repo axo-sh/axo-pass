@@ -89,7 +89,7 @@ impl SshAskpassHandler {
             request.key_id = get_ssh_key_fingerprint(&key_path);
             log::debug!(
                 "ssh-askpass: identified key {key_path} [{:?}]",
-                request.key_id
+                request.key_id.clone().map(|k| k.as_str()[0..6].to_string())
             );
         }
 

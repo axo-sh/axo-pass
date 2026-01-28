@@ -115,7 +115,7 @@ impl Debug for PasswordEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("PasswordEntry")
             .field(&self.password_type)
-            .field(&self.key_id)
+            .field(&format!("{}...", &self.key_id[..6])) // truncated
             .finish()
     }
 }
