@@ -1,9 +1,10 @@
 import React from 'react';
 
 import {writeText} from '@tauri-apps/plugin-clipboard-manager';
+import cx from 'classnames';
 import {toast} from 'sonner';
 
-import {code} from '@/components/Code.css';
+import {code, copyableCode} from '@/components/Code.css';
 
 type Props = {
   children: React.ReactNode;
@@ -12,10 +13,11 @@ type Props = {
 
 export const Code: React.FC<Props> = ({canCopy, children}) => {
   const codeRef = React.useRef<HTMLElement | null>(null);
-  const onCopyClick = () => {
+  const onCopyClick: React.MouseEventHandler = (e) => {
     if (!canCopy) {
       return;
     }
+    e.stopPropagation();
     const content = codeRef.current?.innerText;
     if (content) {
       writeText(content);
@@ -24,7 +26,13 @@ export const Code: React.FC<Props> = ({canCopy, children}) => {
   };
 
   return (
-    <code ref={codeRef} className={code} onClick={onCopyClick}>
+    <code
+      ref={codeRef}
+      className={cx(code, {
+        [copyableCode]: canCopy,
+      })}
+      onClick={onCopyClick}
+    >
       {children}
     </code>
   );

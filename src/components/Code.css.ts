@@ -13,3 +13,11 @@ export const code = style({
   padding: spacing(1 / 12, 1 / 2),
   borderRadius: 4,
 });
+
+export const copyableCode = style({
+  userSelect: 'all',
+  ':hover': {
+    cursor: 'pointer',
+    background: colorVar.light30,
+  },
+});
