@@ -35,7 +35,17 @@
       },
       "style": {
         "noInferrableTypes": "off",
-        "useBlockStatements": "error"
+        "useBlockStatements": "error",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "react": {
+                "allowImportNames": ["default"]
+              }
+            }
+          }
+        }
       },
       "a11y": "off"
     }

@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import React from 'react';
 
 import {listen} from '@tauri-apps/api/event';
 
@@ -16,10 +16,10 @@ type SshAskpassScreenProps = {
 };
 
 export const SshAskpassScreen = ({initialRequest}: SshAskpassScreenProps) => {
-  const [request, setRequest] = useState<AskPassRequest | null>(initialRequest ?? null);
+  const [request, setRequest] = React.useState<AskPassRequest | null>(initialRequest ?? null);
 
   // Listen for askpass request events
-  useEffect(() => {
+  React.useEffect(() => {
     const unlisten = listen<AskPassRequest>('askpass-request', (event) => {
       setRequest(event.payload);
     });

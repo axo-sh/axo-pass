@@ -1,11 +1,11 @@
-import {useEffect, useRef} from 'react';
+import React from 'react';
 
 import {getCurrentWindow, LogicalSize} from '@tauri-apps/api/window';
 
 export function useAutoResizeWindow<T extends HTMLElement>(deps: unknown[] = []) {
-  const containerRef = useRef<T>(null);
+  const containerRef = React.useRef<T>(null);
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!containerRef.current) {
       return;
     }

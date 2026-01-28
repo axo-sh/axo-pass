@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React from 'react';
 
 import {type FieldValues, FormProvider, type UseFormReturn} from 'react-hook-form';
 

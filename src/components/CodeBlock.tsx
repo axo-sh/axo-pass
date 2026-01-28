@@ -1,4 +1,4 @@
-import React, {useRef} from 'react';
+import React from 'react';
 
 import {IconCheck, IconCopy} from '@tabler/icons-react';
 import {writeText} from '@tauri-apps/plugin-clipboard-manager';
@@ -15,7 +15,7 @@ type Props = {
 };
 
 export const CodeBlock: React.FC<Props> = ({className, canCopy, children}) => {
-  const codeRef = useRef<HTMLElement | null>(null);
+  const codeRef = React.useRef<HTMLElement | null>(null);
   const [copied, setCopied] = React.useState(false);
   const onCopyClick = () => {
     const content = codeRef.current?.innerText;

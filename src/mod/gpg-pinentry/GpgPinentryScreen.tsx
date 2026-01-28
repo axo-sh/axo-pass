@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import React from 'react';
 
 import {listen} from '@tauri-apps/api/event';
 
@@ -20,10 +20,10 @@ type PinentryScreenProps = {
 };
 
 export const GpgPinentryScreen = ({initialRequest}: PinentryScreenProps) => {
-  const [request, setRequest] = useState<PinentryRequest | null>(initialRequest ?? null);
+  const [request, setRequest] = React.useState<PinentryRequest | null>(initialRequest ?? null);
 
   // Listen for pinentry request events
-  useEffect(() => {
+  React.useEffect(() => {
     const unlisten = listen<PinentryRequest>('pinentry-request', (event) => {
       setRequest(event.payload);
     });

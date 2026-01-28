@@ -1,5 +1,3 @@
-import {useEffect, useState} from 'react';
-
 import type {AppModeAndState} from '@/client';
 import {getMode} from '@/client';
 import {ErrorDialogProvider} from '@/components/ErrorDialog';
@@ -11,14 +9,16 @@ import {SshAskpassScreen} from '@/mod/ssh-askpass/SshAskpassScreen';
 
 import '@/App.css.ts';
 
+import React from 'react';
+
 import {AppRouter} from '@/mod/app/AppRouter';
 
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppModeAndState | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [vaultStore] = useState(() => new VaultStore());
+  const [mode, setMode] = React.useState<AppModeAndState | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [vaultStore] = React.useState(() => new VaultStore());
 
-  useEffect(() => {
+  React.useEffect(() => {
     (async () => {
       try {
         const appMode = await getMode();

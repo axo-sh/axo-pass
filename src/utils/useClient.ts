@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React from 'react';
 
 export const useClient = <T>(fetchFn: () => Promise<T>, deps: React.DependencyList = []) => {
   const [ready, setReady] = React.useState(false);
