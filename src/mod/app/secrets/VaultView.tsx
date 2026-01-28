@@ -8,7 +8,7 @@ import {button, buttonIconLeft} from '@/components/Button.css';
 import {useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex, FlexSpacer} from '@/components/Flex';
-import {Toggle} from '@/components/Toggle';
+import {SlideToggle} from '@/components/SlideToggle';
 import {Toolbar} from '@/components/Toolbar';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard//DashboardContent';
 import {useVaultStore} from '@/mod/app/mobx/VaultStore';
@@ -108,13 +108,13 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
         }
       >
         <Toolbar>
-          <Toggle
+          <SlideToggle
             onChange={(checked) => setShowCombined(checked)}
             checked={showFlat}
             toggleSize={16}
           >
             Flat View
-          </Toggle>
+          </SlideToggle>
           <FlexSpacer />
           <button
             className={button({variant: 'clear', size: 'small'})}

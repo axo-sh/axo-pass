@@ -14,7 +14,7 @@ import {button, buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {Flex} from '@/components/Flex';
 import {Loader} from '@/components/Loader';
-import {Toggle} from '@/components/Toggle';
+import {SlideToggle} from '@/components/SlideToggle';
 import {updateCheckDate} from '@/mod/app/settings/Settings/AppUpdates.css';
 import {useClient} from '@/utils/useClient';
 
@@ -48,9 +48,13 @@ export const AppUpdates: React.FC = () => {
   return (
     <>
       <Flex gap={1 / 2}>
-        <Toggle checked={!updateCheckDisabled} onChange={handleToggleAutoUpdate} toggleSize={16}>
+        <SlideToggle
+          checked={!updateCheckDisabled}
+          onChange={handleToggleAutoUpdate}
+          toggleSize={16}
+        >
           Automatically Check (once per day)
-        </Toggle>
+        </SlideToggle>
         <button
           className={button({variant: 'clear', size: 'small'})}
           onClick={handleCheckUpdates}

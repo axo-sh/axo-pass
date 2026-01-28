@@ -11,7 +11,7 @@ import {
   toggleSize as toggleSizeVar,
   toggleSlider,
   toggleSliderContainer,
-} from '@/components/Toggle.css';
+} from '@/components/SlideToggle.css';
 
 type Props = {
   children?: React.ReactNode;
@@ -21,7 +21,7 @@ type Props = {
   toggleSize?: number;
 };
 
-export const Toggle: React.FC<Props> = ({
+export const SlideToggle: React.FC<Props> = ({
   children,
   onChange,
   checked = false,
