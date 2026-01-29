@@ -15,13 +15,13 @@ pub(crate) struct SessionBinding {
 
 impl SessionBinding {
     pub fn new(bind: SessionBind) -> Self {
-        let hostkey = bind.host_key.clone().into();
+        let hostkey = bind.host_key.clone();
         let host_name = KnownHosts::load_from_user_ssh_dir()
             .ok()
             .and_then(|parser| parser.find_host_by_key(&hostkey).first().cloned());
         Self {
             inner: bind,
-            host_name: host_name,
+            host_name,
         }
     }
 }

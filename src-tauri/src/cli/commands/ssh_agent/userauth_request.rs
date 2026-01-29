@@ -134,10 +134,7 @@ impl Display for UserauthRequest {
             .field("pubkey", &compute_short_sha256_fingerprint(&self.pubkey))
             .field(
                 "hostkey",
-                &self
-                    .hostkey
-                    .as_ref()
-                    .map(|hk| compute_short_sha256_fingerprint(hk)),
+                &self.hostkey.as_ref().map(compute_short_sha256_fingerprint),
             )
             .finish()
     }
