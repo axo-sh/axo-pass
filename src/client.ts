@@ -10,6 +10,8 @@ import type {
   DeleteCredentialRequest,
   DeleteItemRequest,
   DeleteManagedSshKeyRequest,
+  GetSshKeyRequest,
+  GetSshKeyResponse,
   ListSshKeysResponse,
   ListVaultsResponse,
   NewVaultRequest,
@@ -212,4 +214,10 @@ export const getSshAgentStatus = async (
   agentType: SshAgentType,
 ): Promise<SshAgentStatusResponse> => {
   return await invoke<SshAgentStatusResponse>('get_ssh_agent_status', {agentType});
+};
+
+export const getSshKey = async (request: GetSshKeyRequest): Promise<GetSshKeyResponse> => {
+  return await invoke<GetSshKeyResponse>('get_ssh_key', {
+    request,
+  });
 };

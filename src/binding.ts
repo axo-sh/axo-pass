@@ -89,6 +89,15 @@ export interface DeleteVaultRequest {
   vault_key: string;
 }
 
+export interface GetSshKeyRequest {
+  fingerprint_sha256: string;
+}
+
+export interface GetSshKeyResponse {
+  path?: string;
+  public_key: string;
+}
+
 export interface GetVaultRequest {
   vault_key?: string;
 }

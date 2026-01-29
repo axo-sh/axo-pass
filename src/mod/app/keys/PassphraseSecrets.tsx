@@ -2,9 +2,16 @@ import React from 'react';
 
 import {IconTrash} from '@tabler/icons-react';
 
-import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryType} from '@/client';
+import {
+  deletePassword,
+  getSshKey,
+  listPasswords,
+  type PasswordEntry,
+  type PasswordEntryType,
+} from '@/client';
 import {button} from '@/components/Button.css';
-import {CodeBlock} from '@/components/CodeBlock';
+import {Card, CardLabel, CardSection} from '@/components/Card';
+import {Code} from '@/components/Code';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {Flex} from '@/components/Flex';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard//DashboardContent';
@@ -114,6 +121,18 @@ type DialogProps = {
 };
 
 const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onClose}) => {
+  const [sshKeyPath, setSshKeyPath] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setSshKeyPath(null);
+    if (entry && entry.password_type === 'ssh_key') {
+      getSshKey({fingerprint_sha256: entry.key_id}).then((response) => {
+        if (response.path) {
+          setSshKeyPath(response.path);
+        }
+      });
+    }
+  }, [entry]);
+
   if (!entry) {
     return null;
   }
@@ -122,9 +141,30 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
   return (
     <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
       <Flex column gap={1 / 2}>
-        <CodeBlock ellipsis>{entry.key_id}</CodeBlock>
-        Are you sure you want to delete the {keyType} passphrase identified above from your
-        keychain? You will need to re-enter the passphrase the next time you use the {keyType}.
+        <Card sectioned>
+          <CardSection>
+            <CardLabel>{keyType} Identifier</CardLabel>
+            <div>
+              <Code canCopy>{entry.key_id}</Code>
+            </div>
+          </CardSection>
+          {sshKeyPath && (
+            <CardSection>
+              <CardLabel>Key Path</CardLabel>
+              <div>
+                <Code canCopy>{sshKeyPath}</Code>
+              </div>
+            </CardSection>
+          )}
+        </Card>
+        <div>
+          Are you sure you want to delete the {keyType} passphrase identified above from your
+          keychain?
+        </div>
+        <div>
+          <strong>This cannot be undone.</strong> You will need to re-enter the passphrase the next
+          time you use the {keyType}.
+        </div>
       </Flex>
       <DialogActions>
         <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
