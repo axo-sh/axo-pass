@@ -4,7 +4,7 @@ import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {observer} from 'mobx-react';
 import {toast} from 'sonner';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Card, CardSection} from '@/components/Card';
 import {useDialog} from '@/components/Dialog';
 import {flex} from '@/components/Flex.css';
@@ -74,14 +74,15 @@ export const SecretCredentialList: React.FC<{
         })}
 
         <CardSection className={flex({justify: 'end'})}>
-          <button
-            className={button({size: 'small', variant: 'clear'})}
+          <Button
+            size="small"
+            variant="clear"
             onClick={() => {
               showAddCredentialDialog();
             }}
           >
             + Add Credential
-          </button>
+          </Button>
         </CardSection>
       </Card>
 

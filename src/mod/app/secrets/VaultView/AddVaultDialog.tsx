@@ -2,7 +2,7 @@ import React from 'react';
 
 import {useForm} from 'react-hook-form';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
@@ -76,12 +76,12 @@ export const AddVaultDialog = React.forwardRef<AddVaultDialogHandle, Props>(({on
         </InputField>
 
         <DialogActions>
-          <button type="button" className={button({variant: 'clear'})} onClick={dialog.onClose}>
+          <Button variant="clear" onClick={dialog.onClose}>
             Cancel
-          </button>
-          <button type="submit" className={button({variant: 'default'})}>
+          </Button>
+          <Button submit variant="default">
             Add Vault
-          </button>
+          </Button>
         </DialogActions>
       </Form>
     </Dialog>

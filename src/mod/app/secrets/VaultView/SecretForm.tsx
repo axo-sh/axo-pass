@@ -2,7 +2,7 @@ import React from 'react';
 
 import type {UseFormReturn} from 'react-hook-form';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {DialogActions} from '@/components/Dialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
@@ -93,21 +93,12 @@ export const SecretForm: React.FC<SecretFormProps> = ({
       </InputField>
 
       <DialogActions>
-        <button
-          type="button"
-          className={button({variant: 'clear', size: 'large'})}
-          onClick={onCancel}
-          disabled={isSubmitting}
-        >
+        <Button variant="clear" size="large" onClick={onCancel} disabled={isSubmitting}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          className={button({variant: 'default', size: 'large'})}
-          disabled={isSubmitting}
-        >
+        </Button>
+        <Button submit variant="default" size="large" disabled={isSubmitting}>
           {isSubmitting ? 'Saving...' : submitLabel || 'Save'}
-        </button>
+        </Button>
       </DialogActions>
     </Form>
   );

@@ -4,7 +4,7 @@ import {observer} from 'mobx-react';
 import {useForm} from 'react-hook-form';
 
 import {addCredential} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Form} from '@/components/form/Form';
@@ -106,21 +106,12 @@ export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
           </InputField>
 
           <DialogActions>
-            <button
-              type="button"
-              className={button({variant: 'clear', size: 'large'})}
-              onClick={onClose}
-              disabled={isSubmitting}
-            >
+            <Button variant="clear" size="large" onClick={onClose} disabled={isSubmitting}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              className={button({variant: 'default', size: 'large'})}
-              disabled={isSubmitting}
-            >
+            </Button>
+            <Button submit variant="default" size="large" disabled={isSubmitting}>
               {isSubmitting ? 'Adding...' : 'Add Credential'}
-            </button>
+            </Button>
           </DialogActions>
         </Form>
       </Dialog>

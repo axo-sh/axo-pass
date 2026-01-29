@@ -5,7 +5,7 @@ import {toast} from 'sonner';
 import {useLocation} from 'wouter';
 
 import {deleteItem} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {useVaultStore} from '@/mod/app/mobx/VaultStore';
@@ -89,12 +89,12 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({itemKey, isOpen, onClose}) =
     <Dialog title="Delete saved secret?" isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete this secret? This action cannot be undone.
       <DialogActions>
-        <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
+        <Button variant="clear" size="large" onClick={onClose}>
           Cancel
-        </button>
-        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
+        </Button>
+        <Button variant="error" size="large" onClick={onDelete}>
           Delete
-        </button>
+        </Button>
       </DialogActions>
     </Dialog>
   );

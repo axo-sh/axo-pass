@@ -7,7 +7,7 @@ import {toast} from 'sonner';
 
 import type {DecryptedCredential} from '@/binding';
 import {getDecryptedVaultItemCredential} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {CodeBlock} from '@/components/CodeBlock';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
@@ -77,32 +77,35 @@ export const CredentialItem: React.FC<Props> = observer(
         >
           {children}
           <Flex gap={0.5} align="stretch">
-            <button
-              className={button({size: 'small', variant: 'clear'})}
+            <Button
+              size="small"
+              variant="clear"
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleSecret(e);
               }}
             >
               {showSecret ? 'Hide' : 'Show'}
-            </button>
-            <button
-              className={button({size: 'iconSmall', variant: 'clear'})}
+            </Button>
+            <Button
+              size="iconSmall"
+              variant="clear"
               onClick={(e) => {
                 e.stopPropagation();
                 onCopySecret();
               }}
             >
               <IconCopy size={14} />
-            </button>
-            <button
-              className={button({size: 'iconSmall', variant: 'secondaryError'})}
+            </Button>
+            <Button
+              size="iconSmall"
+              variant="secondaryError"
               onClick={() => {
                 onDelete(credKey);
               }}
             >
               <IconTrash size={14} />
-            </button>
+            </Button>
           </Flex>
         </div>
         {showSecret && decryptedCred && (

@@ -3,7 +3,7 @@ import {toast} from 'sonner';
 
 import type {VaultSchema} from '@/binding';
 import {updateVault} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Form} from '@/components/form/Form';
 import {FormRow} from '@/components/form/FormRow';
@@ -66,9 +66,9 @@ export const VaultDetailsForm: React.FC<{vault: VaultSchema}> = ({vault}) => {
       </InputField>
 
       <FormRow>
-        <button type="submit" className={button({variant: 'default'})}>
+        <Button variant="default" submit>
           Save Changes
-        </button>
+        </Button>
       </FormRow>
     </Form>
   );

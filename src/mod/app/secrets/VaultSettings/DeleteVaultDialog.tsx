@@ -5,7 +5,7 @@ import {useLocation} from 'wouter';
 
 import type {VaultSchema} from '@/binding';
 import {deleteVault} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Code} from '@/components/Code';
 import {Dialog, DialogActions, type DialogHandle} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
@@ -60,17 +60,12 @@ export const DeleteVaultDialog: React.FC<Props> = ({vault, dialog}) => {
         />
       </Flex>
       <DialogActions>
-        <button type="button" className={button({variant: 'clear'})} onClick={handleClose}>
+        <Button variant="clear" onClick={handleClose}>
           Cancel
-        </button>
-        <button
-          type="button"
-          className={button({variant: 'error'})}
-          disabled={confirmKey !== vault.key}
-          onClick={handleDelete}
-        >
+        </Button>
+        <Button variant="error" disabled={confirmKey !== vault.key} onClick={handleDelete}>
           Delete Vault
-        </button>
+        </Button>
       </DialogActions>
     </Dialog>
   );

@@ -10,7 +10,8 @@ import {
   getUpdateStatus,
   setUpdateCheckDisabled,
 } from '@/client';
-import {button, buttonIconLeft} from '@/components/Button.css';
+import {Button} from '@/components/Button';
+import {buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {Flex} from '@/components/Flex';
 import {Loader} from '@/components/Loader';
@@ -55,14 +56,10 @@ export const AppUpdates: React.FC = () => {
         >
           Automatically Check (once per day)
         </SlideToggle>
-        <button
-          className={button({variant: 'clear', size: 'small'})}
-          onClick={handleCheckUpdates}
-          disabled={checking}
-        >
+        <Button variant="clear" size="small" onClick={handleCheckUpdates} disabled={checking}>
           <IconRefresh className={buttonIconLeft} />
           Check Now
-        </button>
+        </Button>
       </Flex>
       <UpdateStatusDisplay result={result} />
     </>

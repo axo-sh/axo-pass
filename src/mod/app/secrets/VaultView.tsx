@@ -4,6 +4,7 @@ import {IconPlus, IconSettings} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {Link, useLocation} from 'wouter';
 
+import {Button} from '@/components/Button';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {useDialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
@@ -59,14 +60,14 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
         />
         <Flex column align="center" justify="center">
           <h2>No vaults found.</h2>
-          <button
+          <Button
             onClick={() => {
               addVaultDialogRef.current?.open();
             }}
-            className={button({size: 'large'})}
+            size="large"
           >
             Create New Vault
-          </button>
+          </Button>
         </Flex>
         <AddVaultDialog
           ref={addVaultDialogRef}
@@ -116,13 +117,10 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
             Flat View
           </SlideToggle>
           <FlexSpacer />
-          <button
-            className={button({variant: 'clear', size: 'small'})}
-            onClick={addSecretDialog.open}
-          >
+          <Button variant="clear" size="small" onClick={addSecretDialog.open}>
             <IconPlus className={buttonIconLeft} />
             Add Secret
-          </button>
+          </Button>
         </Toolbar>
       </DashboardContentHeader>
 

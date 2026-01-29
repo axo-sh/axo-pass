@@ -1,7 +1,7 @@
 import {toast} from 'sonner';
 
 import {deleteCredential} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {useVaultStore} from '@/mod/app/mobx/VaultStore';
@@ -35,12 +35,12 @@ export const DeleteCredentialDialog: React.FC<Props> = ({credKey, isOpen, onClos
     <Dialog title="Delete credential?" isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete this credential? This action cannot be undone.
       <DialogActions>
-        <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
+        <Button variant="clear" size="large" onClick={onClose}>
           Cancel
-        </button>
-        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
+        </Button>
+        <Button variant="error" size="large" onClick={onDelete}>
           Delete
-        </button>
+        </Button>
       </DialogActions>
     </Dialog>
   );
