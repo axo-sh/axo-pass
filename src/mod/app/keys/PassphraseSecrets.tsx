@@ -17,7 +17,7 @@ import {
 } from '@/styles/secrets.css';
 import {useClient} from '@/utils/useClient';
 
-const GpgSecretsHeader = () => (
+const PassphraseSecretsHeader = () => (
   <DashboardContentHeader
     title="GPG & SSH Keys"
     description="Stored GPG and SSH key passphrases. IDs correspond to GPG keygrips and SSH key
@@ -25,7 +25,7 @@ const GpgSecretsHeader = () => (
   />
 );
 
-export const GPGSecrets: React.FC = () => {
+export const PassphraseSecrets: React.FC = () => {
   const [selectedEntry, setSelectedEntry] = React.useState<PasswordEntry | null>(null);
   const {ready, result, error, reload} = useClient(async () => (await listPasswords()) || []);
   const dialog = useDialog();
@@ -33,7 +33,7 @@ export const GPGSecrets: React.FC = () => {
   if (error) {
     return (
       <>
-        <GpgSecretsHeader />
+        <PassphraseSecretsHeader />
         <p>Error loading passphrases: {String(error)}</p>
       </>
     );
@@ -42,7 +42,7 @@ export const GPGSecrets: React.FC = () => {
   if (!ready) {
     return (
       <>
-        <GpgSecretsHeader />
+        <PassphraseSecretsHeader />
         <p>Loading passphrases...</p>
       </>
     );
@@ -51,7 +51,7 @@ export const GPGSecrets: React.FC = () => {
   if (result === null || result.length === 0) {
     return (
       <>
-        <GpgSecretsHeader />
+        <PassphraseSecretsHeader />
         <p>
           No stored passphrases found. Passphrases will be saved here when you use Touch ID
           authentication.
@@ -62,7 +62,7 @@ export const GPGSecrets: React.FC = () => {
 
   return (
     <>
-      <GpgSecretsHeader />
+      <PassphraseSecretsHeader />
       <div className={secretsList()}>
         {result.map((entry) => (
           <div key={entry.key_id} className={secretItem()}>
