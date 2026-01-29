@@ -10,6 +10,7 @@ use tokio::net::UnixStream;
 use crate::cli::commands::ssh_agent::SshAgentServer;
 use crate::cli::commands::ssh_agent::session::AXO_SHUTDOWN_EXT;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatus {
     Running,
     NotRunning,
@@ -18,14 +19,25 @@ pub enum AgentStatus {
 
 pub async fn get_agent_status() -> AgentStatus {
     let socket_path = SshAgentServer::default_socket_path();
+    get_agent_status_for_socket(&socket_path).await
+}
+
+pub async fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatus {
+    let socket_path = socket_path.as_ref();
     if !socket_path.exists() {
         return AgentStatus::NotRunning;
     }
 
-    match tokio::net::UnixStream::connect(&socket_path).await {
+    match tokio::net::UnixStream::connect(socket_path).await {
         Ok(_) => AgentStatus::Running,
         Err(_) => AgentStatus::StaleSocket,
     }
+}
+
+pub fn get_system_socket_path() -> Option<String> {
+    std::env::var("ORIGINAL_SSH_AUTH_SOCK")
+        .ok()
+        .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
 }
 
 #[derive(Error, Debug)]

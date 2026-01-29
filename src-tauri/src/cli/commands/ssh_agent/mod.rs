@@ -13,8 +13,9 @@ use color_print::cprintln;
 pub use server::SshAgentServer;
 
 pub use crate::cli::commands::ssh_agent::client::{
-    AgentStatus, SshAgentClientError, get_agent_status, list_axo_agent_identities,
-    list_system_agent_identities, stop_ssh_agent,
+    AgentStatus, SshAgentClientError, get_agent_status, get_agent_status_for_socket,
+    get_system_socket_path, list_axo_agent_identities, list_system_agent_identities,
+    stop_ssh_agent,
 };
 
 #[derive(Parser, Debug)]

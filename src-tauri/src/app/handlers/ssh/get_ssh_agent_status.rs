@@ -1,11 +1,8 @@
-use std::collections::{BTreeSet, HashMap};
-
-use serde::Serialize;
-use ssh_key::HashAlg;
+use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::cli::commands::ssh_agent::{
-    AgentStatus, get_agent_status, list_axo_agent_identities, list_system_agent_identities,
+    AgentStatus, SshAgentServer, get_agent_status_for_socket, get_system_socket_path,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,23 +24,12 @@ impl From<AgentStatus> for SshAgentStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Deserialize)]
 #[typeshare]
 #[serde(rename_all = "snake_case")]
-pub enum SshKeyTag {
-    Transient,
-    SystemAgent,
-    AxoPassAgent,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[typeshare]
-#[serde(rename_all = "snake_case")]
-pub struct SshAgentIdentity {
-    pub fingerprint: String,
-    pub comment: String,
-    #[typeshare(typescript(type = "SshKeyTag[]"))]
-    pub tags: BTreeSet<SshKeyTag>,
+pub enum SshAgentType {
+    Axo,
+    System,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,52 +37,36 @@ pub struct SshAgentIdentity {
 #[serde(rename_all = "snake_case")]
 pub struct SshAgentStatusResponse {
     pub status: SshAgentStatus,
-    pub identities: Vec<SshAgentIdentity>,
+    pub socket_path: Option<String>,
 }
 
 #[tauri::command]
-pub async fn get_ssh_agent_status() -> Result<SshAgentStatusResponse, String> {
-    let status = get_agent_status().await;
-    let mut identities: HashMap<String, SshAgentIdentity> = HashMap::new();
-
-    // Query system agent (SSH_AUTH_SOCK)
-    if let Ok(agent_identities) = list_system_agent_identities().await {
-        for identity in agent_identities {
-            let fingerprint = identity.pubkey.fingerprint(HashAlg::Sha256).to_string();
-            identities
-                .entry(fingerprint.clone())
-                .and_modify(|e| {
-                    e.tags.insert(SshKeyTag::SystemAgent);
-                })
-                .or_insert(SshAgentIdentity {
-                    fingerprint,
-                    comment: identity.comment.to_string(),
-                    tags: BTreeSet::from([SshKeyTag::SystemAgent]),
-                });
-        }
-    }
-
-    // Query our agent if it's running
-    if matches!(status, AgentStatus::Running)
-        && let Ok(agent_identities) = list_axo_agent_identities().await
-    {
-        for identity in agent_identities {
-            let fingerprint = identity.pubkey.fingerprint(HashAlg::Sha256).to_string();
-            identities
-                .entry(fingerprint.clone())
-                .and_modify(|e| {
-                    e.tags.insert(SshKeyTag::AxoPassAgent);
-                })
-                .or_insert(SshAgentIdentity {
-                    fingerprint,
-                    comment: identity.comment.to_string(),
-                    tags: BTreeSet::from([SshKeyTag::AxoPassAgent]),
-                });
-        }
-    }
+pub async fn get_ssh_agent_status(
+    agent_type: SshAgentType,
+) -> Result<SshAgentStatusResponse, String> {
+    let (status, socket_path) = match agent_type {
+        SshAgentType::Axo => {
+            let path = SshAgentServer::default_socket_path();
+            let status = get_agent_status_for_socket(&path).await;
+            log::debug!(
+                "Axo SSH agent status: {:?}, socket path: {}",
+                status,
+                path.to_string_lossy()
+            );
+            (status, Some(path.to_string_lossy().to_string()))
+        },
+        SshAgentType::System => {
+            let path = get_system_socket_path();
+            let status = match &path {
+                Some(p) => get_agent_status_for_socket(p).await,
+                None => AgentStatus::NotRunning,
+            };
+            (status, path)
+        },
+    };
 
     Ok(SshAgentStatusResponse {
         status: status.into(),
-        identities: identities.into_values().collect(),
+        socket_path,
     })
 }
