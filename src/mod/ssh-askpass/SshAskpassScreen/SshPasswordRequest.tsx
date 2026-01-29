@@ -22,6 +22,10 @@ type Props = {
   onResponse: (response: PasswordResponse) => void;
 };
 
+// note: the following tests the flow where a passphrase is requested without a path
+// ssh-keygen -p -f ~/.ssh/id_ed25519
+// > Enter old passphrase:
+// > Enter new passphrase (empty for no passphrase):
 export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
   const containerRef = useAutoResizeWindow<HTMLElement>([request]);
   return (
@@ -41,7 +45,7 @@ export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
           <Card loading>
             <p>Requesting authentication to unlock SSH key...</p>
           </Card>
-        ) : request.key_path ? (
+        ) : request.key_path || request.prompt.includes('passphrase') ? (
           <PasswordRequestForm
             prompt="Enter passphrase for SSH key"
             keyIdentifier={request.key_id || request.key_path}
@@ -54,9 +58,9 @@ export const SshPasswordRequest: React.FC<Props> = ({request, onResponse}) => {
             <ResponseForm
               onResponse={(response) => {
                 if (response !== null) {
-                  onResponse({
-                    response: response.trim(),
-                  });
+                  onResponse({response: response.trim()});
+                } else {
+                  onResponse('cancelled');
                 }
               }}
             />
