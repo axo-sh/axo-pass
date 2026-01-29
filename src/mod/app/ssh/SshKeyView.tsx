@@ -1,187 +1,152 @@
-import React from 'react';
-
-import {IconLock} from '@tabler/icons-react';
-import {toast} from 'sonner';
+import {IconLock, IconTrash} from '@tabler/icons-react';
+import {observer} from 'mobx-react-lite';
 import {Link, useParams} from 'wouter';
 
-import type {SshKeyEntry} from '@/binding';
-import {listSshKeys, saveSshKeyPassword} from '@/client';
-import {button} from '@/components/Button.css';
+import {type SshKeyEntry, SshKeyLocation} from '@/binding';
+import {button, buttonIconLeft} from '@/components/Button.css';
 import {Card, CardLabel, CardSection} from '@/components/Card';
 import {Code} from '@/components/Code';
-import {useErrorDialog} from '@/components/ErrorDialog';
-import {Flex} from '@/components/Flex';
+import {CodeBlock} from '@/components/CodeBlock';
+import {useDialog} from '@/components/Dialog';
+import {Flex, FlexSpacer} from '@/components/Flex';
+import {Toolbar} from '@/components/Toolbar';
 import {layoutTitlePrefixLink} from '@/layout/Layout.css';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
-import {useClient} from '@/utils/useClient';
+import {useSshKeysStore} from '@/mod/app/mobx/SshKeysStore';
+import {DeleteSshKeyDialog} from '@/mod/app/ssh/DeleteSshKeyDialog';
 
-export const SshKeyView = () => {
-  const params = useParams<{keyName: string}>();
-  const {ready, result: sshKeys, error, reload} = useClient(listSshKeys);
+export const SshKeyView = observer(() => {
+  const params = useParams<{fingerprint: string}>();
+  const store = useSshKeysStore();
+  const deleteDialog = useDialog();
+  const titlePrefix = (
+    <Link className={layoutTitlePrefixLink} to="/">
+      SSH
+    </Link>
+  );
 
-  if (error) {
-    return (
-      <>
-        <DashboardContentHeader title="SSH Keys" />
-        <div>Error loading SSH keys: {String(error)}</div>
-      </>
-    );
-  }
-
-  if (!ready) {
-    return (
-      <>
-        <DashboardContentHeader title="SSH Keys" />
-        <div>Loading SSH key...</div>
-      </>
-    );
-  }
-
-  const sshKey = sshKeys?.keys.find((k) => k.name === params.keyName);
+  const sshKey = store.getKeyByFingerprint(decodeURIComponent(params.fingerprint));
   if (!sshKey) {
     return (
       <>
-        <DashboardContentHeader title="SSH Keys" />
-        <div>SSH key not found: {params.keyName}</div>
+        <DashboardContentHeader titlePrefix={titlePrefix} title={''} />
+        <div>SSH key not found: {params.fingerprint}</div>
+      </>
+    );
+  }
+
+  if (!sshKey.is_managed) {
+    return (
+      <>
+        <DashboardContentHeader titlePrefix={titlePrefix} title={sshKey.name} />
+        <SSHKeyDetails sshKey={sshKey} />
       </>
     );
   }
 
   return (
     <>
-      <DashboardContentHeader
-        titlePrefix={
-          <Link className={layoutTitlePrefixLink} to="/">
-            SSH
-          </Link>
-        }
-        title={sshKey.name}
-      />
-      <SSHKeyDetails sshKey={sshKey} onPasswordSaved={reload} />
+      <DashboardContentHeader titlePrefix={titlePrefix} title={sshKey.name}>
+        <Toolbar>
+          <FlexSpacer />
+          <button
+            className={button({size: 'small', variant: 'secondaryError'})}
+            disabled={!sshKey.is_managed}
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteDialog.open();
+            }}
+          >
+            <IconTrash className={buttonIconLeft} /> Delete
+          </button>
+        </Toolbar>
+      </DashboardContentHeader>
+      <SSHKeyDetails sshKey={sshKey} />
+      <DeleteSshKeyDialog sshKey={sshKey} dialog={deleteDialog} />
     </>
   );
-};
+});
 
 type SSHKeyDetailsProps = {
   sshKey: SshKeyEntry;
-  onPasswordSaved: () => void;
 };
 
-const SSHKeyDetails = ({sshKey, onPasswordSaved}: SSHKeyDetailsProps) => {
-  const [showPasswordForm, setShowPasswordForm] = React.useState(false);
-  const [password, setPassword] = React.useState('');
-  const [saving, setSaving] = React.useState(false);
-  const errorDialog = useErrorDialog();
-
-  const handleSavePassword = async () => {
-    if (!sshKey.fingerprint_sha256 || !password.trim()) {
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await saveSshKeyPassword({
-        fingerprint: sshKey.fingerprint_sha256,
-        password: password.trim(),
-      });
-      toast.success('Password saved to keychain');
-      setPassword('');
-      setShowPasswordForm(false);
-      onPasswordSaved();
-    } catch (err) {
-      errorDialog.showError('Failed to save password', String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
+const SSHKeyDetails: React.FC<SSHKeyDetailsProps> = ({sshKey}) => {
+  const isTransient = sshKey.location === SshKeyLocation.Transient;
 
   return (
     <Card sectioned>
-      <CardSection>
-        <CardLabel>Name</CardLabel>
-        <div>{sshKey.name}</div>
-      </CardSection>
+      {isTransient ? (
+        <CardSection>
+          <CardLabel>Transient</CardLabel>
+          <div>This key was manually added to the SSH agent.</div>
+        </CardSection>
+      ) : (
+        <CardSection>
+          <CardLabel>Name</CardLabel>
+          <div>{sshKey.name}</div>
+        </CardSection>
+      )}
 
-      <CardSection>
-        <CardLabel>Path</CardLabel>
-        <div>
-          <Code>{sshKey.path}</Code>
-        </div>
-      </CardSection>
+      {sshKey.fingerprint_sha256 && (
+        <CardSection>
+          <CardLabel>Fingerprint (SHA-256)</CardLabel>
+          <div>
+            <Code canCopy>{sshKey.fingerprint_sha256}</Code>
+          </div>
+        </CardSection>
+      )}
+
+      {/* ssh-keygen -lf -E md5 */}
+      {sshKey.fingerprint_md5 && (
+        <CardSection>
+          <CardLabel>Fingerprint (MD5)</CardLabel>
+          <div>
+            <Code canCopy>{sshKey.fingerprint_md5}</Code>
+          </div>
+        </CardSection>
+      )}
 
       <CardSection>
         <CardLabel>Key Type</CardLabel>
         <div>{sshKey.key_type.toUpperCase()}</div>
       </CardSection>
 
-      {sshKey.fingerprint_sha256 && (
+      {!sshKey.is_managed && (
         <CardSection>
-          <CardLabel>Fingerprint (SHA256)</CardLabel>
+          <CardLabel>Path</CardLabel>
           <div>
-            <Code>{sshKey.fingerprint_sha256}</Code>
+            <Code canCopy>{sshKey.path}</Code>
           </div>
         </CardSection>
       )}
 
-      <CardSection>
-        <CardLabel>Public Key File</CardLabel>
-        <div>{sshKey.public_key ? 'Available' : 'Not found'}</div>
-      </CardSection>
+      {!isTransient && (
+        <CardSection>
+          <CardLabel>Public Key File</CardLabel>
+          <div>{sshKey.public_key ? <Code>{sshKey.public_key}</Code> : 'Not found'}</div>
+        </CardSection>
+      )}
 
-      <CardSection>
-        <CardLabel>Saved Password</CardLabel>
-        {sshKey.has_saved_password ? (
-          <Flex gap={0.5} align="center">
-            <IconLock size={16} />
-            <span>Password saved in keychain</span>
-          </Flex>
-        ) : showPasswordForm && sshKey.fingerprint_sha256 ? (
-          <Flex column gap={0.5}>
-            <input
-              type="password"
-              placeholder="Enter passphrase"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleSavePassword();
-                }
-              }}
-              autoFocus
-            />
-            <Flex gap={0.5}>
-              <button
-                className={button({variant: 'clear', size: 'small'})}
-                onClick={() => {
-                  setShowPasswordForm(false);
-                  setPassword('');
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className={button({variant: 'default', size: 'small'})}
-                onClick={handleSavePassword}
-                disabled={saving || !password.trim()}
-              >
-                {saving ? 'Saving...' : 'Save Password'}
-              </button>
+      {!sshKey.is_managed && (
+        <CardSection>
+          <CardLabel>Saved Password</CardLabel>
+          {sshKey.has_saved_password ? (
+            <Flex gap={0.5} align="center">
+              <IconLock size={16} />
+              <span>Password saved in keychain</span>
             </Flex>
-          </Flex>
-        ) : (
-          <Flex gap={0.5} align="center">
-            <span>No password saved</span>
-            {sshKey.fingerprint_sha256 && (
-              <button
-                className={button({variant: 'clear', size: 'small'})}
-                onClick={() => setShowPasswordForm(true)}
-              >
-                Add Password
-              </button>
-            )}
-          </Flex>
-        )}
-      </CardSection>
+          ) : (
+            <Flex column gap={1 / 2}>
+              <div>
+                No saved password. If you have axo set up as your ssh askpass helper, you can save a
+                password by running:
+              </div>
+              <CodeBlock canCopy>ssh-add "{sshKey.path}"</CodeBlock>
+            </Flex>
+          )}
+        </CardSection>
+      )}
     </Card>
   );
 };

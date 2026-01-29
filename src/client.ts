@@ -3,15 +3,19 @@ import {invoke} from '@tauri-apps/api/core';
 import type {
   AddCredentialRequest,
   AddItemRequest,
+  AddManagedSshKeyResponse,
   AppSettingsResponse,
   DecryptedCredential,
   DecryptedCredentialRequest,
   DeleteCredentialRequest,
   DeleteItemRequest,
+  DeleteManagedSshKeyRequest,
   ListSshKeysResponse,
   ListVaultsResponse,
   NewVaultRequest,
   SaveSshKeyPasswordRequest,
+  SshAgentStatusResponse,
+  SshAgentType,
   UpdateItemRequest,
   UpdateStatusResponse,
   UpdateVaultRequest,
@@ -194,4 +198,18 @@ export const listSshKeys = async (): Promise<ListSshKeysResponse> => {
 
 export const saveSshKeyPassword = async (request: SaveSshKeyPasswordRequest): Promise<void> => {
   return await invoke<void>('save_ssh_key_password', {request});
+};
+
+export const addManagedSshKey = async (): Promise<AddManagedSshKeyResponse> => {
+  return await invoke<AddManagedSshKeyResponse>('add_managed_ssh_key');
+};
+
+export const deleteManagedSshKey = async (request: DeleteManagedSshKeyRequest): Promise<void> => {
+  return await invoke<void>('delete_managed_ssh_key', {request});
+};
+
+export const getSshAgentStatus = async (
+  agentType: SshAgentType,
+): Promise<SshAgentStatusResponse> => {
+  return await invoke<SshAgentStatusResponse>('get_ssh_agent_status', {agentType});
 };
