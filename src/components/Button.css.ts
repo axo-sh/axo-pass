@@ -49,16 +49,16 @@ const buttonVariants = styleVariants({
   clear: {
     background: 'rgba(255,255,255,0.05)',
     borderColor: 'rgba(255,255,255,0.05)',
-    ':active': {
-      outline: 'none',
-      boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
-      background: colorVar.light20,
-    },
     ':hover': {
       outline: 'none',
       background: 'rgba(255,255,255,0.04)',
       borderColor: colorVar.light20,
       boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+    },
+    ':active': {
+      outline: 'none',
+      boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
+      background: colorVar.light10,
     },
     vars: greyScheme,
   },
