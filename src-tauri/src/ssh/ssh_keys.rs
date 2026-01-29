@@ -35,8 +35,8 @@ impl From<Algorithm> for SshKeyType {
 pub struct SystemSshKey {
     pub name: String,
     pub path: PathBuf,
+    pub public_key: PublicKey,
     pub public_key_path: Option<PathBuf>,
-    #[allow(dead_code)]
     pub comment: String,
     pub key_type: SshKeyType,
     pub fingerprint_sha256: String,
@@ -126,6 +126,7 @@ impl SystemSshKey {
             key_type: public_key.algorithm().into(),
             fingerprint_sha256: compute_sha256_fingerprint(public_key.key_data()),
             fingerprint_md5: compute_md5_fingerprint(public_key.key_data()),
+            public_key: public_key,
         })
     }
 
