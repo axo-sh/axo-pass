@@ -15,9 +15,17 @@ export const Toaster: React.FC = () => {
     }
   }, [toasts]);
 
+  // note on expand: if don't set this, there's bug where
+  // hovering on the first toast triggers expansion but
+  // the height is incorrect
   return (
     <div className={toaster} ref={ref} popover="manual">
-      <SonnerToaster />
+      <SonnerToaster
+        expand
+        icons={{
+          success: null,
+        }}
+      />
     </div>
   );
 };
