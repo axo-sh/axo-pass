@@ -8,6 +8,7 @@ import {toast} from 'sonner';
 import {button} from '@/components/Button.css';
 import {
   codeBlockCopy,
+  codeBlockOverflowBreakAll,
   codeBlockOverflowEllipsis,
   codeBlockPre,
   codeBlockPreCode,
@@ -17,10 +18,10 @@ type Props = {
   className?: string;
   canCopy?: boolean;
   children: React.ReactNode;
-  ellipsis?: boolean;
+  overflow?: 'ellipsis' | 'break-all';
 };
 
-export const CodeBlock: React.FC<Props> = ({className, canCopy, children, ellipsis}) => {
+export const CodeBlock: React.FC<Props> = ({className, canCopy, children, overflow}) => {
   const codeRef = React.useRef<HTMLElement | null>(null);
   const [copied, setCopied] = React.useState(false);
   const onCopyClick = () => {
@@ -40,7 +41,8 @@ export const CodeBlock: React.FC<Props> = ({className, canCopy, children, ellips
   return (
     <pre
       className={cx(className || codeBlockPre, {
-        [codeBlockOverflowEllipsis]: ellipsis,
+        [codeBlockOverflowEllipsis]: overflow === 'ellipsis',
+        [codeBlockOverflowBreakAll]: overflow === 'break-all',
       })}
     >
       {canCopy && (

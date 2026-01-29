@@ -19,6 +19,10 @@ export const codeBlockOverflowEllipsis = style({
   textOverflow: 'ellipsis',
 });
 
+export const codeBlockOverflowBreakAll = style({
+  wordBreak: 'break-all',
+});
+
 export const codeBlockPreCode = style({
   fontFamily: vars.fonts.monospace,
   fontSize: vars.scale.sm,
