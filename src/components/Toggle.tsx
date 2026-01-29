@@ -1,8 +1,6 @@
 import type React from 'react';
 
-import cx from 'classnames';
-
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {toggle} from '@/components/Toggle.css';
 
 export const Toggle = ({
@@ -14,10 +12,7 @@ export const Toggle = ({
   onClick: () => void;
   children: React.ReactNode;
 }) => (
-  <button
-    className={cx(toggle, button({variant: active ? 'default' : 'clear', size: 'small'}))}
-    onClick={onClick}
-  >
+  <Button variant={active ? 'default' : 'clear'} size="small" className={toggle} onClick={onClick}>
     {children}
-  </button>
+  </Button>
 );

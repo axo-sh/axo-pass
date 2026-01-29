@@ -1,6 +1,6 @@
 import React from 'react';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Card} from '@/components/Card';
 import {Flex} from '@/components/Flex';
 import {Form} from '@/components/form/Form';
@@ -49,16 +49,10 @@ export const ResponseForm: React.FC<Props> = ({onResponse}) => {
         </FormRow>
 
         <Flex gap={1 / 2} align="center" justify="end">
-          <button
-            className={button({variant: 'clear'})}
-            type="button"
-            onClick={() => handleSubmit(false)}
-          >
+          <Button variant="clear" onClick={() => handleSubmit(false)}>
             Cancel
-          </button>
-          <button className={button()} type="submit">
-            OK
-          </button>
+          </Button>
+          <Button submit>OK</Button>
         </Flex>
       </Form>
     </Card>

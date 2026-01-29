@@ -5,7 +5,7 @@ import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import cx from 'classnames';
 import {toast} from 'sonner';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {
   codeBlockCopy,
   codeBlockOverflowBreakAll,
@@ -46,14 +46,16 @@ export const CodeBlock: React.FC<Props> = ({className, canCopy, children, overfl
       })}
     >
       {canCopy && (
-        <button
-          className={cx(button({variant: 'clear', size: 'iconSmall'}), codeBlockCopy)}
+        <Button
+          variant="clear"
+          size="iconSmall"
+          className={codeBlockCopy}
           disabled={copied}
           onClick={onCopyClick}
           aria-label="Copy to clipboard"
         >
           <CopyIcon size={16} />
-        </button>
+        </Button>
       )}
       {/* todo: support ellipsis */}
       <code ref={codeRef} className={codeBlockPreCode}>

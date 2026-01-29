@@ -5,7 +5,8 @@ import {useLocation} from 'wouter';
 
 import {SshAgentType, SshKeyAgent, type SshKeyEntry, SshKeyLocation} from '@/binding';
 import {addManagedSshKey} from '@/client';
-import {button, buttonIconLeft} from '@/components/Button.css';
+import {Button} from '@/components/Button';
+import {buttonIconLeft} from '@/components/Button.css';
 import {Card} from '@/components/Card';
 import {Code} from '@/components/Code';
 import {useErrorDialog} from '@/components/ErrorDialog';
@@ -58,13 +59,10 @@ export const SshView = observer(() => {
             <SshFilterToggle filter="transient">Transient</SshFilterToggle>
           </Flex>
           <FlexSpacer />
-          <button
-            className={button({variant: 'clear', size: 'small'})}
-            onClick={handleAddManagedKey}
-          >
+          <Button variant="clear" size="small" onClick={handleAddManagedKey}>
             <IconPlus className={buttonIconLeft} />
             Add Managed Key
-          </button>
+          </Button>
         </Toolbar>
       </DashboardContentHeader>
 

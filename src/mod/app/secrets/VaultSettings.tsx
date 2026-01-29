@@ -4,6 +4,7 @@ import {IconChevronLeft} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {Link} from 'wouter';
 
+import {Button} from '@/components/Button';
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {CodeBlock} from '@/components/CodeBlock';
 import {useDialog} from '@/components/Dialog';
@@ -80,9 +81,9 @@ export const VaultSettings: React.FC<Props> = observer(({vaultKey}) => {
 
       <DashboardSection title="Delete Vault">
         <div>Deleting a repository will move the vault file to Trash on your Mac.</div>
-        <button className={button({variant: 'error'})} onClick={() => deleteDialog.open()}>
+        <Button variant="error" onClick={() => deleteDialog.open()}>
           Delete
-        </button>
+        </Button>
       </DashboardSection>
 
       <DeleteVaultDialog vault={vault} dialog={deleteDialog} />

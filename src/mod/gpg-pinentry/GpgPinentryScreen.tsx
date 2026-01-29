@@ -8,7 +8,7 @@ import {
   type RequestEvent,
   sendPinentryResponse,
 } from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Loader} from '@/components/Loader';
 import {Layout} from '@/layout/Layout';
 import {LayoutTitle} from '@/layout/LayoutTitle';
@@ -72,12 +72,8 @@ export const GpgPinentryScreen = ({initialRequest}: PinentryScreenProps) => {
         <LayoutTitle>Confirmation Required</LayoutTitle>
         {description && <p>{description}</p>}
         <div style={{display: 'flex', gap: '0.5rem', marginTop: '1rem'}}>
-          <button className={button()} onClick={() => handleSubmit('confirmed')}>
-            OK
-          </button>
-          <button className={button()} onClick={() => handleSubmit('cancelled')}>
-            Cancel
-          </button>
+          <Button onClick={() => handleSubmit('confirmed')}>OK</Button>
+          <Button onClick={() => handleSubmit('cancelled')}>Cancel</Button>
         </div>
       </Layout>
     );
@@ -89,7 +85,7 @@ export const GpgPinentryScreen = ({initialRequest}: PinentryScreenProps) => {
       <Layout centered>
         <LayoutTitle>Message</LayoutTitle>
         {description && <p>{description}</p>}
-        <button onClick={() => handleSubmit('confirmed')}>OK</button>
+        <Button onClick={() => handleSubmit('confirmed')}>OK</Button>
       </Layout>
     );
   }

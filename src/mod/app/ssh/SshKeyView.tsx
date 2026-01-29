@@ -6,7 +6,8 @@ import {Link, useParams} from 'wouter';
 
 import {type SshKeyEntry, SshKeyLocation} from '@/binding';
 import {getSshKey} from '@/client';
-import {button, buttonIconLeft} from '@/components/Button.css';
+import {Button} from '@/components/Button';
+import {buttonIconLeft} from '@/components/Button.css';
 import {Card, CardLabel, CardSection} from '@/components/Card';
 import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
@@ -53,8 +54,9 @@ export const SshKeyView = observer(() => {
       <DashboardContentHeader titlePrefix={titlePrefix} title={sshKey.name}>
         <Toolbar>
           <FlexSpacer />
-          <button
-            className={button({size: 'small', variant: 'secondaryError'})}
+          <Button
+            size="small"
+            variant="secondaryError"
             disabled={!sshKey.is_managed}
             onClick={(e) => {
               e.stopPropagation();
@@ -62,7 +64,7 @@ export const SshKeyView = observer(() => {
             }}
           >
             <IconTrash className={buttonIconLeft} /> Delete
-          </button>
+          </Button>
         </Toolbar>
       </DashboardContentHeader>
       <SSHKeyDetails sshKey={sshKey} />
@@ -151,13 +153,14 @@ const SSHKeyDetails: React.FC<SSHKeyDetailsProps> = ({sshKey}) => {
             <CardSection>
               <CardLabel>Public Key</CardLabel>
               <div>
-                <button
-                  className={button({size: 'small', variant: 'clear'})}
+                <Button
+                  size="small"
+                  variant="clear"
                   disabled={isLoading || !sshKey.fingerprint_sha256}
                   onClick={handleShowPublicKey}
                 >
                   {isLoading ? 'Loading...' : 'View Public Key'}
-                </button>
+                </Button>
               </div>
             </CardSection>
             <CardSection>

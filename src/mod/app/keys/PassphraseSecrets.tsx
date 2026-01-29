@@ -9,7 +9,7 @@ import {
   type PasswordEntry,
   type PasswordEntryType,
 } from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Card, CardLabel, CardSection} from '@/components/Card';
 import {Code} from '@/components/Code';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
@@ -77,15 +77,16 @@ export const PassphraseSecrets: React.FC = () => {
               <div className={secretItemLabel}>{getKeyTypeShort(entry.password_type)}</div>
               <code className={secretItemValue}>{entry.key_id}</code>
             </div>
-            <button
-              className={button({size: 'iconSmall', variant: 'secondaryError'})}
+            <Button
+              size="iconSmall"
+              variant="secondaryError"
               onClick={() => {
                 setSelectedEntry(entry);
                 dialog.open();
               }}
             >
               <IconTrash size={16} />
-            </button>
+            </Button>
           </div>
         ))}
         <DeleteSecretDialog
@@ -167,12 +168,12 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
         </div>
       </Flex>
       <DialogActions>
-        <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
+        <Button variant="clear" size="large" onClick={onClose}>
           Cancel
-        </button>
-        <button className={button({variant: 'error', size: 'large'})} onClick={onDelete}>
+        </Button>
+        <Button variant="error" size="large" onClick={onDelete}>
           Delete
-        </button>
+        </Button>
       </DialogActions>
     </Dialog>
   );

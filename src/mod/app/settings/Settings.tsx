@@ -1,5 +1,5 @@
 import {getAppSettings, gpgTestIntegration} from '@/client';
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
@@ -28,12 +28,9 @@ export const Settings: React.FC = () => {
           <Code>echo test | gpg -as -</Code> (or clicking the button below).
         </div>
         <div>
-          <button
-            className={button({variant: 'clear', size: 'small'})}
-            onClick={() => gpgTestIntegration()}
-          >
+          <Button variant="clear" size="small" onClick={() => gpgTestIntegration()}>
             Test GPG Integration
-          </button>
+          </Button>
         </div>
       </DashboardSection>
 

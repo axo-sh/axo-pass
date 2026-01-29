@@ -3,7 +3,8 @@ import React from 'react';
 import {IconEye, IconEyeOff, IconFingerprint} from '@tabler/icons-react';
 
 import type {PasswordResponse} from '@/client';
-import {button, buttonIconLeft} from '@/components/Button.css';
+import {Button} from '@/components/Button';
+import {buttonIconLeft} from '@/components/Button.css';
 import {Card} from '@/components/Card';
 import {Divider} from '@/components/Divider';
 import {Flex} from '@/components/Flex';
@@ -91,16 +92,10 @@ export const PasswordRequestForm: React.FC<Props> = ({
         )}
 
         <Flex gap={1 / 2} align="center" justify="end">
-          <button
-            className={button({variant: 'clear'})}
-            type="button"
-            onClick={() => handleSubmit(false)}
-          >
+          <Button variant="clear" onClick={() => handleSubmit(false)}>
             Cancel
-          </button>
-          <button className={button()} type="submit">
-            OK
-          </button>
+          </Button>
+          <Button submit>OK</Button>
         </Flex>
       </Form>
 
@@ -108,10 +103,10 @@ export const PasswordRequestForm: React.FC<Props> = ({
         <>
           <Divider>or</Divider>
           <Flex justify="center">
-            <button className={button()} onClick={() => handleUseSavedPassword()}>
+            <Button onClick={() => handleUseSavedPassword()}>
               <IconFingerprint className={buttonIconLeft} />
               Use Saved Passphrase
-            </button>
+            </Button>
           </Flex>
           <div style={{height: 8}} />
         </>

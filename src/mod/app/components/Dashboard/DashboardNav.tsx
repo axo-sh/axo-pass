@@ -17,7 +17,8 @@ import cx from 'classnames';
 import {observer} from 'mobx-react-lite';
 import {Link} from 'wouter';
 
-import {button, buttonIconLeft} from '@/components/Button.css';
+import {Button} from '@/components/Button';
+import {buttonIconLeft} from '@/components/Button.css';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {Flex} from '@/components/Flex';
 import {
@@ -74,13 +75,10 @@ export const DashboardNav: React.FC = observer(() => {
                 </li>
               ))}
               <li className={navNestedLinksAction}>
-                <button
-                  onClick={openAddVaultDialog}
-                  className={button({variant: 'clear', size: 'small'})}
-                >
+                <Button onClick={openAddVaultDialog} variant="clear" size="small">
                   <IconPlus className={buttonIconLeft} />
                   Add Vault
-                </button>
+                </Button>
               </li>
             </ul>
             <AddVaultDialog
@@ -161,16 +159,13 @@ const DashboardNavSection: React.FC<Props> = ({title, children}) => {
       <Flex justify="between" align="center" gap={1 / 4}>
         {title}
 
-        <button
-          className={button({size: 'iconSmall', variant: 'clear'})}
-          onClick={() => setShow(!show)}
-        >
+        <Button size="iconSmall" variant="clear" onClick={() => setShow(!show)}>
           {show ? (
             <IconChevronDown size={14} strokeWidth={3} />
           ) : (
             <IconChevronRight size={14} strokeWidth={3} />
           )}
-        </button>
+        </Button>
       </Flex>
       {show && children}
     </li>

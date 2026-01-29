@@ -2,7 +2,7 @@ import React from 'react';
 
 import {IconAlertSquareRounded} from '@tabler/icons-react';
 
-import {button} from '@/components/Button.css';
+import {Button} from '@/components/Button';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {errorDialogContent, errorIcon, errorMessage} from '@/components/ErrorDialog.css';
 
@@ -81,9 +81,9 @@ export const ErrorDialog: React.FC<Props> = ({
       </div>
       <div className={errorMessage}>{message}</div>
       <DialogActions>
-        <button className={button({variant: 'clear'})} onClick={onClose}>
+        <Button variant="clear" onClick={onClose}>
           {dismissText}
-        </button>
+        </Button>
       </DialogActions>
     </Dialog>
   );
