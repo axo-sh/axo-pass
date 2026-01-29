@@ -15,7 +15,10 @@ export const Button: React.FC<React.PropsWithChildren<Props>> = ({
 }) => {
   return (
     <button
-      className={cx(button({variant: props.variant, size: props.size}), className)}
+      className={cx(
+        button({variant: props.variant, size: props.size, clear: props.clear}),
+        className,
+      )}
       type={props.submit ? 'submit' : 'button'}
       onClick={props.onClick}
       {...props}

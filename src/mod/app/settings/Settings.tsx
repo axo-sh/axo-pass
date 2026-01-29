@@ -28,7 +28,7 @@ export const Settings: React.FC = () => {
           <Code>echo test | gpg -as -</Code> (or clicking the button below).
         </div>
         <div>
-          <Button variant="clear" size="small" onClick={() => gpgTestIntegration()}>
+          <Button clear size="small" onClick={() => gpgTestIntegration()}>
             Test GPG Integration
           </Button>
         </div>

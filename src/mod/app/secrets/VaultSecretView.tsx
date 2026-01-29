@@ -1,11 +1,12 @@
 import type React from 'react';
 
-import {IconEdit} from '@tabler/icons-react';
+import {IconEdit, IconTrash} from '@tabler/icons-react';
 import {observer} from 'mobx-react';
 import {Link} from 'wouter';
 
 import {button, buttonIconLeft} from '@/components/Button.css';
 import {useDialog} from '@/components/Dialog';
+import {FlexSpacer} from '@/components/Flex';
 import {Toolbar} from '@/components/Toolbar';
 import {layoutTitlePrefixLink} from '@/layout/Layout.css';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
@@ -65,10 +66,20 @@ export const VaultSecretView: React.FC<Props> = observer((props) => {
         <Toolbar>
           <Link
             href={`/${props.vaultKey}/${props.itemKey}/edit`}
-            className={button({variant: 'clear', size: 'small'})}
+            className={button({clear: true, size: 'small'})}
           >
             <IconEdit className={buttonIconLeft} /> Edit Secret
           </Link>
+          <FlexSpacer />
+          <button
+            className={button({size: 'small', variant: 'secondaryError'})}
+            onClick={(e) => {
+              e.stopPropagation();
+              // onDelete(itemKey);
+            }}
+          >
+            <IconTrash className={buttonIconLeft} /> Delete
+          </button>
         </Toolbar>
       </DashboardContentHeader>
       <div className={secretsList()}>

@@ -33,7 +33,7 @@ export const SlideToggle: React.FC<Props> = ({
   };
 
   return (
-    <label className={cx(toggle, button({size: 'small', variant: 'clear'}))}>
+    <label className={cx(toggle, button({size: 'small', clear: true}))}>
       {!!children && <div className={toggleLabel}>{children}</div>}
       <div
         className={toggleSliderContainer}

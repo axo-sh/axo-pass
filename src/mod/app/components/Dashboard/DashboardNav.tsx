@@ -75,7 +75,7 @@ export const DashboardNav: React.FC = observer(() => {
                 </li>
               ))}
               <li className={navNestedLinksAction}>
-                <Button onClick={openAddVaultDialog} variant="clear" size="small">
+                <Button onClick={openAddVaultDialog} variant="green" clear size="small">
                   <IconPlus className={buttonIconLeft} />
                   Add Vault
                 </Button>

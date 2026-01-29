@@ -145,6 +145,7 @@ export const greyScheme = lightDarkScheme(
   scheme(palette.grey[800], palette.grey[100]),
 );
 
+export const successScheme = scheme(palette.green[600], palette.white);
 export const errorScheme = scheme(palette.red[600], palette.white);
 
 export const statusColors = {

@@ -25,7 +25,7 @@ export const SecretItem: React.FC<Props> = observer(({onEdit, onDelete, itemKey}
     <div className={secretItem({clickable: true})} onClick={() => onEdit(itemKey)}>
       <div>{entry.title}</div>
       <Flex gap={0.5}>
-        <Button size="iconSmall" variant="clear" onClick={() => onEdit(itemKey)}>
+        <Button size="iconSmall" clear onClick={() => onEdit(itemKey)}>
           <IconEdit size={16} />
         </Button>
         <Button

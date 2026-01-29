@@ -56,7 +56,7 @@ export const AppUpdates: React.FC = () => {
         >
           Automatically Check (once per day)
         </SlideToggle>
-        <Button variant="clear" size="small" onClick={handleCheckUpdates} disabled={checking}>
+        <Button clear size="small" onClick={handleCheckUpdates} disabled={checking}>
           <IconRefresh className={buttonIconLeft} />
           Check Now
         </Button>

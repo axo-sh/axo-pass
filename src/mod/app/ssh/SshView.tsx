@@ -59,7 +59,7 @@ export const SshView = observer(() => {
             <SshFilterToggle filter="transient">Transient</SshFilterToggle>
           </Flex>
           <FlexSpacer />
-          <Button variant="clear" size="small" onClick={handleAddManagedKey}>
+          <Button variant="green" clear size="small" onClick={handleAddManagedKey}>
             <IconPlus className={buttonIconLeft} />
             Add Managed Key
           </Button>

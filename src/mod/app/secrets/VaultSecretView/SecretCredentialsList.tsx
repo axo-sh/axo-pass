@@ -76,7 +76,8 @@ export const SecretCredentialList: React.FC<{
         <CardSection className={flex({justify: 'end'})}>
           <Button
             size="small"
-            variant="clear"
+            variant="green"
+            clear
             onClick={() => {
               showAddCredentialDialog();
             }}

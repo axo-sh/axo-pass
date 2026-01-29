@@ -117,7 +117,7 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
             Flat View
           </SlideToggle>
           <FlexSpacer />
-          <Button variant="clear" size="small" onClick={addSecretDialog.open}>
+          <Button variant="green" clear size="small" onClick={addSecretDialog.open}>
             <IconPlus className={buttonIconLeft} />
             Add Secret
           </Button>

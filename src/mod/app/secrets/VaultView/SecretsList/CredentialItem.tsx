@@ -79,7 +79,7 @@ export const CredentialItem: React.FC<Props> = observer(
           <Flex gap={0.5} align="stretch">
             <Button
               size="small"
-              variant="clear"
+              clear
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleSecret(e);
@@ -89,7 +89,7 @@ export const CredentialItem: React.FC<Props> = observer(
             </Button>
             <Button
               size="iconSmall"
-              variant="clear"
+              clear
               onClick={(e) => {
                 e.stopPropagation();
                 onCopySecret();
