@@ -92,14 +92,16 @@ impl ManagedSshKey {
 }
 
 impl ManagedSshKey {
-    pub async fn create() -> Result<(), KeychainError> {
-        let key_id = Uuid::new_v4().simple();
+    pub async fn create() -> Result<ManagedSshKey, KeychainError> {
+        let key_uuid = Uuid::new_v4();
+        let key_id = key_uuid.simple();
         let label = format!("{SSH_KEY_LABEL_PREFIX}{key_id}");
 
         let managed_key = ManagedKey::create(&label)?;
 
         // get the pubkey in openssh format
-        let pubkey_openssh = ssh_key::PublicKey::new(managed_key.public_key()?, key_id.to_string())
+        let pubkey = managed_key.public_key()?;
+        let pubkey_openssh = ssh_key::PublicKey::new(pubkey.clone(), key_id.to_string())
             .to_openssh()
             .map_err(|e| {
                 KeychainError::PublicKeyCreationFailed(anyhow!("Failed to format OpenSSH key: {e}"))
@@ -117,7 +119,11 @@ impl ManagedSshKey {
         })?;
 
         log::debug!("Saved public key to {}", pubkey_path.display());
-        Ok(())
+        Ok(ManagedSshKey {
+            id: key_uuid,
+            public_key: pubkey,
+            managed_key,
+        })
     }
 
     pub fn find(label: &str) -> Result<Option<ManagedSshKey>, anyhow::Error> {
