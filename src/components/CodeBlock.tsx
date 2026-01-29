@@ -6,15 +6,21 @@ import cx from 'classnames';
 import {toast} from 'sonner';
 
 import {button} from '@/components/Button.css';
-import {codeBlockCopy, codeBlockPre, codeBlockPreCode} from '@/components/CodeBlock.css';
+import {
+  codeBlockCopy,
+  codeBlockOverflowEllipsis,
+  codeBlockPre,
+  codeBlockPreCode,
+} from '@/components/CodeBlock.css';
 
 type Props = {
   className?: string;
   canCopy?: boolean;
   children: React.ReactNode;
+  ellipsis?: boolean;
 };
 
-export const CodeBlock: React.FC<Props> = ({className, canCopy, children}) => {
+export const CodeBlock: React.FC<Props> = ({className, canCopy, children, ellipsis}) => {
   const codeRef = React.useRef<HTMLElement | null>(null);
   const [copied, setCopied] = React.useState(false);
   const onCopyClick = () => {
@@ -32,7 +38,11 @@ export const CodeBlock: React.FC<Props> = ({className, canCopy, children}) => {
   const CopyIcon = copied ? IconCheck : IconCopy;
 
   return (
-    <pre className={className || codeBlockPre}>
+    <pre
+      className={cx(className || codeBlockPre, {
+        [codeBlockOverflowEllipsis]: ellipsis,
+      })}
+    >
       {canCopy && (
         <button
           className={cx(button({variant: 'clear', size: 'iconSmall'}), codeBlockCopy)}
@@ -43,6 +53,7 @@ export const CodeBlock: React.FC<Props> = ({className, canCopy, children}) => {
           <CopyIcon size={16} />
         </button>
       )}
+      {/* todo: support ellipsis */}
       <code ref={codeRef} className={codeBlockPreCode}>
         {children}
       </code>

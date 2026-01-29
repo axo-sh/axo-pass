@@ -14,6 +14,11 @@ export const codeBlockPre = style({
   width: '100%',
 });
 
+export const codeBlockOverflowEllipsis = style({
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
 export const codeBlockPreCode = style({
   fontFamily: vars.fonts.monospace,
   fontSize: vars.scale.sm,

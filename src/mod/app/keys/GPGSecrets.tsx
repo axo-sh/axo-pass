@@ -6,6 +6,7 @@ import {deletePassword, listPasswords, type PasswordEntry, type PasswordEntryTyp
 import {button} from '@/components/Button.css';
 import {CodeBlock} from '@/components/CodeBlock';
 import {Dialog, DialogActions, useDialog} from '@/components/Dialog';
+import {Flex} from '@/components/Flex';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard//DashboardContent';
 import {
   secretItem,
@@ -19,8 +20,8 @@ import {useClient} from '@/utils/useClient';
 const GpgSecretsHeader = () => (
   <DashboardContentHeader
     title="GPG & SSH Keys"
-    description="Stored GPG and SSH key passphrases. IDs correspond to GPG key grips and SSH key
-                fingerprint. Passphrases cannot be added directly here, only via GPG or SSH."
+    description="Stored GPG and SSH key passphrases. IDs correspond to GPG keygrips and SSH key
+                fingerprints. Passphrases cannot be added directly here, only via GPG or SSH."
   />
 );
 
@@ -120,9 +121,11 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
   const keyType = getKeyType(entry.password_type);
   return (
     <Dialog title={`Delete saved ${keyType} passphrase?`} isOpen={isOpen} onClose={onClose}>
-      <CodeBlock>{entry.key_id}</CodeBlock>
-      Are you sure you want to delete the {keyType} passphrase identified above from your keychain?
-      You will need to re-enter the passphrase the next time you use the {keyType}.
+      <Flex column gap={1 / 2}>
+        <CodeBlock ellipsis>{entry.key_id}</CodeBlock>
+        Are you sure you want to delete the {keyType} passphrase identified above from your
+        keychain? You will need to re-enter the passphrase the next time you use the {keyType}.
+      </Flex>
       <DialogActions>
         <button className={button({variant: 'clear', size: 'large'})} onClick={onClose}>
           Cancel
