@@ -49,6 +49,22 @@ export const Settings: React.FC = () => {
         </CodeBlock>
       </DashboardSection>
 
+      <DashboardSection title="SSH agent">
+        <div>
+          To use Axo Pass as an SSH agent, first follow the CLI instructions below to install the{' '}
+          <Code>ap</Code> CLI helper.
+        </div>
+        <div>Starting the SSH agent:</div>
+        <CodeBlock canCopy>ap ssh-agent start</CodeBlock>
+        <div>Stopping the SSH agent:</div>
+        <CodeBlock canCopy>ap ssh-agent stop</CodeBlock>
+        <div>
+          Troubleshooting: If the agent doesn't shut down properly, you may need to delete the stale
+          socket file manually. It can be found here:
+        </div>
+        <CodeBlock canCopy>~/Library/Application Support/Axo Pass/agent.sock</CodeBlock>
+      </DashboardSection>
+
       <DashboardSection title="CLI">
         <div>
           Install the <Code>ap</Code> command to be able to interact with Axo Pass from the command
