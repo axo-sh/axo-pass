@@ -16,8 +16,36 @@ export interface AddItemRequest {
   item_key: string;
 }
 
-export interface AddManagedSshKeyRequest {
-  alias?: string;
+export enum SshKeyLocation {
+  Vault = 'Vault',
+  Transient = 'Transient',
+  SshDir = 'SshDir',
+}
+
+export enum SshKeyType {
+  Rsa = 'rsa',
+  Ed25519 = 'ed25519',
+  Ecdsa = 'ecdsa',
+  Dsa = 'dsa',
+  Unknown = 'unknown',
+}
+
+export interface SshKeyEntry {
+  name: string;
+  location: SshKeyLocation;
+  path?: string;
+  public_key?: string;
+  comment?: string;
+  key_type: SshKeyType;
+  fingerprint_sha256: string;
+  fingerprint_md5: string;
+  has_saved_password: boolean;
+  is_managed: boolean;
+  agent: SshKeyAgent[];
+}
+
+export interface AddManagedSshKeyResponse {
+  key: SshKeyEntry;
 }
 
 export interface AppSettingsResponse {
@@ -65,27 +93,6 @@ export interface GetVaultRequest {
   vault_key?: string;
 }
 
-export enum SshKeyType {
-  Rsa = 'rsa',
-  Ed25519 = 'ed25519',
-  Ecdsa = 'ecdsa',
-  Dsa = 'dsa',
-  Unknown = 'unknown',
-}
-
-export interface SshKeyEntry {
-  name: string;
-  path?: string;
-  public_key?: string;
-  comment?: string;
-  key_type: SshKeyType;
-  fingerprint_sha256: string;
-  fingerprint_md5: string;
-  has_saved_password: boolean;
-  is_managed: boolean;
-  tags: SshKeyTag[];
-}
-
 export interface ListSshKeysResponse {
   keys: SshKeyEntry[];
 }
@@ -109,12 +116,6 @@ export interface SaveSshKeyPasswordRequest {
   password: string;
 }
 
-export interface SshAgentIdentity {
-  fingerprint: string;
-  comment: string;
-  tags: SshKeyTag[];
-}
-
 export enum SshAgentStatus {
   Running = 'running',
   NotRunning = 'not_running',
@@ -123,7 +124,7 @@ export enum SshAgentStatus {
 
 export interface SshAgentStatusResponse {
   status: SshAgentStatus;
-  identities: SshAgentIdentity[];
+  socket_path?: string;
 }
 
 export interface UpdateCheckDisabledStatusResponse {
@@ -165,8 +166,12 @@ export interface VaultResponse {
   vault: VaultSchema;
 }
 
-export enum SshKeyTag {
-  Transient = 'transient',
+export enum SshAgentType {
+  Axo = 'axo',
+  System = 'system',
+}
+
+export enum SshKeyAgent {
   SystemAgent = 'system_agent',
   AxoPassAgent = 'axo_pass_agent',
 }

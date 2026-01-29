@@ -1,30 +1,12 @@
-use std::collections::{BTreeSet, HashSet};
-
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::app::handlers::ssh::get_ssh_agent_status::SshKeyTag;
+use crate::app::handlers::ssh::schema::ssh_key_entry::{SshKeyAgent, SshKeyEntry};
 use crate::cli::commands::ssh_agent::{list_axo_agent_identities, list_system_agent_identities};
+use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
-use crate::ssh::ssh_keys::{SshKeyType, SystemSshKey};
-use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
-
-#[derive(Debug, Clone, Serialize)]
-#[typeshare]
-#[serde(rename_all = "snake_case")]
-pub struct SshKeyEntry {
-    pub name: String,
-    pub path: Option<String>,
-    pub public_key: Option<String>,
-    pub comment: Option<String>,
-    pub key_type: SshKeyType,
-    pub fingerprint_sha256: String,
-    pub fingerprint_md5: String,
-    pub has_saved_password: bool,
-    pub is_managed: bool,
-    #[typeshare(typescript(type = "SshKeyTag[]"))]
-    pub tags: BTreeSet<SshKeyTag>,
-}
+use crate::ssh::ssh_keys::SystemSshKey;
+use crate::ssh::utils::compute_sha256_fingerprint;
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]
@@ -38,113 +20,56 @@ pub async fn list_ssh_keys() -> Result<ListSshKeysResponse, String> {
     let mut keys_map: std::collections::HashMap<String, SshKeyEntry> =
         std::collections::HashMap::new();
 
-    // Get known SSH keys (system + managed)
+    // Get known system SSH keys (from .ssh)
     let system_ssh_keys = SystemSshKey::load_from_user_ssh_dir()
         .inspect_err(|e| log::error!("Failed to find system SSH keys: {e}"))
         .unwrap_or_default();
-
     for system_key in system_ssh_keys {
-        let path_str = system_key.path.to_string_lossy().to_string();
         let has_saved_password = system_key.has_saved_password();
-        let fingerprint_sha256 = system_key.fingerprint_sha256.clone();
-        keys_map.insert(
-            fingerprint_sha256.clone(),
-            SshKeyEntry {
-                name: system_key.name,
-                path: Some(path_str),
-                public_key: system_key
-                    .public_key_path
-                    .as_ref()
-                    .map(|p| format!("{}", p.display())),
-                comment: Some(system_key.comment),
-                key_type: system_key.key_type,
-                fingerprint_sha256,
-                fingerprint_md5: system_key.fingerprint_md5,
-                has_saved_password,
-                is_managed: false,
-                tags: BTreeSet::new(),
-            },
-        );
+        let mut key_entry: SshKeyEntry = system_key.into();
+        key_entry.has_saved_password = has_saved_password;
+        keys_map.insert(key_entry.fingerprint_sha256.clone(), key_entry);
     }
 
+    // Get managed SSH keys
     let managed_ssh_keys = ManagedSshKey::list()
         .inspect_err(|e| log::debug!("Failed to list managed SSH keys: {e}"))
         .unwrap_or_default();
     for managed_key in managed_ssh_keys {
-        let fingerprint = managed_key.fingerprint_sha256().to_string();
-        keys_map.insert(
-            fingerprint.clone(),
-            SshKeyEntry {
-                name: managed_key.name(),
-                path: None,
-                key_type: SshKeyType::Ecdsa, // Managed keys are always ECDSA
-                public_key: managed_key
-                    .pubkey_path()
-                    .ok()
-                    .filter(|p| p.exists())
-                    .map(|p| format!("{}", p.display())),
-                comment: None,
-                fingerprint_sha256: fingerprint,
-                fingerprint_md5: managed_key.fingerprint_md5().to_string(),
-                has_saved_password: false,
-                is_managed: true,
-                tags: BTreeSet::new(),
-            },
-        );
+        let key_entry: SshKeyEntry = managed_key.into();
+        keys_map.insert(key_entry.fingerprint_sha256.clone(), key_entry);
     }
 
-    let known_fingerprints: HashSet<String> = keys_map.keys().cloned().collect();
-
-    // Get system agent identities
+    // Get system agent identities (transient key - in agent but not .ssh or vault)
     if let Ok(system_identities) = list_system_agent_identities().await {
         for identity in system_identities {
             let fingerprint_sha256 = compute_sha256_fingerprint(&identity.pubkey);
-            if let Some(key) = keys_map.get_mut(&fingerprint_sha256) {
-                key.tags.insert(SshKeyTag::SystemAgent);
+            if let Some(key_entry) = keys_map.get_mut(&fingerprint_sha256) {
+                key_entry.agent.insert(SshKeyAgent::SystemAgent);
             } else {
-                // Transient key - in agent but not known
-                keys_map.insert(
-                    fingerprint_sha256.clone(),
-                    SshKeyEntry {
-                        name: identity.comment.clone(),
-                        path: None,
-                        public_key: None,
-                        comment: Some(identity.comment.to_string()),
-                        key_type: identity.pubkey.algorithm().into(),
-                        fingerprint_sha256,
-                        fingerprint_md5: compute_md5_fingerprint(&identity.pubkey),
-                        has_saved_password: false,
-                        is_managed: false,
-                        tags: BTreeSet::from([SshKeyTag::Transient, SshKeyTag::SystemAgent]),
-                    },
-                );
+                let mut key_entry: SshKeyEntry = identity.into();
+                key_entry.has_saved_password = PasswordEntry::ssh(&fingerprint_sha256)
+                    .exists()
+                    .unwrap_or(false);
+                key_entry.agent.insert(SshKeyAgent::SystemAgent);
+                keys_map.insert(fingerprint_sha256, key_entry);
             }
         }
     }
 
-    // Get our agent identities
+    // Get axo agent identities (transient key - in agent but not .ssh or vault)
     if let Ok(our_identities) = list_axo_agent_identities().await {
         for identity in our_identities {
             let fingerprint_sha256 = compute_sha256_fingerprint(&identity.pubkey);
-            if let Some(key) = keys_map.get_mut(&fingerprint_sha256) {
-                key.tags.insert(SshKeyTag::AxoPassAgent);
-            } else if !known_fingerprints.contains(&fingerprint_sha256) {
-                // Transient key - in agent but not known
-                keys_map.insert(
-                    fingerprint_sha256.clone(),
-                    SshKeyEntry {
-                        name: identity.comment.clone(),
-                        path: None,
-                        public_key: None,
-                        comment: Some(identity.comment.to_string()),
-                        key_type: identity.pubkey.algorithm().into(),
-                        fingerprint_sha256,
-                        fingerprint_md5: compute_md5_fingerprint(&identity.pubkey),
-                        has_saved_password: false,
-                        is_managed: false,
-                        tags: BTreeSet::from([SshKeyTag::Transient, SshKeyTag::AxoPassAgent]),
-                    },
-                );
+            if let Some(key_entry) = keys_map.get_mut(&fingerprint_sha256) {
+                key_entry.agent.insert(SshKeyAgent::AxoPassAgent);
+            } else {
+                let mut key_entry: SshKeyEntry = identity.into();
+                key_entry.has_saved_password = PasswordEntry::ssh(&fingerprint_sha256)
+                    .exists()
+                    .unwrap_or(false);
+                key_entry.agent.insert(SshKeyAgent::AxoPassAgent);
+                keys_map.insert(fingerprint_sha256, key_entry);
             }
         }
     }
