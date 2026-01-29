@@ -154,21 +154,27 @@ impl PasswordEntry {
     }
 
     pub fn exists(&self) -> Result<bool, KeychainError> {
-        log::debug!("Checking if password exists for key_id: {self:?}");
+        let account = self.account();
         let res = GenericPasswordQuery::build()
-            .with_account(&self.account())
+            .with_account(&account)
             .without_authentication()
             .one();
 
         match res {
-            Ok(Some(_)) => Ok(true),
+            Ok(Some(_)) => {
+                log::debug!("{account}: Found entry");
+                Ok(true)
+            },
             Ok(None) => {
-                log::debug!("No password found for key_id: {}", &self.account());
+                log::debug!("{account}: Entry not found");
                 Ok(false)
             },
-            Err(KeychainError::ItemNotAccessible) => Ok(true),
+            Err(KeychainError::ItemNotAccessible) => {
+                log::debug!("{account}: Found entry but not accessible");
+                Ok(true)
+            },
             Err(e) => {
-                log::error!("Error checking password existence: {e}");
+                log::error!("{account}: Entry error {e}");
                 Err(anyhow!(e).into())
             },
         }
