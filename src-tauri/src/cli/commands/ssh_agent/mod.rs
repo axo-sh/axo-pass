@@ -81,43 +81,47 @@ impl SshAgentCommand {
         }
     }
 
-    pub async fn run(&self) {
+    pub async fn run(&self) -> ! {
         match &self.subcommand {
             SshAgentSubcommand::Start { .. } => {
                 log::info!("Starting SSH agent...");
                 let server = SshAgentServer::new();
                 if let Err(e) = server.run().await {
                     log::error!("SSH Agent failed: {e}");
+                    std::process::exit(1);
                 }
+                std::process::exit(0)
             },
 
             SshAgentSubcommand::Stop => match stop_ssh_agent().await {
                 Ok(_) => {
                     println!("SSH agent stopped.");
+                    std::process::exit(0)
                 },
                 Err(e) => match e {
                     SshAgentClientError::NoSocketFound => {
                         println!("SSH agent is not running.");
+                        std::process::exit(0)
                     },
                     _ => {
                         log::error!("{e}");
-                        std::process::exit(1);
+                        std::process::exit(1)
                     },
                 },
             },
             SshAgentSubcommand::Status => match get_agent_status() {
                 AgentStatus::Running => {
                     cprintln!("SSH agent status: <green>running</green>");
-                    std::process::exit(0);
+                    std::process::exit(0)
                 },
                 AgentStatus::NotRunning => {
                     cprintln!("SSH agent status: <yellow>not running</yellow>");
-                    std::process::exit(1);
+                    std::process::exit(1)
                 },
                 AgentStatus::StaleSocket => {
                     cprintln!("SSH agent status: <yellow>not running</yellow>");
                     println!("Warning: stale socket found");
-                    std::process::exit(1);
+                    std::process::exit(1)
                 },
             },
         }
