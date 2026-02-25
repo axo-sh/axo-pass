@@ -79,16 +79,20 @@ impl AxoPassCommand {
         if let AxoPassCommand::SshAgent(ssh_agent) = self
             && ssh_agent.should_detach()
         {
+            ssh_agent.pre_run();
+
             log::debug!("Daemonizing SSH agent process...");
             // if we're not in debug mode, we should detach the ssh process:
             // do that here before tokio is initialized, otherwise bad things happen:
             // https://github.com/tokio-rs/tokio/issues/4301
             if let Err(e) = daemon(false, false) {
+                // original process exits here
                 log::error!("Failed to daemonize SSH agent: {e}");
                 std::process::exit(1);
             }
 
-            // we are detached now, modify the logger to log to a file: instead
+            // daemonized process begins here are, process is detached.
+            // modify the logger to log to a file instead.
             if let Some(reload_log) = reload_log {
                 let _ = reload_log
                     .modify(|layer| {

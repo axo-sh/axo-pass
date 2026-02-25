@@ -17,18 +17,21 @@ pub enum AgentStatus {
     StaleSocket,
 }
 
-pub async fn get_agent_status() -> AgentStatus {
+pub fn get_agent_status() -> AgentStatus {
     let socket_path = SshAgentServer::default_socket_path();
-    get_agent_status_for_socket(&socket_path).await
+    get_agent_status_for_socket(&socket_path)
 }
 
-pub async fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatus {
+pub fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatus {
     let socket_path = socket_path.as_ref();
     if !socket_path.exists() {
         return AgentStatus::NotRunning;
     }
 
-    match tokio::net::UnixStream::connect(socket_path).await {
+    // note: not using the tokio UnixStream because we want to run this check
+    // prior to forking the daemon, and initializing a tokio runtime to execute the
+    // async code causes the forked process to crash/
+    match std::os::unix::net::UnixStream::connect(socket_path) {
         Ok(_) => AgentStatus::Running,
         Err(_) => AgentStatus::StaleSocket,
     }

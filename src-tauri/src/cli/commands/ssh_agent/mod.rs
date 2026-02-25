@@ -8,6 +8,8 @@ mod session_binding;
 mod stored_credential;
 mod userauth_request;
 
+use std::fs;
+
 use clap::{Parser, Subcommand, command};
 use color_print::cprintln;
 pub use server::SshAgentServer;
@@ -48,14 +50,40 @@ impl SshAgentCommand {
         }
     }
 
+    // code to run before detach (i.e. tokio is not initialized, user can still
+    // interact with the program)
+    pub fn pre_run(&self) {
+        if matches!(&self.subcommand, SshAgentSubcommand::Start { .. }) {
+            match get_agent_status() {
+                AgentStatus::Running => {
+                    log::info!("SSH agent is already running.");
+                    std::process::exit(0);
+                },
+                AgentStatus::StaleSocket => {
+                    let socket_path = SshAgentServer::default_socket_path();
+                    let replace = inquire::Confirm::new(&format!(
+                        "Stale socket found ({}). Replace it?",
+                        socket_path.display()
+                    ))
+                    .with_default(true)
+                    .prompt()
+                    .unwrap_or(false);
+
+                    if !replace {
+                        std::process::exit(1);
+                    } else if let Err(e) = fs::remove_file(&socket_path) {
+                        log::error!("Failed to remove stale socket: {e}");
+                        std::process::exit(1);
+                    }
+                },
+                _ => {},
+            }
+        }
+    }
+
     pub async fn run(&self) {
         match &self.subcommand {
             SshAgentSubcommand::Start { .. } => {
-                if matches!(get_agent_status().await, AgentStatus::Running) {
-                    log::info!("SSH agent is already running.");
-                    std::process::exit(1);
-                }
-
                 log::info!("Starting SSH agent...");
                 let server = SshAgentServer::new();
                 if let Err(e) = server.run().await {
@@ -77,7 +105,7 @@ impl SshAgentCommand {
                     },
                 },
             },
-            SshAgentSubcommand::Status => match get_agent_status().await {
+            SshAgentSubcommand::Status => match get_agent_status() {
                 AgentStatus::Running => {
                     cprintln!("SSH agent status: <green>running</green>");
                     std::process::exit(0);
