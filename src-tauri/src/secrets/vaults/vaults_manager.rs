@@ -66,7 +66,7 @@ impl VaultsManager {
 
             // load vault using key (this is a bit redundant with VaultWrapper::load, which
             // recreates the path)
-            match VaultWrapper::load(vaults_dir, Some(key.to_owned())) {
+            match VaultWrapper::load_from_path(Some(key.to_owned()), &path) {
                 Ok(vw) => {
                     vaults.insert(key.to_string(), vw);
                 },
