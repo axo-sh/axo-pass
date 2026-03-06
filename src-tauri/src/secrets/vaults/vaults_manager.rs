@@ -95,12 +95,18 @@ impl VaultsManager {
     }
 
     pub fn update_vault_key(&mut self, old_key: &str, new_key: &str) -> Result<(), Error> {
-        if let Some(vw) = self.vaults.remove(old_key) {
-            self.vaults.insert(new_key.to_string(), vw);
-            Ok(())
-        } else {
-            Err(Error::VaultNotFound(old_key.to_string()))
-        }
+        // remove vault using old_key
+        let Some(mut vw) = self.vaults.remove(old_key) else {
+            return Err(Error::VaultNotFound(old_key.to_string()));
+        };
+
+        // update its key and save it
+        vw.set_vault_key(new_key.to_string())?;
+        vw.save()?;
+
+        // re-insert it with the new key
+        self.vaults.insert(new_key.to_string(), vw);
+        Ok(())
     }
 
     pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultWrapper)> {

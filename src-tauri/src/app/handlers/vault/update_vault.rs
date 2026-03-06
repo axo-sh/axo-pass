@@ -4,7 +4,6 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::app_state::AppState;
-use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize, Debug)]
 #[typeshare]
@@ -19,26 +18,28 @@ pub async fn update_vault(
     state: tauri::State<'_, Mutex<AppState>>,
     request: UpdateVaultRequest,
 ) -> Result<(), String> {
-    let new_vault_key = request.new_vault_key.filter(|k| k != &request.vault_key);
+    // note: updating the vault doesn't require the vault to be unlocked
+    // (at least not to update the vault key or name), so we don't use
+    // with_unlocked_vault here
+    let mut state = state.lock().unwrap();
+    let vw = state.vaults.get_vault_mut(&request.vault_key)?;
 
-    with_unlocked_vault(&state, &request.vault_key, |vw| {
-        if let Some(new_vault_key) = new_vault_key.clone() {
-            vw.set_vault_key(new_vault_key)?;
-        }
-        if request.new_name != vw.vault.name
-            && let Some(new_name) = request.new_name
-        {
-            vw.set_vault_name(new_name);
-        }
-        Ok(vw.save()?)
-    })?;
+    if request.new_name != vw.vault.name
+        && let Some(new_name) = request.new_name
+    {
+        vw.set_vault_name(new_name);
+        vw.save()?
+    }
 
-    if let Some(new_vault_key) = new_vault_key {
-        let mut state = state.lock().unwrap();
+    if request.new_vault_key.as_deref() != Some(request.vault_key.as_str())
+        && let Some(new_vault_key) = request.new_vault_key
+    {
+        // note: update saves the vault
         state
             .vaults
             .update_vault_key(&request.vault_key, &new_vault_key)
             .map_err(|e| format!("Failed to update vault key in manager: {}", e))?;
     }
+
     Ok(())
 }
