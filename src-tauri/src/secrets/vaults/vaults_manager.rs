@@ -82,6 +82,13 @@ impl VaultsManager {
                 if let Ok(vault) =
                     VaultWrapper::load_from_path(Some(vault_key.clone()), &vault_config.path)
                 {
+                    if vaults.contains_key(&vault_key) {
+                        log::error!(
+                            "Vault with duplicate {vault_key} found at {}, skipping",
+                            vault_config.path.display()
+                        );
+                        continue;
+                    }
                     vaults.insert(vault_key, vault);
                 }
             }
