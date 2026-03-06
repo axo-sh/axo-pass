@@ -13,7 +13,7 @@ use crate::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 const CONFIG_FILENAME: &str = "config.toml";
 
 pub static APP_CONFIG: LazyLock<Mutex<AppConfig>> =
-    LazyLock::new(|| Mutex::new(AppConfig::load_or_create()));
+    LazyLock::new(|| Mutex::new(AppConfig::load_or_create().unwrap()));
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
@@ -41,25 +41,20 @@ impl AppConfig {
         app_data_dir().join(CONFIG_FILENAME)
     }
 
-    fn load_or_create() -> Self {
+    fn load_or_create() -> Result<Self, anyhow::Error> {
         let path = Self::config_path();
-        let config: AppConfig = if path.exists() {
+        if path.exists() {
             fs::read_to_string(&path)
                 .context("reading config file")
                 .and_then(|data| toml::from_str(&data).context("parsing config file"))
-                .unwrap_or_else(|e| {
-                    log::warn!("Failed to load config file: {e:#}");
-                    Self::default()
-                })
         } else {
             log::debug!("Creating new config file at {}", path.display());
-            Self::default()
-        };
-
-        if let Err(e) = config.save() {
-            log::warn!("Failed to save initial config: {e}");
+            let config = Self::default();
+            if let Err(e) = config.save() {
+                log::warn!("Failed to save initial config: {e}");
+            }
+            Ok(config)
         }
-        config
     }
 
     pub fn save(&self) -> Result<(), io::Error> {
