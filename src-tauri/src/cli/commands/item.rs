@@ -95,7 +95,7 @@ impl ItemCommand {
     }
 
     fn unlock_vault(vault_key: Option<String>) -> Result<VaultWrapper, String> {
-        let mut vw = VaultWrapper::load(&vaults_dir(), vault_key.as_deref())
+        let mut vw = VaultWrapper::load(&vaults_dir(), vault_key)
             .map_err(|e| format!("Failed to load vault: {e}"))?;
         vw.unlock()
             .map_err(|e| format!("Failed to unlock vault: {e}"))?;

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault_wrapper::{
@@ -47,21 +48,41 @@ impl VaultsManager {
 
     fn discover_vaults(vaults_dir: &Path) -> HashMap<String, VaultWrapper> {
         let mut vaults = HashMap::new();
-        if let Ok(entries) = fs::read_dir(vaults_dir) {
-            for path in entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("json"))
-            {
-                if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    match VaultWrapper::load(vaults_dir, Some(file_stem)) {
-                        Ok(vw) => {
-                            vaults.insert(file_stem.to_string(), vw);
-                        },
-                        Err(e) => {
-                            log::error!("Skipping {file_stem}, failed to load: {e:?}");
-                        },
-                    }
+
+        // read vaults from default vault dir
+        let entries = fs::read_dir(vaults_dir).into_iter().flatten().flatten();
+        for entry in entries {
+            let path = entry.path();
+
+            // require json file
+            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+
+            // get vault key from file name
+            let Some(key) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
+                continue;
+            };
+
+            // load vault using key (this is a bit redundant with VaultWrapper::load, which
+            // recreates the path)
+            match VaultWrapper::load(vaults_dir, Some(key.to_owned())) {
+                Ok(vw) => {
+                    vaults.insert(key.to_string(), vw);
+                },
+                Err(e) => log::error!("Skipping {key}, failed to load: {e:?}"),
+            }
+        }
+
+        // read external vaults (as referenced in the app config)
+        if let Ok(config) = APP_CONFIG.lock().inspect_err(|e| {
+            log::error!("Failed to load external vaults: {e}");
+        }) {
+            for (vault_key, vault_config) in config.external_vaults.clone() {
+                if let Ok(vault) =
+                    VaultWrapper::load_from_path(Some(vault_key.clone()), &vault_config.path)
+                {
+                    vaults.insert(vault_key, vault);
                 }
             }
         }
@@ -92,9 +113,10 @@ impl VaultsManager {
                 "Vault not loaded, reading vault from vaults dir: {}",
                 self.vaults_dir.display()
             );
-            let vw = VaultWrapper::load(&self.vaults_dir, Some(key)).inspect_err(|e| {
-                log::error!("Error reading vault: {:?}", e);
-            })?;
+            let vw =
+                VaultWrapper::load(&self.vaults_dir, Some(key.to_owned())).inspect_err(|e| {
+                    log::error!("Error reading vault: {:?}", e);
+                })?;
             self.vaults.insert(key.to_string(), vw);
         }
 

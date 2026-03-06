@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
@@ -20,6 +21,8 @@ pub struct AppConfig {
     pub id: uuid::Uuid,
     pub update_check_disabled: Option<bool>,
     pub updates: Option<UpdateCheckRecord>,
+    #[serde(default)]
+    pub external_vaults: BTreeMap<String, ExternalVaultConfig>,
 }
 
 impl Default for AppConfig {
@@ -28,6 +31,7 @@ impl Default for AppConfig {
             id: uuid::Uuid::new_v4(),
             update_check_disabled: None,
             updates: None,
+            external_vaults: BTreeMap::new(),
         }
     }
 }
@@ -74,4 +78,19 @@ impl AppConfig {
             result: result.clone(),
         });
     }
+
+    pub fn add_external_vault(&mut self, vault_key: &str, path: PathBuf) -> Result<(), io::Error> {
+        let vault_key = vault_key.to_string();
+        if !self.external_vaults.contains_key(&vault_key) {
+            self.external_vaults
+                .insert(vault_key, ExternalVaultConfig { path });
+            self.save()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ExternalVaultConfig {
+    pub path: PathBuf,
 }

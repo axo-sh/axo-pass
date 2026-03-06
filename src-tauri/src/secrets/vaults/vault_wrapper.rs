@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{fs, io};
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, OsRng, Payload};
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 use anyhow::anyhow;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
@@ -50,22 +50,37 @@ impl VaultWrapper {
         Ok(vault_wrapper)
     }
 
-    pub fn load(vault_dir: &Path, vault_key: Option<&str>) -> Result<VaultWrapper, Error> {
-        let vault_key = vault_key.unwrap_or(DEFAULT_VAULT);
-        let vault_path = vault_file_path(vault_dir, vault_key);
+    pub fn load(vault_dir: &Path, vault_key: Option<String>) -> Result<Self, Error> {
+        let vault_key = vault_key.unwrap_or(DEFAULT_VAULT.to_string());
+        let vault_path = vault_file_path(vault_dir, &vault_key);
+        Self::load_from_path(Some(vault_key), &vault_path)
+    }
+
+    pub fn load_from_path(vault_key: Option<String>, vault_path: &Path) -> Result<Self, Error> {
         log::debug!("Reading vault from file: {}", vault_path.display());
         let vault_data = fs::read_to_string(&vault_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
-                Error::VaultNotFound(vault_key.to_string())
+                Error::VaultNotFound(
+                    vault_key
+                        .clone()
+                        .unwrap_or(vault_path.to_string_lossy().to_string())
+                        .to_string(),
+                )
             } else {
                 Error::VaultReadError(e)
             }
         })?;
         let vault: Vault =
             serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)?;
-        Ok(VaultWrapper {
-            key: vault_key.to_string(),
-            path: vault_path,
+
+        Ok(Self {
+            // todo: decide what to do for key for external vaults, some options:
+            // 1. use file name as key
+            // 2. use the vault.id as the key
+            // 3. use the vault.name
+            // 4. add a key field to the vault file and use that
+            key: vault_key.unwrap_or(vault.id.to_string()).to_string(),
+            path: vault_path.to_path_buf(),
             cipher: None,
             vault,
         })
@@ -79,17 +94,10 @@ impl VaultWrapper {
         self.unlock_with_key(managed_key)
     }
 
-    pub fn unlock_with_key(&mut self, managed_key: ManagedKey) -> Result<(), Error> {
-        if self.cipher.is_some() {
-            return Ok(());
+    fn unlock_with_key(&mut self, managed_key: ManagedKey) -> Result<(), Error> {
+        if self.cipher.is_none() {
+            self.cipher = Some(self.vault.decrypt_file_key(&managed_key)?);
         }
-        let Some(file_key_bytes) = managed_key.decrypt(&self.vault.file_key) else {
-            return Err(Error::VaultFileKeyDecryptionError);
-        };
-
-        #[allow(deprecated)]
-        let key = Key::<Aes256Gcm>::from_slice(&file_key_bytes);
-        self.cipher = Some(Aes256Gcm::new(key));
         Ok(())
     }
 
