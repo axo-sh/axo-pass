@@ -3,7 +3,7 @@ import React from 'react';
 import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
 
-import {addItem} from '@/client';
+import {addOrUpdateItem} from '@/client';
 import {Dialog} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {useVaultStore} from '@/mod/app/mobx/VaultStore';
@@ -42,7 +42,7 @@ export const AddSecretDialog: React.FC<AddSecretDialogProps> = ({vaultKey, isOpe
   const onSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
-      await addItem({
+      await addOrUpdateItem({
         vault_key: data.vaultKey,
         item_title: data.label,
         item_key: data.id,

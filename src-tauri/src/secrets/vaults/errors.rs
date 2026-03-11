@@ -65,6 +65,9 @@ pub enum Error {
     #[error("Invalid credential key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidCredentialKey(String),
 
+    #[error("Credential secret cannot be empty")]
+    InvalidEmptyCredentialValue,
+
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
 }

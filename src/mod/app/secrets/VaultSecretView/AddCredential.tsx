@@ -3,7 +3,7 @@ import React from 'react';
 import {observer} from 'mobx-react';
 import {useForm} from 'react-hook-form';
 
-import {addCredential} from '@/client';
+import {addOrUpdateCredential} from '@/client';
 import {Button} from '@/components/Button';
 import {Dialog, DialogActions} from '@/components/Dialog';
 import {useErrorDialog} from '@/components/ErrorDialog';
@@ -58,12 +58,12 @@ export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
     const onSubmit = async (data: F) => {
       setIsSubmitting(true);
       try {
-        await addCredential({
+        await addOrUpdateCredential({
           vault_key: itemKey.vaultKey,
           item_key: itemKey.itemKey,
-          credential_title: data.label,
           credential_key: data.id,
-          credential_value: data.value,
+          title: data.label,
+          value: data.value,
         });
         await vaultStore.reload(itemKey.vaultKey);
         onClose();

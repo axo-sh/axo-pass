@@ -1,9 +1,9 @@
 import {invoke} from '@tauri-apps/api/core';
 
 import type {
-  AddCredentialRequest,
-  AddItemRequest,
   AddManagedSshKeyResponse,
+  AddOrUpdateCredentialRequest,
+  AddOrUpdateItemRequest,
   AppSettingsResponse,
   DecryptedCredential,
   DecryptedCredentialRequest,
@@ -18,7 +18,6 @@ import type {
   SaveSshKeyPasswordRequest,
   SshAgentStatusResponse,
   SshAgentType,
-  UpdateItemRequest,
   UpdateStatusResponse,
   UpdateVaultRequest,
   VaultInfo,
@@ -141,20 +140,18 @@ export const getDecryptedVaultItemCredential = async (
   });
 };
 
-export const addItem = async (request: AddItemRequest): Promise<void> => {
-  return await invoke<void>('add_item', {request});
-};
-
-export const updateItem = async (request: UpdateItemRequest): Promise<void> => {
-  return await invoke<void>('update_item', {request});
+export const addOrUpdateItem = async (request: AddOrUpdateItemRequest): Promise<void> => {
+  return await invoke<void>('add_or_update_item', {request});
 };
 
 export const deleteItem = async (request: DeleteItemRequest): Promise<void> => {
   return await invoke<void>('delete_item', {request});
 };
 
-export const addCredential = async (request: AddCredentialRequest): Promise<void> => {
-  return await invoke<void>('add_credential', {request});
+export const addOrUpdateCredential = async (
+  request: AddOrUpdateCredentialRequest,
+): Promise<void> => {
+  return await invoke<void>('add_or_update_credential', {request});
 };
 
 export const deleteCredential = async (request: DeleteCredentialRequest): Promise<void> => {

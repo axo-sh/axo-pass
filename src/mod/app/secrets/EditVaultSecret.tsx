@@ -5,8 +5,7 @@ import {useForm} from 'react-hook-form';
 import {toast} from 'sonner';
 import {Link, useLocation} from 'wouter';
 
-import type {CredentialUpdate} from '@/binding';
-import {updateItem} from '@/client';
+import {addOrUpdateItem} from '@/client';
 import {useErrorDialog} from '@/components/ErrorDialog';
 import {layoutTitlePrefixLink} from '@/layout/Layout.css';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
@@ -49,18 +48,10 @@ export const EditVaultSecret: React.FC<Props> = observer((props) => {
   const handleSubmit = async (data: SecretFormData) => {
     setIsSubmitting(true);
     try {
-      const credentials: Record<string, CredentialUpdate> = {};
-      Object.entries(item.credentials).forEach(([key, cred]) => {
-        credentials[key] = {
-          title: cred.title,
-        };
-      });
-
-      await updateItem({
+      await addOrUpdateItem({
         vault_key: itemKey.vaultKey,
         item_key: itemKey.itemKey,
         item_title: data.label,
-        credentials: credentials,
       });
       toast.success('Secret updated.');
       vaultStore.reload(props.vaultKey);

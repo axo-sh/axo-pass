@@ -287,9 +287,16 @@ impl Vault {
             .get_mut(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
 
-        let encrypted_secret =
-            self.cipher
-                .encrypt_cred_value(item_id, cred_id, cred_value.expose_secret())?;
+        // update secret if secret is non-empty
+        let secret = cred_value.expose_secret();
+        if !secret.is_empty() {
+            let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
+            self.secrets.insert(cred_id, encrypted_secret);
+        } else if !self.secrets.contains_key(&cred_id) {
+            // if secret is empty and credential doesn't already exist, throw error (to
+            // prevent creating credentials with empty secrets by mistake)
+            return Err(Error::InvalidEmptyCredentialValue);
+        }
 
         // add or update credential in item.credentials
         item.credentials.insert(cred_id, cred_overview);
@@ -298,7 +305,6 @@ impl Vault {
         // overwrite the existing keys.
         self.item_credential_index
             .insert((item_key.to_string(), cred_key), (item_id, cred_id));
-        self.secrets.insert(cred_id, encrypted_secret);
         self.metadata_blobs.remove(&cred_id); // for simplicity, always attempt this
 
         // get a reference to return

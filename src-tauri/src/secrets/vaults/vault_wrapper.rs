@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{fs, io};
@@ -178,26 +177,13 @@ impl VaultWrapper {
     /// an empty title for existing items).
     pub fn add_item(
         &mut self,
-        item_title: &str,
         item_key: &str,
+        item_title: &str,
     ) -> Result<&VaultItemOverview, Error> {
         let VaultState::Unlocked { vault, .. } = &mut self.state else {
             return Err(Error::VaultLocked);
         };
         vault.add_or_update_item(item_key, item_title)
-    }
-
-    pub fn update_item(
-        &mut self,
-        item_key: &str,
-        item_title: String,
-        credentials: BTreeMap<String, (String, SecretString)>,
-    ) -> anyhow::Result<()> {
-        self.add_item(&item_title, item_key)?;
-        for (cred_key, (cred_title, secret)) in credentials {
-            self.add_secret(item_key, &cred_key, &cred_title, secret)?;
-        }
-        Ok(())
     }
 
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
