@@ -3,34 +3,34 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{fs, io};
 
-use aes_gcm::aead::{Aead, OsRng, Payload};
-use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
-use anyhow::anyhow;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
-use secrecy::{ExposeSecret, SecretBox, SecretString};
-use uuid::Uuid;
+use secrecy::{SecretBox, SecretString};
+use url::Url;
 
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::{Vault, VaultItem, VaultItemCredential, VaultSecret};
+use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
+use crate::secrets::vaults::vault::{Vault, VaultItemCredentialOverview, VaultItemOverview};
 
 pub const DEFAULT_VAULT: &str = "default";
 
 const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
+enum VaultState {
+    Locked { name: Option<String> },
+    Unlocked { vault: Vault },
+}
+
+// in-memory representation of a vault
 pub struct VaultWrapper {
     pub key: String,
     pub path: PathBuf,
-    pub cipher: Option<Aes256Gcm>,
-    pub vault: Vault,
+    state: VaultState,
 }
 
 fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> {
-    if !validate_key(&vault_key) {
-        return Err(Error::InvalidVaultKey(vault_key.to_string()));
-    }
+    let vault_key =
+        normalized_key(vault_key).ok_or_else(|| Error::InvalidVaultKey(vault_key.to_string()))?;
     Ok(vault_dir.join(format!("{vault_key}.json")))
 }
 
@@ -41,16 +41,18 @@ impl VaultWrapper {
         vault_key: &str,
         user_encryption_key: ManagedKey,
     ) -> Result<Self, Error> {
-        let vault = Vault::new(name, user_encryption_key)?;
-        if !validate_key(&vault_key) {
-            return Err(Error::InvalidVaultKey(vault_key.to_string()));
-        }
-        let vault_path = vault_file_path(vault_dir, vault_key)?;
+        log::debug!("Creating new vault...");
+        let vault_key = normalized_key(vault_key)
+            .ok_or_else(|| Error::InvalidVaultKey(vault_key.to_string()))?;
+
+        let vault_path = vault_file_path(vault_dir, &vault_key)?;
+        let vault_overview = Vault::new(name, user_encryption_key)?;
         let vault_wrapper = Self {
             key: vault_key.to_string(),
             path: vault_path,
-            cipher: None,
-            vault,
+            state: VaultState::Unlocked {
+                vault: vault_overview,
+            },
         };
         vault_wrapper.save()?;
         Ok(vault_wrapper)
@@ -63,21 +65,7 @@ impl VaultWrapper {
     }
 
     pub fn load_from_path(vault_key: Option<String>, vault_path: &Path) -> Result<Self, Error> {
-        log::debug!("Reading vault from file: {}", vault_path.display());
-        let vault_data = fs::read_to_string(&vault_path).map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                Error::VaultNotFound(
-                    vault_key
-                        .clone()
-                        .unwrap_or(vault_path.to_string_lossy().to_string())
-                        .to_string(),
-                )
-            } else {
-                Error::VaultReadError(e)
-            }
-        })?;
-        let vault: Vault =
-            serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)?;
+        let vault = EncryptedVault::load(vault_path)?;
 
         // todo: decide what to do for key for external vaults, some options:
         // 1. use file name as key
@@ -92,23 +80,22 @@ impl VaultWrapper {
         Ok(Self {
             key: vault_key,
             path: vault_path.to_path_buf(),
-            cipher: None,
-            vault,
+            state: VaultState::Locked {
+                name: vault.name.clone(),
+            },
         })
     }
 
     pub fn unlock(&mut self) -> Result<(), Error> {
-        if self.cipher.is_some() {
+        if matches!(self.state, VaultState::Unlocked { .. }) {
             return Ok(());
         }
         let managed_key = get_vault_encryption_key()?;
-        self.unlock_with_key(managed_key)
-    }
-
-    fn unlock_with_key(&mut self, managed_key: ManagedKey) -> Result<(), Error> {
-        if self.cipher.is_none() {
-            self.cipher = Some(self.vault.decrypt_file_key(&managed_key)?);
-        }
+        let encrypted_vault = EncryptedVault::load(&self.path)?;
+        let vault = Vault::from_encrypted(managed_key, encrypted_vault)
+            .inspect_err(|e| log::debug!("failed to build vault: {e}"))
+            .map_err(|_| Error::VaultFileKeyDecryptionError)?;
+        self.state = VaultState::Unlocked { vault };
         Ok(())
     }
 
@@ -120,16 +107,20 @@ impl VaultWrapper {
             )));
         };
 
+        let VaultState::Unlocked { vault } = &self.state else {
+            return Err(Error::VaultLocked);
+        };
+        let encrypted_vault = vault.into_encrypted()?;
+        let vault_data = serde_json::to_string_pretty(&encrypted_vault)
+            .map_err(Error::VaultSerializationError)?;
+
         fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
-        let vault_data =
-            serde_json::to_string_pretty(&self.vault).map_err(Error::VaultSerializationError)?;
         fs::write(self.path.clone(), vault_data).map_err(Error::VaultWriteError)?;
         Ok(())
     }
 
     pub fn set_vault_key(&mut self, new_vault_key: String) -> Result<(), Error> {
-        // validate vault name
-        if !VAULT_KEY_REGEX.is_match(&new_vault_key) {
+        if !validate_key(&new_vault_key) {
             return Err(Error::InvalidVaultKey(new_vault_key));
         }
 
@@ -139,287 +130,142 @@ impl VaultWrapper {
             .expect("Vault path has no parent directory");
         let new_path = vault_file_path(vault_dir, &new_vault_key)?;
 
-        // move the vault file
         if let Err(err) = std::fs::rename(&self.path, &new_path) {
             return Err(Error::VaultKeyUpdateFailed(err));
         }
 
-        // update the vault
         self.key = new_vault_key;
         self.path = new_path;
         self.save()?;
         Ok(())
     }
 
-    pub fn set_vault_name(&mut self, new_name: String) {
-        self.vault.name = Some(new_name);
-    }
-
-    pub fn get_secret_by_url(&self, url: url::Url) -> anyhow::Result<Option<String>> {
-        let item_key = url
-            .path_segments()
-            .and_then(|segments| segments.into_iter().next())
-            .ok_or_else(|| anyhow!("reference missing item key: {}", url))?;
-        let credential_key = url
-            .path_segments()
-            .and_then(|mut segments| {
-                segments.next();
-                segments.next()
-            })
-            .ok_or_else(|| anyhow!("reference missing credential key: {}", url))?;
-        log::debug!("Parsed reference {item_key}/{credential_key}");
-        let secret = self.get_secret(item_key, credential_key)?;
-        Ok(secret)
-    }
-
-    fn encrypt(&self, cred_value: SecretString, aad: &[u8]) -> Result<Vec<u8>, Error> {
-        let cipher = self.cipher.as_ref().ok_or_else(|| Error::VaultLocked)?;
-
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits; unique per message
-        let ciphertext = cipher
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: cred_value.expose_secret().as_bytes(),
-                    aad,
-                },
-            )
-            .inspect_err(|e| log::debug!("encryption error: {e}"))
-            .map_err(|_| Error::VaultSecretEncryptionError)?;
-
-        // first 12 bytes are the nonce
-        Ok(nonce.iter().copied().chain(ciphertext).collect())
-    }
-
-    pub fn list_items(&self) -> impl Iterator<Item = (&String, &VaultItem)> {
-        self.vault.items.iter()
-    }
-
-    pub fn get_item(&self, item_key: &str) -> Option<&VaultItem> {
-        self.vault.items.get(item_key)
-    }
-
-    pub fn add_item(&mut self, item_title: String, item_key: String) -> Result<(), Error> {
-        let item_key = normalize_key(&item_key);
-        if !validate_key(&item_key) {
-            return Err(Error::InvalidItemKey(item_key));
+    pub fn vault_name(&self) -> Option<&str> {
+        match &self.state {
+            VaultState::Locked { name } => name.as_deref(),
+            VaultState::Unlocked { vault, .. } => vault.name.as_deref(),
         }
-        self.vault
-            .items
-            .entry(item_key)
-            .or_insert_with(|| VaultItem {
-                id: Uuid::new_v4(),
-                title: item_title.trim().to_string(),
-                credentials: BTreeMap::new(),
-            });
+    }
+
+    pub fn set_vault_name(&mut self, new_name: String) -> Result<(), Error> {
+        let VaultState::Unlocked { vault, .. } = &mut self.state else {
+            return Err(Error::VaultLocked);
+        };
+        vault.name = Some(new_name);
         Ok(())
+    }
+
+    pub fn list_items(&self) -> Result<Vec<&VaultItemOverview>, Error> {
+        let VaultState::Unlocked { vault, .. } = &self.state else {
+            return Err(Error::VaultLocked);
+        };
+        Ok(vault.list_items())
+    }
+
+    pub fn get_item_overview(&self, item_key: &str) -> Result<Option<&VaultItemOverview>, Error> {
+        let VaultState::Unlocked { vault, .. } = &self.state else {
+            return Err(Error::VaultLocked);
+        };
+        match vault.get_item(item_key) {
+            Ok(item) => Ok(Some(item)),
+            Err(Error::InvalidItemKey(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Get or create an item by key. When the item already exists the
+    /// item_title is ignored (consistent with how add_credential callers pass
+    /// an empty title for existing items).
+    pub fn add_item(
+        &mut self,
+        item_title: &str,
+        item_key: &str,
+    ) -> Result<&VaultItemOverview, Error> {
+        let VaultState::Unlocked { vault, .. } = &mut self.state else {
+            return Err(Error::VaultLocked);
+        };
+        vault.add_or_update_item(item_key, item_title)
     }
 
     pub fn update_item(
         &mut self,
         item_key: &str,
-        new_title: String,
-        credentials: BTreeMap<String, (Option<String>, Option<SecretString>)>,
+        item_title: String,
+        credentials: BTreeMap<String, (String, SecretString)>,
     ) -> anyhow::Result<()> {
-        let new_title = new_title.trim();
-        let mut encrypted_values: BTreeMap<String, String> = BTreeMap::new();
-        let item = self
-            .vault
-            .items
-            .get(item_key)
-            .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
-
-        for (cred_key, (_, new_cred_value)) in &credentials {
-            if let Some(new_value) = new_cred_value
-                && let Some(credential) = item.credentials.get(cred_key)
-            {
-                let aad = format!("{}:{}", item.id, credential.id);
-                let encrypted = self.encrypt(new_value.clone(), aad.as_bytes())?;
-                let secret_leaf = b64.encode(&encrypted);
-                encrypted_values.insert(cred_key.clone(), secret_leaf);
-            }
+        self.add_item(&item_title, item_key)?;
+        for (cred_key, (cred_title, secret)) in credentials {
+            self.add_secret(item_key, &cred_key, &cred_title, secret)?;
         }
-
-        // Now update the item with mutable access
-        let item = self
-            .vault
-            .items
-            .get_mut(item_key)
-            .ok_or_else(|| anyhow!("Item with key {item_key} not found"))?;
-
-        item.title = new_title.to_string();
-
-        // Update credentials by their keys
-        for (cred_key, (new_cred_title, _)) in credentials {
-            if let Some(credential) = item.credentials.get_mut(&cred_key) {
-                // Update title if provided
-                if let Some(title) = new_cred_title {
-                    credential.title = Some(title);
-                }
-
-                // Update encrypted value if we encrypted one
-                if let Some(secret_leaf) = encrypted_values.get(&cred_key) {
-                    credential.value = SecretBox::new(Box::new(VaultSecret(secret_leaf.clone())));
-                }
-            }
-        }
-
         Ok(())
     }
 
-    pub fn delete_item(&mut self, item_key: &str) -> anyhow::Result<()> {
-        if self.vault.items.remove(item_key).is_none() {
-            log::debug!("Did not find item {item_key} to delete");
+    pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
+        let VaultState::Unlocked { vault, .. } = &mut self.state else {
+            return Err(Error::VaultLocked);
         };
-        Ok(())
+        vault.delete_item(item_key)
     }
 
     pub fn add_secret(
         &mut self,
-        item_title: &str,
         item_key: &str,
-        cred_title: &str,
         cred_key: &str,
+        cred_title: &str,
         cred_value: SecretString,
     ) -> Result<(), Error> {
-        // normalize values
-        let item_title = item_title.trim();
-        let item_key = normalize_key(item_key);
-        if !validate_key(&item_key) {
-            return Err(Error::InvalidItemKey(item_key));
-        }
-        let cred_key = normalize_key(cred_key);
-        if !validate_key(&cred_key) {
-            return Err(Error::InvalidCredentialKey(cred_key));
-        }
-
-        // get ids and encrypt credential value
-        let (item_id, cred_id) = self
-            .vault
-            .items
-            .get(&item_key)
-            .map(|i| {
-                (
-                    i.id,
-                    i.credentials
-                        .get(&cred_key)
-                        .map(|c| c.id)
-                        .unwrap_or_else(Uuid::new_v4),
-                )
-            })
-            .unwrap_or_else(|| (Uuid::new_v4(), Uuid::new_v4()));
-        let aad = format!("{item_id}:{cred_id}");
-        let secret_leaf = b64.encode(&self.encrypt(cred_value, aad.as_bytes())?);
-
-        // get the entry in data or create it
-        let entry = self
-            .vault
-            .items
-            .entry(item_key.clone())
-            .and_modify(|i| {
-                // Only update title if a non-empty title is provided
-                if !item_title.is_empty() {
-                    i.title = item_title.to_string();
-                }
-            })
-            .or_insert_with(|| VaultItem {
-                id: item_id,
-                title: item_title.to_string(),
-                credentials: BTreeMap::new(),
-            });
-
-        entry
-            .credentials
-            .entry(cred_key.clone())
-            .and_modify(|c| {
-                c.title = Some(cred_title.to_string());
-                c.value = SecretBox::new(Box::new(VaultSecret(secret_leaf.clone())))
-            })
-            .or_insert_with(move || VaultItemCredential {
-                id: cred_id,
-                title: Some(cred_title.to_string()),
-                value: SecretBox::new(Box::new(VaultSecret(secret_leaf.clone()))),
-            });
-
+        let VaultState::Unlocked { vault } = &mut self.state else {
+            return Err(Error::VaultLocked);
+        };
+        vault.add_or_update_item_credential(item_key, cred_key, cred_title, cred_value)?;
         Ok(())
     }
 
     pub fn get_secret(
         &self,
         item_key: &str,
-        credential_key: &str,
-    ) -> Result<Option<String>, Error> {
-        let Some(cipher) = &self.cipher else {
+        cred_key: &str,
+    ) -> Result<Option<SecretBox<String>>, Error> {
+        let VaultState::Unlocked { vault } = &self.state else {
             return Err(Error::VaultLocked);
         };
-        let Some(item) = self.vault.items.get(item_key) else {
-            return Ok(None);
-        };
-        let Some(cred) = item.credentials.get(credential_key) else {
-            return Ok(None);
-        };
-
-        let ciphertext = b64
-            .decode(cred.value.expose_secret().0.clone())
-            .inspect_err(|e| log::debug!("base64 decode error: {e}"))
-            .map_err(|_| Error::VaultSecretDecryptionError)?;
-
-        #[allow(deprecated)]
-        let nonce = Nonce::from_slice(&ciphertext[..12]); // 96-bits; unique per message
-        let aad = format!("{}:{}", item.id, cred.id);
-        log::debug!("Decrypting credential value with AAD='{aad}'");
-        let plaintext = cipher
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: &ciphertext[12..],
-                    aad: aad.as_bytes(),
-                },
-            )
-            .inspect_err(|err| log::debug!("decryption failure: {err}"))
-            .map_err(|_| Error::VaultSecretDecryptionError)?;
-
-        let secret = String::from_utf8(plaintext)
-            .inspect_err(|err| log::debug!("decryption failure: {err}"))
-            .map_err(|_| Error::VaultSecretDecryptionError)?;
-        Ok(Some(secret))
+        vault.get_item_credential_secret(item_key, cred_key)
     }
 
-    pub fn get_item_credential(
+    pub fn get_secret_by_url(&self, url: Url) -> Result<Option<SecretBox<String>>, Error> {
+        let mut segments = url
+            .path_segments()
+            .ok_or(Error::InvalidVaultItemReference("invalid url".to_string()))?;
+        let item_key = segments.next().ok_or(Error::InvalidVaultItemReference(
+            "missing item key".to_string(),
+        ))?;
+        let credential_key = segments.next().ok_or(Error::InvalidVaultItemReference(
+            "missing credential key".to_string(),
+        ))?;
+        log::debug!("Parsed reference {item_key}/{credential_key}");
+        self.get_secret(item_key, credential_key)
+    }
+
+    pub fn get_secret_overview(
         &self,
         item_key: &str,
         credential_key: &str,
-    ) -> anyhow::Result<Option<&VaultItemCredential>> {
-        let item = self
-            .vault
-            .items
-            .get(item_key)
-            .ok_or_else(|| anyhow!("Item {item_key} not found."))?;
-
-        let credential = item
-            .credentials
-            .get(credential_key)
-            .ok_or_else(|| anyhow!("Credential {item_key}/{credential_key} not found"))?;
-
-        Ok(Some(credential))
+    ) -> Result<Option<&VaultItemCredentialOverview>, Error> {
+        let VaultState::Unlocked { vault, .. } = &self.state else {
+            return Err(Error::VaultLocked);
+        };
+        match vault.get_item_credential(item_key, credential_key) {
+            Ok(cred) => Ok(Some(cred)),
+            Err(Error::InvalidCredentialKey(_)) | Err(Error::InvalidItemKey(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
-    pub fn delete_item_credential(
-        &mut self,
-        item_key: &str,
-        credential_key: &str,
-    ) -> anyhow::Result<()> {
-        let item = self
-            .vault
-            .items
-            .get_mut(item_key)
-            .ok_or_else(|| anyhow!("Item {item_key} not found."))?;
-
-        if item.credentials.remove(credential_key).is_none() {
-            log::debug!("Could not not find credential {item_key}/{credential_key} to delete");
+    pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
+        let VaultState::Unlocked { vault, .. } = &mut self.state else {
+            return Err(Error::VaultLocked);
         };
-
-        Ok(())
+        vault.delete_item_credential(item_key, cred_key)
     }
 }
 
@@ -433,10 +279,15 @@ pub fn validate_key(key: &str) -> bool {
     VAULT_KEY_REGEX.is_match(key)
 }
 
-pub fn normalize_key(key: &str) -> String {
-    WHITESPACE_REGEX
+pub fn normalized_key(key: &str) -> Option<String> {
+    let normalized = WHITESPACE_REGEX
         .replace_all(&key.trim().to_lowercase(), "-")
-        .to_string()
+        .to_string();
+    if validate_key(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
 }
 
 pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {

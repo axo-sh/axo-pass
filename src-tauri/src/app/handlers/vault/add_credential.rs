@@ -31,10 +31,9 @@ pub async fn add_credential(
 
     with_unlocked_vault(&state, &vault_key, |vw| {
         vw.add_secret(
-            "", // item_title is not used when item already exists
             &item_key,
-            &credential_title,
             &credential_key,
+            &credential_title,
             credential_value.into(),
         )
         .map_err(|e| format!("Failed to add credential to vault: {e}"))

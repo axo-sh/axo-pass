@@ -28,5 +28,8 @@ pub async fn add_vault(
         .add_vault(request.vault_name, &request.vault_key)
         .map_err(|e| format!("Failed to create new vault: {e}"))?;
 
-    Ok(VaultResponse { vault: vw.into() })
+    let schema = vw
+        .to_schema()
+        .map_err(|e| format!("Failed to build vault schema: {e}"))?;
+    Ok(VaultResponse { vault: schema })
 }

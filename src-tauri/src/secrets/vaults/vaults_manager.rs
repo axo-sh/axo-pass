@@ -3,12 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use secrecy::ExposeSecret;
+
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault_wrapper::{
-    VaultWrapper, get_vault_encryption_key, normalize_key, validate_key,
-};
+use crate::secrets::vaults::vault_wrapper::{VaultWrapper, get_vault_encryption_key};
 
 #[derive(Default)]
 pub struct VaultsManager {
@@ -30,14 +30,10 @@ impl VaultsManager {
         name: Option<String>,
         vault_key: &str,
     ) -> Result<&VaultWrapper, Error> {
-        let vault_key = normalize_key(vault_key);
-        if !validate_key(&vault_key) {
-            return Err(Error::InvalidVaultKey(vault_key));
-        }
-
         let user_encryption_key = get_vault_encryption_key()?;
 
-        let vw = VaultWrapper::new_vault(name, &self.vaults_dir, &vault_key, user_encryption_key)?;
+        let vw = VaultWrapper::new_vault(name, &self.vaults_dir, vault_key, user_encryption_key)?;
+        let vault_key = vw.key.clone(); // normalized key
 
         log::debug!("Vault created, saving new vault to disk...");
         vw.save()?;
@@ -172,10 +168,10 @@ impl VaultsManager {
             log::error!("Error unlocking vault {vault_key}: {e:?}");
         })?;
         match vault.get_secret_by_url(u) {
-            Ok(secret) => Ok(secret),
+            Ok(secret) => Ok(secret.map(|s| s.expose_secret().to_string())),
             Err(e) => {
                 log::error!("Error retrieving {item_url}: {e:?}");
-                Err(Error::SecretRetrievalFailed(item_url.to_string(), e))
+                Err(Error::SecretRetrievalFailed(item_url.to_string(), e.into()))
             },
         }
     }

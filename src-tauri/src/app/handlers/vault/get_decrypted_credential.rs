@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -17,7 +18,7 @@ pub struct DecryptedCredentialRequest {
 #[derive(Serialize)]
 #[typeshare]
 pub struct DecryptedCredential {
-    pub title: Option<String>,
+    pub title: String,
     pub secret: String,
     pub url: String,
 }
@@ -29,7 +30,7 @@ pub async fn get_decrypted_credential(
 ) -> Result<Option<DecryptedCredential>, String> {
     let (secret, title) = with_unlocked_vault(&state, &request.vault_key, |vw| {
         let credential = vw
-            .get_item_credential(&request.item_key, &request.credential_key)
+            .get_secret_overview(&request.item_key, &request.credential_key)
             .map_err(|e| format!("Failed to get credential: {e}"))?
             .ok_or("Could not find credential.".to_string())?;
         let secret = vw
@@ -40,7 +41,7 @@ pub async fn get_decrypted_credential(
 
     Ok(secret.map(|secret| DecryptedCredential {
         title,
-        secret,
+        secret: secret.expose_secret().to_string(),
         url: format!(
             "axo://{}/{}/{}",
             request.vault_key, request.item_key, request.credential_key

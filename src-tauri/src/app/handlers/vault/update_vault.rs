@@ -24,11 +24,11 @@ pub async fn update_vault(
     let mut state = state.lock().unwrap();
     let vw = state.vaults.get_vault_mut(&request.vault_key)?;
 
-    if request.new_name != vw.vault.name
+    if request.new_name.as_deref() != vw.vault_name()
         && let Some(new_name) = request.new_name
     {
-        vw.set_vault_name(new_name);
-        vw.save()?
+        vw.set_vault_name(new_name)?;
+        vw.save()?;
     }
 
     if request.new_vault_key.as_deref() != Some(request.vault_key.as_str())

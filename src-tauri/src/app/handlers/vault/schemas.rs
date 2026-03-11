@@ -3,8 +3,11 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::secrets::vaults::{VaultItem, VaultWrapper};
+use crate::secrets::vaults::{VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
 
+// VaultSchema is the serialized form of VaultWrapper, with decrypted item
+// titles and credential titles, but without credential values. Used for sending
+// vault data to the frontend.
 #[derive(Serialize, Debug, Clone)]
 #[typeshare]
 pub struct VaultSchema {
@@ -15,19 +18,20 @@ pub struct VaultSchema {
     pub data: BTreeMap<String, VaultItemSchema>,
 }
 
-impl From<&VaultWrapper> for VaultSchema {
-    fn from(vw: &VaultWrapper) -> Self {
-        VaultSchema {
-            key: vw.key.clone(),
-            name: vw.vault.name.clone(),
-            path: vw.path.to_string_lossy().to_string(),
-            data: vw
-                .vault
-                .items
-                .iter()
-                .map(|(key, item)| (key.clone(), item.into()))
+impl VaultWrapper {
+    pub fn to_schema(&self) -> Result<VaultSchema, String> {
+        let items = self
+            .list_items()
+            .map_err(|e| format!("Failed to decrypt vault items: {e}"))?;
+        Ok(VaultSchema {
+            key: self.key.clone(),
+            name: self.vault_name().map(|s| s.to_string()),
+            path: self.path.to_string_lossy().to_string(),
+            data: items
+                .into_iter()
+                .map(|item| (item.key.clone(), item.into()))
                 .collect(),
-        }
+        })
     }
 }
 
@@ -41,23 +45,15 @@ pub struct VaultItemSchema {
     credentials: BTreeMap<String, VaultItemCredentialSchema>,
 }
 
-impl From<&VaultItem> for VaultItemSchema {
-    fn from(item: &VaultItem) -> Self {
-        VaultItemSchema {
+impl From<&VaultItemOverview> for VaultItemSchema {
+    fn from(item: &VaultItemOverview) -> Self {
+        Self {
             id: item.id,
             title: item.title.clone(),
             credentials: item
                 .credentials
-                .iter()
-                .map(|(cred_key, cred)| {
-                    (
-                        cred_key.clone(),
-                        VaultItemCredentialSchema {
-                            id: cred.id,
-                            title: cred.title.clone(),
-                        },
-                    )
-                })
+                .values()
+                .map(|cred| (cred.key.clone(), cred.into()))
                 .collect(),
         }
     }
@@ -68,5 +64,14 @@ impl From<&VaultItem> for VaultItemSchema {
 pub struct VaultItemCredentialSchema {
     #[typeshare(serialized_as = "String")]
     id: uuid::Uuid,
-    title: Option<String>,
+    title: String,
+}
+
+impl From<&VaultItemCredentialOverview> for VaultItemCredentialSchema {
+    fn from(cred: &VaultItemCredentialOverview) -> Self {
+        Self {
+            id: cred.id,
+            title: cred.title.clone(),
+        }
+    }
 }

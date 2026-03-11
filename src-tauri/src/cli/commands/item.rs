@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use color_print::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::VaultWrapper;
@@ -107,7 +107,10 @@ impl ItemCommand {
         let vw = Self::unlock_vault(item_reference.vault.or_else(|| self.vault.clone()))?;
         let vault_key = vw.key.clone();
         let item_key = item_reference.item;
-        let Some(item) = vw.get_item(&item_key) else {
+        let Some(item) = vw
+            .get_item_overview(&item_key)
+            .map_err(|e| format!("Failed to get item: {e}"))?
+        else {
             return Err(cformat!(
                 "<blue>{item_key}</blue> not found in vault <blue>{vault_key}</blue>",
             ));
@@ -117,26 +120,24 @@ impl ItemCommand {
                 if item.credentials.is_empty() {
                     cprintln!("<dim><<no credentials>></dim>");
                 }
-                for (cred_key, cred_value) in item.credentials.iter() {
+                for (cred_key, cred) in &item.credentials {
                     cprintln!(
                         "{} {cred_key} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>",
-                        cred_value.title.as_deref().unwrap_or(cred_key),
+                        cred.title,
                     );
                 }
             },
             Some(credential_key) => {
-                let Some(Some(credential)) =
-                    vw.get_item_credential(&item_key, &credential_key).ok()
+                let Some(credential) = vw
+                    .get_secret_overview(&item_key, &credential_key)
+                    .map_err(|e| format!("Failed to get credential: {e}"))?
                 else {
                     return Err(cformat!(
                         "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
                     ));
                 };
                 cprintln!("<green>Credential</green>: {}", credential_key);
-                cprintln!(
-                    "<green>Title</green>: {}",
-                    credential.title.as_deref().unwrap_or("<none>")
-                );
+                cprintln!("<green>Title</green>: {}", credential.title);
                 cprintln!(
                     "<green>Reference</green>: axo://{vault_key}/{item_key}/{credential_key}"
                 );
@@ -160,7 +161,7 @@ impl ItemCommand {
 
         match vw.get_secret(&item_key, &credential_key) {
             Ok(Some(secret)) => {
-                println!("{secret}");
+                println!("{}", secret.expose_secret());
             },
             Ok(None) => {
                 // no-op
@@ -177,14 +178,19 @@ impl ItemCommand {
         let vault_key = vw.key.clone();
         cprintln!("<green>Vault</green>: <blue>{vault_key}</blue>");
 
-        let mut items: Vec<_> = vw.list_items().collect();
-        items.sort_by_key(|(_item_key, item_value)| item_value.title.to_lowercase());
+        let mut items = vw
+            .list_items()
+            .map_err(|e| format!("Failed to list items: {e}"))?;
+        items.sort_by_key(|item| item.title.to_lowercase());
 
         let mut has_items = false;
-        for (item_key, item_value) in items {
-            for (cred_key, cred_value) in item_value.credentials.iter() {
-                let cred_title = cred_value.title.as_deref().unwrap_or("<untitled>");
-                cprintln!("  {cred_title} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>");
+        for item in &items {
+            for (cred_key, cred) in &item.credentials {
+                cprintln!(
+                    "  {} <dim>axo://{vault_key}/{}/{cred_key}</dim>",
+                    cred.title,
+                    item.key
+                );
             }
             has_items = true;
         }
@@ -225,14 +231,8 @@ impl ItemCommand {
             },
         };
 
-        vw.add_secret(
-            &item_key,
-            &item_key,
-            &credential_key,
-            &credential_key,
-            secret,
-        )
-        .expect("Failed to add secret");
+        vw.add_secret(&item_key, &credential_key, &credential_key, secret)
+            .expect("Failed to add secret");
 
         vw.save().expect("Failed to save vault");
 

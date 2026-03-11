@@ -462,6 +462,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tauri-utils",
+ "tempfile",
  "thiserror 2.0.17",
  "time",
  "tokio",
@@ -471,6 +472,7 @@ dependencies = [
  "typeshare",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

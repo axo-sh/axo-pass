@@ -11,8 +11,8 @@ use crate::secrets::vaults::VaultWrapper;
 #[derive(Deserialize)]
 #[typeshare]
 pub struct CredentialUpdate {
-    pub title: Option<String>,
-    pub value: Option<String>,
+    pub title: String,
+    pub value: String,
 }
 
 #[derive(Deserialize)]
@@ -22,6 +22,7 @@ pub struct UpdateItemRequest {
     pub vault_key: String,
     pub item_key: String,
     pub item_title: String,
+
     #[typeshare(serialized_as = "HashMap<String, CredentialUpdate>")]
     pub credentials: BTreeMap<String, CredentialUpdate>,
 }
@@ -46,14 +47,10 @@ pub async fn update_item(
         .get_vault_mut(&vault_key)
         .map_err(|e| format!("Failed to get vault: {e}"))?;
 
-    let credentials_with_secrets: BTreeMap<String, (Option<String>, Option<SecretString>)> =
-        credentials
-            .into_iter()
-            .map(|(key, cred)| {
-                let secret_value = cred.value.map(|v| v.into());
-                (key, (cred.title, secret_value))
-            })
-            .collect();
+    let credentials_with_secrets: BTreeMap<String, (String, SecretString)> = credentials
+        .into_iter()
+        .map(|(key, cred)| (key, (cred.title, cred.value.into())))
+        .collect();
 
     vw.update_item(&item_key, item_title, credentials_with_secrets)
         .map_err(|e| format!("Failed to update item in vault: {e}"))?;

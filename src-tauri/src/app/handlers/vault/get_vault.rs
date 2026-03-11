@@ -5,7 +5,8 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::vault::schemas::VaultSchema;
-use crate::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
+use crate::app::handlers::vault::with_unlocked_vault;
+use crate::secrets::vaults::DEFAULT_VAULT;
 
 #[derive(Deserialize)]
 #[typeshare]
@@ -25,17 +26,11 @@ pub async fn get_vault(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<VaultResponse, String> {
     log::debug!("command: get_vault");
-    let mut state = state
-        .lock()
-        .map_err(|e| format!("Failed to lock app state: {e}"))?;
     let vault_key = request
         .vault_key
         .unwrap_or_else(|| DEFAULT_VAULT.to_string());
-    let vw: &VaultWrapper = state
-        .vaults
-        .get_vault(&vault_key)
-        .map_err(|e| format!("Failed to get vault: {e}"))?;
-    Ok(VaultResponse { vault: vw.into() })
+    let schema = with_unlocked_vault(&state, &vault_key, |vw| vw.to_schema())?;
+    Ok(VaultResponse { vault: schema })
 }
 
 #[derive(Serialize)]
@@ -69,7 +64,7 @@ pub async fn list_vaults(
                 .vaults
                 .get_vault(k.as_str())
                 .ok()
-                .and_then(|vw| vw.vault.name.clone()),
+                .and_then(|vw| vw.vault_name().map(|s| s.to_string())),
             key: k.to_string(),
         })
         .collect();

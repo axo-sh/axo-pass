@@ -43,7 +43,7 @@ impl VaultCommand {
             return;
         }
         for (vault_key, vw) in vm.iter_vaults() {
-            let vault_name = vw.vault.name.as_deref().unwrap_or("<unnamed>");
+            let vault_name = vw.vault_name().unwrap_or("<unnamed>");
             cprintln!("  <blue>{vault_name}</blue> {vault_key}");
         }
     }
