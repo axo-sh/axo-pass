@@ -12,7 +12,7 @@ use crate::secrets::vaults::vault_wrapper::{VaultWrapper, get_vault_encryption_k
 
 #[derive(Default)]
 pub struct VaultsManager {
-    pub vaults_dir: PathBuf,
+    vaults_dir: PathBuf,
     vaults: HashMap<String, VaultWrapper>,
 }
 

@@ -126,7 +126,7 @@ impl SystemSshKey {
             key_type: public_key.algorithm().into(),
             fingerprint_sha256: compute_sha256_fingerprint(public_key.key_data()),
             fingerprint_md5: compute_md5_fingerprint(public_key.key_data()),
-            public_key: public_key,
+            public_key,
         })
     }
 

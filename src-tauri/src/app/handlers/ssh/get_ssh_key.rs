@@ -58,5 +58,5 @@ pub async fn get_ssh_key(request: GetSshKeyRequest) -> Result<GetSshKeyResponse,
         }
     }
 
-    Err(format!("SSH key not found"))
+    Err("SSH key not found".to_string())
 }

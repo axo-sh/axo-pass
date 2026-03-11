@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
@@ -76,9 +77,8 @@ impl AppConfig {
 
     pub fn add_external_vault(&mut self, vault_key: &str, path: PathBuf) -> Result<(), io::Error> {
         let vault_key = vault_key.to_string();
-        if !self.external_vaults.contains_key(&vault_key) {
-            self.external_vaults
-                .insert(vault_key, ExternalVaultConfig { path });
+        if let Entry::Vacant(e) = self.external_vaults.entry(vault_key) {
+            e.insert(ExternalVaultConfig { path });
             self.save()?;
         }
         Ok(())
