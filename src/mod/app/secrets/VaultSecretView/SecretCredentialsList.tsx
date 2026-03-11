@@ -6,9 +6,9 @@ import {toast} from 'sonner';
 
 import {Button} from '@/components/Button';
 import {Card, CardSection} from '@/components/Card';
-import {useDialog} from '@/components/Dialog';
 import {flex} from '@/components/Flex.css';
 import {useVaultStore} from '@/mod/app/mobx/VaultStore';
+import {EditCredentialDialog} from '@/mod/app/secrets/VaultSecretView/EditCredentialDialog';
 import {CredentialItem} from '@/mod/app/secrets/VaultView/SecretsList/CredentialItem';
 import {DeleteCredentialDialog} from '@/mod/app/secrets/VaultView/SecretsList/DeleteCredentialDialog';
 import {secretItemDesc, secretItemValue} from '@/styles/secrets.css';
@@ -19,17 +19,9 @@ export const SecretCredentialList: React.FC<{
   showAddCredentialDialog: () => void;
 }> = observer(({itemKey, showAddCredentialDialog}) => {
   const vaultStore = useVaultStore();
-  const dialog = useDialog();
-  const [selectedCredKey, setSelectedCredKey] = React.useState<CredentialKey | null>(null);
+  const [deleteCredKey, setDeleteCredKey] = React.useState<CredentialKey | null>(null);
+  const [editCredKey, setEditCredKey] = React.useState<CredentialKey | null>(null);
   const item = vaultStore.getItem(itemKey);
-
-  React.useEffect(() => {
-    if (selectedCredKey) {
-      dialog.open();
-    } else {
-      dialog.onClose();
-    }
-  }, [selectedCredKey]);
 
   if (!item) {
     return null;
@@ -49,7 +41,8 @@ export const SecretCredentialList: React.FC<{
                   ...itemKey,
                   credKey,
                 }}
-                onDelete={setSelectedCredKey}
+                onDelete={setDeleteCredKey}
+                onEdit={setEditCredKey}
               >
                 <div>
                   <code className={secretItemValue}>{credentials[credKey].title}</code>
@@ -87,12 +80,22 @@ export const SecretCredentialList: React.FC<{
         </CardSection>
       </Card>
 
-      {selectedCredKey && (
+      {deleteCredKey && (
         <DeleteCredentialDialog
-          credKey={selectedCredKey}
-          isOpen={dialog.isOpen}
+          credKey={deleteCredKey}
+          isOpen={true}
           onClose={() => {
-            setSelectedCredKey(null);
+            setDeleteCredKey(null);
+          }}
+        />
+      )}
+
+      {editCredKey && (
+        <EditCredentialDialog
+          credKey={editCredKey}
+          isOpen={true}
+          onClose={() => {
+            setEditCredKey(null);
           }}
         />
       )}

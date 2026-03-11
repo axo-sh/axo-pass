@@ -1,6 +1,6 @@
 import React from 'react';
 
-import {IconCopy, IconTrash} from '@tabler/icons-react';
+import {IconCopy, IconEdit, IconTrash} from '@tabler/icons-react';
 import {writeText} from '@tauri-apps/plugin-clipboard-manager';
 import {observer} from 'mobx-react';
 import {toast} from 'sonner';
@@ -19,10 +19,11 @@ type Props = {
   children: React.ReactNode;
   onClick?: (item: ItemKey) => void;
   onDelete: (key: CredentialKey) => void;
+  onEdit?: (key: CredentialKey) => void;
 };
 
 export const CredentialItem: React.FC<Props> = observer(
-  ({credKey, onClick, onDelete, children}) => {
+  ({credKey, onClick, onDelete, onEdit, children}) => {
     const errorDialog = useErrorDialog();
     const [showSecret, setShowSecret] = React.useState(false);
     const [decryptedCred, setDecryptedCred] = React.useState<DecryptedCredential | null>(null);
@@ -97,6 +98,18 @@ export const CredentialItem: React.FC<Props> = observer(
             >
               <IconCopy size={14} />
             </Button>
+            {onEdit && (
+              <Button
+                size="iconSmall"
+                clear
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit(credKey);
+                }}
+              >
+                <IconEdit size={14} />
+              </Button>
+            )}
             <Button
               size="iconSmall"
               variant="secondaryError"
