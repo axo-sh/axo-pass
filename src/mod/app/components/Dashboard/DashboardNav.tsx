@@ -54,9 +54,11 @@ export const DashboardNav: React.FC = observer(() => {
       </div>
       <ul className={navLinks}>
         {vaultStore.vaultKeys.length === 0 && (
-          <Link className={navLink} href="/dashboard/secrets">
-            <IconForms size={18} /> Secrets
-          </Link>
+          <li>
+            <Link className={navLink} href="/dashboard/secrets">
+              <IconForms size={18} /> Secrets
+            </Link>
+          </li>
         )}
         {vaultStore.vaultKeys.length > 0 && (
           <DashboardNavSection
