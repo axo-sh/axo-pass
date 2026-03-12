@@ -7,6 +7,7 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFData, CFMutableDictionary, CFString, CFType};
+use objc2_local_authentication::LAAccessControlOperation;
 use objc2_security::{
     SecItemAdd, SecItemDelete, errSecSuccess, kSecAttrAccessControl, kSecAttrAccount,
     kSecAttrService, kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain,
@@ -15,7 +16,7 @@ use objc2_security::{
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::core::la_context::evaluate_local_la_context;
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
@@ -135,31 +136,41 @@ impl PasswordEntry {
     }
 
     pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {
-        let access_control = AccessControl::GenericPassword.to_sec_access_control()?;
-        evaluate_local_la_context(access_control)
-            .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
-
-        // need authentication: without it, we don't get all items
-        let passwords = GenericPasswordQuery::build()
-            .list()
-            .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
-
-        let entries: Vec<PasswordEntry> = passwords
-            .iter()
-            .filter_map(|password| password.account.parse().ok())
-            .collect();
-
-        log::debug!("Found {} password entries", entries.len());
-        Ok(entries)
+        // needs authentication: without it, we don't get all items
+        run_on_auth_thread(
+            AuthContext::SharedThreadLocal,
+            AuthMethod::AccessControl {
+                access_control: AccessControl::GenericPassword,
+                operation: LAAccessControlOperation::UseItem,
+                reason: "unlock keychain to list passwords".to_string(),
+            },
+            |la_context| {
+                let passwords = GenericPasswordQuery::build()
+                    .list(la_context)
+                    .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
+                let entries: Vec<PasswordEntry> = passwords
+                    .iter()
+                    .filter_map(|password| password.account.parse().ok())
+                    .collect();
+                log::debug!("Found {} password entries", entries.len());
+                Ok(entries)
+            },
+        )
+        .flatten()
     }
 
     pub fn exists(&self) -> Result<bool, KeychainError> {
         let account = self.account();
-        let res = GenericPasswordQuery::build()
-            .with_account(&account)
-            .without_authentication()
-            .one();
+        let res = run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
+            GenericPasswordQuery::build()
+                .with_account(&account)
+                .without_authentication()
+                .one(la_context)
+        })
+        .flatten();
 
+        // account was moved in the loop, so get a new clone
+        let account = self.account();
         match res {
             Ok(Some(_)) => {
                 log::debug!("{account}: Found entry");
@@ -208,9 +219,22 @@ impl PasswordEntry {
 
     pub fn get_password(&self) -> Result<Option<SecretString>, KeychainError> {
         log::debug!("Attempting to retrieve password for key_id: {self:?}");
-        GenericPasswordQuery::build()
-            .with_account(&self.account())
-            .one()
-            .map(|opt| opt.map(|entry| entry.password))
+        let account = self.account();
+        // todo: always prompt here? with OneTime
+        run_on_auth_thread(
+            AuthContext::SharedThreadLocal,
+            AuthMethod::AccessControl {
+                access_control: AccessControl::GenericPassword,
+                operation: LAAccessControlOperation::UseItem,
+                reason: format!("unlock keychain to access password for {account}"),
+            },
+            move |la_context| {
+                GenericPasswordQuery::build()
+                    .with_account(&account)
+                    .one(la_context)
+                    .map(|opt| opt.map(|entry| entry.password))
+            },
+        )
+        .flatten()
     }
 }

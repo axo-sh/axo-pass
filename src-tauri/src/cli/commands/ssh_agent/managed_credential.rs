@@ -1,9 +1,8 @@
-mod signer;
-
 use ssh_agent_lib::proto;
 use ssh_key::public::KeyData;
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
+use crate::core::auth;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 use crate::ssh::ssh_keys::SshKeyType;
 
@@ -25,6 +24,10 @@ impl Credential for ManagedCredential {
     }
 
     fn sign(&self, req: proto::SignRequest) -> Result<ssh_key::Signature, CredentialError> {
-        signer::sign_with_managed_key(&self.0.label(), &req.data)
+        let managed_key_label = self.0.label();
+        auth::sign_with_managed_key(&managed_key_label, &req.data).map_err(|e| {
+            log::debug!("Failed to sign with managed key {managed_key_label}: {e}");
+            CredentialError::SigningFailed
+        })
     }
 }

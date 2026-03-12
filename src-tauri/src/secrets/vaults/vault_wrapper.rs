@@ -5,6 +5,7 @@ use std::{fs, io};
 use secrecy::{SecretBox, SecretString};
 use url::Url;
 
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
@@ -89,8 +90,8 @@ impl VaultWrapper {
         if matches!(self.state, VaultState::Unlocked { .. }) {
             return Ok(());
         }
-        let managed_key = get_vault_encryption_key()?;
         let encrypted_vault = EncryptedVault::load(&self.path)?;
+        let managed_key = get_vault_encryption_key()?;
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)
             .inspect_err(|e| log::debug!("failed to build vault: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
@@ -277,11 +278,21 @@ pub fn normalized_key(key: &str) -> Option<String> {
 }
 
 pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
-    match ManagedKeyQuery::build()
-        .with_label(VAULT_ENCRYPTION_KEY_LABEL)
-        .with_key_class(KeyClass::Private)
-        .one()
-    {
+    let key_result = run_on_auth_thread(
+        AuthContext::SharedThreadLocal,
+        AuthMethod::Policy {
+            reason: "unlock the vault".to_string(),
+        },
+        move |la_context| {
+            ManagedKeyQuery::build()
+                .with_label(VAULT_ENCRYPTION_KEY_LABEL)
+                .with_key_class(KeyClass::Private)
+                .one(la_context)
+        },
+    )
+    .map_err(|e| Error::KeyRetrievalFailed(e))?;
+
+    match key_result {
         Ok(Some(user_encryption_key)) => Ok(user_encryption_key),
         Ok(None) => {
             log::debug!("Vault encryption key not found, initializing new key...");

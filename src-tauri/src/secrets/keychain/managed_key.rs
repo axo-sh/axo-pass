@@ -34,6 +34,10 @@ pub struct ManagedKey {
     sec_key: Retained<SecKey>,
 }
 
+// to confirm: SecKey is safe to send between threads
+// https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Multithreading/ThreadSafetySummary/ThreadSafetySummary.html
+unsafe impl Send for ManagedKey {}
+
 impl ManagedKey {
     pub fn common_attrs(label: Option<String>) -> Retained<CFMutableDictionary<CFString, CFType>> {
         let query = CFMutableDictionary::<CFString, CFType>::empty();

@@ -3,13 +3,10 @@ use std::os::raw::c_void;
 use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFMutableDictionary, CFString, CFType, Type};
-use objc2_local_authentication::LAContext;
 use objc2_security::{
-    SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef,
-    kSecUseAuthenticationContext, kSecValueRef,
+    SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef, kSecValueRef,
 };
 
-use crate::core::la_context::THREAD_LA_CONTEXT;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::ManagedKey;
@@ -18,7 +15,6 @@ use crate::secrets::keychain::managed_key::shared::KeyClass;
 pub struct ManagedKeyQuery {
     label: Option<String>,
     key_class: Option<KeyClass>,
-    la_context: Option<Retained<LAContext>>,
 }
 
 impl ManagedKeyQuery {
@@ -26,7 +22,6 @@ impl ManagedKeyQuery {
         ManagedKeyQuery {
             label: None,
             key_class: None,
-            la_context: None,
         }
     }
 
@@ -37,11 +32,6 @@ impl ManagedKeyQuery {
 
     pub fn with_key_class(mut self, key_class: KeyClass) -> Self {
         self.key_class = Some(key_class);
-        self
-    }
-
-    pub fn with_la_context(mut self, la_context: &Retained<LAContext>) -> Self {
-        self.la_context = Some(la_context.clone());
         self
     }
 }
@@ -86,18 +76,6 @@ impl KeyChainQuery for ManagedKeyQuery {
             query.add(kSecReturnAttributes, CFBoolean::new(true));
             if let Some(key_class) = &self.key_class {
                 query.add(kSecAttrKeyClass, key_class.as_objc());
-            }
-
-            // reuse our LAContext
-            if let Some(la_context) = &self.la_context {
-                let la_context = la_context.as_ref() as *const LAContext as *const CFType;
-                query.add(kSecUseAuthenticationContext, &*la_context);
-            } else {
-                THREAD_LA_CONTEXT.with(|thread_la_context| {
-                    let la_context =
-                        thread_la_context.as_ref() as *const LAContext as *const CFType;
-                    query.add(kSecUseAuthenticationContext, &*la_context);
-                });
             }
             query
         }

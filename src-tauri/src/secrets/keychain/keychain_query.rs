@@ -1,11 +1,12 @@
 use std::ptr;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFArray, CFMutableDictionary, CFString, CFType};
+use objc2_local_authentication::LAContext;
 use objc2_security::{
     SecItemCopyMatching, errSecInteractionNotAllowed, errSecItemNotFound, errSecSuccess,
-    errSecUserCanceled, kSecMatchLimit, kSecMatchLimitAll,
+    errSecUserCanceled, kSecMatchLimit, kSecMatchLimitAll, kSecUseAuthenticationContext,
 };
 
 use crate::secrets::keychain::errors::KeychainError;
@@ -16,9 +17,14 @@ pub trait KeyChainQuery {
     fn parse_result(&self, result: &CFType) -> Result<Self::Item, KeychainError>;
     fn build_query(&self) -> Retained<CFMutableDictionary<CFString, CFType>>;
 
-    fn one(&self) -> Result<Option<Self::Item>, KeychainError> {
+    fn one(&self, la_context: Retained<LAContext>) -> Result<Option<Self::Item>, KeychainError> {
         unsafe {
             let query = self.build_query();
+
+            // attach auth context
+            let la_context = Retained::as_ptr(&la_context) as *const CFType;
+            query.add(kSecUseAuthenticationContext, &*la_context);
+
             let mut ret: *const CFType = ptr::null();
             let res = SecItemCopyMatching(query.as_opaque(), &mut ret);
             #[allow(non_upper_case_globals)]
@@ -33,10 +39,15 @@ pub trait KeyChainQuery {
         }
     }
 
-    fn list(&self) -> anyhow::Result<Vec<Self::Item>> {
+    fn list(&self, la_context: Retained<LAContext>) -> Result<Vec<Self::Item>, KeychainError> {
         unsafe {
             let query = self.build_query();
             query.add(kSecMatchLimit, kSecMatchLimitAll);
+
+            // attach auth context
+            let la_context = Retained::as_ptr(&la_context) as *const CFType;
+            query.add(kSecUseAuthenticationContext, &*la_context);
+
             let mut ret: *const CFType = ptr::null(); // CFTypeRef
             let res = SecItemCopyMatching(query.as_opaque(), &mut ret);
 
@@ -46,12 +57,12 @@ pub trait KeyChainQuery {
             }
             if res != errSecSuccess {
                 log::debug!("got error code: {res}");
-                bail!("got error code: {res}");
+                return Err(anyhow!("got error code: {res}").into());
             }
 
             let cf_type_ret = &*ret;
             let Some(cf_array) = cf_type_ret.downcast_ref::<CFArray>() else {
-                bail!("expected CFArray result");
+                return Err(anyhow!("expected CFArray result").into());
             };
 
             let mut items = Vec::new();

@@ -9,7 +9,7 @@ use ssh_key::public::KeyData;
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
-use crate::core::la_context::evaluate_la_context;
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::ssh::ssh_keys::SshKeyType;
 use crate::ssh::utils::compute_short_sha256_fingerprint;
 
@@ -55,12 +55,20 @@ impl StoredCredential {
         }
 
         if self.requires_auth {
+            // we only use the touch id auth prompt to confirm, this key is not stored in
+            // the secure enclave.
             // todo: show more detail in the auth prompt, e.g.
             // - which key is being used
             // - who is requesting it
             // - for what purpose
-            if let Err(err) = evaluate_la_context("unlock a ssh key") {
-                log::error!("Failed to authenticate for SSH key: {err}");
+            if let Err(e) = run_on_auth_thread(
+                AuthContext::OneTime,
+                AuthMethod::Policy {
+                    reason: "unlock a ssh key".to_string(),
+                },
+                |_| {},
+            ) {
+                log::error!("Authentication failed: {e}");
                 return Err(CredentialError::Locked);
             }
         }

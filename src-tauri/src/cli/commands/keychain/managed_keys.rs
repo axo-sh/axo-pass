@@ -1,14 +1,24 @@
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use color_print::cprintln;
 
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{self, ManagedKeyQuery, ManagedSshKey};
 
 pub async fn cmd_list_managed_keys() {
-    let keys = ManagedKeyQuery::build()
-        .with_key_class(managed_key::KeyClass::Public)
-        .list()
-        .unwrap();
+    let keys = run_on_auth_thread(
+        AuthContext::OneTime,
+        AuthMethod::Policy {
+            reason: "list managed keys".to_string(),
+        },
+        move |la_context| {
+            ManagedKeyQuery::build()
+                .with_key_class(managed_key::KeyClass::Public)
+                .list(la_context)
+        },
+    )
+    .flatten()
+    .unwrap();
 
     if keys.is_empty() {
         println!("No managed keys found");
@@ -36,6 +46,7 @@ pub async fn cmd_list_managed_keys() {
 pub async fn cmd_delete_managed_key(label: &str) {
     // Find the key by label (need to query private keys to be able to delete)
     if let Err(e) = ManagedSshKey::find(label)
+        .context("Failed to find managed key")
         .and_then(|ssh_key| ssh_key.ok_or(anyhow!("Key not found")))
         .and_then(|ssh_key| ssh_key.delete())
     {

@@ -2,7 +2,7 @@ use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use objc2::rc::Retained;
 use objc2_local_authentication::LAContext;
 use ssh_agent_lib::proto;
@@ -11,6 +11,7 @@ use ssh_key::public::KeyData;
 use ssh_key::{Mpint, Signature};
 use uuid::Uuid;
 
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeyChainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
@@ -126,26 +127,30 @@ impl ManagedSshKey {
         })
     }
 
-    pub fn find(label: &str) -> Result<Option<ManagedSshKey>, anyhow::Error> {
-        Self::find_with_la_context(label, None)
+    pub fn find(label: &str) -> Result<Option<ManagedSshKey>, KeychainError> {
+        let label = label.to_string();
+        run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
+            Self::find_with_la_context(&label, la_context)
+        })
+        .flatten()
     }
 
     pub fn find_with_la_context(
         label: &str,
-        la_context: Option<Retained<LAContext>>,
-    ) -> Result<Option<ManagedSshKey>, anyhow::Error> {
+        la_context: Retained<LAContext>,
+    ) -> Result<Option<ManagedSshKey>, KeychainError> {
         // strip_prefix returns None if prefix not found
         let Some(key_id) = label.strip_prefix(SSH_KEY_LABEL_PREFIX) else {
-            bail!("Invalid label");
+            return Err(KeychainError::Generic(anyhow!(
+                "Invalid key label format: {label}"
+            )));
         };
-        let mut query = ManagedKeyQuery::build()
+        let results = ManagedKeyQuery::build()
             .with_label(label)
-            .with_key_class(KeyClass::Private);
-        if let Some(la_context) = &la_context {
-            query = query.with_la_context(la_context);
-        }
+            .with_key_class(KeyClass::Private)
+            .one(la_context);
 
-        match query.one() {
+        match results {
             Ok(Some(managed_key)) => {
                 let uuid = Uuid::try_parse(key_id).context("Failed to parse key ID as UUID")?;
                 Ok(Some(ManagedSshKey {
@@ -155,9 +160,9 @@ impl ManagedSshKey {
                 }))
             },
             Ok(None) => Ok(None),
-            Err(e) => {
-                bail!("Failed to query managed key: {e}");
-            },
+            Err(e) => Err(KeychainError::Generic(anyhow!(
+                "Failed to query managed key: {e}"
+            ))),
         }
     }
 
@@ -176,10 +181,13 @@ impl ManagedSshKey {
     }
 
     pub fn list() -> Result<Vec<ManagedSshKey>, anyhow::Error> {
-        let managed_keys = ManagedKeyQuery::build()
-            .with_key_class(KeyClass::Private)
-            .list()
-            .unwrap();
+        let managed_keys =
+            run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
+                ManagedKeyQuery::build()
+                    .with_key_class(KeyClass::Private)
+                    .list(la_context)
+            })
+            .flatten()?;
 
         let mut out = Vec::new();
         for managed_key in managed_keys {
