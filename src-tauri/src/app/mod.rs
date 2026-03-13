@@ -9,7 +9,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use clap::Subcommand;
-use tauri::Manager;
+use tauri::menu::{MenuItemBuilder, MenuItemKind};
+use tauri::{Emitter, Manager};
 use tokio::sync::oneshot;
 
 use crate::app::app_mode::AppMode;
@@ -134,6 +135,31 @@ pub fn run(cmd: Option<AxoAppCommand>) {
                     app.handle().manage(AppMode::App);
                     app.handle().manage(Mutex::new(AppState::new()));
 
+                    // Add Lock item to the File menu
+                    if let Some(menu) = app.menu() {
+                        let lock_item = MenuItemBuilder::with_id("lock", "Lock")
+                            .accelerator("Cmd+L")
+                            .build(app)?;
+
+                        // Find the File submenu and append the lock item
+                        for item in menu.items()? {
+                            if let MenuItemKind::Submenu(submenu) = item {
+                                if submenu.text()? == "File" {
+                                    submenu.append(&lock_item)?;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let app_handle = app.handle().clone();
+                    app.on_menu_event(move |_app, event| {
+                        if event.id() == "lock" {
+                            log::debug!("Lock menu item clicked");
+                            let _ = app_handle.emit("lock-app", ());
+                        }
+                    });
+
                     // check for updates on startup
                     let app_handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
@@ -203,6 +229,8 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::vault::add_or_update_item::add_or_update_item,
             handlers::vault::delete_item::delete_item,
             handlers::vault::delete_credential::delete_credential,
+            handlers::vault::unlock_vault::unlock_axo,
+            handlers::vault::unlock_vault::lock_axo,
             handlers::vault::add_or_update_credential::add_or_update_credential,
             handlers::ssh::add_managed_ssh_key::add_managed_ssh_key,
             handlers::ssh::delete_managed_ssh_key::delete_managed_ssh_key,

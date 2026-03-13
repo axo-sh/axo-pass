@@ -15,7 +15,13 @@ use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 
-const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
+// const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
+const TOUCH_ID_REUSE_DURATION_SECS: f64 = 5.0; // 5 seconds for testing
+
+enum AuthMessage {
+    Work(AuthWork),
+    Invalidate(mpsc::Sender<()>),
+}
 
 struct AuthWork {
     context: AuthContext,
@@ -52,13 +58,13 @@ static LA_CONTEXT_CACHE_SIZE: usize = 16;
 /// Dedicated thread that owns a single LAContext with Touch ID reuse duration
 /// enabled. All auth-requiring keychain operations run on this thread so they
 /// share the same LAContext and a single Touch ID prompt covers them all.
-static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthWork>>> = LazyLock::new(|| {
-    let (tx, rx) = mpsc::channel::<AuthWork>();
+static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::channel::<AuthMessage>();
     thread::Builder::new()
         .name("shared-auth".into())
         .spawn(move || {
             // Shared LAContext for the thread; allows reuse.
-            let thread_la_context = unsafe {
+            let mut thread_la_context = unsafe {
                 let ctx = LAContext::new();
                 ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
                 ctx
@@ -68,27 +74,49 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthWork>>> = LazyLock::new(|| {
             let mut la_cache: LruCache<String, Retained<LAContext>> =
                 LruCache::new(NonZero::new(LA_CONTEXT_CACHE_SIZE).unwrap());
 
-            for work in rx {
-                let selected_la_ctx = match work.context {
-                    AuthContext::WithContext(ref key) => {
-                        log::debug!("Running auth work with context {key}");
-                        la_cache
-                            .get_or_insert(key.clone(), || unsafe { LAContext::new() })
-                            .clone()
+            for msg in rx {
+                match msg {
+                    AuthMessage::Invalidate(reply) => {
+                        log::debug!("Invalidating all LAContext instances");
+                        thread_la_context = unsafe {
+                            let ctx = LAContext::new();
+                            ctx.setTouchIDAuthenticationAllowableReuseDuration(
+                                TOUCH_ID_REUSE_DURATION_SECS,
+                            );
+                            ctx
+                        };
+                        la_cache.clear();
+                        let _ = reply.send(());
                     },
-                    AuthContext::SharedThreadLocal => thread_la_context.clone(),
-                    AuthContext::OneTime => unsafe { LAContext::new() },
-                };
-                match authenticate(selected_la_ctx.clone(), work.auth) {
-                    Ok(_) => {
-                        log::debug!("Authentication successful for context {:?}", work.context);
-                        let _ = work.auth_reply.send(Ok(()));
-                        (work.work)(selected_la_ctx);
-                    },
-                    Err(e) => {
-                        log::error!("Authentication failed for context {:?}: {e}", work.context);
-                        let _ = work.auth_reply.send(Err(e));
-                        continue;
+                    AuthMessage::Work(work) => {
+                        let selected_la_ctx = match work.context {
+                            AuthContext::WithContext(ref key) => {
+                                log::debug!("Running auth work with context {key}");
+                                la_cache
+                                    .get_or_insert(key.clone(), || unsafe { LAContext::new() })
+                                    .clone()
+                            },
+                            AuthContext::SharedThreadLocal => thread_la_context.clone(),
+                            AuthContext::OneTime => unsafe { LAContext::new() },
+                        };
+                        match authenticate(selected_la_ctx.clone(), work.auth) {
+                            Ok(_) => {
+                                log::debug!(
+                                    "Authentication successful for context {:?}",
+                                    work.context
+                                );
+                                let _ = work.auth_reply.send(Ok(()));
+                                (work.work)(selected_la_ctx);
+                            },
+                            Err(e) => {
+                                log::error!(
+                                    "Authentication failed for context {:?}: {e}",
+                                    work.context
+                                );
+                                let _ = work.auth_reply.send(Err(e));
+                                continue;
+                            },
+                        }
                     },
                 }
             }
@@ -156,11 +184,22 @@ where
     AUTH_THREAD
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .send(work)
+        .send(AuthMessage::Work(work))
         .expect("shared-auth thread stopped");
 
     auth_rx.recv().expect("shared-auth thread stopped")?;
     Ok(reply_rx.recv().expect("shared-auth thread stopped"))
+}
+
+/// Invalidate all cached LAContext instances, requiring re-authentication.
+pub fn invalidate_auth() {
+    let (tx, rx) = mpsc::channel();
+    AUTH_THREAD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(AuthMessage::Invalidate(tx))
+        .expect("shared-auth thread stopped");
+    rx.recv().expect("shared-auth thread stopped");
 }
 
 pub fn sign_with_managed_key(managed_key_label: &str, data: &[u8]) -> Result<Signature, String> {

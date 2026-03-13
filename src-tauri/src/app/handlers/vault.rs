@@ -12,6 +12,7 @@ pub mod delete_vault;
 pub mod get_decrypted_credential;
 pub mod get_vault;
 pub mod schemas;
+pub mod unlock_vault;
 pub mod update_vault;
 
 pub fn with_unlocked_vault<F, R>(

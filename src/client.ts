@@ -114,6 +114,14 @@ export const listPasswords = async (): Promise<PasswordEntry[]> => {
   return await invoke<PasswordEntry[]>('list_passwords');
 };
 
+export const unlockApp = async (): Promise<void> => {
+  return await invoke<void>('unlock_axo');
+};
+
+export const lockApp = async (): Promise<void> => {
+  return await invoke<void>('lock_axo');
+};
+
 export const getVault = async (vaultKey?: string): Promise<VaultResponse> => {
   return await invoke<VaultResponse>('get_vault', {
     request: {vault_key: vaultKey},

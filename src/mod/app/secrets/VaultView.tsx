@@ -20,7 +20,6 @@ import {
 } from '@/mod/app/secrets/VaultView/AddVaultDialog';
 import {CombinedList} from '@/mod/app/secrets/VaultView/CombinedList';
 import {SecretsList} from '@/mod/app/secrets/VaultView/SecretsList';
-
 type Props = {
   vaultKey: string;
 };
@@ -36,22 +35,7 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
 
   const showAllVaults = vaultKey === 'all';
 
-  React.useEffect(() => {
-    const reload = async () => {
-      try {
-        if (showAllVaults) {
-          await vaultStore.reloadAll();
-        } else {
-          await vaultStore.reload(vaultKey);
-        }
-      } catch (error) {
-        errorDialog.showError(null, String(error));
-      }
-    };
-    reload();
-  }, []);
-
-  if (vaultStore.vaults.size === 0) {
+  if (vaultStore.vaultKeys.length === 0) {
     return (
       <>
         <DashboardContentHeader
@@ -75,7 +59,6 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
             try {
               await vaultStore.addVault(name, key);
               await vaultStore.reload(key);
-              // navigate to the new vault
               navigate(key);
             } catch (error) {
               errorDialog.showError(null, String(error));

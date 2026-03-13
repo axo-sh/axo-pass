@@ -3,6 +3,7 @@ import {getMode} from '@/client';
 import {ErrorDialogProvider} from '@/components/ErrorDialog';
 import {Layout} from '@/layout/Layout';
 import {Dashboard} from '@/mod/app/components/Dashboard/Dashboard';
+import {LockStore, LockStoreContext} from '@/mod/app/mobx/LockStore';
 import {VaultStore, VaultStoreContext} from '@/mod/app/mobx/VaultStore';
 import {GpgPinentryScreen} from '@/mod/gpg-pinentry/GpgPinentryScreen';
 import {SshAskpassScreen} from '@/mod/ssh-askpass/SshAskpassScreen';
@@ -16,6 +17,7 @@ import {AppRouter} from '@/mod/app/AppRouter';
 const App: React.FC = () => {
   const [mode, setMode] = React.useState<AppModeAndState | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [lockStore] = React.useState(() => new LockStore());
   const [vaultStore] = React.useState(() => new VaultStore());
 
   React.useEffect(() => {
@@ -63,11 +65,13 @@ const App: React.FC = () => {
   // Main app mode
   return (
     <ErrorDialogProvider>
-      <VaultStoreContext.Provider value={vaultStore}>
-        <Dashboard>
-          <AppRouter />
-        </Dashboard>
-      </VaultStoreContext.Provider>
+      <LockStoreContext.Provider value={lockStore}>
+        <VaultStoreContext.Provider value={vaultStore}>
+          <Dashboard>
+            <AppRouter />
+          </Dashboard>
+        </VaultStoreContext.Provider>
+      </LockStoreContext.Provider>
     </ErrorDialogProvider>
   );
 };
