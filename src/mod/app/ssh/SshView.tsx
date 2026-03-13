@@ -14,11 +14,8 @@ import {Flex, FlexSpacer} from '@/components/Flex';
 import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
+import {IconMessage} from '@/mod/app/components/IconMessage';
 import {type AgentFilter, useSshKeysStore} from '@/mod/app/mobx/SshKeysStore';
-import {
-  emptyVault,
-  emptyVaultIcon,
-} from '@/mod/app/secrets/VaultView/SecretsList/EmptyVaultMessage.css';
 import {SshAgentCard} from '@/mod/app/ssh/SshView/SshAgentCard';
 import {sshKeyDetail, sshKeyName, sshKeyRow, sshKeyTable, tag} from '@/mod/app/ssh/SshView.css';
 import {secretItemDesc} from '@/styles/secrets.css';
@@ -94,13 +91,9 @@ export const SshView = observer(() => {
             ))}
           </div>
         ) : (
-          // todo: refactor this and <EmptyVaultMessage />
-          <div className={emptyVault}>
-            <div className={emptyVaultIcon}>
-              <IconCircleOff size={36} />
-            </div>
-            <div>{filter === 'all' ? 'No SSH keys found.' : `No ${filter} keys found.`}</div>
-          </div>
+          <IconMessage icon={IconCircleOff}>
+            {filter === 'all' ? 'No SSH keys found.' : `No ${filter} keys found.`}
+          </IconMessage>
         )}
       </Flex>
     </>

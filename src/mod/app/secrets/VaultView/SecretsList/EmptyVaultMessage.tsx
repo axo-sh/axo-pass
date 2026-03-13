@@ -1,17 +1,7 @@
 import {IconCircleOff} from '@tabler/icons-react';
 
-import {
-  emptyVault,
-  emptyVaultIcon,
-} from '@/mod/app/secrets/VaultView/SecretsList/EmptyVaultMessage.css';
+import {IconMessage} from '@/mod/app/components/IconMessage';
 
 export const EmptyVaultMessage: React.FC = () => {
-  return (
-    <div className={emptyVault}>
-      <div className={emptyVaultIcon}>
-        <IconCircleOff size={36} />
-      </div>
-      <div>Vault is empty.</div>
-    </div>
-  );
+  return <IconMessage icon={IconCircleOff}>Vault is empty.</IconMessage>;
 };
