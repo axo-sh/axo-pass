@@ -46,12 +46,12 @@ export class VaultStore {
   }
 
   async reloadAll() {
-    this.vaultKeys = [];
     await this.loadVaultKeys();
     for (const {key} of this.vaultKeys) {
       await this.reload(key);
     }
   }
+
   async reload(vaultKey: string) {
     const {vault} = await getVault(vaultKey);
     const existingVault = this.vaults.get(vault.key);
