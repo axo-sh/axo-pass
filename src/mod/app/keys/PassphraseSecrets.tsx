@@ -47,12 +47,7 @@ export const PassphraseSecrets: React.FC = () => {
   }
 
   if (!ready) {
-    return (
-      <>
-        <PassphraseSecretsHeader />
-        <p>Loading passphrases...</p>
-      </>
-    );
+    return <PassphraseSecretsHeader />;
   }
 
   if (result === null || result.length === 0) {
