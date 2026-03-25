@@ -142,7 +142,7 @@ impl PasswordEntry {
             AuthMethod::AccessControl {
                 access_control: AccessControl::GenericPassword,
                 operation: LAAccessControlOperation::UseItem,
-                reason: "unlock keychain to list passwords".to_string(),
+                reason: "unlock to list passwords".to_string(),
             },
             |la_context| {
                 let passwords = GenericPasswordQuery::build()
@@ -180,6 +180,7 @@ impl PasswordEntry {
                 Ok(false)
             },
             Err(KeychainError::ItemNotAccessible) => {
+                // entry exists but we have not unlocked it
                 log::debug!("{account}: Found entry but not accessible");
                 Ok(true)
             },
@@ -225,7 +226,7 @@ impl PasswordEntry {
             AuthMethod::AccessControl {
                 access_control: AccessControl::GenericPassword,
                 operation: LAAccessControlOperation::UseItem,
-                reason: format!("unlock keychain to access password for {account}"),
+                reason: format!("unlock to access password for {account}"),
             },
             move |la_context| {
                 GenericPasswordQuery::build()

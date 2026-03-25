@@ -6,7 +6,7 @@ pub async fn unlock_axo() -> Result<(), String> {
     run_on_auth_thread(
         AuthContext::SharedThreadLocal,
         AuthMethod::Policy {
-            reason: "unlock Axo".to_string(),
+            reason: "unlock".to_string(),
         },
         |_| {},
     )
