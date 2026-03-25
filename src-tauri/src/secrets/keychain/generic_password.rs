@@ -16,7 +16,7 @@ use objc2_security::{
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use crate::core::auth::{AuthContext, AuthMethod, run_local_onetime, run_on_auth_thread};
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
@@ -161,13 +161,12 @@ impl PasswordEntry {
 
     pub fn exists(&self) -> Result<bool, KeychainError> {
         let account = self.account();
-        let res = run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
+        let res = run_local_onetime(move |la_context| {
             GenericPasswordQuery::build()
                 .with_account(&account)
                 .without_authentication()
                 .one(la_context)
-        })
-        .flatten();
+        });
 
         // account was moved in the loop, so get a new clone
         let account = self.account();

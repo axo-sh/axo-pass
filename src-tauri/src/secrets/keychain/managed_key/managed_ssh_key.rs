@@ -11,7 +11,7 @@ use ssh_key::public::KeyData;
 use ssh_key::{Mpint, Signature};
 use uuid::Uuid;
 
-use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use crate::core::auth::run_local_onetime;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
@@ -129,10 +129,7 @@ impl ManagedSshKey {
 
     pub fn find(label: &str) -> Result<Option<ManagedSshKey>, KeychainError> {
         let label = label.to_string();
-        run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
-            Self::find_with_la_context(&label, la_context)
-        })
-        .flatten()
+        run_local_onetime(move |la_context| Self::find_with_la_context(&label, la_context))
     }
 
     pub fn find_with_la_context(
@@ -181,13 +178,11 @@ impl ManagedSshKey {
     }
 
     pub fn list() -> Result<Vec<ManagedSshKey>, anyhow::Error> {
-        let managed_keys =
-            run_on_auth_thread(AuthContext::OneTime, AuthMethod::None, move |la_context| {
-                ManagedKeyQuery::build()
-                    .with_key_class(KeyClass::Private)
-                    .list(la_context)
-            })
-            .flatten()?;
+        let managed_keys = run_local_onetime(move |la_context| {
+            ManagedKeyQuery::build()
+                .with_key_class(KeyClass::Private)
+                .list(la_context)
+        })?;
 
         let mut out = Vec::new();
         for managed_key in managed_keys {

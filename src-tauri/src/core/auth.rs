@@ -191,6 +191,17 @@ where
     Ok(reply_rx.recv().expect("shared-auth thread stopped"))
 }
 
+pub fn run_local_onetime<F, R>(work_fn: F) -> R
+where
+    F: FnOnce(Retained<LAContext>) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    // alternative to running on shared thread with AuthContext::OneTime,
+    // AuthMethod::None
+    let la_context = unsafe { LAContext::new() };
+    work_fn(la_context)
+}
+
 /// Invalidate all cached LAContext instances, requiring re-authentication.
 pub fn invalidate_auth() {
     let (tx, rx) = mpsc::channel();
