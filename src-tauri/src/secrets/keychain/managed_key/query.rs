@@ -8,7 +8,7 @@ use objc2_security::{
 };
 
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::keychain::managed_key::shared::KeyClass;
 
@@ -36,7 +36,7 @@ impl ManagedKeyQuery {
     }
 }
 
-impl KeyChainQuery for ManagedKeyQuery {
+impl KeychainQuery for ManagedKeyQuery {
     type Item = ManagedKey;
 
     fn parse_result(&self, cf_type: &CFType) -> Result<Self::Item, KeychainError> {

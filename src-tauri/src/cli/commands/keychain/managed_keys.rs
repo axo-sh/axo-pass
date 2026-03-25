@@ -2,7 +2,7 @@ use anyhow::{Context, anyhow};
 use color_print::cprintln;
 
 use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{self, ManagedKeyQuery, ManagedSshKey};
 
 pub async fn cmd_list_managed_keys() {

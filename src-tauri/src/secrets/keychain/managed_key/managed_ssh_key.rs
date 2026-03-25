@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, get_ssh_dir};
 

@@ -12,7 +12,7 @@ use objc2_security::{
 use secrecy::SecretString;
 
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 
 pub struct GenericPassword {
     pub account: String,
@@ -58,7 +58,7 @@ impl GenericPasswordQuery {
         }
     }
 }
-impl KeyChainQuery for GenericPasswordQuery {
+impl KeychainQuery for GenericPasswordQuery {
     type Item = GenericPassword;
 
     fn parse_result(&self, cf_type: &CFType) -> Result<Self::Item, KeychainError> {

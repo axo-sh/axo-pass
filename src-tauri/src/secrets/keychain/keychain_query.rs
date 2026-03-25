@@ -11,7 +11,7 @@ use objc2_security::{
 
 use crate::secrets::keychain::errors::KeychainError;
 
-pub trait KeyChainQuery {
+pub trait KeychainQuery {
     type Item;
 
     fn parse_result(&self, result: &CFType) -> Result<Self::Item, KeychainError>;

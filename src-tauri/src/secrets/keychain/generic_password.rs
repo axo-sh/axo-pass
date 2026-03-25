@@ -20,7 +20,7 @@ use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 
 static SERVICE_NAME: &str = "com.breakfastlabs.frittata";
 

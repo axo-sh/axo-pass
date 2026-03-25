@@ -6,7 +6,7 @@ use secrecy::{SecretBox, SecretString};
 use url::Url;
 
 use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
-use crate::secrets::keychain::keychain_query::KeyChainQuery;
+use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
