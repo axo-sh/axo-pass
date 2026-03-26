@@ -198,8 +198,11 @@ where
 {
     // alternative to running on shared thread with AuthContext::OneTime,
     // AuthMethod::None
-    let la_context = unsafe { LAContext::new() };
-    work_fn(la_context)
+    unsafe {
+        let la_context = LAContext::new();
+        la_context.setInteractionNotAllowed(true);
+        work_fn(la_context)
+    }
 }
 
 /// Invalidate all cached LAContext instances, requiring re-authentication.
