@@ -26,7 +26,7 @@ pub async fn list_passwords() -> Result<Vec<PasswordEntry>, AppError> {
 #[cfg(not(debug_assertions))]
 #[tauri::command]
 pub async fn list_passwords() -> Result<Vec<PasswordEntry>, AppError> {
-    let passwords = PasswordEntry::list()?.error_context("Failed to list password entries.")?;
+    let passwords = PasswordEntry::list().error_context("Failed to list password entries.")?;
     Ok(passwords)
 }
 
