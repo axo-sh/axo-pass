@@ -5,7 +5,7 @@ use std::{fs, io};
 use secrecy::{SecretBox, SecretString};
 use url::Url;
 
-use crate::core::auth::{AuthContext, AuthMethod, check_auth, run_on_auth_thread};
+use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
@@ -87,15 +87,7 @@ impl VaultWrapper {
     }
 
     pub fn unlock(&mut self) -> Result<(), Error> {
-        if matches!(self.state, VaultState::Unlocked { .. }) {
-            // Also verify auth is still valid, because unlocked vaults stay cached and we
-            // want to ensure the user still has a valid auth session
-            if let Err(err) = check_auth() {
-                log::debug!("Vault unlocked but auth is invalid: {err}");
-                return Err(Error::VaultLocked);
-            };
-            return Ok(());
-        }
+        // note: does not check if the LAContext is still valid
         let encrypted_vault = EncryptedVault::load(&self.path)?;
         let managed_key = get_vault_encryption_key()?;
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)

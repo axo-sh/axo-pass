@@ -216,7 +216,7 @@ where
 /// Verify that the user is still authenticated. Returns Ok(()) if auth is
 /// still valid, or Err if it has expired (which also invalidates cached
 /// contexts).
-pub fn check_auth() -> Result<(), KeychainError> {
+pub fn check_auth_still_valid() -> Result<(), KeychainError> {
     // todo: handle the case where we call this as the initial auth check -
     // we shouldn't prompt for auth, we should only be checking if an existing auth
     // is still valid

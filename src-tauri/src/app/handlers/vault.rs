@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
+use crate::core::auth::check_auth_still_valid;
 use crate::secrets::vaults::VaultWrapper;
 
 pub mod add_or_update_credential;
@@ -23,6 +24,8 @@ pub fn with_unlocked_vault<F, R>(
 where
     F: FnOnce(&mut VaultWrapper) -> Result<R, AppError>,
 {
+    // check the LAContext is still valid
+    check_auth_still_valid()?;
 
     // get the vault wrapper
     let mut guard = state.lock()?;
