@@ -105,6 +105,20 @@ impl VaultWrapper {
         Ok(())
     }
 
+    fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
+        match &self.state {
+            VaultState::Unlocked { vault } => Ok(vault),
+            VaultState::Locked { .. } => Err(Error::VaultLocked),
+        }
+    }
+
+    fn get_unlocked_vault_mut(&mut self) -> Result<&mut Vault, Error> {
+        match &mut self.state {
+            VaultState::Unlocked { vault } => Ok(vault),
+            VaultState::Locked { .. } => Err(Error::VaultLocked),
+        }
+    }
+
     pub fn save(&self) -> Result<(), Error> {
         let Some(vault_dir) = self.path.parent() else {
             return Err(Error::VaultDirCreateError(io::Error::new(
@@ -113,9 +127,7 @@ impl VaultWrapper {
             )));
         };
 
-        let VaultState::Unlocked { vault } = &self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault()?;
         let encrypted_vault = vault.into_encrypted()?;
         let vault_data = serde_json::to_string_pretty(&encrypted_vault)
             .map_err(Error::VaultSerializationError)?;
@@ -154,24 +166,18 @@ impl VaultWrapper {
     }
 
     pub fn set_vault_name(&mut self, new_name: String) -> Result<(), Error> {
-        let VaultState::Unlocked { vault, .. } = &mut self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault_mut()?;
         vault.name = Some(new_name);
         Ok(())
     }
 
     pub fn list_items(&self) -> Result<Vec<&VaultItemOverview>, Error> {
-        let VaultState::Unlocked { vault, .. } = &self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault()?;
         Ok(vault.list_items())
     }
 
     pub fn get_item_overview(&self, item_key: &str) -> Result<Option<&VaultItemOverview>, Error> {
-        let VaultState::Unlocked { vault, .. } = &self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault()?;
         match vault.get_item(item_key) {
             Ok(item) => Ok(Some(item)),
             Err(Error::InvalidItemKey(_)) => Ok(None),
@@ -187,16 +193,12 @@ impl VaultWrapper {
         item_key: &str,
         item_title: &str,
     ) -> Result<&VaultItemOverview, Error> {
-        let VaultState::Unlocked { vault, .. } = &mut self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault_mut()?;
         vault.add_or_update_item(item_key, item_title)
     }
 
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
-        let VaultState::Unlocked { vault, .. } = &mut self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item(item_key)
     }
 
@@ -207,9 +209,7 @@ impl VaultWrapper {
         cred_title: &str,
         cred_value: SecretString,
     ) -> Result<(), Error> {
-        let VaultState::Unlocked { vault } = &mut self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault_mut()?;
         vault.add_or_update_item_credential(item_key, cred_key, cred_title, cred_value)?;
         Ok(())
     }
@@ -219,9 +219,7 @@ impl VaultWrapper {
         item_key: &str,
         cred_key: &str,
     ) -> Result<Option<SecretBox<String>>, Error> {
-        let VaultState::Unlocked { vault } = &self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault()?;
         vault.get_item_credential_secret(item_key, cred_key)
     }
 
@@ -244,9 +242,7 @@ impl VaultWrapper {
         item_key: &str,
         credential_key: &str,
     ) -> Result<Option<&VaultItemCredentialOverview>, Error> {
-        let VaultState::Unlocked { vault, .. } = &self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault()?;
         match vault.get_item_credential(item_key, credential_key) {
             Ok(cred) => Ok(Some(cred)),
             Err(Error::InvalidCredentialKey(_)) | Err(Error::InvalidItemKey(_)) => Ok(None),
@@ -255,9 +251,7 @@ impl VaultWrapper {
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
-        let VaultState::Unlocked { vault, .. } = &mut self.state else {
-            return Err(Error::VaultLocked);
-        };
+        let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item_credential(item_key, cred_key)
     }
 }
