@@ -31,6 +31,8 @@ pub fn create_la_auth_callback() -> (
             );
             let err = match LAError(err.code()) {
                 LAError::UserCancel => KeychainError::UserCancelled,
+                // cause: context has been invalidated
+                LAError::InvalidContext => KeychainError::AuthenticationExpired,
                 _ => anyhow!("Failed to authenticate with LAContext: {err:?}").into(),
             };
             let _ = tx.send(Err(err));

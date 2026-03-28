@@ -64,11 +64,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
         .name("shared-auth".into())
         .spawn(move || {
             // Shared LAContext for the thread; allows reuse.
-            let mut thread_la_context = unsafe {
-                let ctx = LAContext::new();
-                ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
-                ctx
-            };
+            let mut thread_la_context = init_shared_la_context();
 
             // Cache of keyed contexts
             let mut la_cache: LruCache<String, Retained<LAContext>> =
@@ -78,13 +74,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                 match msg {
                     AuthMessage::Invalidate(reply) => {
                         log::debug!("Invalidating all LAContext instances");
-                        thread_la_context = unsafe {
-                            let ctx = LAContext::new();
-                            ctx.setTouchIDAuthenticationAllowableReuseDuration(
-                                TOUCH_ID_REUSE_DURATION_SECS,
-                            );
-                            ctx
-                        };
+                        thread_la_context = init_shared_la_context();
                         la_cache.clear();
                         let _ = reply.send(());
                     },
@@ -101,12 +91,22 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                         };
                         match authenticate(selected_la_ctx.clone(), work.auth) {
                             Ok(_) => {
-                                log::debug!(
-                                    "Authentication successful for context {:?}",
-                                    work.context
-                                );
+                                log::debug!("Authentication successful ({:?})", work.context);
                                 let _ = work.auth_reply.send(Ok(()));
                                 (work.work)(selected_la_ctx);
+                            },
+                            Err(KeychainError::AuthenticationExpired) => {
+                                log::warn!(
+                                    "{:?} expired, invalidating all LAContext instances",
+                                    work.context
+                                );
+                                // Replace shared thread-local la context
+                                thread_la_context = init_shared_la_context();
+                                la_cache.clear();
+                                let _ = work
+                                    .auth_reply
+                                    .send(Err(KeychainError::AuthenticationExpired));
+                                continue;
                             },
                             Err(e) => {
                                 log::error!(
@@ -124,6 +124,14 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
         .expect("Failed to spawn shared-auth thread");
     Mutex::new(tx)
 });
+
+fn init_shared_la_context() -> Retained<LAContext> {
+    unsafe {
+        let ctx = LAContext::new();
+        ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
+        ctx
+    }
+}
 
 // Authenticate the LAContext using the specified method
 fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(), KeychainError> {
