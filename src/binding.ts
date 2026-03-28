@@ -48,6 +48,21 @@ export interface AddOrUpdateItemRequest {
   item_key: string;
 }
 
+export enum AppErrorType {
+  AuthenticationRequired = 'authentication_required',
+  AuthenticationFailed = 'authentication_failed',
+  AuthenticationCancelled = 'authentication_cancelled',
+  AuthenticationExpired = 'authentication_expired',
+  NotFound = 'not_found',
+  Internal = 'internal',
+  Unknown = 'unknown',
+}
+
+export interface AppError {
+  type: AppErrorType;
+  message?: string;
+}
+
 export interface AppSettingsResponse {
   helper_bin_path?: string;
   vaults_dir: string;

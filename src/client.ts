@@ -1,4 +1,6 @@
-import {invoke} from '@tauri-apps/api/core';
+import type {InvokeArgs} from '@tauri-apps/api/core';
+import {invoke as tauriInvoke} from '@tauri-apps/api/core';
+import {toast} from 'sonner';
 
 import type {
   AddManagedSshKeyResponse,
@@ -23,6 +25,28 @@ import type {
   VaultInfo,
   VaultResponse,
 } from '@/binding';
+import {AppErrorType} from '@/binding';
+import {globalLockStore} from '@/mod/app/mobx/LockStore';
+import {mapToAppError} from '@/utils/AppError';
+
+// invoke always throws an AppError
+const invoke = async <T>(cmd: string, args?: InvokeArgs): Promise<T> => {
+  try {
+    return await tauriInvoke<T>(cmd, args);
+  } catch (err) {
+    const appError = mapToAppError(err);
+    if (
+      appError.type === AppErrorType.AuthenticationExpired ||
+      appError.type === AppErrorType.AuthenticationRequired ||
+      appError.type === AppErrorType.AuthenticationCancelled ||
+      appError.type === AppErrorType.AuthenticationFailed
+    ) {
+      toast.error('Authentication required. Please unlock the app to continue.');
+      globalLockStore.lock();
+    }
+    throw appError;
+  }
+};
 
 // Common password request structure (used by both pinentry and SSH askpass)
 export type PasswordRequestData = {

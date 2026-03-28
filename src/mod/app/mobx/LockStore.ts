@@ -1,5 +1,3 @@
-import React from 'react';
-
 import {listen} from '@tauri-apps/api/event';
 import {action, makeObservable, observable, runInAction} from 'mobx';
 
@@ -35,12 +33,4 @@ export class LockStore {
   }
 }
 
-export const LockStoreContext = React.createContext<LockStore | null>(null);
-
-export const useLockStore = (): LockStore => {
-  const store = React.useContext(LockStoreContext);
-  if (!store) {
-    throw new Error('LockStore not found in context');
-  }
-  return store;
-};
+export const globalLockStore = new LockStore();

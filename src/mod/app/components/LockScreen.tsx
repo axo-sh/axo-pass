@@ -4,6 +4,8 @@ import {IconLock} from '@tabler/icons-react';
 
 import {Button} from '@/components/Button';
 import {IconMessage} from '@/mod/app/components/IconMessage';
+import {lockScreen} from '@/mod/app/components/LockScreen.css';
+import {globalLockStore} from '@/mod/app/mobx/LockStore';
 
 type Props = {
   onUnlock: () => Promise<void>;
@@ -11,28 +13,26 @@ type Props = {
 
 export const LockScreen: React.FC<Props> = ({onUnlock}) => {
   const [unlocking, setUnlocking] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
 
   const handleUnlock = async () => {
     setUnlocking(true);
-    setError(null);
     try {
+      await globalLockStore.unlock();
       await onUnlock();
-    } catch (e) {
-      // todo: hide if "User cancelled the keychain access"
-      setError(String(e));
     } finally {
+      // error is shown in a toast
       setUnlocking(false);
     }
   };
 
   return (
-    <IconMessage icon={IconLock}>
-      <p>Axo is locked.</p>
-      {error && <p>{error}</p>}
-      <Button size="large" onClick={handleUnlock} disabled={unlocking}>
-        {unlocking ? 'Unlocking...' : 'Unlock'}
-      </Button>
-    </IconMessage>
+    <div className={lockScreen}>
+      <IconMessage icon={IconLock} stroke={1.5}>
+        <p>Axo is locked.</p>
+        <Button variant="rounded" size="large" onClick={handleUnlock} disabled={unlocking}>
+          {unlocking ? 'Unlocking...' : 'Unlock'}
+        </Button>
+      </IconMessage>
+    </div>
   );
 };

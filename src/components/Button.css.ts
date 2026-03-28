@@ -70,6 +70,10 @@ const buttonVariants = styleVariants({
     vars: errorScheme,
     background: colorVar.base,
   },
+  rounded: {
+    vars: accentScheme,
+    borderRadius: 9999,
+  },
   secondaryError: {
     borderColor: colorVar.light20,
     ':hover': {
