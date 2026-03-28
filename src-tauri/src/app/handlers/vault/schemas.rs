@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::secrets::vaults::{VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
+use crate::secrets::vaults::{Error, VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
 
 // VaultSchema is the serialized form of VaultWrapper, with decrypted item
 // titles and credential titles, but without credential values. Used for sending
@@ -19,10 +19,8 @@ pub struct VaultSchema {
 }
 
 impl VaultWrapper {
-    pub fn to_schema(&self) -> Result<VaultSchema, String> {
-        let items = self
-            .list_items()
-            .map_err(|e| format!("Failed to decrypt vault items: {e}"))?;
+    pub fn to_schema(&self) -> Result<VaultSchema, Error> {
+        let items = self.list_items()?;
         Ok(VaultSchema {
             key: self.key.clone(),
             name: self.vault_name().map(|s| s.to_string()),

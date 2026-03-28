@@ -4,6 +4,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize)]
@@ -17,9 +18,9 @@ pub struct DeleteItemRequest {
 pub fn delete_item(
     request: DeleteItemRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     with_unlocked_vault(&state, &request.vault_key, |vw| {
         vw.delete_item(&request.item_key)
-            .map_err(|e| format!("Failed to delete credential: {e}"))
+            .error_context("Failed to delete item.")
     })
 }

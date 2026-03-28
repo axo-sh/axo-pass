@@ -4,6 +4,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize)]
@@ -20,7 +21,7 @@ pub struct AddOrUpdateCredentialRequest {
 pub async fn add_or_update_credential(
     request: AddOrUpdateCredentialRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let AddOrUpdateCredentialRequest {
         vault_key,
         item_key,
@@ -31,6 +32,6 @@ pub async fn add_or_update_credential(
 
     with_unlocked_vault(&state, &vault_key, |vw| {
         vw.add_secret(&item_key, &credential_key, &title, value.into())
-            .map_err(|e| format!("Failed to add/update credential: {e}"))
+            .error_context("Failed to add/update credential.")
     })
 }

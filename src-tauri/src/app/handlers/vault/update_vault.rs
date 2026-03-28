@@ -4,6 +4,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::app_state::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 
 #[derive(Deserialize, Debug)]
 #[typeshare]
@@ -17,11 +18,11 @@ pub struct UpdateVaultRequest {
 pub async fn update_vault(
     state: tauri::State<'_, Mutex<AppState>>,
     request: UpdateVaultRequest,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     // note: updating the vault doesn't require the vault to be unlocked
     // (at least not to update the vault key or name), so we don't use
     // with_unlocked_vault here
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock()?;
     let vw = state.vaults.get_vault_mut(&request.vault_key)?;
 
     if request.new_name.as_deref() != vw.vault_name()
@@ -38,7 +39,7 @@ pub async fn update_vault(
         state
             .vaults
             .update_vault_key(&request.vault_key, &new_vault_key)
-            .map_err(|e| format!("Failed to update vault key in manager: {}", e))?;
+            .error_context("Failed to update vault key.")?;
     }
 
     Ok(())

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::with_unlocked_vault;
 
 #[typeshare]
@@ -27,15 +28,14 @@ pub struct DecryptedCredential {
 pub async fn get_decrypted_credential(
     request: DecryptedCredentialRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<Option<DecryptedCredential>, String> {
+) -> Result<Option<DecryptedCredential>, AppError> {
     let (secret, title) = with_unlocked_vault(&state, &request.vault_key, |vw| {
         let credential = vw
-            .get_secret_overview(&request.item_key, &request.credential_key)
-            .map_err(|e| format!("Failed to get credential: {e}"))?
-            .ok_or("Could not find credential.".to_string())?;
+            .get_secret_overview(&request.item_key, &request.credential_key)?
+            .ok_or(AppError::internal("Could not find credential."))?;
         let secret = vw
             .get_secret(&request.item_key, &request.credential_key)
-            .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
+            .error_context("Failed to decrypt secret.")?;
         Ok((secret, credential.title.clone()))
     })?;
 

@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use typeshare::typeshare;
 
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::ssh::schema::ssh_key_entry::{SshKeyAgent, SshKeyEntry};
 use crate::cli::commands::ssh_agent::{list_axo_agent_identities, list_system_agent_identities};
 use crate::secrets::keychain::generic_password::PasswordEntry;
@@ -16,14 +19,12 @@ pub struct ListSshKeysResponse {
 }
 
 #[tauri::command]
-pub async fn list_ssh_keys() -> Result<ListSshKeysResponse, String> {
-    let mut keys_map: std::collections::HashMap<String, SshKeyEntry> =
-        std::collections::HashMap::new();
+pub async fn list_ssh_keys() -> Result<ListSshKeysResponse, AppError> {
+    let mut keys_map: HashMap<String, SshKeyEntry> = HashMap::new();
 
     // Get known system SSH keys (from .ssh)
-    let system_ssh_keys = SystemSshKey::load_from_user_ssh_dir()
-        .inspect_err(|e| log::error!("Failed to find system SSH keys: {e}"))
-        .unwrap_or_default();
+    let system_ssh_keys =
+        SystemSshKey::load_from_user_ssh_dir().error_context("Failed to find system SSH keys")?;
     for system_key in system_ssh_keys {
         let has_saved_password = system_key.has_saved_password();
         let mut key_entry: SshKeyEntry = system_key.into();
@@ -32,9 +33,8 @@ pub async fn list_ssh_keys() -> Result<ListSshKeysResponse, String> {
     }
 
     // Get managed SSH keys
-    let managed_ssh_keys = ManagedSshKey::list()
-        .inspect_err(|e| log::debug!("Failed to list managed SSH keys: {e}"))
-        .unwrap_or_default();
+    let managed_ssh_keys =
+        ManagedSshKey::list().error_context("Failed to list managed SSH keys")?;
     for managed_key in managed_ssh_keys {
         let key_entry: SshKeyEntry = managed_key.into();
         keys_map.insert(key_entry.fingerprint_sha256.clone(), key_entry);

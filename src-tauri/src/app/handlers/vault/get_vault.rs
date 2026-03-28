@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::schemas::VaultSchema;
 use crate::app::handlers::vault::with_unlocked_vault;
 use crate::secrets::vaults::DEFAULT_VAULT;
@@ -24,12 +25,15 @@ pub struct VaultResponse {
 pub async fn get_vault(
     request: GetVaultRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<VaultResponse, String> {
+) -> Result<VaultResponse, AppError> {
     log::debug!("command: get_vault");
     let vault_key = request
         .vault_key
         .unwrap_or_else(|| DEFAULT_VAULT.to_string());
-    let schema = with_unlocked_vault(&state, &vault_key, |vw| vw.to_schema())?;
+    let schema = with_unlocked_vault(&state, &vault_key, |vw| {
+        vw.to_schema()
+            .error_context("Failed to build vault schema.")
+    })?;
     Ok(VaultResponse { vault: schema })
 }
 
@@ -49,14 +53,11 @@ pub struct ListVaultsResponse {
 #[tauri::command]
 pub async fn list_vaults(
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<ListVaultsResponse, String> {
+) -> Result<ListVaultsResponse, AppError> {
     log::debug!("command: list_vaults");
-    let mut state = state
-        .lock()
-        .map_err(|e| format!("Failed to lock app state: {e}"))?;
+    let mut state = state.lock()?;
 
     let vault_keys: Vec<String> = state.vaults.iter_vault_keys().collect();
-
     let mut vaults: Vec<VaultInfo> = vault_keys
         .iter()
         .map(|k| VaultInfo {

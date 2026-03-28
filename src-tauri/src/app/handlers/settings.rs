@@ -12,7 +12,7 @@ pub struct AppSettingsResponse {
 }
 
 #[tauri::command]
-pub async fn get_app_settings() -> Result<AppSettingsResponse, String> {
+pub async fn get_app_settings() -> AppSettingsResponse {
     let helper_bin_path = current_exe()
         .inspect_err(|e| log::debug!("Failed to get app directory: {e}"))
         .ok()
@@ -21,9 +21,8 @@ pub async fn get_app_settings() -> Result<AppSettingsResponse, String> {
                 .and_then(|p| p.parent())
                 .map(|parent| parent.to_string_lossy().to_string())
         });
-
-    Ok(AppSettingsResponse {
+    AppSettingsResponse {
         helper_bin_path,
         vaults_dir: vaults_dir().to_string_lossy().to_string(),
-    })
+    }
 }

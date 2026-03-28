@@ -41,7 +41,7 @@ pub struct SshAgentStatusResponse {
 }
 
 #[tauri::command]
-pub fn get_ssh_agent_status(agent_type: SshAgentType) -> Result<SshAgentStatusResponse, String> {
+pub fn get_ssh_agent_status(agent_type: SshAgentType) -> SshAgentStatusResponse {
     let (status, socket_path) = match agent_type {
         SshAgentType::Axo => {
             let path = SshAgentServer::default_socket_path();
@@ -63,8 +63,8 @@ pub fn get_ssh_agent_status(agent_type: SshAgentType) -> Result<SshAgentStatusRe
         },
     };
 
-    Ok(SshAgentStatusResponse {
+    SshAgentStatusResponse {
         status: status.into(),
         socket_path,
-    })
+    }
 }

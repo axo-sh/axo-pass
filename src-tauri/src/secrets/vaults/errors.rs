@@ -11,6 +11,9 @@ pub enum Error {
     #[error("Vault is locked")]
     VaultLocked,
 
+    #[error("Vault unlocked but got {0}")]
+    VaultInvalidAuth(#[source] KeychainError),
+
     #[error("Failed to create vault directory: {0}")]
     VaultDirCreateError(#[source] std::io::Error),
 

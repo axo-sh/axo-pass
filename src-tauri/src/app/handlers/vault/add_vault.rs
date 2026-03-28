@@ -4,6 +4,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::get_vault::VaultResponse;
 
 #[derive(Deserialize)]
@@ -17,19 +18,15 @@ pub struct NewVaultRequest {
 pub async fn add_vault(
     request: NewVaultRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<VaultResponse, String> {
+) -> Result<VaultResponse, AppError> {
     log::debug!("command: add_vault");
-    let mut state = state
-        .lock()
-        .map_err(|e| format!("Failed to lock app state: {e}"))?;
-
+    let mut state = state.lock()?;
     let vw = state
         .vaults
         .add_vault(request.vault_name, &request.vault_key)
-        .map_err(|e| format!("Failed to create new vault: {e}"))?;
-
+        .error_context("Failed to create new vault.")?;
     let schema = vw
         .to_schema()
-        .map_err(|e| format!("Failed to build vault schema: {e}"))?;
+        .error_context("Failed to build vault schema.")?;
     Ok(VaultResponse { vault: schema })
 }

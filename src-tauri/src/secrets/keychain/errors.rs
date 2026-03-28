@@ -5,6 +5,9 @@ pub enum KeychainError {
     #[error("User cancelled the keychain access")]
     UserCancelled,
 
+    #[error("Authentication expired")]
+    AuthenticationExpired,
+
     #[error("Item exists but access is not allowed without user authentication")]
     ItemNotAccessible,
 

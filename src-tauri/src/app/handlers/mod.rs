@@ -1,3 +1,4 @@
+mod app_errors;
 pub mod gpg;
 pub mod passwords;
 pub mod settings;

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use typeshare::typeshare;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize)]
@@ -18,10 +19,10 @@ pub struct AddOrUpdateItemRequest {
 pub async fn add_or_update_item(
     request: AddOrUpdateItemRequest,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     with_unlocked_vault(&state, &request.vault_key, |vw| {
         vw.add_item(&request.item_key, &request.item_title)
-            .map_err(|e| format!("Failed to add/update item: {e}"))?;
+            .error_context("Failed to add/update item.")?;
         Ok(())
     })
 }

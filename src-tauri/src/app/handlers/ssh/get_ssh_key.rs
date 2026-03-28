@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use ssh_key::PublicKey;
 use typeshare::typeshare;
 
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 use crate::ssh::ssh_keys::SystemSshKey;
 
@@ -21,19 +22,18 @@ pub struct GetSshKeyResponse {
 }
 
 #[tauri::command]
-pub async fn get_ssh_key(request: GetSshKeyRequest) -> Result<GetSshKeyResponse, String> {
+pub async fn get_ssh_key(request: GetSshKeyRequest) -> Result<GetSshKeyResponse, AppError> {
     let fingerprint = &request.fingerprint_sha256;
 
     // Try managed SSH keys first
-    let managed_keys =
-        ManagedSshKey::list().map_err(|e| format!("Failed to list managed SSH keys: {e}"))?;
+    let managed_keys = ManagedSshKey::list().error_context("Failed to list managed SSH keys")?;
 
     for managed_key in managed_keys {
         if managed_key.fingerprint_sha256() == *fingerprint {
             let public_key_openssh =
                 PublicKey::new(managed_key.public_key().clone(), managed_key.label())
                     .to_openssh()
-                    .map_err(|e| format!("Failed to format public key: {e}"))?;
+                    .error_context("Failed to format public key")?;
 
             return Ok(GetSshKeyResponse {
                 public_key: public_key_openssh,
@@ -43,8 +43,8 @@ pub async fn get_ssh_key(request: GetSshKeyRequest) -> Result<GetSshKeyResponse,
     }
 
     // Try system SSH keys (from ~/.ssh)
-    let system_keys = SystemSshKey::load_from_user_ssh_dir()
-        .map_err(|e| format!("Failed to load system SSH keys: {e}"))?;
+    let system_keys =
+        SystemSshKey::load_from_user_ssh_dir().error_context("Failed to load system SSH keys")?;
 
     for system_key in system_keys {
         if system_key.fingerprint_sha256 == *fingerprint {
@@ -53,10 +53,12 @@ pub async fn get_ssh_key(request: GetSshKeyRequest) -> Result<GetSshKeyResponse,
                 public_key: system_key
                     .public_key
                     .to_openssh()
-                    .map_err(|e| format!("Failed to format public key: {e}"))?,
+                    .error_context("Failed to format public key")?,
             });
         }
     }
 
-    Err("SSH key not found".to_string())
+    Err(AppError::not_found(&format!(
+        "SSH key {fingerprint} not found"
+    )))
 }

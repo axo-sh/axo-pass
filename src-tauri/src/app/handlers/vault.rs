@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use crate::app::AppState;
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::secrets::vaults::VaultWrapper;
 
 pub mod add_or_update_credential;
@@ -19,29 +20,25 @@ pub fn with_unlocked_vault<F, R>(
     state: &tauri::State<'_, Mutex<AppState>>,
     vault_key: &str,
     f: F,
-) -> Result<R, String>
+) -> Result<R, AppError>
 where
-    F: FnOnce(&mut VaultWrapper) -> Result<R, String>,
+    F: FnOnce(&mut VaultWrapper) -> Result<R, AppError>,
 {
-    let mut guard = state
-        .lock()
-        .map_err(|e| format!("Failed to lock app state: {e}"))?;
 
+    // get the vault wrapper
+    let mut guard = state.lock()?;
     let vw = guard
         .vaults
         .get_vault_mut(vault_key)
-        .map_err(|e| format!("Failed to get vault: {e}"))?;
+        .error_context("Failed to get vault")?;
 
-    vw.unlock().map_err(|e| match e {
-        // Error::VaultLocked => "Vault is locked".to_string(),
-        other => {
-            log::debug!("Failed to unlock vault: {:?}", other);
-            "Failed to unlock vault.".to_string()
-        },
-    })?;
+    // unlock the vault
+    vw.unlock()?;
 
+    // run the provided function
     let result = f(vw)?;
-    vw.save()
-        .map_err(|e| format!("Failed to save vault: {e}"))?;
+
+    // save the vault
+    vw.save().error_context("Failed to save vault")?;
     Ok(result)
 }
