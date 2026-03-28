@@ -48,8 +48,6 @@ pub enum AuthMethod {
         operation: LAAccessControlOperation,
         reason: String,
     },
-    /// Skip authentication
-    None,
 }
 
 // Store up to 16 LAContext instances for reuse.
@@ -157,10 +155,6 @@ fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(
                 &callback,
             );
         },
-        AuthMethod::None => {
-            unsafe { la_context.setInteractionNotAllowed(true) };
-            return Ok(());
-        },
     }
 
     match rx.recv() {
@@ -205,7 +199,7 @@ where
     R: Send + 'static,
 {
     // alternative to running on shared thread with AuthContext::OneTime,
-    // AuthMethod::None
+    // sort of AuthMethod::None
     unsafe {
         let la_context = LAContext::new();
         la_context.setInteractionNotAllowed(true);
