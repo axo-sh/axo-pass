@@ -20,6 +20,7 @@ import {
 } from '@/mod/app/secrets/VaultView/AddVaultDialog';
 import {CombinedList} from '@/mod/app/secrets/VaultView/CombinedList';
 import {SecretsList} from '@/mod/app/secrets/VaultView/SecretsList';
+
 type Props = {
   vaultKey: string;
 };

@@ -1,4 +1,3 @@
-import {observer} from 'mobx-react';
 import {Redirect, Route, Switch} from 'wouter';
 
 import {LockGuard} from '@/mod/app/components/LockGuard';
