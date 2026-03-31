@@ -72,7 +72,7 @@ pub fn delete_recipient(recipient: &str) -> Result<(), AgeError> {
         .map_err(|e| AgeError::FailedToDeleteRecipient(recipient.to_owned(), e))
 }
 
-fn resolve_recipient(recipient: &str) -> Result<age::x25519::Recipient, AgeError> {
+pub fn resolve_recipient(recipient: &str) -> Result<age::x25519::Recipient, AgeError> {
     let recipient = recipient.to_owned();
     if recipient.starts_with("age1") {
         recipient

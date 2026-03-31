@@ -1,5 +1,6 @@
 mod errors;
 mod vault;
+pub mod vault_export;
 mod vault_wrapper;
 mod vaults_manager;
 

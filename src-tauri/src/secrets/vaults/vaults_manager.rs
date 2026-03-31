@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,6 +8,7 @@ use secrecy::ExposeSecret;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::vault_export::{ImportIdentity, import_vault};
 use crate::secrets::vaults::vault_wrapper::{VaultWrapper, get_vault_encryption_key};
 
 #[derive(Default)]
@@ -91,6 +92,25 @@ impl VaultsManager {
         }
 
         vaults
+    }
+
+    pub fn import_vault<P: AsRef<Path>>(
+        &mut self,
+        import_path: P,
+        identity: ImportIdentity,
+        vault_key: Option<String>,
+    ) -> Result<&VaultWrapper, Error> {
+        let vw = import_vault(import_path, identity, &self.vaults_dir, vault_key)?;
+
+        let vault_key = vw.key.clone();
+        if self.vaults.contains_key(&vault_key) {
+            return Err(Error::InvalidVaultKey(format!(
+                "A vault with key '{vault_key}' already exists"
+            )));
+        }
+
+        self.vaults.insert(vault_key.clone(), vw);
+        Ok(self.vaults.get(&vault_key).unwrap())
     }
 
     pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {

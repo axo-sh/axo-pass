@@ -16,6 +16,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{EncryptedVault, VaultFileKey};
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
+use crate::secrets::vaults::vault_export::{ExportMode, ExportedVault};
 use crate::secrets::vaults::vault_wrapper::normalized_key;
 
 type ItemId = Uuid;
@@ -56,7 +57,7 @@ impl Vault {
         );
 
         // wrap actual key in VaultCipher to simplify operations
-        let cipher = VaultCipher::new(Aes256Gcm::new(&actual_file_key), vault_id);
+        let cipher = VaultCipher::new_with_bytes(&actual_file_key, vault_id);
 
         Ok(Self {
             id: vault_id,
@@ -175,6 +176,22 @@ impl Vault {
         }
 
         Ok(vault)
+    }
+
+    pub fn into_export(
+        &self,
+        key: Option<String>,
+        export_mode: ExportMode,
+    ) -> Result<ExportedVault, Error> {
+        let encrypted_vault = self.into_encrypted()?;
+        let age_file_key = self.cipher.wrap_file_key_for_export(export_mode)?;
+        Ok(ExportedVault {
+            id: encrypted_vault.id,
+            name: encrypted_vault.name,
+            default_key: key,
+            age_file_key,
+            items: encrypted_vault.items,
+        })
     }
 
     pub fn list_items(&self) -> Vec<&VaultItemOverview> {

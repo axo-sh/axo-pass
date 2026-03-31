@@ -73,6 +73,12 @@ pub enum Error {
 
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
+
+    #[error("Failed to export vault: {0}")]
+    VaultExportError(String),
+
+    #[error("Failed to import vault: {0}")]
+    VaultImportError(String),
 }
 
 impl From<Error> for String {

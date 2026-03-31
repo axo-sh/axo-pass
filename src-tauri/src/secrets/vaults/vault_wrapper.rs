@@ -11,6 +11,7 @@ use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuer
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{Vault, VaultItemCredentialOverview, VaultItemOverview};
+use crate::secrets::vaults::vault_export::ExportMode;
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -245,6 +246,16 @@ impl VaultWrapper {
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item_credential(item_key, cred_key)
+    }
+
+    pub fn export(&self, path: &Path, export_mode: ExportMode) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault()?;
+        let vault_key = (self.key != DEFAULT_VAULT).then(|| self.key.clone());
+        let exported = vault.into_export(vault_key, export_mode)?;
+        let json =
+            serde_json::to_string_pretty(&exported).map_err(Error::VaultSerializationError)?;
+        fs::write(path, json).map_err(Error::VaultWriteError)?;
+        Ok(())
     }
 }
 

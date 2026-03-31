@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use aes_gcm::aead::KeyInit;
-use aes_gcm::{Aes256Gcm, Key};
 use serde::{Deserialize, Serialize};
 use serde_with::base64::Base64;
 use serde_with::serde_as;
@@ -56,9 +54,8 @@ impl EncryptedVault {
         // try all candidate keys
         for file_key_bytes in candidate_keys {
             if let Some(decrypted_key) = user_encryption_key.decrypt(file_key_bytes) {
-                #[allow(deprecated)]
-                let key = Key::<Aes256Gcm>::from_slice(&decrypted_key);
-                return Ok(VaultCipher::new(Aes256Gcm::new(key), self.id));
+                let cipher = VaultCipher::new_with_bytes(&decrypted_key, self.id);
+                return Ok(cipher);
             }
         }
         Err(Error::VaultFileKeyDecryptionError)
@@ -146,16 +143,9 @@ pub struct EncryptedVaultItemCredential {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use aes_gcm::aead::OsRng;
-    use aes_gcm::{Aes256Gcm, KeyInit};
     use secrecy::ExposeSecret;
-    use uuid::Uuid;
 
     use super::*;
-    use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
-    use crate::secrets::vaults::vault::{VaultItemCredentialOverview, VaultItemOverview};
 
     fn make_vault() -> EncryptedVault {
         EncryptedVault {
@@ -166,14 +156,10 @@ mod tests {
         }
     }
 
-    fn make_cipher(vault: &EncryptedVault) -> VaultCipher {
-        VaultCipher::new(Aes256Gcm::new(&Aes256Gcm::generate_key(OsRng)), vault.id)
-    }
-
     #[test]
     fn test_add_multiple_items() {
         let mut vault = make_vault();
-        let cipher = make_cipher(&vault);
+        let cipher = VaultCipher::new(vault.id);
         let item_a = VaultItemOverview::try_new("Item A", "item-a").unwrap();
         let item_b = VaultItemOverview::try_new("Item B", "item-b").unwrap();
         vault.add_item(&cipher, None, &item_a).unwrap();
@@ -208,7 +194,7 @@ mod tests {
     #[test]
     fn test_add_and_get_credential() {
         let mut vault = make_vault();
-        let cipher = make_cipher(&vault);
+        let cipher = VaultCipher::new(vault.id);
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
         vault.add_item(&cipher, None, &item).unwrap();
 
@@ -246,7 +232,7 @@ mod tests {
     #[test]
     fn test_add_credential_to_nonexistent_item_returns_error() {
         let mut vault = make_vault();
-        let cipher = make_cipher(&vault);
+        let cipher = VaultCipher::new(vault.id);
         let cred = VaultItemCredentialOverview::try_new("Token", "token").unwrap();
         let secret = cipher
             .encrypt_cred_value(Uuid::new_v4(), Uuid::new_v4(), "tok")
