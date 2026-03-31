@@ -233,7 +233,7 @@ pub fn check_auth_still_valid() -> Result<(), KeychainError> {
     run_on_auth_thread(
         AuthContext::SharedThreadLocal,
         AuthMethod::Policy {
-            reason: "verify authentication".to_string(),
+            reason: "unlock".to_string(),
         },
         |_| {},
     )
