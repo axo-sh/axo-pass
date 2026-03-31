@@ -7,7 +7,10 @@ use anyhow::anyhow;
 use lru::LruCache;
 use objc2::rc::Retained;
 use objc2_foundation::NSString;
-use objc2_local_authentication::{LAAccessControlOperation, LAContext, LAPolicy};
+use objc2_local_authentication::{
+    LAAccessControlOperation, LAContext, LAPolicy,
+    LATouchIDAuthenticationMaximumAllowableReuseDuration,
+};
 use ssh_key::Signature;
 
 use crate::core::auth::la_context::create_la_auth_callback;
@@ -15,8 +18,10 @@ use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 
-// const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
-const TOUCH_ID_REUSE_DURATION_SECS: f64 = 5.0; // 5 seconds for testing
+// TODO: Investigate if this actually works, empirically it seems to be fixed to
+// 10 minutes regardless of what I set. Cannot be longer than
+// LATouchIDAuthenticationMaximumAllowableReuseDuration
+const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
 
 enum AuthMessage {
     Work(AuthWork),
@@ -126,7 +131,18 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
 fn init_shared_la_context() -> Retained<LAContext> {
     unsafe {
         let ctx = LAContext::new();
-        ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
+        if TOUCH_ID_REUSE_DURATION_SECS > LATouchIDAuthenticationMaximumAllowableReuseDuration {
+            log::warn!(
+                "Requested Touch ID reuse duration of {TOUCH_ID_REUSE_DURATION_SECS}s exceeds the system maximum of {LATouchIDAuthenticationMaximumAllowableReuseDuration}s. Capping to the maximum."
+            );
+            ctx.setTouchIDAuthenticationAllowableReuseDuration(
+                LATouchIDAuthenticationMaximumAllowableReuseDuration,
+            );
+        } else {
+            // this takes an NSTimeInterval, which is a c_double
+            // which is "almost always f64" per the std::os::raw docs
+            ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
+        }
         ctx
     }
 }
