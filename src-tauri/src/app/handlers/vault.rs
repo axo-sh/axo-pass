@@ -31,7 +31,7 @@ where
     let mut guard = state.lock()?;
     let vw = guard
         .vaults
-        .get_vault_mut(vault_key)
+        .get_or_create_vault_mut(vault_key)
         .error_context("Failed to get vault")?;
 
     // unlock the vault

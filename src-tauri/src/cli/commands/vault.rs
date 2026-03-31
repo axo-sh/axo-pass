@@ -1,8 +1,14 @@
+mod export;
+mod import;
+mod utils;
+
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use color_print::cprintln;
 
+use crate::cli::commands::vault::export::VaultExportCommand;
+use crate::cli::commands::vault::import::VaultImportCommand;
 use crate::core::config::APP_CONFIG;
 use crate::secrets::vaults::{VaultWrapper, VaultsManager};
 
@@ -20,10 +26,16 @@ enum VaultSubcommand {
 
     /// Add an external vault by path
     Add { vault_path: String },
+
+    /// Export a vault to a portable file
+    Export(VaultExportCommand),
+
+    /// Import a vault from an export file
+    Import(VaultImportCommand),
 }
 
 impl VaultCommand {
-    pub async fn execute(&self) {
+    pub async fn execute(&self) -> ! {
         match &self.subcommand {
             VaultSubcommand::List => self.cmd_list_vaults(),
             VaultSubcommand::Add { vault_path } => {
@@ -32,20 +44,33 @@ impl VaultCommand {
                     std::process::exit(1);
                 }
             },
+            VaultSubcommand::Export(vault_export_cmd) => {
+                if let Err(e) = vault_export_cmd.execute() {
+                    cprintln!("<red>Error:</red> {e}");
+                    std::process::exit(1);
+                }
+            },
+            VaultSubcommand::Import(vault_import_cmd) => {
+                if let Err(e) = vault_import_cmd.execute() {
+                    cprintln!("<red>Error:</red> {e}");
+                    std::process::exit(1);
+                }
+            },
         }
+        std::process::exit(0);
     }
 
-    fn cmd_list_vaults(&self) {
+    fn cmd_list_vaults(&self) -> ! {
         let vm = VaultsManager::new();
         cprintln!("<green>Vaults:</green>");
         if vm.iter_vault_keys().next().is_none() {
             println!("<no vaults>");
-            return;
         }
         for (vault_key, vw) in vm.iter_vaults() {
             let vault_name = vw.vault_name().unwrap_or("<unnamed>");
             cprintln!("  <blue>{vault_name}</blue> {vault_key}");
         }
+        std::process::exit(0);
     }
 
     fn cmd_add_vault(&self, vault_path: &str) -> Result<(), String> {

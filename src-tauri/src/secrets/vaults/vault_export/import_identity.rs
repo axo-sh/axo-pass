@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::iter::once;
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 
 use crate::secrets::vaults::errors::Error;
 
@@ -9,7 +9,7 @@ pub enum ImportIdentity {
     Passphrase(SecretString),
 
     /// age secret key in armored format (age x25519 identity)
-    Identity(SecretString),
+    Identity(age::x25519::Identity),
 }
 
 impl ImportIdentity {
@@ -18,13 +18,7 @@ impl ImportIdentity {
             ImportIdentity::Passphrase(passphrase) => {
                 Box::new(age::scrypt::Identity::new(passphrase.clone()))
             },
-            ImportIdentity::Identity(secret_key) => {
-                let id = secret_key
-                    .expose_secret()
-                    .parse::<age::x25519::Identity>()
-                    .map_err(|e| Error::VaultImportError(format!("Invalid age secret key: {e}")))?;
-                Box::new(id)
-            },
+            ImportIdentity::Identity(identity) => Box::new(identity.clone()),
         };
 
         let armor_reader = age::armor::ArmoredReader::new(age_ciphertext.as_bytes());

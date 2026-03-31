@@ -23,7 +23,7 @@ pub async fn update_vault(
     // (at least not to update the vault key or name), so we don't use
     // with_unlocked_vault here
     let mut state = state.lock()?;
-    let vw = state.vaults.get_vault_mut(&request.vault_key)?;
+    let vw = state.vaults.get_or_create_vault_mut(&request.vault_key)?;
 
     if request.new_name.as_deref() != vw.vault_name()
         && let Some(new_name) = request.new_name

@@ -55,7 +55,7 @@ pub async fn list_vaults(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<ListVaultsResponse, AppError> {
     log::debug!("command: list_vaults");
-    let mut state = state.lock()?;
+    let state = state.lock()?;
 
     let vault_keys: Vec<String> = state.vaults.iter_vault_keys().collect();
     let mut vaults: Vec<VaultInfo> = vault_keys
@@ -64,7 +64,6 @@ pub async fn list_vaults(
             name: state
                 .vaults
                 .get_vault(k.as_str())
-                .ok()
                 .and_then(|vw| vw.vault_name().map(|s| s.to_string())),
             key: k.to_string(),
         })

@@ -94,6 +94,16 @@ impl VaultsManager {
         vaults
     }
 
+    pub fn vault_labels(&self) -> BTreeMap<String, String> {
+        // note: this relies on the fact that BTreeMap keys are sorted
+        self.iter_vaults()
+            .map(|(key, vw)| match vw.vault_name() {
+                Some(name) => (format!("{name} ({key})"), key.clone()),
+                None => (key.clone(), key.clone()),
+            })
+            .collect::<BTreeMap<_, _>>()
+    }
+
     pub fn import_vault<P: AsRef<Path>>(
         &mut self,
         import_path: P,
@@ -136,7 +146,7 @@ impl VaultsManager {
         self.vaults.iter()
     }
 
-    pub fn get_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {
+    pub fn get_or_create_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {
         if !self.vaults.contains_key(key) {
             log::debug!(
                 "Vault not loaded, reading vault from vaults dir: {}",
@@ -152,8 +162,12 @@ impl VaultsManager {
         Ok(self.vaults.get_mut(key).unwrap())
     }
 
-    pub fn get_vault(&mut self, key: &str) -> Result<&VaultWrapper, Error> {
-        self.get_vault_mut(key).map(|v| &*v)
+    pub fn get_vault_mut(&mut self, key: &str) -> Option<&mut VaultWrapper> {
+        self.vaults.get_mut(key)
+    }
+
+    pub fn get_vault(&self, key: &str) -> Option<&VaultWrapper> {
+        self.vaults.get(key)
     }
 
     pub fn delete_vault(&mut self, key: &str) -> Result<(), Error> {
