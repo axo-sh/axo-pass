@@ -17,6 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::core::auth::{AuthContext, AuthMethod, run_local_onetime, run_on_auth_thread};
+use crate::core::provenance;
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
@@ -218,15 +219,32 @@ impl PasswordEntry {
     }
 
     pub fn get_password(&self) -> Result<Option<SecretString>, KeychainError> {
+        // todo: maybe move up somewhere
+        let caller = provenance::get_parent_process_description();
+        self.get_password_for_caller(caller.as_deref())
+    }
+
+    pub fn get_password_for_caller(
+        &self,
+        caller: Option<&str>,
+    ) -> Result<Option<SecretString>, KeychainError> {
         log::debug!("Attempting to retrieve password for key_id: {self:?}");
         let account = self.account();
-        // todo: always prompt here? with OneTime
+        let account_display = if account.chars().count() > 16 {
+            format!("{}...", account.chars().take(16).collect::<String>())
+        } else {
+            account.clone()
+        };
+        let reason = match caller {
+            Some(c) => format!("unlock password for {account_display} for {c}"),
+            None => format!("unlock password for {account_display}"),
+        };
         run_on_auth_thread(
             AuthContext::SharedThreadLocal,
             AuthMethod::AccessControl {
                 access_control: AccessControl::GenericPassword,
                 operation: LAAccessControlOperation::UseItem,
-                reason: format!("unlock to access password for {account}"),
+                reason,
             },
             move |la_context| {
                 GenericPasswordQuery::build()
