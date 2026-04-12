@@ -250,16 +250,20 @@ pub fn invalidate_auth() {
     rx.recv().expect("shared-auth thread stopped");
 }
 
-pub fn sign_with_managed_key(managed_key_label: &str, data: &[u8]) -> Result<Signature, String> {
+pub fn sign_with_managed_key(managed_key_label: &str, data: &[u8], caller: Option<&str>) -> Result<Signature, String> {
     let managed_key_label = managed_key_label.to_string();
     let data = data.to_vec();
+    let reason = match caller {
+        Some(c) => format!("sign with SSH key {} for {c}", managed_key_label),
+        None => format!("sign with SSH key {}", managed_key_label),
+    };
 
     run_on_auth_thread(
         AuthContext::WithContext(managed_key_label.clone()),
         AuthMethod::AccessControl {
             access_control: AccessControl::ManagedKey,
             operation: LAAccessControlOperation::UseKeySign,
-            reason: format!("sign with SSH key {}", managed_key_label),
+            reason,
         },
         move |la_context| match ManagedSshKey::find_with_la_context(&managed_key_label, la_context)
         {

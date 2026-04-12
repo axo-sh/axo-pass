@@ -46,7 +46,7 @@ impl StoredCredential {
         self
     }
 
-    pub fn validate(&self) -> Result<(), CredentialError> {
+    pub fn validate(&self, caller: Option<&str>) -> Result<(), CredentialError> {
         if let Some(expiry) = self.expires_at {
             let now = UtcDateTime::now();
             if now > expiry {
@@ -55,17 +55,13 @@ impl StoredCredential {
         }
 
         if self.requires_auth {
-            // we only use the touch id auth prompt to confirm, this key is not stored in
-            // the secure enclave.
-            // todo: show more detail in the auth prompt, e.g.
-            // - which key is being used
-            // - who is requesting it
-            // - for what purpose
+            let reason = match caller {
+                Some(c) => format!("unlock a ssh key for {c}"),
+                None => "unlock a ssh key".to_string(),
+            };
             if let Err(e) = run_on_auth_thread(
                 AuthContext::OneTime,
-                AuthMethod::Policy {
-                    reason: "unlock a ssh key".to_string(),
-                },
+                AuthMethod::Policy { reason },
                 |_| {},
             ) {
                 log::error!("Authentication failed: {e}");
@@ -96,8 +92,8 @@ impl Credential for StoredCredential {
         }
     }
 
-    fn sign(&self, req: proto::SignRequest) -> Result<ssh_key::Signature, CredentialError> {
-        self.validate()?;
+    fn sign(&self, req: proto::SignRequest, caller: Option<&str>) -> Result<ssh_key::Signature, CredentialError> {
+        self.validate(caller)?;
         match &self.credential {
             proto::Credential::Key { privkey, .. } => {
                 let key_algorithm = privkey.algorithm().map_err(|e| {

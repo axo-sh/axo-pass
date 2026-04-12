@@ -23,9 +23,9 @@ impl Credential for ManagedCredential {
         self.0.public_key().clone()
     }
 
-    fn sign(&self, req: proto::SignRequest) -> Result<ssh_key::Signature, CredentialError> {
+    fn sign(&self, req: proto::SignRequest, caller: Option<&str>) -> Result<ssh_key::Signature, CredentialError> {
         let managed_key_label = self.0.label();
-        auth::sign_with_managed_key(&managed_key_label, &req.data).map_err(|e| {
+        auth::sign_with_managed_key(&managed_key_label, &req.data, caller).map_err(|e| {
             log::debug!("Failed to sign with managed key {managed_key_label}: {e}");
             CredentialError::SigningFailed
         })

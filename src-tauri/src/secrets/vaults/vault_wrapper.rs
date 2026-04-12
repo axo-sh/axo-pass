@@ -6,6 +6,7 @@ use secrecy::{SecretBox, SecretString};
 use url::Url;
 
 use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use crate::core::provenance;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
@@ -281,11 +282,13 @@ pub fn normalized_key(key: &str) -> Option<String> {
 }
 
 pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
+    let reason = match provenance::get_parent_process_description() {
+        Some(caller) => format!("unlock the vault for {caller}"),
+        None => "unlock the vault".to_string(),
+    };
     let key_result = run_on_auth_thread(
         AuthContext::SharedThreadLocal,
-        AuthMethod::Policy {
-            reason: "unlock the vault".to_string(),
-        },
+        AuthMethod::Policy { reason },
         move |la_context| {
             ManagedKeyQuery::build()
                 .with_label(VAULT_ENCRYPTION_KEY_LABEL)
