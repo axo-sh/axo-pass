@@ -19,8 +19,16 @@ pub enum CredentialError {
 
 pub trait Credential {
     fn key_type(&self) -> SshKeyType;
-    fn sign(&self, req: proto::SignRequest, caller: Option<&str>) -> Result<Signature, CredentialError>;
+
+    // caller, if provided, is displayed in the auth prompt
+    fn sign(
+        &self,
+        req: proto::SignRequest,
+        caller: Option<&str>,
+    ) -> Result<Signature, CredentialError>;
+
     fn public_key_data(&self) -> KeyData;
+
     fn dest_constraints(&self) -> Vec<proto::extension::DestinationConstraint> {
         Vec::new()
     }

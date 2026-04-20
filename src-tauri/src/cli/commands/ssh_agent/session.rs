@@ -11,7 +11,6 @@ use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::managed_credential::ManagedCredential;
-use crate::core::provenance;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
@@ -21,7 +20,7 @@ use crate::ssh::utils::compute_short_sha256_fingerprint;
 pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
 
 pub struct SshAgentSession {
-    caller_process_chain: Vec<provenance::ProcInfo>,
+    caller: Option<String>,
     state: Arc<Mutex<Vec<StoredCredential>>>,
     pub(crate) sessions: Vec<SessionBinding>,
     pub(crate) session_bind_attempted: bool,
@@ -31,11 +30,11 @@ pub struct SshAgentSession {
 impl SshAgentSession {
     pub fn new(
         state: Arc<Mutex<Vec<StoredCredential>>>,
-        chain: Vec<provenance::ProcInfo>,
+        caller: Option<String>,
         shutdown_sender: broadcast::Sender<()>,
     ) -> Self {
         SshAgentSession {
-            caller_process_chain: chain,
+            caller,
             state,
             sessions: Vec::new(),
             session_bind_attempted: false,
@@ -245,9 +244,8 @@ impl Session for SshAgentSession {
         }
 
         // passed all checks, perform signing
-        let caller = provenance::caller_description(&self.caller_process_chain);
         stored_cred
-            .sign(req, caller.as_deref())
+            .sign(req, self.caller.as_deref())
             .map_err(|e| AgentError::Other(e.into()))
     }
 
@@ -337,7 +335,7 @@ mod tests {
         // Setup session
         let state = Arc::new(Mutex::new(Vec::new()));
         let (shutdown_tx, _) = broadcast::channel(1);
-        let mut session = SshAgentSession::new(state, Vec::new(), shutdown_tx);
+        let mut session = SshAgentSession::new(state, None, shutdown_tx);
 
         // Add identity
         session

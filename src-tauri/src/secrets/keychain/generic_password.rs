@@ -17,7 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::core::auth::{AuthContext, AuthMethod, run_local_onetime, run_on_auth_thread};
-use crate::core::provenance;
+use crate::core::provenance::Provenance;
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
@@ -220,8 +220,10 @@ impl PasswordEntry {
 
     pub fn get_password(&self) -> Result<Option<SecretString>, KeychainError> {
         // todo: maybe move up somewhere
-        let caller = provenance::get_parent_process_description();
-        self.get_password_for_caller(caller.as_deref())
+        let parent = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("get_password: {provenance:#?}"))
+            .and_then(|p| p.caller());
+        self.get_password_for_caller(parent.as_deref())
     }
 
     pub fn get_password_for_caller(

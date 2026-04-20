@@ -8,10 +8,10 @@ use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, broadcast};
 
-use crate::core::provenance;
 use crate::cli::commands::ssh_agent::session::SshAgentSession;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::core::dirs::app_data_dir;
+use crate::core::provenance::Provenance;
 
 #[derive(Clone)]
 pub struct SshAgentServer {
@@ -110,16 +110,18 @@ impl SshAgentServer {
 
 impl Agent<UnixListener> for SshAgentServer {
     fn new_session(&mut self, socket: &UnixStream) -> impl Session {
-        let chain = match provenance::get_peer_pid(socket) {
-            Some(peer_pid) => provenance::get_process_chain(peer_pid),
-            None => Vec::new(),
-        };
-        let chain_str = chain
-            .iter()
-            .map(|p| format!("{p:#}"))
-            .collect::<Vec<_>>()
-            .join(" → ");
-        log::debug!("SSH Agent: Connection from: {chain_str}");
-        SshAgentSession::new(self.credentials.clone(), chain, self.shutdown_sender.clone())
+        let caller = socket
+            .peer_cred()
+            .ok()
+            .and_then(|cred| cred.pid())
+            .map(|pid| Provenance::resolve(pid as u32))
+            .inspect(|provenance| log::debug!("SSH agent: {provenance:?}"))
+            .and_then(|chain| chain.caller());
+
+        SshAgentSession::new(
+            self.credentials.clone(),
+            caller,
+            self.shutdown_sender.clone(),
+        )
     }
 }
