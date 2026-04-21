@@ -39,7 +39,7 @@ impl From<Option<&UpdateCheckRecord>> for UpdateStatusResponse {
                             checked_at_rfc3339,
                         }
                     },
-                    UpdateCheckResult::UpToDate => UpdateStatusResponse::UpToDate {
+                    UpdateCheckResult::UpToDate {} => UpdateStatusResponse::UpToDate {
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         checked_at_rfc3339,
                     },

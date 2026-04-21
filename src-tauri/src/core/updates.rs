@@ -15,7 +15,7 @@ pub struct UpdateCheckRecord {
 #[serde(untagged, rename_all = "snake_case")]
 pub enum UpdateCheckResult {
     UpdateAvailable { version: String },
-    UpToDate,
+    UpToDate {},
     Error { error: String },
 }
 
@@ -63,7 +63,7 @@ pub async fn check_for_updates(app_handle: tauri::AppHandle, force: bool) {
             Ok(None) => {
                 eprintln!("No updates available");
                 let mut config = APP_CONFIG.lock().unwrap();
-                config.record_update_check(UpdateCheckResult::UpToDate);
+                config.record_update_check(UpdateCheckResult::UpToDate {});
                 if let Err(e) = config.save() {
                     eprintln!("Failed to save config after update check: {e}");
                 }
