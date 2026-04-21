@@ -8,6 +8,7 @@ use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -187,6 +188,7 @@ impl Vault {
         let age_file_key = self.cipher.wrap_file_key_for_export(export_mode)?;
         Ok(ExportedVault {
             id: encrypted_vault.id,
+            exported_at: OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
             name: encrypted_vault.name,
             default_key: key,
             age_file_key,

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVaultItem;
@@ -10,6 +11,9 @@ use crate::secrets::vaults::vault::encrypted_vault::EncryptedVaultItem;
 #[derive(Serialize, Deserialize)]
 pub struct ExportedVault {
     pub id: Uuid,
+
+    #[serde(with = "time::serde::rfc3339", default = "OffsetDateTime::now_utc")]
+    pub exported_at: OffsetDateTime,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
