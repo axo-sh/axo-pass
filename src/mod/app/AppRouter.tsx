@@ -24,7 +24,7 @@ export const AppRouter = () => {
           <PassphraseSecrets />
         </LockGuard>
       </Route>
-      <Route path="/dashboard/settings">
+      <Route path="/dashboard/settings" nest>
         <Settings />
       </Route>
       <Route>

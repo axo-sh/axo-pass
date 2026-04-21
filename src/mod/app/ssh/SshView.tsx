@@ -15,6 +15,7 @@ import {Toggle} from '@/components/Toggle';
 import {Toolbar} from '@/components/Toolbar';
 import {DashboardContentHeader} from '@/mod/app/components/Dashboard/DashboardContent';
 import {IconMessage} from '@/mod/app/components/IconMessage';
+import {TabBar} from '@/mod/app/components/tabs/TabBar';
 import {type AgentFilter, useSshKeysStore} from '@/mod/app/mobx/SshKeysStore';
 import {SshAgentCard} from '@/mod/app/ssh/SshView/SshAgentCard';
 import {sshKeyDetail, sshKeyName, sshKeyRow, sshKeyTable, tag} from '@/mod/app/ssh/SshView.css';
@@ -49,12 +50,12 @@ export const SshView = observer(() => {
     <>
       <DashboardContentHeader title="SSH Keys">
         <Toolbar>
-          <Flex gap={1 / 4}>
+          <TabBar>
             <SshFilterToggle filter="all">All</SshFilterToggle>
             <SshFilterToggle filter="system">System Agent</SshFilterToggle>
             <SshFilterToggle filter="axo">Axo Agent</SshFilterToggle>
             <SshFilterToggle filter="transient">Transient</SshFilterToggle>
-          </Flex>
+          </TabBar>
           <FlexSpacer />
           <Button variant="green" clear size="small" onClick={handleAddManagedKey}>
             <IconPlus className={buttonIconLeft} />

@@ -16,6 +16,7 @@ import {Code} from '@/components/Code';
 import {Flex} from '@/components/Flex';
 import {Loader} from '@/components/Loader';
 import {SlideToggle} from '@/components/SlideToggle';
+import {DashboardSection} from '@/mod/app/components/Dashboard/DashboardSection';
 import {updateCheckDate} from '@/mod/app/settings/Settings/AppUpdates.css';
 import {useClient} from '@/utils/useClient';
 
@@ -43,11 +44,15 @@ export const AppUpdates: React.FC = () => {
   };
 
   if (!result || updateCheckDisabled === undefined) {
-    return <Loader />;
+    return (
+      <DashboardSection title="Updates">
+        <Loader />
+      </DashboardSection>
+    );
   }
 
   return (
-    <>
+    <DashboardSection title="Updates">
       <Flex gap={1 / 2}>
         <SlideToggle
           checked={!updateCheckDisabled}
@@ -62,7 +67,7 @@ export const AppUpdates: React.FC = () => {
         </Button>
       </Flex>
       <UpdateStatusDisplay result={result} />
-    </>
+    </DashboardSection>
   );
 };
 
