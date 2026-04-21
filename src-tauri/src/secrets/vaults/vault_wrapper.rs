@@ -299,7 +299,7 @@ pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
                 .one(la_context)
         },
     )
-    .map_err(|e| Error::KeyRetrievalFailed(e))?;
+    .map_err(Error::KeyRetrievalFailed)?;
 
     match key_result {
         Ok(Some(user_encryption_key)) => Ok(user_encryption_key),

@@ -49,7 +49,6 @@ pub fn import_vault<P: AsRef<Path>, Q: AsRef<Path>>(
             Error::InvalidVaultKey(
                 "No vault key provided and export file has no default key".to_string(),
             )
-            .into()
         })?;
 
     // normalize and validate the key

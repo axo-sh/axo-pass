@@ -143,11 +143,11 @@ pub fn run(cmd: Option<AxoAppCommand>) {
 
                         // Find the File submenu and append the lock item
                         for item in menu.items()? {
-                            if let MenuItemKind::Submenu(submenu) = item {
-                                if submenu.text()? == "File" {
-                                    submenu.append(&lock_item)?;
-                                    break;
-                                }
+                            if let MenuItemKind::Submenu(submenu) = item
+                                && submenu.text()? == "File"
+                            {
+                                submenu.append(&lock_item)?;
+                                break;
                             }
                         }
                     }

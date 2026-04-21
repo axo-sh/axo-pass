@@ -8,7 +8,7 @@ pub fn prompt_passphrase(prompt: &str) -> Result<SecretString, String> {
     if std::io::stdin().is_terminal() {
         Password::new(prompt)
             .prompt()
-            .map(|s| SecretString::from(s))
+            .map(SecretString::from)
             .map_err(|e| format!("Failed to read passphrase: {e}"))
     } else {
         let mut buf = String::new();

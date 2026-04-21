@@ -59,11 +59,9 @@ impl StoredCredential {
                 Some(c) => format!("unlock a ssh key for {c}"),
                 None => "unlock a ssh key".to_string(),
             };
-            if let Err(e) = run_on_auth_thread(
-                AuthContext::OneTime,
-                AuthMethod::Policy { reason },
-                |_| {},
-            ) {
+            if let Err(e) =
+                run_on_auth_thread(AuthContext::OneTime, AuthMethod::Policy { reason }, |_| {})
+            {
                 log::error!("Authentication failed: {e}");
                 return Err(CredentialError::Locked);
             }
@@ -92,7 +90,11 @@ impl Credential for StoredCredential {
         }
     }
 
-    fn sign(&self, req: proto::SignRequest, caller: Option<&str>) -> Result<ssh_key::Signature, CredentialError> {
+    fn sign(
+        &self,
+        req: proto::SignRequest,
+        caller: Option<&str>,
+    ) -> Result<ssh_key::Signature, CredentialError> {
         self.validate(caller)?;
         match &self.credential {
             proto::Credential::Key { privkey, .. } => {

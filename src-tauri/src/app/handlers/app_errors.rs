@@ -144,7 +144,7 @@ impl<T> From<PoisonError<T>> for AppError {
     fn from(e: PoisonError<T>) -> Self {
         AppError::new(
             AppErrorType::Internal,
-            Some(format!("Failed to acquire state lock")),
+            Some("Failed to acquire state lock".to_string()),
             Some(format!("{e:#}")),
         )
     }

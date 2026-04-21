@@ -250,7 +250,11 @@ pub fn invalidate_auth() {
     rx.recv().expect("shared-auth thread stopped");
 }
 
-pub fn sign_with_managed_key(managed_key_label: &str, data: &[u8], caller: Option<&str>) -> Result<Signature, String> {
+pub fn sign_with_managed_key(
+    managed_key_label: &str,
+    data: &[u8],
+    caller: Option<&str>,
+) -> Result<Signature, String> {
     let managed_key_label = managed_key_label.to_string();
     let data = data.to_vec();
     let reason = match caller {
