@@ -218,6 +218,8 @@ pub fn run(cmd: Option<AxoAppCommand>) {
             handlers::global_lock::unlock_axo,
             handlers::global_lock::lock_axo,
             handlers::settings::get_app_settings,
+            handlers::shell_integration::get_shell_integration_status,
+            handlers::shell_integration::configure_shell_integration,
             handlers::updates::check_updates,
             handlers::updates::get_update_status,
             handlers::updates::get_update_check_disabled,

@@ -18,6 +18,7 @@ import type {
   ListVaultsResponse,
   NewVaultRequest,
   SaveSshKeyPasswordRequest,
+  ShellIntegrationStatus,
   SshAgentStatusResponse,
   SshAgentType,
   UpdateStatusResponse,
@@ -249,4 +250,12 @@ export const getSshKey = async (request: GetSshKeyRequest): Promise<GetSshKeyRes
   return await invoke<GetSshKeyResponse>('get_ssh_key', {
     request,
   });
+};
+
+export const getShellIntegrationStatus = async (): Promise<ShellIntegrationStatus> => {
+  return await invoke<ShellIntegrationStatus>('get_shell_integration_status');
+};
+
+export const configureShellIntegration = async (): Promise<ShellIntegrationStatus> => {
+  return await invoke<ShellIntegrationStatus>('configure_shell_integration');
 };

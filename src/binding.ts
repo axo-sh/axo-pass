@@ -135,6 +135,11 @@ export interface SaveSshKeyPasswordRequest {
   password: string;
 }
 
+export interface ShellIntegrationStatus {
+  configured: boolean;
+  zshrc_path: string;
+}
+
 export enum SshAgentStatus {
   Running = 'running',
   NotRunning = 'not_running',
