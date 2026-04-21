@@ -14,7 +14,7 @@ const VAULT_EXTENSION: &str = "axovault";
 
 #[derive(Parser, Debug)]
 pub struct VaultExportCommand {
-    /// Vault key of vault to export (default vault if not given)
+    /// Vault key of vault to export (will prompt if not given)
     #[arg(long)]
     vault: Option<String>,
 
@@ -98,7 +98,7 @@ impl TryInto<ExportMode> for &ExportModeFlags {
         if let Some(pass) = &self.passphrase {
             return Ok(ExportMode::Passphrase(pass.clone().into()));
         }
-        let passphrase = prompt_passphrase("Enter export passphrase:")
+        let passphrase = prompt_passphrase("Enter passphrase to encrypt the exported vault:")
             .map_err(|e| format!("Failed to read passphrase: {e}"))?;
         Ok(ExportMode::Passphrase(passphrase))
     }
