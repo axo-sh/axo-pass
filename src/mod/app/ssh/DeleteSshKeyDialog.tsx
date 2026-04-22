@@ -69,7 +69,7 @@ export const DeleteSshKeyDialog: React.FC<Props> = ({sshKey, dialog}) => {
         />
       </Flex>
       <DialogActions>
-        <Button variant="clear" onClick={handleClose}>
+        <Button clear onClick={handleClose}>
           Cancel
         </Button>
         <Button

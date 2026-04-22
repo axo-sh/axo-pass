@@ -93,7 +93,7 @@ export const SecretForm: React.FC<SecretFormProps> = ({
       </InputField>
 
       <DialogActions>
-        <Button variant="clear" size="large" onClick={onCancel} disabled={isSubmitting}>
+        <Button clear size="large" onClick={onCancel} disabled={isSubmitting}>
           Cancel
         </Button>
         <Button submit variant="default" size="large" disabled={isSubmitting}>

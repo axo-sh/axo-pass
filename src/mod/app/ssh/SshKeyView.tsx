@@ -155,7 +155,7 @@ const SSHKeyDetails: React.FC<SSHKeyDetailsProps> = ({sshKey}) => {
               <div>
                 <Button
                   size="small"
-                  variant="clear"
+                  clear
                   disabled={isLoading || !sshKey.fingerprint_sha256}
                   onClick={handleShowPublicKey}
                 >

@@ -34,7 +34,7 @@ const VaultSettingsHeader: React.FC<{vaultName?: string; vaultKey: string}> = ({
       }
       title="Settings"
       titleAction={
-        <Link className={button({variant: 'clear', size: 'small'})} href={`/${vaultKey}`}>
+        <Link className={button({clear: true, size: 'small'})} href={`/${vaultKey}`}>
           <IconChevronLeft className={buttonIconLeft} /> Back to Vault
         </Link>
       }

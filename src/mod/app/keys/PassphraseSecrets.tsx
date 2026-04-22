@@ -163,7 +163,7 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({entry, isOpen, onDelete, onC
         </div>
       </Flex>
       <DialogActions>
-        <Button variant="clear" size="large" onClick={onClose}>
+        <Button clear size="large" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="error" size="large" onClick={onDelete}>

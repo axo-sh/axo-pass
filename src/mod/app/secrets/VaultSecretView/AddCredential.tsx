@@ -106,7 +106,7 @@ export const AddCredentialDialog: React.FC<AddCredentialDialogProps> = observer(
           </InputField>
 
           <DialogActions>
-            <Button variant="clear" size="large" onClick={onClose} disabled={isSubmitting}>
+            <Button clear size="large" onClick={onClose} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button submit variant="default" size="large" disabled={isSubmitting}>

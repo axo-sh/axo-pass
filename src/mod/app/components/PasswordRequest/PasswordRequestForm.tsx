@@ -92,7 +92,7 @@ export const PasswordRequestForm: React.FC<Props> = ({
         )}
 
         <Flex gap={1 / 2} align="center" justify="end">
-          <Button variant="clear" onClick={() => handleSubmit(false)}>
+          <Button clear onClick={() => handleSubmit(false)}>
             Cancel
           </Button>
           <Button submit>OK</Button>

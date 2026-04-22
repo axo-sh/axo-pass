@@ -35,7 +35,7 @@ export const DeleteCredentialDialog: React.FC<Props> = ({credKey, isOpen, onClos
     <Dialog title="Delete credential?" isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete this credential? This action cannot be undone.
       <DialogActions>
-        <Button variant="clear" size="large" onClick={onClose}>
+        <Button clear size="large" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="error" size="large" onClick={onDelete}>

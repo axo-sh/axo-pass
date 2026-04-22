@@ -7,6 +7,7 @@ type Props = {
   size?: ButtonVariants['size'];
   clear?: boolean;
   submit?: boolean;
+  rounded?: boolean;
 } & React.ButtonHTMLAttributes<HTMLButtonElement>;
 export const Button: React.FC<React.PropsWithChildren<Props>> = ({
   children,
@@ -16,7 +17,12 @@ export const Button: React.FC<React.PropsWithChildren<Props>> = ({
   return (
     <button
       className={cx(
-        button({variant: props.variant, size: props.size, clear: props.clear}),
+        button({
+          variant: props.variant,
+          size: props.size,
+          clear: props.clear,
+          rounded: props.rounded,
+        }),
         className,
       )}
       type={props.submit ? 'submit' : 'button'}

@@ -60,7 +60,7 @@ export const DeleteVaultDialog: React.FC<Props> = ({vault, dialog}) => {
         />
       </Flex>
       <DialogActions>
-        <Button variant="clear" onClick={handleClose}>
+        <Button clear onClick={handleClose}>
           Cancel
         </Button>
         <Button variant="error" disabled={confirmKey !== vault.key} onClick={handleDelete}>

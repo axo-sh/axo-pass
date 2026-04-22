@@ -161,7 +161,7 @@ const DashboardNavSection: React.FC<Props> = ({title, children}) => {
       <Flex justify="between" align="center" gap={1 / 4}>
         {title}
 
-        <Button size="iconSmall" variant="clear" onClick={() => setShow(!show)}>
+        <Button clear size="iconSmall" onClick={() => setShow(!show)}>
           {show ? (
             <IconChevronDown size={14} strokeWidth={3} />
           ) : (

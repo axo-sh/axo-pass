@@ -76,7 +76,7 @@ export const AddVaultDialog = React.forwardRef<AddVaultDialogHandle, Props>(({on
         </InputField>
 
         <DialogActions>
-          <Button variant="clear" onClick={dialog.onClose}>
+          <Button clear onClick={dialog.onClose}>
             Cancel
           </Button>
           <Button submit variant="default">

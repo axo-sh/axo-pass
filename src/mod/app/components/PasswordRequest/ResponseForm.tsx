@@ -49,7 +49,7 @@ export const ResponseForm: React.FC<Props> = ({onResponse}) => {
         </FormRow>
 
         <Flex gap={1 / 2} align="center" justify="end">
-          <Button variant="clear" onClick={() => handleSubmit(false)}>
+          <Button clear onClick={() => handleSubmit(false)}>
             Cancel
           </Button>
           <Button submit>OK</Button>

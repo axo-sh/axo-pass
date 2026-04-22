@@ -29,7 +29,7 @@ export const LockScreen: React.FC<Props> = ({onUnlock}) => {
     <div className={lockScreen}>
       <IconMessage icon={IconLock} stroke={1.5}>
         <p>Axo is locked.</p>
-        <Button variant="rounded" size="large" onClick={handleUnlock} disabled={unlocking}>
+        <Button rounded size="large" onClick={handleUnlock} disabled={unlocking}>
           {unlocking ? 'Unlocking...' : 'Unlock'}
         </Button>
       </IconMessage>

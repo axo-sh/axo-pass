@@ -89,7 +89,7 @@ const DeleteSecretDialog: React.FC<DialogProps> = ({itemKey, isOpen, onClose}) =
     <Dialog title="Delete saved secret?" isOpen={isOpen} onClose={onClose}>
       Are you sure you want to delete this secret? This action cannot be undone.
       <DialogActions>
-        <Button variant="clear" size="large" onClick={onClose}>
+        <Button clear size="large" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="error" size="large" onClick={onDelete}>

@@ -47,7 +47,7 @@ export const CodeBlock: React.FC<Props> = ({className, canCopy, children, overfl
     >
       {canCopy && (
         <Button
-          variant="clear"
+          clear
           size="iconSmall"
           className={codeBlockCopy}
           disabled={copied}

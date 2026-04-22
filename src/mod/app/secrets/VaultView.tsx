@@ -80,7 +80,7 @@ export const VaultView: React.FC<Props> = observer(({vaultKey}) => {
           !showAllVaults && (
             <Link
               href={`/${vaultKey}/settings`}
-              className={button({variant: 'clear', size: 'iconSmall'})}
+              className={button({clear: true, size: 'iconSmall'})}
             >
               <IconSettings size={16} />
             </Link>

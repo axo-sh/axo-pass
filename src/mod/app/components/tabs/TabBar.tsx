@@ -17,7 +17,7 @@ type TabProps = React.PropsWithChildren<{
 
 export const TabBarTab: React.FC<TabProps> = ({path, children}) => {
   const [isActive] = useRoute(path);
-  const className = button({variant: 'rounded', size: 'large', clear: !isActive});
+  const className = button({rounded: true, size: 'large', clear: isActive ? false : '++'});
   return (
     <Link className={className} href={path}>
       {children}

@@ -5,7 +5,7 @@ import {type RecipeVariants, recipe} from '@vanilla-extract/recipes';
 import {vars} from '@/App.css';
 import {flex} from '@/components/Flex.css';
 import {loader} from '@/components/Loader.css';
-import {accentScheme, colorVar, errorScheme, greyScheme, successScheme} from '@/styles/colors.css';
+import {accentScheme, colorVar, errorScheme, successScheme} from '@/styles/colors.css';
 import {spacing} from '@/styles/utils';
 
 export type ButtonVariants = NonNullable<Required<RecipeVariants<typeof button>>>;
@@ -46,33 +46,12 @@ const buttonVariants = styleVariants({
   default: {
     vars: accentScheme,
   },
-  // deprecated: use `clear` variant instead
-  clear: {
-    background: 'rgba(255,255,255,0.05)',
-    borderColor: 'rgba(255,255,255,0.05)',
-    ':hover': {
-      outline: 'none',
-      background: 'rgba(255,255,255,0.04)',
-      borderColor: colorVar.light20,
-      boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
-    },
-    ':active': {
-      outline: 'none',
-      boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
-      background: colorVar.light10,
-    },
-    vars: greyScheme,
-  },
   green: {
     vars: successScheme,
   },
   error: {
     vars: errorScheme,
     background: colorVar.base,
-  },
-  rounded: {
-    vars: accentScheme,
-    borderRadius: 9999,
   },
   secondaryError: {
     borderColor: colorVar.light20,
@@ -110,6 +89,11 @@ export const button = recipe({
   variants: {
     variant: buttonVariants,
     size: sizeVariants,
+    rounded: {
+      true: {
+        borderRadius: 9999,
+      },
+    },
     clear: {
       true: {
         background: 'rgba(255,255,255,0.05)',
@@ -124,6 +108,13 @@ export const button = recipe({
           outline: 'none',
           boxShadow: 'inset 0 0.5em 1em rgba(27,31,35,.05)',
           background: 'rgba(255,255,255,0.1)',
+        },
+      },
+      '++': {
+        background: 'transparent',
+        borderColor: 'transparent',
+        ':hover': {
+          background: colorVar.dark30,
         },
       },
     },

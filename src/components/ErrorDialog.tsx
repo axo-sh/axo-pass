@@ -81,7 +81,7 @@ export const ErrorDialog: React.FC<Props> = ({
       </div>
       <div className={errorMessage}>{message}</div>
       <DialogActions>
-        <Button variant="clear" onClick={onClose}>
+        <Button clear onClick={onClose}>
           {dismissText}
         </Button>
       </DialogActions>
