@@ -22,10 +22,9 @@ export const VaultHelp: React.FC<Props> = ({settings}) => {
           You can backup vaults by using the <Link href="/cli">command-line integration</Link> to
           export and import vaults.
         </div>
-
         <p>
-          <strong>Export</strong> a vault to a portable <Code>.axovault</Code> file, encrypted with
-          a passphrase or age recipient key:
+          To <strong>export</strong> a vault to a portable <Code>.axovault</Code> file, encrypted
+          with a passphrase or age recipient key:
         </p>
         <CodeBlock canCopy>ap vault export [options]</CodeBlock>
         <dl>
@@ -40,10 +39,17 @@ export const VaultHelp: React.FC<Props> = ({settings}) => {
             Output file path. Defaults to <Code>&lt;vault-key&gt;.axovault</Code> in the current
             directory.
           </dd>
+        </dl>
+        <div>
+          The following mutually exclusive encryption options are supported; if none are given then
+          you will prompted for a passphrase.
+        </div>
+        <dl>
           <dt>
             <Code>--passphrase &lt;passphrase&gt;</Code>
           </dt>
           <dd>Encrypt the export with a passphrase.</dd>
+
           <dt>
             <Code>--recipient &lt;name&gt;</Code>
           </dt>
@@ -54,7 +60,9 @@ export const VaultHelp: React.FC<Props> = ({settings}) => {
           <dd>Encrypt to an age public key.</dd>
         </dl>
 
-        <p>Import a vault from an export file:</p>
+        <p>
+          To <strong>import</strong> a vault from an export file:
+        </p>
         <CodeBlock canCopy>ap vault import &lt;path&gt; [vault-key] [options]</CodeBlock>
         <dl>
           <dt>
@@ -64,7 +72,14 @@ export const VaultHelp: React.FC<Props> = ({settings}) => {
           <dt>
             <Code>[vault-key]</Code>
           </dt>
-          <dd>Key to assign to the imported vault. Overrides the key stored in the export file.</dd>
+          <dd>
+            Key to assign to the imported vault. Optional; overrides the key stored in the export
+            file.
+          </dd>
+        </dl>
+
+        <div>Decryption options:</div>
+        <dl>
           <dt>
             <Code>--passphrase &lt;passphrase&gt;</Code>
           </dt>

@@ -1,3 +1,5 @@
+import {Link} from 'wouter';
+
 import {Code} from '@/components/Code';
 import {CodeBlock} from '@/components/CodeBlock';
 import {DashboardSection} from '@/mod/app/components/Dashboard/DashboardSection';
@@ -23,8 +25,10 @@ export const SshHelp: React.FC<Props> = ({appBundlePath}) => {
 
       <DashboardSection title="SSH agent">
         <div>
-          To use Axo Pass as an SSH agent, first follow the CLI instructions below to install the{' '}
-          <Code>ap</Code> CLI helper.
+          Important: Using Axo Pass as an SSH agent requires either the <code>ap</code> CLI tool to
+          be
+          <Link href="/cli">installed and configured</Link>; or configuring your SSH client to use
+          the Axo Pass agent socket directly (see below).
         </div>
         <div>Starting the SSH agent:</div>
         <CodeBlock canCopy>ap ssh-agent start</CodeBlock>
@@ -35,6 +39,25 @@ export const SshHelp: React.FC<Props> = ({appBundlePath}) => {
           socket file manually. It can be found here:
         </div>
         <CodeBlock canCopy>~/Library/Application Support/Axo Pass/agent.sock</CodeBlock>
+      </DashboardSection>
+
+      <DashboardSection title="Alternative configuration">
+        <div>
+          In addition to using the CLI integration, you can also configure SSH to use the Axo Pass
+          SSH agent directly. This can be more reliable for apps, such as Git UIs, which use SSH
+          outside of your usual shell context.
+        </div>
+        <div>
+          Add the following to your <Code>~/.ssh/config</Code>:
+        </div>
+        <CodeBlock canCopy>
+          {`Host *
+    IdentityAgent "~/Library/Application Support/Axo Pass/agent.sock"`}
+        </CodeBlock>
+        <div>
+          This will direct SSH to use the Axo Pass agent socket for all hosts. You can also specify
+          it for individual hosts if you prefer.
+        </div>
       </DashboardSection>
     </>
   );
