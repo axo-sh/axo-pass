@@ -114,7 +114,8 @@ export const button = recipe({
         background: 'transparent',
         borderColor: 'transparent',
         ':hover': {
-          background: colorVar.dark30,
+          color: colorVar.dim75,
+          background: 'transparent',
         },
       },
     },
