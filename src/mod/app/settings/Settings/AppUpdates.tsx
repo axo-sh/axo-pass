@@ -14,6 +14,7 @@ import {Button} from '@/components/Button';
 import {buttonIconLeft} from '@/components/Button.css';
 import {Code} from '@/components/Code';
 import {Flex} from '@/components/Flex';
+import {InlineCheck} from '@/components/InlineCheck';
 import {Loader} from '@/components/Loader';
 import {SlideToggle} from '@/components/SlideToggle';
 import {DashboardSection} from '@/mod/app/components/Dashboard/DashboardSection';
@@ -99,7 +100,8 @@ export const UpdateStatusDisplay: React.FC<Props> = ({result}) => {
       return (
         <div>
           <div>
-            You're up to date! <Code>{data.version}</Code>
+            <InlineCheck /> You're up to date! The latest version is <strong>{data.version}</strong>
+            .
           </div>
           <div className={updateCheckDate}>Last checked: {formatDate(data.checked_at_rfc3339)}</div>
         </div>
