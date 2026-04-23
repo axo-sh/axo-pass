@@ -3,7 +3,7 @@ pub mod shell_integration;
 
 use std::io;
 
-use clap::{CommandFactory, Parser, Subcommand, command};
+use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use fork::daemon;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};

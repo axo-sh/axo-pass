@@ -13,7 +13,7 @@ export const useInterval = (callback: () => void, delay: number | null, deps = [
       return;
     }
 
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: number;
 
     const tick = () => {
       savedCallback.current();

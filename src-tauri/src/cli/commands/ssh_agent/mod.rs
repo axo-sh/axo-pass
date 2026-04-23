@@ -10,7 +10,7 @@ mod userauth_request;
 
 use std::fs;
 
-use clap::{Parser, Subcommand, command};
+use clap::{Parser, Subcommand};
 use color_print::cprintln;
 pub use server::SshAgentServer;
 
