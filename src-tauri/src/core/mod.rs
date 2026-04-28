@@ -3,6 +3,7 @@ pub mod build_sha;
 pub mod config;
 pub mod dirs;
 pub mod find_bin_folder;
+pub mod interpolate;
 mod objc_helpers;
 pub mod provenance;
 pub mod read_input;

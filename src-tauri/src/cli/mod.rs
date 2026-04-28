@@ -12,6 +12,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt, reload};
 
 use crate::cli::commands::age::AgeCommand;
+use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
@@ -38,6 +39,9 @@ pub enum AxoPassCommand {
     Read {
         item_reference: ItemReference,
     },
+
+    /// Run a command with secrets interpolated into the environment
+    Exec(ExecCommand),
 
     /// Inject secrets into a file
     Inject(InjectCommand),
@@ -134,6 +138,7 @@ impl AxoPassCommand {
             AxoPassCommand::Read { item_reference } => {
                 ItemCommand::cmd_read(item_reference, None).unwrap();
             },
+            AxoPassCommand::Exec(exec) => exec.execute().await,
             AxoPassCommand::Inject(inject) => inject.execute().await,
             AxoPassCommand::Age(age) => age.execute().await,
             AxoPassCommand::Info => {
