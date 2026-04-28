@@ -46,30 +46,30 @@ impl ExecCommand {
         let err = command.exec();
 
         // only reachable if exec fails
-        eprintln!("error: failed to execute '{program}': {err}");
+        eprintln!("error: Failed to execute '{program}': {err}");
         std::process::exit(1);
     }
 
     pub async fn try_prepare_env(&self) -> Result<HashMap<String, String>, anyhow::Error> {
         let mut env_vars: HashMap<String, String> = std::env::vars().collect();
         for pattern in &self.env_files {
-            let paths = glob(pattern).map_err(|e| anyhow!("invalid pattern '{pattern}': {e}"))?;
+            let paths = glob(pattern).map_err(|e| anyhow!("Invalid pattern '{pattern}': {e}"))?;
             // partition so we can check for all GlobErrors upfront and then sort the paths
             // before reading the files so the read order is deterministic.
             let (mut paths, errors): (Vec<_>, Vec<_>) = paths.partition_result();
             if !errors.is_empty() {
                 let err_list = errors.into_iter().map(|e| e.to_string()).join("\n");
-                bail!("failed to execute pattern '{pattern}', got {err_list}");
+                bail!("Failed to execute pattern '{pattern}', got {err_list}");
             }
 
             paths.sort();
             for path in &paths {
                 let display_path = path.display();
                 let env_iter = dotenvy::from_path_iter(path)
-                    .map_err(|e| anyhow!("failed to read env file {display_path}: {e}"))?;
+                    .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
                 let vars = env_iter
                     .collect::<Result<Vec<(String, String)>, _>>()
-                    .map_err(|e| anyhow!("failed to read env file {display_path}: {e}"))?;
+                    .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
                 env_vars.extend(vars);
             }
         }

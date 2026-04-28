@@ -9,9 +9,11 @@ use crate::secrets::vaults::VaultsManager;
 
 #[derive(Parser, Debug)]
 pub struct InjectCommand {
+    /// Input file path. If not provided, the input will be read from stdin.
     #[arg(long = "input", short = 'i')]
     pub input_file: Option<PathBuf>,
 
+    /// Output file path. If not provided, the result will be printed to stdout.
     #[arg(long = "output", short = 'o')]
     pub output_file: Option<PathBuf>,
 }
@@ -21,7 +23,7 @@ impl InjectCommand {
         let input_data = match read_file_or_stdin(&self.input_file) {
             Ok(data) => String::from_utf8_lossy(&data).to_string(),
             Err(e) => {
-                log::error!("{e}");
+                eprintln!("error: {e}");
                 return;
             },
         };
@@ -30,7 +32,10 @@ impl InjectCommand {
         let output_data = interpolate_secrets(&input_data, &mut vaults);
         if let Some(output_path) = &self.output_file {
             if let Err(e) = std::fs::write(output_path, output_data) {
-                log::error!("Failed to write output file {}: {e}", output_path.display());
+                eprintln!(
+                    "error: Failed to write output file {}: {e}",
+                    output_path.display()
+                );
             }
         } else {
             match io::stdout().write_all(output_data.as_bytes()) {
@@ -38,7 +43,7 @@ impl InjectCommand {
                     let _ = io::stdout().flush();
                 },
                 Err(e) => {
-                    log::error!("Failed to write to stdout: {}", e);
+                    eprintln!("error:Failed to write to stdout: {}", e);
                 },
             }
         }
