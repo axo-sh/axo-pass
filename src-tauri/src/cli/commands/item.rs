@@ -185,11 +185,12 @@ impl ItemCommand {
 
         let mut has_items = false;
         for item in &items {
-            for (cred_key, cred) in &item.credentials {
+            for (_, cred) in &item.credentials {
                 cprintln!(
-                    "  {} <dim>axo://{vault_key}/{}/{cred_key}</dim>",
+                    "  {} <dim>axo://{vault_key}/{}/{}</dim>",
                     cred.title,
-                    item.key
+                    item.key,
+                    cred.key
                 );
             }
             has_items = true;
