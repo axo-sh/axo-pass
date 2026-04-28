@@ -3,6 +3,7 @@ import {globalStyle, style} from '@vanilla-extract/css';
 import {vars} from '@/App.css';
 import {card} from '@/components/Card.css';
 import {colorVar} from '@/styles/colors.css';
+import {customScrollbar} from '@/styles/scrollbar.css';
 import {spacing} from '@/styles/utils';
 
 export const passwordRequest = style({
@@ -11,23 +12,29 @@ export const passwordRequest = style({
   height: 'auto',
 });
 
-export const passwordRequestContent = style({
-  overflow: 'scroll',
-});
+export const passwordRequestContent = style([
+  {
+    overflow: 'scroll',
+  },
+  customScrollbar,
+]);
 
 globalStyle(`${passwordRequestContent} > .${card.classNames.base}`, {
   flexShrink: 0,
   flexGrow: 1,
 });
 
-export const passwordRequestDescription = style({
-  fontSize: vars.scale.xs,
-  fontFamily: vars.fonts.monospace,
-  fontWeight: 600,
-  whiteSpace: 'pre-wrap',
-  overflowWrap: 'break-word',
-  overflowY: 'scroll',
-});
+export const passwordRequestDescription = style([
+  {
+    fontSize: vars.scale.xs,
+    fontFamily: vars.fonts.monospace,
+    fontWeight: 600,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'break-word',
+    overflowY: 'scroll',
+  },
+  customScrollbar,
+]);
 
 export const passwordRequestKeyId = style({
   fontFamily: vars.fonts.monospace,

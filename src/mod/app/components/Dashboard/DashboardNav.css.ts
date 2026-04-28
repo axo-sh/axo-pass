@@ -2,21 +2,25 @@ import {globalStyle, style} from '@vanilla-extract/css';
 
 import {vars} from '@/App.css';
 import {colorVar} from '@/styles/colors.css';
+import {customScrollbar} from '@/styles/scrollbar.css';
 import {spacing} from '@/styles/utils';
 
-export const nav = style({
-  display: 'flex',
-  flexDirection: 'column',
-  borderRightWidth: 1,
-  borderRightStyle: 'solid',
-  borderRightColor: colorVar.light20,
-  paddingTop: spacing(1),
-  paddingLeft: spacing(2),
-  paddingRight: spacing(3 / 2),
-  fontSize: vars.scale.nav,
-  overflowY: 'scroll',
-  WebkitUserSelect: 'none',
-});
+export const nav = style([
+  {
+    display: 'flex',
+    flexDirection: 'column',
+    borderRightWidth: 1,
+    borderRightStyle: 'solid',
+    borderRightColor: colorVar.light20,
+    paddingTop: spacing(1),
+    paddingLeft: spacing(2),
+    paddingRight: spacing(3 / 2),
+    fontSize: vars.scale.nav,
+    overflowY: 'auto',
+    WebkitUserSelect: 'none',
+  },
+  customScrollbar,
+]);
 
 export const navLinks = style({
   listStyle: 'none',

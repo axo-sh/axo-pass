@@ -4,15 +4,19 @@ import {vars} from '@/App.css';
 import {flex, gapVar} from '@/components/Flex.css';
 import {layoutDescription, layoutTitle} from '@/layout/Layout.css';
 import {accentScheme, colorVar} from '@/styles/colors.css';
+import {customScrollbar} from '@/styles/scrollbar.css';
 import {spacing} from '@/styles/utils';
 
-export const dashboardContent = style({
-  paddingLeft: spacing(2),
-  paddingRight: spacing(2),
-  paddingBottom: spacing(4),
-  overflowY: 'scroll',
-  overflowX: 'hidden',
-});
+export const dashboardContent = style([
+  {
+    paddingLeft: spacing(2),
+    paddingRight: spacing(2),
+    paddingBottom: spacing(4),
+    overflowY: 'auto',
+    overflowX: 'hidden',
+  },
+  customScrollbar,
+]);
 
 export const dashboardContentHeader = style({
   position: 'sticky',

@@ -3,6 +3,7 @@ import {recipe} from '@vanilla-extract/recipes';
 
 import {vars} from '@/App.css';
 import {accentScheme, colorVar} from '@/styles/colors.css';
+import {customScrollbar} from '@/styles/scrollbar.css';
 import {spacing} from '@/styles/utils';
 
 export const secretsList = recipe({
@@ -75,16 +76,19 @@ export const secretItemValueVault = style({
   color: colorVar.dim50,
 });
 
-export const secretItemCredentialSecret = style({
-  margin: spacing(0.5, 0, 0, 0),
-  border: `1px solid ${colorVar.light10}`,
-  lineHeight: 1.2,
-  borderRadius: 6,
-  vars: accentScheme,
-  overflow: 'scroll',
-  padding: spacing(1, 1.25),
-  whiteSpace: 'pre-wrap',
-});
+export const secretItemCredentialSecret = style([
+  {
+    margin: spacing(0.5, 0, 0, 0),
+    border: `1px solid ${colorVar.light10}`,
+    lineHeight: 1.2,
+    borderRadius: 6,
+    vars: accentScheme,
+    overflow: 'scroll',
+    padding: spacing(1, 1.25),
+    whiteSpace: 'pre-wrap',
+  },
+  customScrollbar,
+]);
 
 export const secretItemDesc = style({
   fontSize: vars.scale.xs,
