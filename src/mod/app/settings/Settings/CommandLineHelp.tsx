@@ -59,6 +59,36 @@ export const CommandLineHelp: React.FC<Props> = ({appBundlePath}) => {
         <CodeBlock canCopy>source {'<'}(ap shellenv zsh)</CodeBlock>
       </DashboardSection>
 
+      <DashboardSection title="Inject secrets into files">
+        <div>
+          Replace <Code>axo://</Code> references in any text file with their resolved secret values:
+        </div>
+        <CodeBlock canCopy>ap inject --input config.template.yml --output config.yml</CodeBlock>
+        <div>
+          Reads from stdin and writes to stdout when <Code>--input</Code> / <Code>--output</Code>{' '}
+          are omitted:
+        </div>
+        <CodeBlock canCopy>cat config.template.yml | ap inject {'>'} config.yml</CodeBlock>
+      </DashboardSection>
+
+      <DashboardSection title="Run commands with secrets in the environment">
+        <div>
+          Interpolate <Code>axo://</Code> references already present in the environment, then run a
+          command:
+        </div>
+        <CodeBlock canCopy>ap exec -- make deploy</CodeBlock>
+        <div>
+          Load one or more dotenv files first — values in those files are also interpolated before
+          the command runs:
+        </div>
+        <CodeBlock canCopy>ap exec --env-file .env.production -- node server.js</CodeBlock>
+        <div>
+          Glob patterns are supported, and multiple <Code>--env-file</Code> flags can be combined
+          (later files take precedence):
+        </div>
+        <CodeBlock canCopy>ap exec --env-file '.env.*' --env-file .env.local -- ./deploy.sh</CodeBlock>
+      </DashboardSection>
+
       <DashboardSection title="Shell integration status">
         {shellStatus?.configured ? (
           <span>
