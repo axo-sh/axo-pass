@@ -24,6 +24,10 @@ pub struct ExecCommand {
 }
 
 impl ExecCommand {
+    // ways to test this:
+    // FOO='axo://...' ap exec -- printenv FOO
+    // FOO='axo://...' ap exec -- sh -c 'echo $FOO'
+    // ap exec --env-file /tmp/test.env -- printenv FOO
     pub async fn execute(&self) -> ! {
         let env = self.try_prepare_env().await.unwrap_or_else(|e| {
             eprintln!("error: {e}");
