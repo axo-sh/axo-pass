@@ -83,7 +83,7 @@ export const secretItemCredentialSecret = style([
     lineHeight: 1.2,
     borderRadius: 6,
     vars: accentScheme,
-    overflow: 'scroll',
+    overflow: 'auto',
     padding: spacing(1, 1.25),
     whiteSpace: 'pre-wrap',
   },
