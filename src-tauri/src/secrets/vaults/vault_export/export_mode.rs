@@ -6,6 +6,8 @@ use secrecy::SecretString;
 
 use crate::secrets::vaults::errors::Error;
 
+pub const SCRYPT_WORK_FACTOR: u8 = 21;
+
 pub enum ExportMode {
     /// Encrypt the file key with a passphrase (age scrypt)
     Passphrase(SecretString),
@@ -18,7 +20,12 @@ impl ExportMode {
     pub fn wrap_file_key(&self, raw_key: &[u8]) -> Result<String, Error> {
         let recipient: Box<dyn age::Recipient> = match self {
             ExportMode::Passphrase(passphrase) => {
-                Box::new(age::scrypt::Recipient::new(passphrase.clone()))
+                let mut r = age::scrypt::Recipient::new(passphrase.clone());
+                // https://words.filippo.io/the-scrypt-parameters/
+                // minimum memory is N x 2r x 64 bytes, and the default r is 8, so a log_n of 21
+                // means about 2 GB of memory needed
+                r.set_work_factor(SCRYPT_WORK_FACTOR);
+                Box::new(r)
             },
             ExportMode::Recipient(pubkey) => {
                 let r: age::x25519::Recipient = pubkey.parse().map_err(|e: &str| {

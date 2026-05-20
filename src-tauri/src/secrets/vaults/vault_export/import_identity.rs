@@ -4,6 +4,7 @@ use std::iter::once;
 use secrecy::SecretString;
 
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::vault_export::export_mode::SCRYPT_WORK_FACTOR;
 
 pub enum ImportIdentity {
     Passphrase(SecretString),
@@ -16,7 +17,9 @@ impl ImportIdentity {
     pub fn unwrap_file_key(&self, age_ciphertext: &str) -> Result<Vec<u8>, Error> {
         let identity: Box<dyn age::Identity> = match self {
             ImportIdentity::Passphrase(passphrase) => {
-                Box::new(age::scrypt::Identity::new(passphrase.clone()))
+                let mut identity = age::scrypt::Identity::new(passphrase.clone());
+                identity.set_max_work_factor(SCRYPT_WORK_FACTOR + 1);
+                Box::new(identity)
             },
             ImportIdentity::Identity(identity) => Box::new(identity.clone()),
         };
