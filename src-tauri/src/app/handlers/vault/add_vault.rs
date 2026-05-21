@@ -6,6 +6,7 @@ use typeshare::typeshare;
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::get_vault::VaultResponse;
+use crate::app::handlers::vault::schemas::VaultWrapperSchemaExt;
 
 #[derive(Deserialize)]
 #[typeshare]

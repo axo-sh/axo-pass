@@ -1,9 +1,11 @@
 use serde::Serialize;
+use tauri_plugin_updater::UpdaterExt;
 use time::format_description::well_known;
+use time::{Duration, OffsetDateTime};
 use typeshare::typeshare;
 
-use crate::core::config::APP_CONFIG;
-use crate::core::updates::{UpdateCheckRecord, UpdateCheckResult, check_for_updates};
+use axo_pass_core::core::config::APP_CONFIG;
+use axo_pass_core::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "status", content = "data", rename_all = "snake_case")]
@@ -95,4 +97,77 @@ pub async fn set_update_check_disabled(disabled: bool) -> Result<(), String> {
         .save()
         .map_err(|e| format!("Failed to save config: {e}"))?;
     Ok(())
+}
+
+pub async fn check_for_updates(app_handle: tauri::AppHandle, force: bool) {
+    // Check updates in a block to release the lock early
+    let now = OffsetDateTime::now_utc();
+    if force {
+        if let Ok(config) = APP_CONFIG.lock()
+            && let Some(ref updates) = config.updates
+            && now - updates.checked_at < Duration::minutes(5)
+        {
+            log::debug!("Skipping update check: too soon after last check.");
+            return;
+        }
+    } else if let Ok(config) = APP_CONFIG.lock() {
+        if config.update_check_disabled.unwrap_or(false) {
+            log::debug!("Skipping update check: Update checks are disabled.");
+        }
+        if let Some(ref updates) = config.updates
+            && updates.checked_at.date() == now.date()
+        {
+            log::debug!("Skipping update check: Already checked today.");
+            if let UpdateCheckResult::UpdateAvailable { version } = &updates.result {
+                println!("Update available (cached): {version}");
+            }
+        }
+        return;
+    } else {
+        log::warn!("Failed to acquire config lock for update check.");
+        return;
+    }
+
+    log::debug!("Checking for updates...");
+    match app_handle.updater() {
+        Ok(updater) => match updater.check().await {
+            Ok(Some(update)) => {
+                let version = update.version.clone();
+                println!("Update available: {version}");
+                let mut config = APP_CONFIG.lock().unwrap();
+                config.record_update_check(UpdateCheckResult::UpdateAvailable { version });
+                if let Err(e) = config.save() {
+                    eprintln!("Failed to save config after update check: {e}");
+                }
+            },
+            Ok(None) => {
+                eprintln!("No updates available");
+                let mut config = APP_CONFIG.lock().unwrap();
+                config.record_update_check(UpdateCheckResult::UpToDate {});
+                if let Err(e) = config.save() {
+                    eprintln!("Failed to save config after update check: {e}");
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to check for updates: {e}");
+                let mut config = APP_CONFIG.lock().unwrap();
+                config.record_update_check(UpdateCheckResult::Error {
+                    error: e.to_string(),
+                });
+                if let Err(e) = config.save() {
+                    eprintln!("Failed to save config after update check: {e}");
+                }
+            },
+        },
+        Err(e) => {
+            eprintln!("Failed to get updater: {e}");
+            let mut config = APP_CONFIG.lock().unwrap();
+            config.record_update_check(UpdateCheckResult::Error {
+                error: e.to_string(),
+            });
+            if let Err(e) = config.save() {
+                eprintln!("Failed to save config after update check: {e}");
+            }
+        },
+    }
 }

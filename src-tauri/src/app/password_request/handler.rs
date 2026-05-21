@@ -4,7 +4,7 @@ use tauri::Emitter;
 use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordResponse, RequestEvent, RequestState};
-use crate::secrets::keychain::errors::KeychainError;
+use axo_pass_core::secrets::keychain::errors::KeychainError;
 
 /// Generic password request handler, contains state machine logic for
 /// requesting passwords from user in the app

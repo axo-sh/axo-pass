@@ -3,7 +3,7 @@ use typeshare::typeshare;
 
 use crate::app::handlers::app_errors::AppError;
 use crate::app::handlers::ssh::schema::ssh_key_entry::SshKeyEntry;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
+use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]

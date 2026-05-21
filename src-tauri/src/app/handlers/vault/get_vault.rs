@@ -5,9 +5,9 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::app::handlers::vault::schemas::VaultSchema;
+use crate::app::handlers::vault::schemas::{VaultSchema, VaultWrapperSchemaExt};
 use crate::app::handlers::vault::with_unlocked_vault;
-use crate::secrets::vaults::DEFAULT_VAULT;
+use axo_pass_core::secrets::vaults::DEFAULT_VAULT;
 
 #[derive(Deserialize)]
 #[typeshare]

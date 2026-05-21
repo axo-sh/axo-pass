@@ -1,0 +1,53 @@
+[package]
+name = "axo-pass-core"
+version.workspace = true
+edition.workspace = true
+description = "axo-pass core"
+
+[lib]
+crate-type = ["rlib"]
+name = "axo_pass_core"
+
+[dependencies]
+aes-gcm = "0.10.3"
+age = {version = "0.11.3", features = ["armor"]}
+age-core = "0.11.0"
+anyhow.workspace = true
+base64 = "0.22.1"
+block2 = "0.6.2"
+color-print = "0.3.7"
+dirs = "6.0.0"
+glob = "0.3"
+itertools = "0.13.0"
+libproc = "0.14.11"
+log.workspace = true
+lru = "0.16.4"
+md5 = "0.8"
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-local-authentication = "0.3.2"
+objc2-security = "0.3.2"
+p256 = "0.13"
+percent-encoding = "2.3.2"
+regex = "1.12.3"
+rsa = "0.9.10"
+secrecy = {version = "0.10.3", features = ["serde"]}
+serde.workspace = true
+serde_json.workspace = true
+serde_with = {version = "3.18.0", features = ["base64"]}
+ssh-agent-lib = "0.5.2"
+ssh-encoding = "0.2"
+ssh-key = {version = "0.6.7", features = ["rsa"]}
+thiserror.workspace = true
+time = {version = "0.3.47", features = ["serde", "serde-well-known"]}
+tokio.workspace = true
+toml = "1.1.2"
+typeshare = "1.0.5"
+url = "2.5.8"
+uuid = {version = "1.23.1", features = ["serde", "v4", "v7"]}
+zeroize = {version = "1.8.2", features = ["derive"]}
+
+[dev-dependencies]
+tempfile = "3"

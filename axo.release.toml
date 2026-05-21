@@ -1,7 +1,7 @@
 [tasks]
 build = """\
-  TAURI_APP_BUILD_SHA=$(git rev-parse head) \
-  TAURI_APP_BUILT_AT=$(date) \
+  APP_BUILD_SHA=$(git rev-parse head) \
+  APP_BUILT_AT=$(date) \
   cargo-tauri build -b app \
     --config src-tauri/tauri.conf.release.json \
 """
@@ -29,6 +29,7 @@ notary-log = """\
 
 [env]
 APPLE_TEAM_ID = "75J48AQ5LF"
+# cert "$type: $name ($team_id)"
 APPLE_SIGNING_IDENTITY = "Developer ID Application: Breakfast Labs, LLC (75J48AQ5LF)"
 APPLE_CERTIFICATE = "axo://frittata/apple/apple_certificate"
 APPLE_CERTIFICATE_PASSWORD = "axo://frittata/apple/apple_certificate_password"

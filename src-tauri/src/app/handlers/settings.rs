@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri_utils::platform::current_exe;
 use typeshare::typeshare;
 
-use crate::core::dirs::vaults_dir;
+use axo_pass_core::core::dirs::vaults_dir;
 
 #[derive(Serialize, Debug)]
 #[typeshare]

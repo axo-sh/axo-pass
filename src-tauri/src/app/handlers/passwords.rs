@@ -1,10 +1,10 @@
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::secrets::keychain::generic_password::PasswordEntry;
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn list_passwords() -> Result<Vec<PasswordEntry>, AppError> {
-    use crate::secrets::keychain::generic_password::PasswordEntryType;
+    use axo_pass_core::secrets::keychain::generic_password::PasswordEntryType;
     // no keychain in debug mode because it's not codesigned
     let passwords = vec![
         PasswordEntry {

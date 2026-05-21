@@ -4,8 +4,8 @@ use std::sync::PoisonError;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::vaults::Error as VaultError;
+use axo_pass_core::secrets::keychain::errors::KeychainError;
+use axo_pass_core::secrets::vaults::Error as VaultError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[typeshare]
@@ -203,8 +203,8 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::secrets::keychain::errors::KeychainError;
-    use crate::secrets::vaults::Error as VaultError;
+    use axo_pass_core::secrets::keychain::errors::KeychainError;
+    use axo_pass_core::secrets::vaults::Error as VaultError;
 
     #[test]
     fn test_app_error_from_anyhow_error() {

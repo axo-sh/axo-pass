@@ -5,11 +5,11 @@ use typeshare::typeshare;
 
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::ssh::schema::ssh_key_entry::{SshKeyAgent, SshKeyEntry};
-use crate::cli::commands::ssh_agent::{list_axo_agent_identities, list_system_agent_identities};
-use crate::secrets::keychain::generic_password::PasswordEntry;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
-use crate::ssh::ssh_keys::SystemSshKey;
-use crate::ssh::utils::compute_sha256_fingerprint;
+use axo_pass_cli::cli::commands::ssh_agent::{list_axo_agent_identities, list_system_agent_identities};
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
+use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
+use axo_pass_core::ssh::ssh_keys::SystemSshKey;
+use axo_pass_core::ssh::utils::compute_sha256_fingerprint;
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]

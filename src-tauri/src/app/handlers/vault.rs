@@ -2,8 +2,8 @@ use std::sync::Mutex;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::core::auth::check_auth_still_valid;
-use crate::secrets::vaults::VaultWrapper;
+use axo_pass_core::core::auth::check_auth_still_valid;
+use axo_pass_core::secrets::vaults::VaultWrapper;
 
 pub mod add_or_update_credential;
 pub mod add_or_update_item;

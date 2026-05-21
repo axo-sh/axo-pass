@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
-use crate::cli::commands::ssh_agent::{
+use axo_pass_cli::cli::commands::ssh_agent::{
     AgentStatus, SshAgentServer, get_agent_status_for_socket, get_system_socket_path,
 };
 

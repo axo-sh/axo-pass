@@ -1,7 +1,7 @@
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::cli::shell_integration;
+use axo_pass_cli::cli::shell_integration;
 
 #[derive(Serialize, Debug)]
 #[typeshare]

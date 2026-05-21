@@ -17,8 +17,8 @@ use crate::app::app_mode::AppMode;
 use crate::app::app_state::AppState;
 use crate::app::protocols::pinentry::{PinentryHandler, PinentryServer, PinentryState};
 use crate::app::protocols::ssh_askpass::{AskPassState, SshAskpassHandler};
-use crate::core::dirs::log_data_dir;
-use crate::core::updates::check_for_updates;
+use axo_pass_core::core::dirs::log_data_dir;
+use crate::app::handlers::updates::check_for_updates;
 
 const STD_DELAY: Duration = Duration::from_millis(200);
 const SSH_EXIT_DELAY: Duration = Duration::from_millis(800);

@@ -6,8 +6,8 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
-use crate::secrets::keychain::generic_password::PasswordEntry;
-use crate::ssh::utils::get_ssh_key_fingerprint;
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
+use axo_pass_core::ssh::utils::get_ssh_key_fingerprint;
 
 static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     let valid_path_char = r#"[^:!$`&*()'"+/\\]"#;

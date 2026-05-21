@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use typeshare::typeshare;
 
-use crate::secrets::vaults::{Error, VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
+use axo_pass_core::secrets::vaults::{Error, VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
 
 // VaultSchema is the serialized form of VaultWrapper, with decrypted item
 // titles and credential titles, but without credential values. Used for sending
@@ -18,8 +18,12 @@ pub struct VaultSchema {
     pub data: BTreeMap<String, VaultItemSchema>,
 }
 
-impl VaultWrapper {
-    pub fn to_schema(&self) -> Result<VaultSchema, Error> {
+pub trait VaultWrapperSchemaExt {
+    fn to_schema(&self) -> Result<VaultSchema, Error>;
+}
+
+impl VaultWrapperSchemaExt for VaultWrapper {
+    fn to_schema(&self) -> Result<VaultSchema, Error> {
         let items = self.list_items()?;
         Ok(VaultSchema {
             key: self.key.clone(),

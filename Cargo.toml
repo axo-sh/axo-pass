@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/cli",
+  "crates/core",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+axo-pass-cli = {path = "crates/cli"}
+axo-pass-core = {path = "crates/core"}
+log = "0.4.29"
+serde = {version = "1", features = ["derive"]}
+serde_json = "1"
+thiserror = "2.0.18"
+tokio = {version = "1.52.1", features = ["full"]}

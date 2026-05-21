@@ -7,8 +7,8 @@ release = "axo.release.toml"
 [tasks]
 dev = "tauri dev"
 build = """\
-  TAURI_APP_BUILD_SHA=$(git rev-parse head) \
-  TAURI_APP_BUILT_AT=$(date) \
+  APP_BUILD_SHA=$(git rev-parse head) \
+  APP_BUILT_AT=$(date) \
   cargo-tauri build -b app \
 """
 icon = "tauri icon ./src-tauri/misc/app-icon.png"

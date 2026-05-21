@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::core::find_bin_folder::find_bin_folder;
+use axo_pass_core::core::find_bin_folder::find_bin_folder;
 
 #[tauri::command]
 pub async fn gpg_test_integration() -> Result<(), String> {

@@ -1,4 +1,4 @@
-use crate::secrets::vaults::VaultsManager;
+use axo_pass_core::secrets::vaults::VaultsManager;
 
 #[derive(Default)]
 pub struct AppState {

@@ -1,0 +1,44 @@
+[package]
+name = "axo-pass-cli"
+version.workspace = true
+edition.workspace = true
+description = "axo-pass CLI binary"
+
+[lib]
+crate-type = ["rlib"]
+name = "axo_pass_cli"
+
+# [[bin]]
+# name = "axo-pass"
+# path = "src/main.rs"
+
+[dependencies]
+age = {version = "0.11.3", features = ["armor"]}
+anyhow.workspace = true
+axo-pass-core.workspace = true
+base64 = "0.22.1"
+clap = {version = "4.6.1", features = ["derive"]}
+clap_complete = "4.6.2"
+color-print = "0.3.7"
+dirs = "6.0.0"
+dotenvy = "0.15.7"
+fork = "0.6.0"
+glob = "0.3"
+indoc = "2.0.7"
+inquire = "0.9.4"
+itertools = "0.13.0"
+log.workspace = true
+regex = "1.12.3"
+rsa = "0.9.10"
+secrecy = {version = "0.10.3", features = ["serde"]}
+serde.workspace = true
+serde_json.workspace = true
+shlex = "1.3.0"
+ssh-agent-lib = "0.5.2"
+ssh-encoding = "0.2"
+ssh-key = {version = "0.6.7", features = ["rsa"]}
+thiserror.workspace = true
+time = {version = "0.3.47", features = ["serde", "serde-well-known"]}
+tokio.workspace = true
+tracing-appender = "0.2"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}

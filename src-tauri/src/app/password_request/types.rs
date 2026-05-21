@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::secrets::keychain::generic_password::PasswordEntry;
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 
 /// Trait for password requests that can be handled by the generic handler
 pub trait PasswordRequest: Clone + Serialize {

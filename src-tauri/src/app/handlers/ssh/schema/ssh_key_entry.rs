@@ -4,9 +4,9 @@ use serde::Serialize;
 use ssh_agent_lib::proto;
 use typeshare::typeshare;
 
-use crate::secrets::keychain::managed_key::ManagedSshKey;
-use crate::ssh::ssh_keys::{SshKeyType, SystemSshKey};
-use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
+use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
+use axo_pass_core::ssh::ssh_keys::{SshKeyType, SystemSshKey};
+use axo_pass_core::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]
