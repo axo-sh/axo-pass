@@ -1,0 +1,4 @@
+.build/
+Sources/axo_pass_ffiFFI/axo_pass_ffiFFI.h
+Sources/axo_pass_ffiFFI/module.modulemap
+Sources/AxoPassFFI/axo_pass_ffi.swift

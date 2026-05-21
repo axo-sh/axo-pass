@@ -1,0 +1,39 @@
+// swift-tools-version: 6.2
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+// Static library + UniFFI Swift bindings are produced by `axo ffi` (see axo.toml).
+// Outputs land in target/<profile>/libaxo_pass_ffi.a and Sources/{axo_pass_ffiFFI,AxoPassFFI}.
+
+let package = Package(
+    name: "Axo Pass",
+    platforms: [.macOS(.v15)],
+    targets: [
+        .systemLibrary(
+            name: "axo_pass_ffiFFI",
+            path: "Sources/axo_pass_ffiFFI"
+        ),
+        .target(
+            name: "AxoPassFFI",
+            dependencies: ["axo_pass_ffiFFI"],
+            path: "Sources/AxoPassFFI"
+        ),
+        .executableTarget(
+            name: "axo_pass",
+            dependencies: ["AxoPassFFI"],
+            path: "Sources/axo_pass",
+            linkerSettings: [
+                // target/swift-lib is a symlink maintained by scripts/build-ffi.sh
+                // pointing at target/debug or target/release depending on PROFILE.
+                .unsafeFlags(["-L../target/swift-lib"]),
+                .linkedLibrary("axo_pass_ffi"),
+                .linkedFramework("AppKit"),
+                .linkedFramework("Foundation"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Security"),
+                .linkedFramework("LocalAuthentication"),
+            ]
+        ),
+    ]
+)

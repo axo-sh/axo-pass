@@ -24,6 +24,12 @@ logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
 fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
+"app:ffi" = "./scripts/build-ffi.sh"
+"app:build" = [":app:ffi", "swift build --package-path app"]
+"app:run" = [":app:ffi", "swift run --package-path app"]
+"app:ffi:release" = "PROFILE=release ./scripts/build-ffi.sh"
+"app:build:release" = [":app:ffi:release", "swift build -c release --package-path app"]
+"app:run:release" = [":app:ffi:release", "swift run -c release --package-path app"]
 
 [packages]
 "nodejs/node" = "^25.0.0"

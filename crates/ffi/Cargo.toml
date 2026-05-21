@@ -1,0 +1,20 @@
+[package]
+name = "axo-pass-ffi"
+version.workspace = true
+edition.workspace = true
+description = "UniFFI bindings for axo-pass (Swift)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "axo_pass_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+axo-pass-core.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uniffi = { version = "0.31", features = ["cli", "tokio"] }
