@@ -27,9 +27,15 @@ fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 "app:ffi" = "./scripts/build-ffi.sh"
 "app:build" = [":app:ffi", "swift build --package-path app"]
 "app:run" = [":app:ffi", "swift run --package-path app"]
+"app:sign" = "./scripts/sign-app.sh"
 "app:ffi:release" = "PROFILE=release ./scripts/build-ffi.sh"
-"app:build:release" = [":app:ffi:release", "swift build -c release --package-path app"]
-"app:run:release" = [":app:ffi:release", "swift run -c release --package-path app"]
+"app:sign:release" = "PROFILE=release ./scripts/sign-app.sh"
+# Release run: build, codesign with entitlements (so keychain access groups,
+# LocalAuthentication, etc. work), then exec the signed binary directly. We
+# don't use `swift run` here since it would relink/re-sign and clobber our
+# signature.
+"app:build:release" = [":app:ffi:release", "swift build -c release --package-path app", ":app:sign:release"]
+"app:run:release" = [":app:build:release", "\"$(swift build -c release --package-path app --show-bin-path)/axo_pass\""]
 
 [packages]
 "nodejs/node" = "^25.0.0"

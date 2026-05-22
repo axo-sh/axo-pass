@@ -594,6 +594,7 @@ name = "axo-pass-ffi"
 version = "0.2.0"
 dependencies = [
  "axo-pass-core",
+ "secrecy",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",

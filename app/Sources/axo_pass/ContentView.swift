@@ -1,89 +1,65 @@
 import SwiftUI
-import AxoPassFFI
 
 struct ContentView: View {
   @Environment(VaultsModel.self) private var model
 
   var body: some View {
-    @Bindable var model = model
-    NavigationSplitView {
-      VaultsSidebar(selection: $model.selectedKey)
-    } detail: {
-      VaultDetail(vault: model.selectedVault)
+    if model.isAppUnlocked {
+      MainView()
+    } else {
+      LockScreen()
     }
-    .navigationTitle("Vaults")
+  }
+}
+
+private struct MainView: View {
+  @Environment(VaultsModel.self) private var model
+
+  var body: some View {
+    NavigationSplitView {
+      VaultsSidebar()
+    } content: {
+      contentPane
+    } detail: {
+      VaultDetailView()
+    }
     .toolbar {
-      ToolbarItem {
-        Button {
-          model.reload()
-        } label: {
+      ToolbarItem(placement: .navigation) {
+        Button { model.reload() } label: {
           Label("Reload", systemImage: "arrow.clockwise")
         }
       }
-    }
-  }
-}
-
-private struct VaultsSidebar: View {
-  @Environment(VaultsModel.self) private var model
-  @Binding var selection: String?
-
-  var body: some View {
-    Group {
-      if let err = model.loadError {
-        ContentUnavailableView(
-          "Couldn't load vaults",
-          systemImage: "exclamationmark.triangle",
-          description: Text(err)
-        )
-      } else if model.vaults.isEmpty {
-        ContentUnavailableView(
-          "No vaults",
-          systemImage: "lock.rectangle.stack",
-          description: Text("Create a vault with the axo-pass CLI to see it here.")
-        )
-      } else {
-        List(selection: $selection) {
-          ForEach(model.vaults, id: \.key) { vault in
-            VStack(alignment: .leading, spacing: 2) {
-              Text(vault.name ?? vault.key)
-                .font(.body)
-              if vault.name != nil {
-                Text(vault.key)
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-              }
-            }
-            .tag(vault.key)
-          }
+      ToolbarItem(placement: .primaryAction) {
+        Button { model.lock() } label: {
+          Label("Lock", systemImage: "lock")
         }
       }
     }
-    .navigationSplitViewColumnWidth(min: 200, ideal: 240)
   }
-}
 
-private struct VaultDetail: View {
-  let vault: VaultInfo?
-
-  var body: some View {
-    if let vault {
-      VStack(alignment: .leading, spacing: 16) {
-        Text(vault.name ?? vault.key)
-          .font(.title)
-        LabeledContent("Key", value: vault.key)
-        if let name = vault.name {
-          LabeledContent("Name", value: name)
-        }
-        Spacer()
-      }
-      .padding()
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  @ViewBuilder
+  private var contentPane: some View {
+    if case .vault = model.sidebarSelection {
+      ItemsPane()
+    } else if case .ssh = model.sidebarSelection {
+      PlaceholderPane(title: "SSH", icon: "asterisk")
+    } else if case .gpg = model.sidebarSelection {
+      PlaceholderPane(title: "Keys", icon: "key.fill")
+    } else if case .setup = model.sidebarSelection {
+      PlaceholderPane(title: "Setup", icon: "terminal")
     } else {
-      ContentUnavailableView(
-        "No vault selected",
-        systemImage: "sidebar.left"
-      )
+      ContentUnavailableView("Select a section", systemImage: "sidebar.left")
     }
+  }
+}
+
+private struct PlaceholderPane: View {
+  let title: String
+  let icon: String
+
+  var body: some View {
+    ContentUnavailableView(title, systemImage: icon, description: Text("Coming soon"))
+      .navigationSplitViewColumnWidth(min: 200, ideal: 240)
+      .navigationTitle(title)
   }
 }

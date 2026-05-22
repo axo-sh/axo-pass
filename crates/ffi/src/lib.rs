@@ -1,5 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use secrecy::ExposeSecret;
+
+use axo_pass_core::core::auth::{AuthContext, AuthMethod, invalidate_auth, run_on_auth_thread};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::vaults::Error as VaultError;
 use axo_pass_core::secrets::vaults::VaultsManager;
@@ -20,10 +23,6 @@ pub enum FfiError {
     #[error("Authentication expired")]
     AuthExpired,
 
-    /// The vault exists but is locked; call unlock() first.
-    #[error("Vault locked")]
-    VaultLocked,
-
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -39,7 +38,6 @@ impl From<VaultError> for FfiError {
     fn from(e: VaultError) -> Self {
         match e {
             VaultError::VaultNotFound(k) => FfiError::NotFound(k),
-            VaultError::VaultLocked => FfiError::VaultLocked,
             VaultError::VaultInvalidAuth(k) => FfiError::from(k),
             VaultError::KeyRetrievalFailed(k) => FfiError::from(k),
             VaultError::KeyCreationFailed(k) => FfiError::from(k),
@@ -68,23 +66,59 @@ pub struct VaultInfo {
     pub name: Option<String>,
 }
 
+#[derive(uniffi::Record)]
+pub struct CredentialInfo {
+    pub key: String,
+    pub title: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct ItemInfo {
+    pub key: String,
+    pub title: String,
+    pub credentials: Vec<CredentialInfo>,
+}
+
 // ---------------------------------------------------------------------------
 // AxoPass object
 // ---------------------------------------------------------------------------
 
 #[derive(uniffi::Object)]
 pub struct AxoPass {
-    // Arc so async methods can move a cheap clone into spawn_blocking.
     manager: Arc<Mutex<VaultsManager>>,
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 impl AxoPass {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
         })
+    }
+
+    /// Authenticate globally via Touch ID / password. One prompt covers all
+    /// subsequent vault operations for the lifetime of the LAContext.
+    /// Mirrors `unlock_axo` in the Tauri app.
+    pub async fn unlock(&self) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(|| {
+            run_on_auth_thread(
+                AuthContext::SharedThreadLocal,
+                AuthMethod::Policy {
+                    reason: "unlock Axo Pass".to_string(),
+                },
+                |_| {},
+            )
+            .map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Invalidate the shared LAContext, requiring re-authentication.
+    /// Mirrors `lock_axo` in the Tauri app.
+    pub fn lock(&self) {
+        invalidate_auth();
     }
 
     /// List all known vaults. Does not require authentication.
@@ -101,16 +135,78 @@ impl AxoPass {
         Ok(vaults)
     }
 
-    /// Unlock a vault. Triggers a Touch ID / password prompt.
-    /// Call this before any operation that reads secrets.
-    pub async fn unlock_vault(&self, vault_key: String) -> Result<(), FfiError> {
+    /// List items for a vault. Decrypts the vault from disk using the
+    /// shared LAContext — no additional Touch ID prompt if `unlock` has
+    /// already been called. Triggers auth if called before `unlock`.
+    pub async fn list_items(&self, vault_key: String) -> Result<Vec<ItemInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            m.get_or_create_vault_mut(&vault_key)
-                .map_err(FfiError::from)?
-                .unlock()
-                .map_err(FfiError::from)
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+
+            // Decrypt from disk if not already in memory. Uses the shared
+            // LAContext so no re-prompt after a successful unlock().
+            if let Err(e) = vault.list_items() {
+                if matches!(e, VaultError::VaultLocked) {
+                    vault.unlock().map_err(FfiError::from)?;
+                } else {
+                    return Err(FfiError::from(e));
+                }
+            }
+
+            let items = vault.list_items().map_err(FfiError::from)?;
+            let mut result: Vec<ItemInfo> = items
+                .into_iter()
+                .map(|item| {
+                    let mut credentials: Vec<CredentialInfo> = item
+                        .credentials
+                        .values()
+                        .map(|c| CredentialInfo {
+                            key: c.key.clone(),
+                            title: c.title.clone(),
+                        })
+                        .collect();
+                    credentials.sort_by(|a, b| a.title.cmp(&b.title));
+                    ItemInfo {
+                        key: item.key.clone(),
+                        title: item.title.clone(),
+                        credentials,
+                    }
+                })
+                .collect();
+            result.sort_by(|a, b| a.title.cmp(&b.title));
+            Ok(result)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Retrieve a credential secret as raw bytes.
+    ///
+    /// Swift callers should immediately wrap the returned `Data` in a
+    /// `CryptoKit.SymmetricKey` and zero the `Data` buffer:
+    ///
+    ///   var raw = try await axoPass.getCredentialSecret(...)
+    ///   let key = SymmetricKey(data: raw)
+    ///   raw.resetBytes(in: raw.indices)
+    pub async fn get_credential_secret(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+    ) -> Result<Vec<u8>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_vault(&vault_key)
+                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+            match vault.get_secret(&item_key, &cred_key).map_err(FfiError::from)? {
+                Some(secret) => Ok(secret.expose_secret().as_bytes().to_vec()),
+                None => Err(FfiError::NotFound(format!("{vault_key}/{item_key}/{cred_key}"))),
+            }
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

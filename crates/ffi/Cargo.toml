@@ -15,6 +15,7 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 axo-pass-core.workspace = true
+secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uniffi = { version = "0.31", features = ["cli", "tokio"] }

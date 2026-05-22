@@ -10,6 +10,6 @@ struct AxoPassApp: App {
         .environment(model)
         .task { model.reload() }
     }
-    .defaultSize(width: 720, height: 480)
+    .defaultSize(width: 960, height: 560)
   }
 }
