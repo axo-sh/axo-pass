@@ -136,7 +136,10 @@ impl AxoPassCommand {
             AxoPassCommand::Vault(vault) => vault.execute().await,
             AxoPassCommand::Item(item) => item.execute().await,
             AxoPassCommand::Read { item_reference } => {
-                ItemCommand::cmd_read(item_reference, None).unwrap();
+                if let Err(e) = ItemCommand::cmd_read(item_reference, None) {
+                    log::error!("{e}");
+                    std::process::exit(1);
+                }
             },
             AxoPassCommand::Exec(exec) => exec.execute().await,
             AxoPassCommand::Inject(inject) => inject.execute().await,

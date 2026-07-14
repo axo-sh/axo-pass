@@ -358,8 +358,18 @@ impl Vault {
         item_key: &str,
         cred_key: &str,
     ) -> Result<Option<SecretBox<String>>, Error> {
-        let item_id = self.get_item(item_key)?.id;
-        let cred_overview = self.get_item_credential(item_key, cred_key)?;
+        let item_id = match self.get_item(item_key) {
+            Ok(item) => item.id,
+            Err(Error::InvalidItemKey(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let cred_overview = match self.get_item_credential(item_key, cred_key) {
+            Ok(cred) => cred,
+            Err(Error::InvalidCredentialKey(_)) | Err(Error::InvalidItemKey(_)) => {
+                return Ok(None);
+            },
+            Err(e) => return Err(e),
+        };
         let cred_id = cred_overview.id;
         let Some(encrypted_secret) = self.secrets.get(&cred_overview.id) else {
             return Ok(None);
