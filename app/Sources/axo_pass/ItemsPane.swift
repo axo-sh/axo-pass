@@ -1,5 +1,5 @@
-import SwiftUI
 import AxoPassFFI
+import SwiftUI
 
 struct ItemsPane: View {
   @Environment(VaultsModel.self) private var model
@@ -7,14 +7,15 @@ struct ItemsPane: View {
   var body: some View {
     @Bindable var model = model
     Group {
-      if model.selectedVaultKey == nil {
-        ContentUnavailableView("Select a vault", systemImage: "sidebar.left")
-      } else if model.items.isEmpty {
-        ProgressView()
-      } else {
+      // if model.selectedVaultKey == nil {
+      //   ContentUnavailableView("Select a vault", systemImage: "sidebar.left")
+      // } else if model.items.isEmpty {
+      //   ProgressView()
+      // } else {
+      if model.selectedVault != nil && !model.items.isEmpty {
         List(selection: $model.selectedItemKey) {
           ForEach(model.items, id: \.key) { item in
-            ItemRow(item: item).tag(item.key)
+            ItemRow(item: item).tag(item.key).padding(6)
           }
         }
       }

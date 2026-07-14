@@ -10,6 +10,7 @@ struct AxoPassApp: App {
         .environment(model)
         .task { model.reload() }
     }
+    .windowStyle(.hiddenTitleBar)
     .defaultSize(width: 960, height: 560)
   }
 }

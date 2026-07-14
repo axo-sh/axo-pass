@@ -23,18 +23,6 @@ private struct MainView: View {
     } detail: {
       VaultDetailView()
     }
-    .toolbar {
-      ToolbarItem(placement: .navigation) {
-        Button { model.reload() } label: {
-          Label("Reload", systemImage: "arrow.clockwise")
-        }
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Button { model.lock() } label: {
-          Label("Lock", systemImage: "lock")
-        }
-      }
-    }
   }
 
   @ViewBuilder

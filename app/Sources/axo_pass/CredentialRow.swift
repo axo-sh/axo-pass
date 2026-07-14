@@ -1,25 +1,36 @@
+import AxoPassFFI
 import CryptoKit
 import SwiftUI
-import AxoPassFFI
 
 struct CredentialRow: View {
   let cred: CredentialInfo
   let secret: SymmetricKey?
   let error: String?
   let isRevealing: Bool
+  let isEditing: Bool
   let onReveal: () -> Void
   let onHide: () -> Void
   let onCopy: () -> Void
 
+  @State private var draftTitle: String = ""
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 8) {
       LabeledContent {
         actionButtons
       } label: {
         VStack(alignment: .leading, spacing: 2) {
-          Text(cred.title)
+          if isEditing {
+            TextField("Title", text: $draftTitle)
+              .fontWeight(.semibold)
+          } else {
+            Text(cred.title).fontWeight(.semibold)
+          }
           Text(cred.key).font(.caption).foregroundStyle(.secondary)
         }
+      }
+      .onChange(of: isEditing) { _, editing in
+        if editing { draftTitle = cred.title }
       }
 
       if let err = error {
@@ -27,12 +38,24 @@ struct CredentialRow: View {
       }
 
       if let secret {
-        LabeledContent("Value") {
-          SecretValueView(secret: secret)
+        // LabeledContent("Value") {
+        SecretValueView(secret: secret, onHide: onHide)
+        // }
+      } else {
+        Button(action: onReveal) {
+          Text("••••••••")
+            .font(.system(.body, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .padding(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         }
+        .buttonStyle(RevealPlaceholderButtonStyle())
       }
     }
     .padding(.vertical, 4)
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder
@@ -42,26 +65,44 @@ struct CredentialRow: View {
     } else if secret != nil {
       HStack(spacing: 4) {
         Button("Copy", action: onCopy).buttonStyle(.bordered).controlSize(.small)
-        Button("Hide", action: onHide).buttonStyle(.bordered).controlSize(.small)
       }
-    } else {
-      Button("Reveal", action: onReveal).buttonStyle(.bordered).controlSize(.small)
     }
+  }
+}
+
+private struct RevealPlaceholderButtonStyle: ButtonStyle {
+  @State private var isHovered = false
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .overlay(
+        RoundedRectangle(cornerRadius: 6)
+          .strokeBorder(.primary.opacity(isHovered ? 0.2 : 0), lineWidth: 1)
+      )
+      .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+      .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+      .animation(.easeInOut(duration: 0.15), value: isHovered)
+      .onHover { isHovered = $0 }
   }
 }
 
 private struct SecretValueView: View {
   let secret: SymmetricKey
+  let onHide: () -> Void
 
   var body: some View {
     let value = secret.withUnsafeBytes { ptr in
       String(bytes: ptr, encoding: .utf8) ?? "(binary data)"
     }
-    Text(value)
-      .font(.system(.body, design: .monospaced))
-      .textSelection(.enabled)
-      .padding(6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    Button(action: onHide) {
+      Text(value)
+        .font(.system(.body, design: .monospaced))
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .lineSpacing(8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    }
+    .textSelection(.enabled)
+    .buttonStyle(RevealPlaceholderButtonStyle())
   }
 }

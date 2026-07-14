@@ -35,5 +35,6 @@ struct LockScreen: View {
       .disabled(model.isUnlocking)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task { await model.unlock() }
   }
 }
