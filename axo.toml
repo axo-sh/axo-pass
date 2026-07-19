@@ -25,39 +25,16 @@ fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
 
-"strudel:sign" = {
-  command = "strudel sign",
-  env = { APPLE_SIGNING_IDENTITY = "axo://apple/developer/dev-cert" }
-}
-"strudel:run" = [
-  ":strudel:sign",
-  "pkill \"Axo Pass\"",
-  "sleep 1",
-  "open \"app/.build/dist/Axo Pass.app\""
-]
-
 # create the new app
 "app:ffi" = "./scripts/build-ffi.sh"
-"app:build" = [":app:ffi", "swift build --package-path app"]
-"app:run" = [":app:ffi", "swift run --package-path app"]
-"app:sign" = "./scripts/sign-app.sh"
-
-# release target
 "app:ffi:release" = "PROFILE=release ./scripts/build-ffi.sh"
-"app:sign:release" = "PROFILE=release ./scripts/sign-app.sh"
-# Release run: build, codesign with entitlements (so keychain access groups,
-# LocalAuthentication, etc. work), then exec the signed binary directly. We
-# don't use `swift run` here since it would relink/re-sign and clobber our
-# signature.
-"app:build:release" = [
-  ":app:ffi:release",
-  "swift build -c release --package-path app",
-  ":app:sign:release"
-]
-"app:run:release" = [
-  ":app:build:release",
-  "\"$(swift build -c release --package-path app --show-bin-path)/axo_pass\""
-]
+
+# strudel builds, signs (using entitlements + provisioning profile from
+# strudel.toml), and runs the app bundle. app:ffi is the pre-build codegen
+# step: uniffi-bindgen must run before Swift compiles.
+"strudel:build" = [":app:ffi", "strudel build"]
+"strudel:run" = [":app:ffi", "strudel run"]
+"strudel:release" = [":app:ffi:release", "strudel release"]
 
 [packages]
 "nodejs/node" = "^25.0.0"

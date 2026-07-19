@@ -6,7 +6,7 @@ description = "UniFFI bindings for axo-pass (Swift)"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["staticlib"]
 name = "axo_pass_ffi"
 
 [[bin]]

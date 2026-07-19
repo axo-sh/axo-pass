@@ -6,7 +6,7 @@
 #   PROFILE=debug|release  (default: debug)
 #
 # Outputs:
-#   target/<profile>/libaxo_pass_ffi.{dylib,a}
+#   target/<profile>/libaxo_pass_ffi.a
 #   target/swift-lib -> target/<profile>   (symlink used by Package.swift)
 #   app/Sources/axo_pass_ffiFFI/{axo_pass_ffiFFI.h,module.modulemap}
 #   app/Sources/AxoPassFFI/axo_pass_ffi.swift
@@ -23,7 +23,7 @@ fi
 echo "==> building axo-pass-ffi ($PROFILE)"
 cargo build "${cargo_flags[@]}"
 
-LIB="$ROOT/target/$PROFILE/libaxo_pass_ffi.dylib"
+LIB="$ROOT/target/$PROFILE/libaxo_pass_ffi.a"
 if [[ ! -f "$LIB" ]]; then
   echo "missing $LIB" >&2
   exit 1
