@@ -3,6 +3,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axo_pass_core::core::provenance::Provenance;
+use axo_pass_core::ssh::agent_client::default_socket_path;
 use ssh_agent_lib::agent::{Agent, Session};
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
@@ -10,8 +12,6 @@ use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::session::SshAgentSession;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
-use axo_pass_core::core::dirs::app_data_dir;
-use axo_pass_core::core::provenance::Provenance;
 
 #[derive(Clone)]
 pub struct SshAgentServer {
@@ -52,7 +52,7 @@ impl SshAgentServer {
         if let Some(socket_path) = self.socket_path.lock().await.as_ref() {
             return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
         }
-        let socket_path = SshAgentServer::default_socket_path();
+        let socket_path = default_socket_path();
         if socket_path.exists() {
             return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
         }
@@ -100,11 +100,6 @@ impl SshAgentServer {
         }
         let _ = fs::remove_file(&socket_path);
         Ok(())
-    }
-
-    pub fn default_socket_path() -> PathBuf {
-        // typically: ~/Library/Application Support/Axo Pass/agent.sock
-        app_data_dir().join("agent.sock")
     }
 }
 

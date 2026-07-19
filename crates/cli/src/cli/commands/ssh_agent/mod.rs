@@ -10,14 +10,17 @@ mod userauth_request;
 
 use std::fs;
 
+use axo_pass_core::ssh::agent_client::default_socket_path;
+pub use axo_pass_core::ssh::agent_client::{
+    AgentStatus, get_agent_status_for_socket, get_system_socket_path, list_axo_agent_identities,
+    list_system_agent_identities,
+};
 use clap::{Parser, Subcommand};
 use color_print::cprintln;
-pub use server::SshAgentServer;
+use server::SshAgentServer;
 
 pub use crate::cli::commands::ssh_agent::client::{
-    AgentStatus, SshAgentClientError, get_agent_status, get_agent_status_for_socket,
-    get_system_socket_path, list_axo_agent_identities, list_system_agent_identities,
-    stop_ssh_agent,
+    SshAgentClientError, get_agent_status, stop_ssh_agent,
 };
 
 #[derive(Parser, Debug)]
@@ -60,7 +63,7 @@ impl SshAgentCommand {
                     std::process::exit(0);
                 },
                 AgentStatus::StaleSocket => {
-                    let socket_path = SshAgentServer::default_socket_path();
+                    let socket_path = default_socket_path();
                     let replace = inquire::Confirm::new(&format!(
                         "Stale socket found ({}). Replace it?",
                         socket_path.display()

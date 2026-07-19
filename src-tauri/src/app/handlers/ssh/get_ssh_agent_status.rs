@@ -1,9 +1,9 @@
+use axo_pass_cli::cli::commands::ssh_agent::{
+    AgentStatus, get_agent_status_for_socket, get_system_socket_path,
+};
+use axo_pass_core::ssh::agent_client::default_socket_path;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
-
-use axo_pass_cli::cli::commands::ssh_agent::{
-    AgentStatus, SshAgentServer, get_agent_status_for_socket, get_system_socket_path,
-};
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]
@@ -44,7 +44,7 @@ pub struct SshAgentStatusResponse {
 pub fn get_ssh_agent_status(agent_type: SshAgentType) -> SshAgentStatusResponse {
     let (status, socket_path) = match agent_type {
         SshAgentType::Axo => {
-            let path = SshAgentServer::default_socket_path();
+            let path = default_socket_path();
             let status = get_agent_status_for_socket(&path);
             log::debug!(
                 "Axo SSH agent status: {:?}, socket path: {}",
