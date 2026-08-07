@@ -41,7 +41,7 @@ ssh-agent-lib = "0.5.2"
 ssh-encoding = "0.2"
 ssh-key = {version = "0.6.7", features = ["rsa"]}
 thiserror.workspace = true
-time = {version = "0.3.47", features = ["serde", "serde-well-known"]}
+time = {version = "0.3.47", features = ["serde", "serde-well-known", "local-offset"]}
 tokio.workspace = true
 toml = "1.1.2"
 typeshare = "1.0.5"
