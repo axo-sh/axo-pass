@@ -8,6 +8,9 @@ pub enum KeychainError {
     #[error("Authentication expired")]
     AuthenticationExpired,
 
+    #[error("Authentication was canceled by the system because another authentication request was in progress")]
+    AuthenticationInProgress,
+
     #[error("Item exists but access is not allowed without user authentication")]
     ItemNotAccessible,
 

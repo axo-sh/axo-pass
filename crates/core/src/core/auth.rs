@@ -147,35 +147,71 @@ fn init_shared_la_context() -> Retained<LAContext> {
     }
 }
 
+// evaluatePolicy shows OS authentication UI; if a second process calls it while
+// another process's prompt is up, the system cancels the first request
+// (LAError::SystemCancel / KeychainError::AuthenticationInProgress) instead of
+// queuing it. We serialize calls across processes with a blocking file lock so
+// concurrent invocations (e.g. `ap inject` run back-to-back) waits their turn
+// instead of repeatedly triggering.
+fn acquire_auth_lock() -> std::fs::File {
+    let path = crate::core::dirs::app_data_dir().join("auth.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .unwrap_or_else(|e| panic!("failed to open auth lock file {path:?}: {e}"));
+    file.lock().expect("failed to acquire auth lock");
+    file
+}
+
+// Kept as a defense-in-depth fallback for races with authentication requests
+// outside our control (e.g. another app), which the file lock above can't
+// serialize against.
+const AUTH_RETRY_ATTEMPTS: u32 = 50;
+const AUTH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
 // Authenticate the LAContext using the specified method
 fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(), KeychainError> {
-    let (callback, rx) = create_la_auth_callback();
-    match method {
-        AuthMethod::Policy { reason } => unsafe {
-            la_context.evaluatePolicy_localizedReason_reply(
-                LAPolicy::DeviceOwnerAuthentication,
-                &NSString::from_str(&reason),
-                &callback,
-            );
-        },
-        AuthMethod::AccessControl {
-            access_control,
-            operation,
-            reason,
-        } => unsafe {
-            let sec_access_control = access_control.to_sec_access_control()?;
-            la_context.evaluateAccessControl_operation_localizedReason_reply(
-                &sec_access_control,
+    let _lock = acquire_auth_lock();
+    let mut attempts_left = AUTH_RETRY_ATTEMPTS;
+    loop {
+        let (callback, rx) = create_la_auth_callback();
+        match &method {
+            AuthMethod::Policy { reason } => unsafe {
+                la_context.evaluatePolicy_localizedReason_reply(
+                    LAPolicy::DeviceOwnerAuthentication,
+                    &NSString::from_str(reason),
+                    &callback,
+                );
+            },
+            AuthMethod::AccessControl {
+                access_control,
                 operation,
-                &NSString::from_str(&reason),
-                &callback,
-            );
-        },
-    }
+                reason,
+            } => unsafe {
+                let sec_access_control = access_control.to_sec_access_control()?;
+                la_context.evaluateAccessControl_operation_localizedReason_reply(
+                    &sec_access_control,
+                    *operation,
+                    &NSString::from_str(reason),
+                    &callback,
+                );
+            },
+        }
 
-    match rx.recv() {
-        Ok(result) => result,
-        Err(e) => Err(anyhow!("error evaluating la_context: {e}").into()),
+        let result = match rx.recv() {
+            Ok(result) => result,
+            Err(e) => Err(anyhow!("error evaluating la_context: {e}").into()),
+        };
+
+        match result {
+            Err(KeychainError::AuthenticationInProgress) if attempts_left > 0 => {
+                attempts_left -= 1;
+                thread::sleep(AUTH_RETRY_DELAY);
+            },
+            other => return other,
+        }
     }
 }
 
