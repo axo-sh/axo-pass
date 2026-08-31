@@ -5,7 +5,6 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize)]
 #[typeshare]
@@ -19,8 +18,9 @@ pub fn delete_item(
     request: DeleteItemRequest,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<(), AppError> {
-    with_unlocked_vault(&state, &request.vault_key, |vw| {
-        vw.delete_item(&request.item_key)
-            .error_context("Failed to delete item.")
-    })
+    let mut guard = state.lock()?;
+    guard
+        .vaults
+        .with_unlocked_vault(&request.vault_key, |vw| vw.delete_item(&request.item_key))
+        .error_context("Failed to delete item.")
 }

@@ -6,7 +6,6 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::app::handlers::vault::with_unlocked_vault;
 
 #[typeshare]
 #[derive(Deserialize, Debug)]
@@ -29,7 +28,8 @@ pub async fn get_decrypted_credential(
     request: DecryptedCredentialRequest,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Option<DecryptedCredential>, AppError> {
-    let (secret, title) = with_unlocked_vault(&state, &request.vault_key, |vw| {
+    let mut guard = state.lock()?;
+    let (secret, title) = guard.vaults.with_unlocked_vault(&request.vault_key, |vw| -> Result<_, AppError> {
         let credential = vw
             .get_secret_overview(&request.item_key, &request.credential_key)?
             .ok_or(AppError::internal("Could not find credential."))?;

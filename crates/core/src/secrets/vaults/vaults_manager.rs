@@ -5,6 +5,7 @@ use std::process::Command;
 
 use secrecy::ExposeSecret;
 
+use crate::core::auth::check_auth_still_valid;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
@@ -144,6 +145,25 @@ impl VaultsManager {
 
     pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultWrapper)> {
         self.vaults.iter()
+    }
+
+    /// Get-or-create + unlock a vault, run `f`, then save. Generic over the
+    /// caller's own error type so each frontend (CLI, FFI) can keep its own
+    /// error taxonomy — it just needs `From<Error>` to absorb failures from
+    /// the get/unlock/save steps themselves.
+    pub fn with_unlocked_vault<F, R, E>(&mut self, vault_key: &str, f: F) -> Result<R, E>
+    where
+        F: FnOnce(&mut VaultWrapper) -> Result<R, E>,
+        E: From<Error>,
+    {
+        check_auth_still_valid().map_err(Error::VaultInvalidAuth)?;
+
+        let vw = self.get_or_create_vault_mut(vault_key)?;
+        vw.unlock()?;
+
+        let result = f(vw)?;
+        vw.save()?;
+        Ok(result)
     }
 
     pub fn get_or_create_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {

@@ -5,7 +5,6 @@ use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use crate::app::handlers::vault::with_unlocked_vault;
 
 #[derive(Deserialize)]
 #[typeshare]
@@ -30,8 +29,11 @@ pub async fn add_or_update_credential(
         value,
     } = request;
 
-    with_unlocked_vault(&state, &vault_key, |vw| {
-        vw.add_secret(&item_key, &credential_key, &title, value.into())
-            .error_context("Failed to add/update credential.")
-    })
+    let mut guard = state.lock()?;
+    guard
+        .vaults
+        .with_unlocked_vault(&vault_key, |vw| {
+            vw.add_secret(&item_key, &credential_key, &title, value.into())
+        })
+        .error_context("Failed to add/update credential.")
 }
