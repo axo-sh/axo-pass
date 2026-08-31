@@ -15,7 +15,8 @@ pub struct AddManagedSshKeyResponse {
 pub async fn add_managed_ssh_key() -> Result<AddManagedSshKeyResponse, AppError> {
     // todo: support managed ssh key aliases
     let managed_key = ManagedSshKey::create().await?;
+    let overview: axo_pass_core::ssh::key_overview::SshKeyOverview = managed_key.into();
     Ok(AddManagedSshKeyResponse {
-        key: managed_key.into(),
+        key: overview.into(),
     })
 }

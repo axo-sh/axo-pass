@@ -1,12 +1,11 @@
 use std::collections::BTreeSet;
 
+use axo_pass_core::ssh::key_overview::{
+    SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
+};
+use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use serde::Serialize;
-use ssh_agent_lib::proto;
 use typeshare::typeshare;
-
-use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
-use axo_pass_core::ssh::ssh_keys::{SshKeyType, SystemSshKey};
-use axo_pass_core::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
 
 #[derive(Debug, Clone, Serialize)]
 #[typeshare]
@@ -16,12 +15,31 @@ pub enum SshKeyLocation {
     SshDir,
 }
 
+impl From<CoreSshKeyLocation> for SshKeyLocation {
+    fn from(l: CoreSshKeyLocation) -> Self {
+        match l {
+            CoreSshKeyLocation::Vault => SshKeyLocation::Vault,
+            CoreSshKeyLocation::Transient => SshKeyLocation::Transient,
+            CoreSshKeyLocation::SshDir => SshKeyLocation::SshDir,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[typeshare]
 #[serde(rename_all = "snake_case")]
 pub enum SshKeyAgent {
     SystemAgent,
     AxoPassAgent,
+}
+
+impl From<CoreSshKeyAgent> for SshKeyAgent {
+    fn from(a: CoreSshKeyAgent) -> Self {
+        match a {
+            CoreSshKeyAgent::SystemAgent => SshKeyAgent::SystemAgent,
+            CoreSshKeyAgent::AxoPassAgent => SshKeyAgent::AxoPassAgent,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,66 +60,20 @@ pub struct SshKeyEntry {
     pub agent: BTreeSet<SshKeyAgent>,
 }
 
-impl From<proto::Identity> for SshKeyEntry {
-    fn from(identity: proto::Identity) -> Self {
-        let comment = identity.comment;
+impl From<SshKeyOverview> for SshKeyEntry {
+    fn from(overview: SshKeyOverview) -> Self {
         SshKeyEntry {
-            name: comment.clone(),
-            location: SshKeyLocation::Transient,
-            path: Some(comment.clone()),
-            public_key: None,
-            comment: Some(comment.clone()),
-            key_type: identity.pubkey.algorithm().into(),
-            fingerprint_sha256: compute_sha256_fingerprint(&identity.pubkey),
-            fingerprint_md5: compute_md5_fingerprint(&identity.pubkey),
-            has_saved_password: false,
-            is_managed: false,
-            agent: BTreeSet::new(),
-        }
-    }
-}
-
-impl From<SystemSshKey> for SshKeyEntry {
-    fn from(system_key: SystemSshKey) -> Self {
-        SshKeyEntry {
-            name: system_key.name,
-            location: SshKeyLocation::SshDir,
-            path: Some(system_key.path.to_string_lossy().to_string()),
-            public_key: system_key
-                .public_key_path
-                .as_ref()
-                .map(|p| format!("{}", p.display())),
-            comment: Some(system_key.comment),
-            key_type: system_key.key_type,
-            fingerprint_sha256: system_key.fingerprint_sha256.clone(),
-            fingerprint_md5: system_key.fingerprint_md5.clone(),
-            // note: we could do system_key.has_saved_password()
-            // but it makes a system call so we leave it to the caller
-            has_saved_password: false,
-            is_managed: false,
-            agent: BTreeSet::new(),
-        }
-    }
-}
-
-impl From<ManagedSshKey> for SshKeyEntry {
-    fn from(managed_key: ManagedSshKey) -> Self {
-        SshKeyEntry {
-            name: managed_key.name(),
-            location: SshKeyLocation::Vault,
-            path: None,
-            key_type: SshKeyType::Ecdsa, // Managed keys are always ECDSA
-            public_key: managed_key
-                .pubkey_path()
-                .ok()
-                .filter(|p| p.exists())
-                .map(|p| format!("{}", p.display())),
-            comment: None,
-            fingerprint_sha256: managed_key.fingerprint_sha256().to_string(),
-            fingerprint_md5: managed_key.fingerprint_md5().to_string(),
-            has_saved_password: false,
-            is_managed: true,
-            agent: BTreeSet::new(),
+            name: overview.name,
+            location: overview.location.into(),
+            path: overview.path,
+            public_key: overview.public_key,
+            comment: overview.comment,
+            key_type: overview.key_type,
+            fingerprint_sha256: overview.fingerprint_sha256,
+            fingerprint_md5: overview.fingerprint_md5,
+            has_saved_password: overview.has_saved_password,
+            is_managed: overview.is_managed,
+            agent: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
         }
     }
 }
