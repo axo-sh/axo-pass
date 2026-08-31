@@ -30,9 +30,9 @@ private struct MainView: View {
     if case .vault = model.sidebarSelection {
       ItemsPane()
     } else if case .ssh = model.sidebarSelection {
-      PlaceholderPane(title: "SSH", icon: "asterisk")
+      SshPane()
     } else if case .gpg = model.sidebarSelection {
-      PlaceholderPane(title: "Keys", icon: "key.fill")
+      GpgPane()
     } else if case .setup = model.sidebarSelection {
       PlaceholderPane(title: "Setup", icon: "terminal")
     } else {

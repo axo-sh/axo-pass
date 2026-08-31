@@ -11,6 +11,8 @@ struct CredentialRow: View {
   let onReveal: () -> Void
   let onHide: () -> Void
   let onCopy: () -> Void
+  let onSave: (String) -> Void
+  let onDelete: () -> Void
 
   @State private var draftTitle: String = ""
 
@@ -29,8 +31,12 @@ struct CredentialRow: View {
           Text(cred.key).font(.caption).foregroundStyle(.secondary)
         }
       }
-      .onChange(of: isEditing) { _, editing in
-        if editing { draftTitle = cred.title }
+      .onChange(of: isEditing) { wasEditing, editing in
+        if editing {
+          draftTitle = cred.title
+        } else if wasEditing, draftTitle != cred.title, !draftTitle.isEmpty {
+          onSave(draftTitle)
+        }
       }
 
       if let err = error {
@@ -62,9 +68,16 @@ struct CredentialRow: View {
   private var actionButtons: some View {
     if isRevealing {
       ProgressView().controlSize(.small)
-    } else if secret != nil {
+    } else {
       HStack(spacing: 4) {
-        Button("Copy", action: onCopy).buttonStyle(.bordered).controlSize(.small)
+        if secret != nil {
+          Button("Copy", action: onCopy).buttonStyle(.bordered).controlSize(.small)
+        }
+        if isEditing {
+          Button("Delete", role: .destructive, action: onDelete)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
       }
     }
   }

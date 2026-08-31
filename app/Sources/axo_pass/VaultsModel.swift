@@ -31,6 +31,10 @@ final class VaultsModel {
   private var itemCache: [String: [ItemInfo]] = [:]
   var selectedItemKey: String? = nil
 
+  // Surfaces failures from vault/item/credential mutations (create, rename,
+  // delete) to whichever pane triggered them.
+  var actionError: String? = nil
+
   // MARK: - Vault list
 
   func reload() {
@@ -111,6 +115,120 @@ final class VaultsModel {
     let key = SymmetricKey(data: raw)
     raw.resetBytes(in: raw.indices)
     return key
+  }
+
+  // MARK: - Vault CRUD
+
+  @discardableResult
+  func addVault(name: String?, key: String) async -> Bool {
+    actionError = nil
+    do {
+      _ = try await core.addVault(name: name, vaultKey: key)
+      reload()
+      sidebarSelection = .vault(key)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func renameVault(vaultKey: String, newName: String?) async -> Bool {
+    actionError = nil
+    do {
+      try await core.updateVault(vaultKey: vaultKey, newVaultKey: nil, newName: newName)
+      reload()
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func deleteVault(_ vaultKey: String) async -> Bool {
+    actionError = nil
+    do {
+      try await core.deleteVault(vaultKey: vaultKey)
+      itemCache.removeValue(forKey: vaultKey)
+      if selectedVaultKey == vaultKey { sidebarSelection = nil }
+      reload()
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  // MARK: - Item CRUD
+
+  @discardableResult
+  func addOrUpdateItem(vaultKey: String, itemKey: String, itemTitle: String) async -> Bool {
+    actionError = nil
+    do {
+      try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle)
+      await loadItems(for: vaultKey)
+      selectedItemKey = itemKey
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func deleteItem(vaultKey: String, itemKey: String) async -> Bool {
+    actionError = nil
+    do {
+      try await core.deleteItem(vaultKey: vaultKey, itemKey: itemKey)
+      if selectedItemKey == itemKey { selectedItemKey = nil }
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  // MARK: - Credential CRUD
+
+  @discardableResult
+  func addOrUpdateCredential(
+    itemKey: String, credKey: String, title: String, value: String
+  ) async -> Bool {
+    guard let vaultKey = selectedVaultKey else {
+      actionError = ModelError.noVaultSelected.errorDescription
+      return false
+    }
+    actionError = nil
+    do {
+      try await core.addOrUpdateCredential(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, title: title, value: value
+      )
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func deleteCredential(itemKey: String, credKey: String) async -> Bool {
+    guard let vaultKey = selectedVaultKey else {
+      actionError = ModelError.noVaultSelected.errorDescription
+      return false
+    }
+    actionError = nil
+    do {
+      try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
   }
 
   // MARK: - Derived
