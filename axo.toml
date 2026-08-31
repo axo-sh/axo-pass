@@ -28,13 +28,16 @@ fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
 # create the new app
 "app:ffi" = "./scripts/build-ffi.sh"
 "app:ffi:release" = "PROFILE=release ./scripts/build-ffi.sh"
+"app:cli" = "./scripts/build-cli.sh"
+"app:cli:release" = "PROFILE=release ./scripts/build-cli.sh"
 
 # strudel builds, signs (using entitlements + provisioning profile from
 # strudel.toml), and runs the app bundle. app:ffi is the pre-build codegen
-# step: uniffi-bindgen must run before Swift compiles.
-"strudel:build" = [":app:ffi", "strudel build"]
-"strudel:run" = [":app:ffi", "strudel run"]
-"strudel:release" = [":app:ffi:release", "strudel release"]
+# step: uniffi-bindgen must run before Swift compiles. app:cli stages the
+# `ap` binary at target/dist/ap so strudel can embed it as a resource.
+"strudel:build" = [":app:ffi", ":app:cli", "strudel build"]
+"strudel:run" = [":app:ffi", ":app:cli", "strudel run"]
+"strudel:release" = [":app:ffi:release", ":app:cli:release", "strudel release"]
 
 [packages]
 "nodejs/node" = "^25.0.0"

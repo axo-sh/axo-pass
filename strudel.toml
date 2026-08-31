@@ -1,0 +1,38 @@
+# strudel.toml — strudel build configuration
+#
+# Commands:
+#   strudel build    — assemble + sign the .app bundle
+#   strudel run      — build, then launch locally
+#   strudel release  — signed, notarized, packaged DMG
+#
+# Signing identity is picked up via (highest precedence first): the
+# APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID env vars (see .env.local), a
+# [apple] section here, or ~/.config/strudel/config.toml. No identity
+# configured anywhere falls back to ad-hoc signing.
+#
+# `strudel release` additionally needs notarization credentials
+# (APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_PATH, or the
+# equivalent [apple] fields) — see `strudel help notarize`.
+
+[app]
+name         = "Axo Pass"
+bundle_id    = "com.breakfastlabs.frittata"
+version      = "0.3.0"
+build_number = "1"
+
+[build]
+source_dir             = "app"
+entitlements_json_path = "src-tauri/misc/entitlements.json"
+target_name            = "axo_pass"
+provisioning_profile   = "src-tauri/misc/Frittata_Developer_ID_Application.provisionprofile"
+
+[build.icon]
+path = "src-tauri/icons/icon.icns"
+
+# `ap` CLI binary, staged by `axo app:cli` (see scripts/build-cli.sh) into
+# target/dist/ap; copied into Contents/MacOS/ap and signed so it passes
+# `codesign --verify --deep --strict` / notarization as a nested executable.
+[[build.copy]]
+src      = "target/dist/ap"
+dest_dir = "Contents/MacOS"
+sign     = true

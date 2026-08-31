@@ -25,7 +25,7 @@ pub fn ap_bin_path() -> Option<String> {
         .and_then(|p| {
             p.parent()
                 .and_then(|p| p.parent())
-                .map(|parent| parent.join("bin/ap").to_string_lossy().to_string())
+                .map(|parent| parent.join("Resources/ap").to_string_lossy().to_string())
         })
 }
 

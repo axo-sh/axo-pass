@@ -1,0 +1,6 @@
+{
+  "com.apple.application-identifier": "75J48AQ5LF.com.breakfastlabs.frittata",
+  "keychain-access-groups": ["75J48AQ5LF.com.breakfastlabs.frittata"],
+  "com.apple.developer.team-identifier": "75J48AQ5LF",
+  "com.apple.security.network.client": true
+}

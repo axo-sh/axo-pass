@@ -8,9 +8,9 @@ description = "axo-pass CLI binary"
 crate-type = ["rlib"]
 name = "axo_pass_cli"
 
-# [[bin]]
-# name = "axo-pass"
-# path = "src/main.rs"
+[[bin]]
+name = "ap"
+path = "src/main.rs"
 
 [dependencies]
 age = {version = "0.11.3", features = ["armor"]}

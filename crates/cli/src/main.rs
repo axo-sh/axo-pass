@@ -1,0 +1,37 @@
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use clap::Parser;
+use clap::builder::styling;
+
+use axo_pass_cli::cli::AxoPassCommand;
+
+const STYLES: styling::Styles = styling::Styles::styled()
+    .header(styling::AnsiColor::Green.on_default().bold())
+    .usage(styling::AnsiColor::Green.on_default().bold())
+    .literal(styling::AnsiColor::Blue.on_default().bold())
+    .placeholder(styling::AnsiColor::Cyan.on_default());
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "Axo Pass",
+    bin_name = "ap",
+    version = env!("CARGO_PKG_VERSION"),
+    styles = STYLES,
+)]
+pub struct AxoPass {
+    #[command(subcommand)]
+    command: Option<AxoPassCommand>,
+}
+
+impl AxoPass {
+    fn execute(&self) {
+        if let Some(cmd) = &self.command {
+            cmd.execute();
+        }
+    }
+}
+
+fn main() {
+    AxoPass::parse().execute();
+}
