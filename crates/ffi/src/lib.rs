@@ -1,11 +1,20 @@
 use std::sync::{Arc, Mutex};
 
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, invalidate_auth, run_on_auth_thread};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
+use axo_pass_core::secrets::keychain::generic_password::{
+    PasswordEntry, PasswordEntryType as CorePasswordEntryType,
+};
+use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 use axo_pass_core::secrets::vaults::Error as VaultError;
 use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
+use axo_pass_core::ssh::key_overview::{
+    SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
+};
+use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
 
 uniffi::setup_scaffolding!();
 
@@ -26,6 +35,11 @@ pub enum FfiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// The request itself was invalid (e.g. a malformed vault/item/credential
+    /// key, or a value that fails a precondition like "already exists").
+    #[error("{0}")]
+    InvalidInput(String),
+
     /// Anything else — message is the Debug repr of the underlying error.
     #[error("{0}")]
     Internal(String),
@@ -41,6 +55,14 @@ impl From<VaultError> for FfiError {
             VaultError::VaultInvalidAuth(k) => FfiError::from(k),
             VaultError::KeyRetrievalFailed(k) => FfiError::from(k),
             VaultError::KeyCreationFailed(k) => FfiError::from(k),
+            VaultError::InvalidVaultKey(k) => FfiError::InvalidInput(format!("Invalid vault key: {k}")),
+            VaultError::InvalidItemKey(k) => FfiError::InvalidInput(format!("Invalid item key: {k}")),
+            VaultError::InvalidCredentialKey(k) => {
+                FfiError::InvalidInput(format!("Invalid credential key: {k}"))
+            },
+            VaultError::InvalidEmptyCredentialValue => {
+                FfiError::InvalidInput("Credential secret cannot be empty".to_string())
+            },
             other => FfiError::Internal(other.to_string()),
         }
     }
@@ -53,6 +75,24 @@ impl From<KeychainError> for FfiError {
             KeychainError::AuthenticationExpired => FfiError::AuthExpired,
             other => FfiError::Internal(other.to_string()),
         }
+    }
+}
+
+impl From<anyhow::Error> for FfiError {
+    fn from(e: anyhow::Error) -> Self {
+        FfiError::Internal(e.to_string())
+    }
+}
+
+impl From<axo_pass_core::gpg::GpgError> for FfiError {
+    fn from(e: axo_pass_core::gpg::GpgError) -> Self {
+        FfiError::Internal(e.to_string())
+    }
+}
+
+impl From<agent_client::SshAgentClientError> for FfiError {
+    fn from(e: agent_client::SshAgentClientError) -> Self {
+        FfiError::Internal(e.to_string())
     }
 }
 
@@ -77,6 +117,166 @@ pub struct ItemInfo {
     pub key: String,
     pub title: String,
     pub credentials: Vec<CredentialInfo>,
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshKeyLocation {
+    Vault,
+    Transient,
+    SshDir,
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SshKeyAgent {
+    SystemAgent,
+    AxoPassAgent,
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshKeyType {
+    Rsa,
+    Ed25519,
+    Ecdsa,
+    Dsa,
+    Unknown,
+}
+
+impl From<CoreSshKeyType> for SshKeyType {
+    fn from(t: CoreSshKeyType) -> Self {
+        match t {
+            CoreSshKeyType::Rsa => SshKeyType::Rsa,
+            CoreSshKeyType::Ed25519 => SshKeyType::Ed25519,
+            CoreSshKeyType::Ecdsa => SshKeyType::Ecdsa,
+            CoreSshKeyType::Dsa => SshKeyType::Dsa,
+            CoreSshKeyType::Unknown => SshKeyType::Unknown,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct SshKeyEntry {
+    pub name: String,
+    pub location: SshKeyLocation,
+    pub path: Option<String>,
+    pub public_key: Option<String>,
+    pub comment: Option<String>,
+    pub key_type: SshKeyType,
+    pub fingerprint_sha256: String,
+    pub fingerprint_md5: String,
+    pub has_saved_password: bool,
+    pub is_managed: bool,
+    pub agents: Vec<SshKeyAgent>,
+}
+
+impl From<CoreSshKeyLocation> for SshKeyLocation {
+    fn from(l: CoreSshKeyLocation) -> Self {
+        match l {
+            CoreSshKeyLocation::Vault => SshKeyLocation::Vault,
+            CoreSshKeyLocation::Transient => SshKeyLocation::Transient,
+            CoreSshKeyLocation::SshDir => SshKeyLocation::SshDir,
+        }
+    }
+}
+
+impl From<CoreSshKeyAgent> for SshKeyAgent {
+    fn from(a: CoreSshKeyAgent) -> Self {
+        match a {
+            CoreSshKeyAgent::SystemAgent => SshKeyAgent::SystemAgent,
+            CoreSshKeyAgent::AxoPassAgent => SshKeyAgent::AxoPassAgent,
+        }
+    }
+}
+
+impl From<SshKeyOverview> for SshKeyEntry {
+    fn from(overview: SshKeyOverview) -> Self {
+        SshKeyEntry {
+            name: overview.name,
+            location: overview.location.into(),
+            path: overview.path,
+            public_key: overview.public_key,
+            comment: overview.comment,
+            key_type: overview.key_type.into(),
+            fingerprint_sha256: overview.fingerprint_sha256,
+            fingerprint_md5: overview.fingerprint_md5,
+            has_saved_password: overview.has_saved_password,
+            is_managed: overview.is_managed,
+            agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshAgentStatus {
+    Running,
+    NotRunning,
+    StaleSocket,
+}
+
+impl From<CoreAgentStatus> for SshAgentStatus {
+    fn from(status: CoreAgentStatus) -> Self {
+        match status {
+            CoreAgentStatus::Running => SshAgentStatus::Running,
+            CoreAgentStatus::NotRunning => SshAgentStatus::NotRunning,
+            CoreAgentStatus::StaleSocket => SshAgentStatus::StaleSocket,
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshAgentType {
+    Axo,
+    System,
+}
+
+#[derive(uniffi::Record)]
+pub struct SshAgentStatusResponse {
+    pub status: SshAgentStatus,
+    pub socket_path: Option<String>,
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordEntryType {
+    GpgKey,
+    SshKey,
+    AgeKey,
+    Other,
+}
+
+impl From<CorePasswordEntryType> for PasswordEntryType {
+    fn from(t: CorePasswordEntryType) -> Self {
+        match t {
+            CorePasswordEntryType::GPGKey => PasswordEntryType::GpgKey,
+            CorePasswordEntryType::SSHKey => PasswordEntryType::SshKey,
+            CorePasswordEntryType::AgeKey => PasswordEntryType::AgeKey,
+            CorePasswordEntryType::Other => PasswordEntryType::Other,
+        }
+    }
+}
+
+impl From<PasswordEntryType> for CorePasswordEntryType {
+    fn from(t: PasswordEntryType) -> Self {
+        match t {
+            PasswordEntryType::GpgKey => CorePasswordEntryType::GPGKey,
+            PasswordEntryType::SshKey => CorePasswordEntryType::SSHKey,
+            PasswordEntryType::AgeKey => CorePasswordEntryType::AgeKey,
+            PasswordEntryType::Other => CorePasswordEntryType::Other,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct PasswordEntryInfo {
+    pub password_type: PasswordEntryType,
+    pub key_id: String,
+}
+
+impl From<PasswordEntry> for PasswordEntryInfo {
+    fn from(entry: PasswordEntry) -> Self {
+        PasswordEntryInfo {
+            password_type: entry.password_type.into(),
+            key_id: entry.key_id,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +407,289 @@ impl AxoPass {
                 Some(secret) => Ok(secret.expose_secret().as_bytes().to_vec()),
                 None => Err(FfiError::NotFound(format!("{vault_key}/{item_key}/{cred_key}"))),
             }
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Retrieve a credential secret's decrypted title as raw bytes (same
+    /// zeroing convention as `get_credential_secret`). `None` if not found.
+    pub async fn get_decrypted_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+    ) -> Result<Option<Vec<u8>>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_vault(&vault_key)
+                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+            match vault.get_secret(&item_key, &cred_key).map_err(FfiError::from)? {
+                Some(secret) => Ok(Some(secret.expose_secret().as_bytes().to_vec())),
+                None => Ok(None),
+            }
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // Vault CRUD
+    // -----------------------------------------------------------------------
+
+    /// Create a new vault. Mirrors `add_vault` in the Tauri app.
+    pub async fn add_vault(&self, name: Option<String>, vault_key: String) -> Result<VaultInfo, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vw = m.add_vault(name, &vault_key).map_err(FfiError::from)?;
+            Ok(VaultInfo {
+                key: vw.key.clone(),
+                name: vw.vault_name().map(|s| s.to_string()),
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Rename a vault and/or change its key. Does not require the vault to be
+    /// unlocked. Mirrors `update_vault` in the Tauri app.
+    pub async fn update_vault(
+        &self,
+        vault_key: String,
+        new_vault_key: Option<String>,
+        new_name: Option<String>,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vw = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+
+            if new_name.as_deref() != vw.vault_name()
+                && let Some(new_name) = new_name
+            {
+                vw.set_vault_name(new_name).map_err(FfiError::from)?;
+                vw.save().map_err(FfiError::from)?;
+            }
+
+            if new_vault_key.as_deref() != Some(vault_key.as_str())
+                && let Some(new_vault_key) = new_vault_key
+            {
+                m.update_vault_key(&vault_key, &new_vault_key)
+                    .map_err(FfiError::from)?;
+            }
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Delete a vault (moved to Trash, not permanently deleted). Mirrors
+    /// `delete_vault` in the Tauri app.
+    pub async fn delete_vault(&self, vault_key: String) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.delete_vault(&vault_key).map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Create or rename an item within a vault.
+    pub async fn add_or_update_item(
+        &self,
+        vault_key: String,
+        item_key: String,
+        item_title: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.add_item(&item_key, &item_title).map_err(FfiError::from)?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Delete an item (and all its credentials) from a vault.
+    pub async fn delete_item(&self, vault_key: String, item_key: String) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.delete_item(&item_key).map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Create or update a credential's title/value within an item.
+    pub async fn add_or_update_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        title: String,
+        value: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.add_secret(&item_key, &cred_key, &title, SecretString::from(value))
+                    .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Delete a single credential from an item.
+    pub async fn delete_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.delete_item_credential(&item_key, &cred_key)
+                    .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // SSH pane
+    // -----------------------------------------------------------------------
+
+    /// Create a new Secure Enclave-backed managed SSH key.
+    pub async fn add_managed_ssh_key(&self) -> Result<SshKeyEntry, FfiError> {
+        let managed_key = ManagedSshKey::create().await.map_err(FfiError::from)?;
+        let overview: SshKeyOverview = managed_key.into();
+        Ok(overview.into())
+    }
+
+    /// Delete a managed SSH key by its sha256 fingerprint.
+    pub async fn delete_managed_ssh_key(&self, fingerprint_sha256: String) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(move || {
+            let keys = ManagedSshKey::list().map_err(FfiError::from)?;
+            let key = keys
+                .into_iter()
+                .find(|k| k.fingerprint_sha256() == fingerprint_sha256)
+                .ok_or_else(|| FfiError::NotFound(fingerprint_sha256.clone()))?;
+            key.delete().map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List all known SSH keys: on-disk (`~/.ssh`), Secure Enclave-managed,
+    /// and transient identities currently loaded into the system or Axo Pass
+    /// SSH agents.
+    pub async fn list_ssh_keys(&self) -> Result<Vec<SshKeyEntry>, FfiError> {
+        let overviews = axo_pass_core::ssh::key_overview::list_all_ssh_keys()
+            .await
+            .map_err(FfiError::from)?;
+        Ok(overviews.into_iter().map(SshKeyEntry::from).collect())
+    }
+
+    /// Check whether the Axo Pass or system SSH agent is reachable over its
+    /// Unix socket. Mirrors `get_ssh_agent_status` in the Tauri app.
+    pub fn get_ssh_agent_status(&self, agent_type: SshAgentType) -> SshAgentStatusResponse {
+        let (status, socket_path) = match agent_type {
+            SshAgentType::Axo => {
+                let path = default_socket_path();
+                let status = agent_client::get_agent_status_for_socket(&path);
+                (status, Some(path.to_string_lossy().to_string()))
+            },
+            SshAgentType::System => {
+                let path = agent_client::get_system_socket_path();
+                let status = match &path {
+                    Some(p) => agent_client::get_agent_status_for_socket(p),
+                    None => CoreAgentStatus::NotRunning,
+                };
+                (status, path)
+            },
+        };
+        SshAgentStatusResponse {
+            status: status.into(),
+            socket_path,
+        }
+    }
+
+    /// Save a password for an SSH key to the Keychain, keyed by fingerprint.
+    /// Errors with `InvalidInput` if a password is already saved.
+    pub async fn save_ssh_key_password(
+        &self,
+        fingerprint: String,
+        password: String,
+    ) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(move || {
+            let entry = PasswordEntry::ssh(&fingerprint);
+            if entry.exists().map_err(FfiError::from)? {
+                return Err(FfiError::InvalidInput(
+                    "Password already exists for this key".to_string(),
+                ));
+            }
+            entry
+                .save_password(SecretString::from(password))
+                .map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // GPG / Keys pane
+    // -----------------------------------------------------------------------
+
+    /// Reload gpg-agent and run a test signing operation, to confirm GPG
+    /// signing works end-to-end. Mirrors `gpg_test_integration` in the Tauri
+    /// app.
+    pub async fn gpg_test_integration(&self) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(axo_pass_core::gpg::test_integration)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::from)
+    }
+
+    /// List generic keychain-managed passwords (GPG/SSH/age keys with a saved
+    /// password). Mirrors `list_passwords` in the Tauri app.
+    pub async fn list_passwords(&self) -> Result<Vec<PasswordEntryInfo>, FfiError> {
+        tokio::task::spawn_blocking(PasswordEntry::list)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::from)
+            .map(|entries| entries.into_iter().map(PasswordEntryInfo::from).collect())
+    }
+
+    /// Delete a generic keychain-managed password entry.
+    pub async fn delete_password(
+        &self,
+        password_type: PasswordEntryType,
+        key_id: String,
+    ) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(move || {
+            let entry = PasswordEntry {
+                password_type: password_type.into(),
+                key_id,
+            };
+            entry.delete().map_err(FfiError::from)
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

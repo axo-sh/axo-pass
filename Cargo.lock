@@ -593,6 +593,7 @@ dependencies = [
 name = "axo-pass-ffi"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
  "axo-pass-core",
  "secrecy",
  "thiserror 2.0.18",
