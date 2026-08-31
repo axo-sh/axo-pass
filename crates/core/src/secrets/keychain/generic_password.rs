@@ -166,7 +166,9 @@ impl PasswordEntry {
             GenericPasswordQuery::build()
                 .with_account(&account)
                 .without_authentication()
-                .one(la_context)
+                // interaction is disallowed on this context (see run_local_onetime),
+                // so errSecInteractionNotAllowed is expected and can't resolve via retry
+                .one_with_retry(la_context, false)
         });
 
         // account was moved in the loop, so get a new clone

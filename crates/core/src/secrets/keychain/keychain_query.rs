@@ -28,6 +28,18 @@ pub trait KeychainQuery {
     fn build_query(&self) -> Retained<CFMutableDictionary<CFString, CFType>>;
 
     fn one(&self, la_context: Retained<LAContext>) -> Result<Option<Self::Item>, KeychainError> {
+        self.one_with_retry(la_context, true)
+    }
+
+    /// Like `one`, but `retry_on_blocked` controls whether `errSecInteractionNotAllowed`
+    /// is retried. Callers that intentionally disallow interaction on the `LAContext`
+    /// (e.g. a fast non-prompting `exists()` probe) will always hit this error and
+    /// should pass `false` to avoid burning the full retry budget on every call.
+    fn one_with_retry(
+        &self,
+        la_context: Retained<LAContext>,
+        retry_on_blocked: bool,
+    ) -> Result<Option<Self::Item>, KeychainError> {
         unsafe {
             let query = self.build_query();
 
@@ -35,7 +47,11 @@ pub trait KeychainQuery {
             let la_context = Retained::as_ptr(&la_context) as *const CFType;
             query.add(kSecUseAuthenticationContext, &*la_context);
 
-            let mut attempts_left = INTERACTION_RETRY_ATTEMPTS;
+            let mut attempts_left = if retry_on_blocked {
+                INTERACTION_RETRY_ATTEMPTS
+            } else {
+                0
+            };
             loop {
                 let mut ret: *const CFType = ptr::null();
                 let res = SecItemCopyMatching(query.as_opaque(), &mut ret);
