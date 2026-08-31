@@ -29,15 +29,18 @@ pub async fn get_decrypted_credential(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Option<DecryptedCredential>, AppError> {
     let mut guard = state.lock()?;
-    let (secret, title) = guard.vaults.with_unlocked_vault(&request.vault_key, |vw| -> Result<_, AppError> {
-        let credential = vw
-            .get_secret_overview(&request.item_key, &request.credential_key)?
-            .ok_or(AppError::internal("Could not find credential."))?;
-        let secret = vw
-            .get_secret(&request.item_key, &request.credential_key)
-            .error_context("Failed to decrypt secret.")?;
-        Ok((secret, credential.title.clone()))
-    })?;
+    let (secret, title) =
+        guard
+            .vaults
+            .with_unlocked_vault(&request.vault_key, |vw| -> Result<_, AppError> {
+                let credential = vw
+                    .get_secret_overview(&request.item_key, &request.credential_key)?
+                    .ok_or(AppError::internal("Could not find credential."))?;
+                let secret = vw
+                    .get_secret(&request.item_key, &request.credential_key)
+                    .error_context("Failed to decrypt secret.")?;
+                Ok((secret, credential.title.clone()))
+            })?;
 
     Ok(secret.map(|secret| DecryptedCredential {
         title,

@@ -1,11 +1,10 @@
 use std::fmt::Display;
 use std::sync::PoisonError;
 
-use serde::{Deserialize, Serialize};
-use typeshare::typeshare;
-
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::vaults::Error as VaultError;
+use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[typeshare]
@@ -201,10 +200,10 @@ where
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-
-    use super::*;
     use axo_pass_core::secrets::keychain::errors::KeychainError;
     use axo_pass_core::secrets::vaults::Error as VaultError;
+
+    use super::*;
 
     #[test]
     fn test_app_error_from_anyhow_error() {

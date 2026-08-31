@@ -1,12 +1,12 @@
 use std::sync::Mutex;
 
+use axo_pass_core::secrets::vaults::DEFAULT_VAULT;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::AppState;
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use crate::app::handlers::vault::schemas::{VaultSchema, VaultWrapperSchemaExt};
-use axo_pass_core::secrets::vaults::DEFAULT_VAULT;
 
 #[derive(Deserialize)]
 #[typeshare]
@@ -30,11 +30,10 @@ pub async fn get_vault(
         .vault_key
         .unwrap_or_else(|| DEFAULT_VAULT.to_string());
     let mut guard = state.lock()?;
-    let schema = guard
-        .vaults
-        .with_unlocked_vault(&vault_key, |vw| {
-            vw.to_schema().error_context("Failed to build vault schema.")
-        })?;
+    let schema = guard.vaults.with_unlocked_vault(&vault_key, |vw| {
+        vw.to_schema()
+            .error_context("Failed to build vault schema.")
+    })?;
     Ok(VaultResponse { vault: schema })
 }
 

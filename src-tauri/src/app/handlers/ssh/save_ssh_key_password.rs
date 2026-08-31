@@ -1,9 +1,9 @@
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
 use crate::app::handlers::app_errors::{AppError, ErrorContext};
-use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[typeshare]

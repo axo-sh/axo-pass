@@ -1,9 +1,9 @@
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
 use crate::app::protocols::pinentry::server::PinentryServerHandler;
-use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
 
 #[derive(Clone, Serialize, Debug)]
 #[serde(rename_all = "snake_case")]

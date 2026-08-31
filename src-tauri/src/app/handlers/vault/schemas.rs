@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
+use axo_pass_core::secrets::vaults::{
+    Error, VaultItemCredentialOverview, VaultItemOverview, VaultWrapper,
+};
 use serde::Serialize;
 use typeshare::typeshare;
-
-use axo_pass_core::secrets::vaults::{Error, VaultItemCredentialOverview, VaultItemOverview, VaultWrapper};
 
 // VaultSchema is the serialized form of VaultWrapper, with decrypted item
 // titles and credential titles, but without credential values. Used for sending

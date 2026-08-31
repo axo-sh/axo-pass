@@ -1,5 +1,6 @@
-use crate::app::handlers::app_errors::{AppError, ErrorContext};
 use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
+
+use crate::app::handlers::app_errors::{AppError, ErrorContext};
 
 #[cfg(debug_assertions)]
 #[tauri::command]

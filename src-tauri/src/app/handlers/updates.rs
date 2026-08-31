@@ -1,11 +1,10 @@
+use axo_pass_core::core::config::APP_CONFIG;
+use axo_pass_core::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 use serde::Serialize;
 use tauri_plugin_updater::UpdaterExt;
 use time::format_description::well_known;
 use time::{Duration, OffsetDateTime};
 use typeshare::typeshare;
-
-use axo_pass_core::core::config::APP_CONFIG;
-use axo_pass_core::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "status", content = "data", rename_all = "snake_case")]

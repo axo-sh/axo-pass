@@ -1,13 +1,13 @@
 use std::io::Write;
 use std::sync::LazyLock;
 
+use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
+use axo_pass_core::ssh::utils::get_ssh_key_fingerprint;
 use regex::Regex;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::app::password_request::{PasswordRequest, PasswordRequestHandler, RequestState};
-use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
-use axo_pass_core::ssh::utils::get_ssh_key_fingerprint;
 
 static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     let valid_path_char = r#"[^:!$`&*()'"+/\\]"#;

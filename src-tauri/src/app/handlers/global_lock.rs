@@ -1,5 +1,6 @@
-use crate::app::handlers::app_errors::AppError;
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, invalidate_auth, run_on_auth_thread};
+
+use crate::app::handlers::app_errors::AppError;
 
 #[tauri::command]
 pub async fn unlock_axo() -> Result<(), AppError> {
