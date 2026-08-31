@@ -19,13 +19,15 @@ pub fn zshrc_path() -> PathBuf {
 }
 
 pub fn ap_bin_path() -> Option<String> {
+    // Inside the bundle `ap` sits next to the main executable in
+    // Contents/MacOS/ (strudel.toml copies + signs it there). Standalone, this
+    // resolves to the running `ap` binary itself, which is fine for the alias.
     std::env::current_exe()
-        .inspect_err(|e| log::debug!("Failed to get app directory: {e}"))
+        .inspect_err(|e| log::debug!("Failed to get exe path: {e}"))
         .ok()
         .and_then(|p| {
             p.parent()
-                .and_then(|p| p.parent())
-                .map(|parent| parent.join("Resources/ap").to_string_lossy().to_string())
+                .map(|dir| dir.join("ap").to_string_lossy().into_owned())
         })
 }
 
