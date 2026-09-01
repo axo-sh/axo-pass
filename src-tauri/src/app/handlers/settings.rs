@@ -1,6 +1,7 @@
+use std::env::current_exe;
+
 use axo_pass_core::core::dirs::vaults_dir;
 use serde::Serialize;
-use tauri_utils::platform::current_exe;
 use typeshare::typeshare;
 
 #[derive(Serialize, Debug)]
