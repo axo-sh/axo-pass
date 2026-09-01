@@ -4,13 +4,13 @@ mod utils;
 
 use std::path::PathBuf;
 
+use axo_pass_core::core::config::APP_CONFIG;
+use axo_pass_core::secrets::vaults::{VaultWrapper, VaultsManager};
 use clap::{Parser, Subcommand};
 use color_print::cprintln;
 
 use crate::cli::commands::vault::export::VaultExportCommand;
 use crate::cli::commands::vault::import::VaultImportCommand;
-use axo_pass_core::core::config::APP_CONFIG;
-use axo_pass_core::secrets::vaults::{VaultWrapper, VaultsManager};
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]

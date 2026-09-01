@@ -1,6 +1,5 @@
-use std::ptr;
-use std::thread;
 use std::time::Duration;
+use std::{ptr, thread};
 
 use anyhow::anyhow;
 use objc2::rc::Retained;
@@ -31,10 +30,11 @@ pub trait KeychainQuery {
         self.one_with_retry(la_context, true)
     }
 
-    /// Like `one`, but `retry_on_blocked` controls whether `errSecInteractionNotAllowed`
-    /// is retried. Callers that intentionally disallow interaction on the `LAContext`
-    /// (e.g. a fast non-prompting `exists()` probe) will always hit this error and
-    /// should pass `false` to avoid burning the full retry budget on every call.
+    /// Like `one`, but `retry_on_blocked` controls whether
+    /// `errSecInteractionNotAllowed` is retried. Callers that intentionally
+    /// disallow interaction on the `LAContext` (e.g. a fast non-prompting
+    /// `exists()` probe) will always hit this error and should pass `false`
+    /// to avoid burning the full retry budget on every call.
     fn one_with_retry(
         &self,
         la_context: Retained<LAContext>,
@@ -64,7 +64,7 @@ pub trait KeychainQuery {
                     errSecInteractionNotAllowed if attempts_left > 0 => {
                         attempts_left -= 1;
                         thread::sleep(INTERACTION_RETRY_DELAY);
-                    }
+                    },
                     errSecInteractionNotAllowed => return Err(KeychainError::ItemNotAccessible),
                     _ => return Err(anyhow!("got error code: {res}").into()),
                 }

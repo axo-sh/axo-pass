@@ -1,14 +1,13 @@
 use std::io::{IsTerminal, Read};
 use std::str::FromStr;
 
+use axo_pass_core::core::dirs::vaults_dir;
+use axo_pass_core::secrets::vaults::VaultWrapper;
 use clap::{Parser, Subcommand};
 use color_print::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
-
-use axo_pass_core::core::dirs::vaults_dir;
-use axo_pass_core::secrets::vaults::VaultWrapper;
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
@@ -185,7 +184,7 @@ impl ItemCommand {
 
         let mut has_items = false;
         for item in &items {
-            for (_, cred) in &item.credentials {
+            for cred in item.credentials.values() {
                 cprintln!(
                     "  {} <dim>axo://{vault_key}/{}/{}</dim>",
                     cred.title,

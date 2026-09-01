@@ -1,20 +1,18 @@
 use std::sync::{Arc, Mutex};
 
-use secrecy::{ExposeSecret, SecretString};
-
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, invalidate_auth, run_on_auth_thread};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
 };
 use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
-use axo_pass_core::secrets::vaults::Error as VaultError;
-use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::secrets::vaults::{Error as VaultError, VaultsManager};
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
 use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
+use secrecy::{ExposeSecret, SecretString};
 
 uniffi::setup_scaffolding!();
 
@@ -28,7 +26,8 @@ pub enum FfiError {
     #[error("Authentication cancelled")]
     AuthCancelled,
 
-    /// A previously-granted auth context expired before the operation completed.
+    /// A previously-granted auth context expired before the operation
+    /// completed.
     #[error("Authentication expired")]
     AuthExpired,
 
@@ -55,8 +54,12 @@ impl From<VaultError> for FfiError {
             VaultError::VaultInvalidAuth(k) => FfiError::from(k),
             VaultError::KeyRetrievalFailed(k) => FfiError::from(k),
             VaultError::KeyCreationFailed(k) => FfiError::from(k),
-            VaultError::InvalidVaultKey(k) => FfiError::InvalidInput(format!("Invalid vault key: {k}")),
-            VaultError::InvalidItemKey(k) => FfiError::InvalidInput(format!("Invalid item key: {k}")),
+            VaultError::InvalidVaultKey(k) => {
+                FfiError::InvalidInput(format!("Invalid vault key: {k}"))
+            },
+            VaultError::InvalidItemKey(k) => {
+                FfiError::InvalidInput(format!("Invalid item key: {k}"))
+            },
             VaultError::InvalidCredentialKey(k) => {
                 FfiError::InvalidInput(format!("Invalid credential key: {k}"))
             },
@@ -403,9 +406,14 @@ impl AxoPass {
             let vault = m
                 .get_vault(&vault_key)
                 .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
-            match vault.get_secret(&item_key, &cred_key).map_err(FfiError::from)? {
+            match vault
+                .get_secret(&item_key, &cred_key)
+                .map_err(FfiError::from)?
+            {
                 Some(secret) => Ok(secret.expose_secret().as_bytes().to_vec()),
-                None => Err(FfiError::NotFound(format!("{vault_key}/{item_key}/{cred_key}"))),
+                None => Err(FfiError::NotFound(format!(
+                    "{vault_key}/{item_key}/{cred_key}"
+                ))),
             }
         })
         .await
@@ -426,7 +434,10 @@ impl AxoPass {
             let vault = m
                 .get_vault(&vault_key)
                 .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
-            match vault.get_secret(&item_key, &cred_key).map_err(FfiError::from)? {
+            match vault
+                .get_secret(&item_key, &cred_key)
+                .map_err(FfiError::from)?
+            {
                 Some(secret) => Ok(Some(secret.expose_secret().as_bytes().to_vec())),
                 None => Ok(None),
             }
@@ -440,7 +451,11 @@ impl AxoPass {
     // -----------------------------------------------------------------------
 
     /// Create a new vault. Mirrors `add_vault` in the Tauri app.
-    pub async fn add_vault(&self, name: Option<String>, vault_key: String) -> Result<VaultInfo, FfiError> {
+    pub async fn add_vault(
+        &self,
+        name: Option<String>,
+        vault_key: String,
+    ) -> Result<VaultInfo, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
@@ -512,7 +527,8 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.add_item(&item_key, &item_title).map_err(FfiError::from)?;
+                vw.add_item(&item_key, &item_title)
+                    .map_err(FfiError::from)?;
                 Ok(())
             })
         })

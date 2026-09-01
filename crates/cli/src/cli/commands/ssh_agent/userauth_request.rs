@@ -1,13 +1,12 @@
 use std::fmt::{Debug, Display};
 
 use anyhow::{Context, Result, bail};
+use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use ssh_encoding::Decode;
 use ssh_key::PublicKey;
 use ssh_key::public::KeyData;
-
-use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 
 const SSH2_MSG_USERAUTH_REQUEST: u8 = 50;
 const OPENSSH_PUBLIC_KEY_HOSTBOUND_METHOD: &str = "publickey-hostbound-v00@openssh.com";

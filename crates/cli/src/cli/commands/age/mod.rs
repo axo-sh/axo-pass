@@ -1,7 +1,6 @@
-use clap::{Parser, Subcommand};
-
 use axo_pass_core::age::crypto::{age_decrypt, age_encrypt};
 use axo_pass_core::age::recipients::{age_keygen, delete_recipient, list_recipients};
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]

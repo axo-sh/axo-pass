@@ -21,8 +21,13 @@ restart = [":build", ":start"]
 biome = "biome check --formatter-enabled=true --linter-enabled=true"
 biome-fix = "biome check --write"
 logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
-fmt = "cd src-tauri && cargo clippy --fix --allow-dirty && cargo +nightly fmt"
+
+fmt = [
+  "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
+  "cargo +nightly fmt --all",
+]
 check = "cargo check --workspace --all-targets"
+
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
 

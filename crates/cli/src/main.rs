@@ -1,10 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use axo_pass_cli::cli::AxoPassCommand;
 use clap::Parser;
 use clap::builder::styling;
-
-use axo_pass_cli::cli::AxoPassCommand;
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Green.on_default().bold())

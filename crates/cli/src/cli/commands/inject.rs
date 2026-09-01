@@ -1,11 +1,10 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use clap::Parser;
-
 use axo_pass_core::core::interpolate::interpolate_secrets;
 use axo_pass_core::core::read_input::read_file_or_stdin;
 use axo_pass_core::secrets::vaults::VaultsManager;
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 pub struct InjectCommand {

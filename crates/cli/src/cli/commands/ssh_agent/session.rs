@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
+use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{
@@ -14,8 +16,6 @@ use crate::cli::commands::ssh_agent::managed_credential::ManagedCredential;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
-use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
-use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 
 pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
 

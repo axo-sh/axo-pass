@@ -3,12 +3,11 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{anyhow, bail};
+use axo_pass_core::core::interpolate::interpolate_secrets;
+use axo_pass_core::secrets::vaults::VaultsManager;
 use clap::Parser;
 use glob::glob;
 use itertools::Itertools;
-
-use axo_pass_core::core::interpolate::interpolate_secrets;
-use axo_pass_core::secrets::vaults::VaultsManager;
 
 #[derive(Parser, Debug)]
 pub struct ExecCommand {

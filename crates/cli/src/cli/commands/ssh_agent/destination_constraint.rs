@@ -1,14 +1,14 @@
 use std::fmt::Display;
 
 use anyhow::bail;
+use axo_pass_core::ssh::known_hosts::KnownHosts;
+use axo_pass_core::ssh::utils::compute_sha256_fingerprint;
 use ssh_agent_lib::proto::extension::DestinationConstraint;
 use ssh_agent_lib::proto::{self};
 use ssh_key::public::KeyData;
 
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::session::SshAgentSession;
-use axo_pass_core::ssh::known_hosts::KnownHosts;
-use axo_pass_core::ssh::utils::compute_sha256_fingerprint;
 
 impl SshAgentSession {
     pub fn identity_permitted(
@@ -274,7 +274,7 @@ mod tests {
                     destination: &TEST_ED25519_KEY,
                     final_hop: false,
                 },
-                &vec![],
+                &[],
                 None,
             );
             assert!(result.is_err(), "Empty constraints should fail");
@@ -285,10 +285,10 @@ mod tests {
             let dest_key = &TEST_ED25519_KEY;
             // First hop (origin is None) with destination key matching constraint (to)
             let result = permitted_by_dest_constraints(
-                SessionHop::FirstHop(&dest_key, false),
-                &vec![DestinationConstraint {
+                SessionHop::FirstHop(dest_key, false),
+                &[DestinationConstraint {
                     from: empty_host_tuple(),
-                    to: host_tuple("server1.example.com", &dest_key),
+                    to: host_tuple("server1.example.com", dest_key),
                 }],
                 None,
             );
@@ -305,13 +305,13 @@ mod tests {
             // note: this isn't really possible, since openssh doesn't allow this syntax
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
+                &[DestinationConstraint {
                     from: empty_host_tuple(),
-                    to: host_tuple("server1.example.com", &dest_key),
+                    to: host_tuple("server1.example.com", dest_key),
                 }],
                 None,
             );
@@ -324,13 +324,13 @@ mod tests {
             let dest_key = &TEST_ED25519_KEY;
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &dest_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", dest_key),
                 }],
                 None,
             );
@@ -345,13 +345,13 @@ mod tests {
             let wrong_dest_key = &TEST_RSA_KEY;
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &wrong_dest_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", wrong_dest_key),
                 }],
                 None,
             );
@@ -365,12 +365,12 @@ mod tests {
 
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
                     to: HostTuple {
                         username: "alice".to_string(),
                         hostname: "server2.example.com".to_string(),
@@ -393,12 +393,12 @@ mod tests {
 
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
                     to: HostTuple {
                         username: "alice".to_string(),
                         hostname: "server2.example.com".to_string(),
@@ -420,12 +420,12 @@ mod tests {
 
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
                 &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
+                    from: host_tuple("server1.example.com", origin_key),
                     to: HostTuple {
                         username: "".to_string(), // empty username matches any
                         hostname: "server2.example.com".to_string(),
@@ -448,13 +448,13 @@ mod tests {
             let dest_key = &TEST_ED25519_KEY;
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("", &dest_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("", dest_key),
                 }],
                 None,
             );
@@ -469,18 +469,18 @@ mod tests {
             let wrong_dest_key = &TEST_RSA_KEY;
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
-                &vec![
+                &[
                     DestinationConstraint {
-                        from: host_tuple("server1.example.com", &origin_key),
-                        to: host_tuple("should-not-match.example.com", &wrong_dest_key),
+                        from: host_tuple("server1.example.com", origin_key),
+                        to: host_tuple("should-not-match.example.com", wrong_dest_key),
                     },
                     DestinationConstraint {
-                        from: host_tuple("server1.example.com", &origin_key),
-                        to: host_tuple("correct.example.com", &dest_key),
+                        from: host_tuple("server1.example.com", origin_key),
+                        to: host_tuple("correct.example.com", dest_key),
                     },
                 ],
                 None,
@@ -496,10 +496,10 @@ mod tests {
             let dest_key = &TEST_ED25519_KEY;
 
             let result = permitted_by_dest_constraints(
-                SessionHop::OriginOnly(&origin_key),
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &dest_key),
+                SessionHop::OriginOnly(origin_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", dest_key),
                 }],
                 None,
             );
@@ -512,9 +512,9 @@ mod tests {
             // origin-only is mainly for non-signing use case
             let origin_key = &TEST_RSA_KEY;
             let result = permitted_by_dest_constraints(
-                SessionHop::OriginOnly(&origin_key),
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
+                SessionHop::OriginOnly(origin_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
                     to: empty_host_tuple(),
                 }],
                 None,
@@ -529,9 +529,9 @@ mod tests {
             let origin_key = &TEST_RSA_KEY;
             let wrong_origin_key = &TEST_ED25519_KEY;
             let result = permitted_by_dest_constraints(
-                SessionHop::OriginOnly(&origin_key),
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &wrong_origin_key),
+                SessionHop::OriginOnly(origin_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", wrong_origin_key),
                     to: empty_host_tuple(),
                 }],
                 None,
@@ -548,12 +548,12 @@ mod tests {
             // single hop has no origin (being the first hop)
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
-                SessionHop::FirstHop(&dest_key, true), // final hop
-                false,                                 // not forwarding
+                SessionHop::FirstHop(dest_key, true), // final hop
+                false,                                // not forwarding
                 Some("alice"),
-                &vec![DestinationConstraint {
+                &[DestinationConstraint {
                     from: empty_host_tuple(),
-                    to: host_tuple("server1.example.com", &dest_key),
+                    to: host_tuple("server1.example.com", dest_key),
                 }],
             );
             assert!(result.is_ok());
@@ -565,12 +565,12 @@ mod tests {
             // single hop has no origin (being the first hop)
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
-                SessionHop::FirstHop(&dest_key, true), // final hop
-                true,                                  // forwarding
-                Some("alice"),                         // signing request
-                &vec![DestinationConstraint {
+                SessionHop::FirstHop(dest_key, true), // final hop
+                true,                                 // forwarding
+                Some("alice"),                        // signing request
+                &[DestinationConstraint {
                     from: empty_host_tuple(),
-                    to: host_tuple("server1.example.com", &dest_key),
+                    to: host_tuple("server1.example.com", dest_key),
                 }],
             );
             assert!(result.is_err());
@@ -589,15 +589,15 @@ mod tests {
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
                 true, // forwarding
                 None,
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &dest_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", dest_key),
                 }],
             );
             assert!(result.is_ok());
@@ -611,15 +611,15 @@ mod tests {
 
             let result = validate_session_hop(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
                 false, // not forwarding
                 None,
-                &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &dest_key),
+                &[DestinationConstraint {
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", dest_key),
                 }],
             );
             assert!(result.is_err());
@@ -640,15 +640,15 @@ mod tests {
 
             let result = validate_session_hop(
                 SessionHop::IntermediateHop {
-                    origin: &origin_key,
-                    destination: &dest_key,
+                    origin: origin_key,
+                    destination: dest_key,
                     final_hop: false,
                 },
                 true, // forwarding
                 None,
                 &vec![DestinationConstraint {
-                    from: host_tuple("server1.example.com", &origin_key),
-                    to: host_tuple("server2.example.com", &wrong_dest_key), // wrong key
+                    from: host_tuple("server1.example.com", origin_key),
+                    to: host_tuple("server2.example.com", wrong_dest_key), // wrong key
                 }],
             );
             assert!(result.is_err());

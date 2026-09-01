@@ -95,7 +95,7 @@ impl ProcInfo {
             || self
                 .signing_info
                 .as_ref()
-                .map_or(false, |s| s.identifier == "com.apple.login")
+                .is_some_and(|s| s.identifier == "com.apple.login")
     }
 }
 

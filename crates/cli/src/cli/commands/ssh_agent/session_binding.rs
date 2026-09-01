@@ -1,11 +1,10 @@
 use std::fmt::Debug;
 
+use axo_pass_core::ssh::known_hosts::KnownHosts;
+use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use ssh_agent_lib::proto::extension::SessionBind;
-
-use axo_pass_core::ssh::known_hosts::KnownHosts;
-use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 
 #[derive(Clone)]
 pub(crate) struct SessionBinding {

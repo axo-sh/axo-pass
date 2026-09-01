@@ -1,9 +1,8 @@
 use anyhow::{Context, anyhow};
-use color_print::cprintln;
-
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use axo_pass_core::secrets::keychain::keychain_query::KeychainQuery;
 use axo_pass_core::secrets::keychain::managed_key::{self, ManagedKeyQuery, ManagedSshKey};
+use color_print::cprintln;
 
 pub async fn cmd_list_managed_keys() {
     let keys = run_on_auth_thread(

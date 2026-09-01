@@ -2,6 +2,9 @@ mod rsa_signing;
 
 use std::fmt::Debug;
 
+use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use axo_pass_core::ssh::ssh_keys::SshKeyType;
+use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use rsa::signature::Signer;
 use ssh_agent_lib::proto::{self, extension};
 use ssh_key::Algorithm;
@@ -9,9 +12,6 @@ use ssh_key::public::KeyData;
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
-use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
-use axo_pass_core::ssh::ssh_keys::SshKeyType;
-use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 
 #[derive(Clone)]
 pub struct StoredCredential {

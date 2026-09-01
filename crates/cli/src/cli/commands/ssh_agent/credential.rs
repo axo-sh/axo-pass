@@ -1,9 +1,8 @@
+use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
 use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use thiserror::Error;
-
-use axo_pass_core::ssh::ssh_keys::SshKeyType;
 
 #[derive(Error, Debug)]
 pub enum CredentialError {
