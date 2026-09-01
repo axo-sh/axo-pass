@@ -7,6 +7,7 @@ use axo_pass_core::secrets::keychain::generic_password::{
 };
 use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 use axo_pass_core::secrets::vaults::{Error as VaultError, VaultsManager};
+use axo_pass_core::shell_integration;
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
@@ -265,6 +266,14 @@ impl From<PasswordEntryType> for CorePasswordEntryType {
             PasswordEntryType::Other => CorePasswordEntryType::Other,
         }
     }
+}
+
+#[derive(uniffi::Record)]
+pub struct ShellIntegrationStatus {
+    /// Whether the `ap` shell integration block is present in `.zshrc`.
+    pub configured: bool,
+    /// Absolute path to the `.zshrc` file that was checked / written.
+    pub zshrc_path: String,
 }
 
 #[derive(uniffi::Record)]
@@ -706,6 +715,34 @@ impl AxoPass {
                 key_id,
             };
             entry.delete().map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // Shell integration (Setup pane)
+    // -----------------------------------------------------------------------
+
+    /// Report whether the `ap` shell integration block is present in `.zshrc`.
+    /// Mirrors `get_shell_integration_status` in the Tauri app.
+    pub fn check_shell_integration(&self) -> ShellIntegrationStatus {
+        let (configured, path) = shell_integration::check_status();
+        ShellIntegrationStatus {
+            configured,
+            zshrc_path: path.to_string_lossy().to_string(),
+        }
+    }
+
+    /// Append the `ap` shell integration block to `.zshrc` if not already
+    /// present. Mirrors `configure_shell_integration` in the Tauri app.
+    pub async fn write_shell_integration(&self) -> Result<ShellIntegrationStatus, FfiError> {
+        tokio::task::spawn_blocking(|| {
+            let path = shell_integration::write_integration().map_err(FfiError::Internal)?;
+            Ok(ShellIntegrationStatus {
+                configured: true,
+                zshrc_path: path.to_string_lossy().to_string(),
+            })
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

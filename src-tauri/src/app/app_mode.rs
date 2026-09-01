@@ -1,8 +1,8 @@
+use std::env::current_exe;
 use std::path::PathBuf;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tauri_utils::platform::current_exe;
 
 use crate::app::password_request::RequestEvent;
 use crate::app::protocols::pinentry::{GpgGetPinRequest, PinentryState};

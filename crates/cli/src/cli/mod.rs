@@ -1,5 +1,4 @@
 pub mod commands;
-pub mod shell_integration;
 
 use std::io;
 

@@ -1,4 +1,4 @@
-use axo_pass_cli::cli::shell_integration;
+use axo_pass_core::shell_integration;
 use serde::Serialize;
 use typeshare::typeshare;
 
