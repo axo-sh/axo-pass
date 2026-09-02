@@ -20,13 +20,14 @@ start = "./src-tauri/target/release/bundle/macos/Axo\\ Pass.app/Contents/MacOS/a
 restart = [":build", ":start"]
 biome = "biome check --formatter-enabled=true --linter-enabled=true"
 biome-fix = "biome check --write"
-logs = "tail -F ~/Library/Logs/com.breakfastlabs.frittata/frittata.log"
+logs = "tail -F ~/Library/Logs/Axo\\ Pass/app.log"
 
 fmt = [
   "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
   "cargo +nightly fmt --all",
 ]
 check = "cargo check --workspace --all-targets"
+test = "cargo test --workspace"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"

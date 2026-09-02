@@ -304,6 +304,7 @@ pub struct AxoPass {
 impl AxoPass {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
+        axo_pass_core::logging::init("app.log");
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
         })
