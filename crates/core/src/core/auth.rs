@@ -19,9 +19,16 @@ use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 
-// TODO: Investigate if this actually works, empirically it seems to be fixed to
-// 10 minutes regardless of what I set. Cannot be longer than
-// LATouchIDAuthenticationMaximumAllowableReuseDuration
+// How long a Touch ID match can be reused, capped by the system at
+// LATouchIDAuthenticationMaximumAllowableReuseDuration (300s as of macOS 15).
+//
+// This does not bound how long the app stays unlocked. It governs reuse of a
+// match across evaluations, but re-evaluating the same live LAContext returns
+// success from the context's own state without consulting it. Measured with
+// this set to 5s: a re-evaluation 25s later succeeded in 5ms with no prompt.
+// An unlock therefore lasts as long as the LAContext object, and only
+// invalidate_auth() ends it. An idle timeout would have to be enforced by the
+// caller.
 const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
 
 enum AuthMessage {
@@ -180,7 +187,9 @@ fn set_reuse_duration(ctx: &LAContext) {
 pub unsafe fn adopt_shared_context(context_ptr: *mut c_void) -> Result<(), KeychainError> {
     let context = unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }
         .ok_or_else(|| KeychainError::from(anyhow!("null LAContext pointer")))?;
-    set_reuse_duration(&context);
+    // The reuse duration is deliberately not set here: it only affects
+    // evaluations that follow it, and the caller has already evaluated. See the
+    // note on TOUCH_ID_REUSE_DURATION_SECS for why it would not matter anyway.
 
     let (tx, rx) = mpsc::channel();
     AUTH_THREAD

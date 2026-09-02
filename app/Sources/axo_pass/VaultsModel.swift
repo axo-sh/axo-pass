@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -27,10 +28,10 @@ final class VaultsModel {
   var isAppUnlocked = false
   var isUnlocking = false
   var unlockError: String? = nil
-  // False until the first attempt finishes. The lock screen prompts as soon as
-  // it appears, so without this the idle copy and the Unlock button show for a
-  // frame on launch.
-  private(set) var hasAttemptedUnlock = false
+  // Whether the lock screen should raise a prompt on its own when it appears.
+  // True at launch and after a manual lock, false once an attempt has finished
+  // and after an automatic lock, which requires a deliberate Unlock.
+  private(set) var autoPromptPending = true
 
   // LAAuthenticationView replaces the system dialog only for the context it was
   // created with. This model owns that context, evaluates the policy on it, and
@@ -39,6 +40,7 @@ final class VaultsModel {
   // Selects the lock screen copy, which differs when this Mac has no Touch ID.
   private(set) var biometry: LABiometryType = .none
   private var unlockTask: Task<Void, Never>? = nil
+  private var autoLock: AutoLock! = nil
 
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
@@ -51,6 +53,7 @@ final class VaultsModel {
   init() {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
+    autoLock = AutoLock { [weak self] in self?.lock(automatic: true) }
   }
 
   // MARK: - Vault list
@@ -73,6 +76,14 @@ final class VaultsModel {
   /// Unlock with the embedded biometric prompt. Without Touch ID the icon has
   /// no state to show, so this falls back to the system dialog and its password
   /// field.
+  /// Prompt when the lock screen appears, but only if a prompt is wanted and
+  /// answerable: an automatic lock waits for a deliberate Unlock, and a prompt
+  /// raised while the app is in the background fails at once.
+  func unlockIfActive() {
+    guard autoPromptPending, NSApp.isActive else { return }
+    unlock()
+  }
+
   func unlock() {
     guard !isUnlocking else { return }
     // The model owns the task. The lock screen's `.task` would cancel the
@@ -103,7 +114,7 @@ final class VaultsModel {
     unlockError = nil
     defer {
       isUnlocking = false
-      hasAttemptedUnlock = true
+      autoPromptPending = false
     }
 
     do {
@@ -122,6 +133,7 @@ final class VaultsModel {
         contextPtr: UInt64(UInt(bitPattern: Unmanaged.passUnretained(context).toOpaque())))
       try? core.endEmbeddedAuth()
       isAppUnlocked = true
+      autoLock.start()
       if let key = selectedVaultKey { await loadItems(for: key) }
     } catch {
       try? core.endEmbeddedAuth()
@@ -150,21 +162,17 @@ final class VaultsModel {
     return context.biometryType
   }
 
-  /// True from the moment the lock screen appears until an attempt finishes.
-  /// Covers the gap before the first `unlock()` sets `isUnlocking`.
-  var isPrompting: Bool { isUnlocking || !hasAttemptedUnlock }
+  /// True while an attempt is in flight, or about to be. The second clause
+  /// covers the gap between the lock screen appearing and its `onAppear`
+  /// starting the attempt, and is false when the app is in the background,
+  /// where `unlockIfActive` declines to prompt at all.
+  var isPrompting: Bool { isUnlocking || (autoPromptPending && NSApp.isActive) }
 
-  /// What the lock screen asks the user to do, given the available
-  /// authentication and whether a prompt is up.
+  /// What to do about the prompt that is up. Only shown while one is.
   var unlockInstruction: String {
-    if isPrompting {
-      return biometry == .touchID
-        ? "Touch the Touch ID sensor to unlock."
-        : "Confirm with your login password to unlock."
-    }
-    return biometry == .touchID
-      ? "Unlock with Touch ID, or use your login password, to open your vaults."
-      : "Unlock with your login password to open your vaults."
+    biometry == .touchID
+      ? "Touch the Touch ID sensor to unlock."
+      : "Confirm with your login password to unlock."
   }
 
   /// Whether to show the password option separately. Without Touch ID the
@@ -187,7 +195,12 @@ final class VaultsModel {
     }
   }
 
-  func lock() {
+  /// `automatic` marks a lock the user did not ask for: idle timeout, sleep, or
+  /// screen lock. Those land on the lock screen without a prompt, so returning
+  /// to the app takes a deliberate Unlock rather than a Touch ID prompt the user
+  /// did not expect.
+  func lock(automatic: Bool = false) {
+    autoLock.stop()
     // A failure here means the core's state is poisoned, not that the vaults
     // stayed decrypted. Lock the UI either way.
     do {
@@ -201,8 +214,7 @@ final class VaultsModel {
     itemCache = [:]
     selectedItemKey = nil
     unlockError = nil
-    // The lock screen prompts again as soon as it reappears.
-    hasAttemptedUnlock = false
+    autoPromptPending = !automatic
   }
 
   // MARK: - Navigation
