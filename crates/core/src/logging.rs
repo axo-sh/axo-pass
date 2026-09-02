@@ -58,7 +58,10 @@ pub fn init(filename_prefix: &str) {
         {
             Ok(appender) => Some(fmt::layer().with_ansi(false).with_writer(appender)),
             Err(e) => {
-                eprintln!("axo-pass: could not open log file in {}: {e}", dir.display());
+                eprintln!(
+                    "axo-pass: could not open log file in {}: {e}",
+                    dir.display()
+                );
                 None
             },
         };

@@ -350,7 +350,8 @@ impl AxoPass {
         if context_ptr == 0 {
             return Err(FfiError::InvalidInput("null LAContext pointer".into()));
         }
-        unsafe { adopt_shared_context(context_ptr as *mut std::ffi::c_void) }.map_err(FfiError::from)
+        unsafe { adopt_shared_context(context_ptr as *mut std::ffi::c_void) }
+            .map_err(FfiError::from)
     }
 
     /// Authenticate globally via Touch ID / password, showing the system
