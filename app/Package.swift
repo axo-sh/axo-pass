@@ -33,6 +33,7 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("Security"),
                 .linkedFramework("LocalAuthentication"),
+                .linkedFramework("LocalAuthenticationEmbeddedUI"),
             ]
         ),
     ]

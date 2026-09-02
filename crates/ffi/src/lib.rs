@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use axo_pass_core::core::auth::{AuthContext, AuthMethod, invalidate_auth, run_on_auth_thread};
+use axo_pass_core::core::auth::{
+    AuthContext, AuthMethod, adopt_shared_context, external_auth_lock, invalidate_auth,
+    run_on_auth_thread,
+};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
@@ -298,6 +301,9 @@ impl From<PasswordEntry> for PasswordEntryInfo {
 #[derive(uniffi::Object)]
 pub struct AxoPass {
     manager: Arc<Mutex<VaultsManager>>,
+    /// Held between `begin_embedded_auth` and `end_embedded_auth` so a
+    /// UI-driven prompt still serializes against other processes.
+    embedded_auth_lock: Mutex<Option<std::fs::File>>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -307,12 +313,53 @@ impl AxoPass {
         axo_pass_core::logging::init("app.log");
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
+            embedded_auth_lock: Mutex::new(None),
         })
     }
 
-    /// Authenticate globally via Touch ID / password. One prompt covers all
-    /// subsequent vault operations for the lifetime of the LAContext.
-    /// Mirrors `unlock_axo` in the Tauri app.
+    /// Take the cross-process auth lock ahead of a UI-driven prompt (see
+    /// `adopt_auth_context`). Blocks until no other process is prompting. Pair
+    /// every call with `end_embedded_auth`.
+    pub async fn begin_embedded_auth(&self) -> Result<(), FfiError> {
+        let file = tokio::task::spawn_blocking(external_auth_lock)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?;
+        *self
+            .embedded_auth_lock
+            .lock()
+            .map_err(|_| FfiError::Poisoned)? = Some(file);
+        Ok(())
+    }
+
+    /// Release the lock taken by `begin_embedded_auth`.
+    pub fn end_embedded_auth(&self) -> Result<(), FfiError> {
+        self.embedded_auth_lock
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .take();
+        Ok(())
+    }
+
+    /// Adopt an `LAContext` the UI created and authenticated, making it the
+    /// shared context for subsequent vault operations.
+    ///
+    /// The UI owns the context so it can attach an `LAAuthenticationView` and
+    /// draw the biometric prompt inline. `context_ptr` is the address of a live
+    /// `LAContext`; the caller keeps its own reference across the call.
+    pub fn adopt_auth_context(&self, context_ptr: u64) -> Result<(), FfiError> {
+        if context_ptr == 0 {
+            return Err(FfiError::InvalidInput("null LAContext pointer".into()));
+        }
+        unsafe { adopt_shared_context(context_ptr as *mut std::ffi::c_void) }.map_err(FfiError::from)
+    }
+
+    /// Authenticate globally via Touch ID / password, showing the system
+    /// dialog. One prompt covers all subsequent vault operations for the
+    /// lifetime of the LAContext. Mirrors `unlock_axo` in the Tauri app.
+    ///
+    /// The macOS app unlocks through `adopt_auth_context` instead so it can
+    /// draw the prompt inline. This remains for callers with no UI, such as the
+    /// `ap` CLI.
     pub async fn unlock(&self) -> Result<(), FfiError> {
         tokio::task::spawn_blocking(|| {
             run_on_auth_thread(

@@ -1,4 +1,5 @@
 mod la_context;
+use std::ffi::c_void;
 use std::num::NonZero;
 use std::sync::{LazyLock, Mutex, mpsc};
 use std::thread;
@@ -26,7 +27,18 @@ const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
 enum AuthMessage {
     Work(AuthWork),
     Invalidate(mpsc::Sender<()>),
+    AdoptContext(ForeignContext, mpsc::Sender<()>),
 }
+
+/// An `LAContext` created outside this crate and handed to the shared auth
+/// thread. The UI owns the context it authenticates with so it can attach an
+/// `LAAuthenticationView` and draw the biometric prompt inline rather than in
+/// the system dialog.
+struct ForeignContext(Retained<LAContext>);
+
+// SAFETY: LAContext supports use from any thread, and every other context in
+// this module already moves onto the shared-auth thread the same way.
+unsafe impl Send for ForeignContext {}
 
 struct AuthWork {
     context: AuthContext,
@@ -81,6 +93,11 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                         la_cache.clear();
                         let _ = reply.send(());
                     },
+                    AuthMessage::AdoptContext(context, reply) => {
+                        log::debug!("Adopting externally created LAContext as the shared context");
+                        thread_la_context = context.0;
+                        let _ = reply.send(());
+                    },
                     AuthMessage::Work(work) => {
                         let selected_la_ctx = match work.context {
                             AuthContext::WithContext(ref key) => {
@@ -129,8 +146,13 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
 });
 
 fn init_shared_la_context() -> Retained<LAContext> {
+    let ctx = unsafe { LAContext::new() };
+    set_reuse_duration(&ctx);
+    ctx
+}
+
+fn set_reuse_duration(ctx: &LAContext) {
     unsafe {
-        let ctx = LAContext::new();
         if TOUCH_ID_REUSE_DURATION_SECS > LATouchIDAuthenticationMaximumAllowableReuseDuration {
             log::warn!(
                 "Requested Touch ID reuse duration of {TOUCH_ID_REUSE_DURATION_SECS}s exceeds the system maximum of {LATouchIDAuthenticationMaximumAllowableReuseDuration}s. Capping to the maximum."
@@ -143,8 +165,38 @@ fn init_shared_la_context() -> Retained<LAContext> {
             // which is "almost always f64" per the std::os::raw docs
             ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
         }
-        ctx
     }
+}
+
+/// Adopt an `LAContext` created outside this crate as the shared context, so
+/// later keychain operations reuse the authentication already performed on it.
+///
+/// The macOS UI creates its own context to drive `LAAuthenticationView`, calls
+/// `evaluatePolicy` on it, then hands it over here.
+///
+/// # Safety
+/// `context_ptr` must point to a live `LAContext`. The caller keeps its own
+/// reference; this takes an additional one.
+pub unsafe fn adopt_shared_context(context_ptr: *mut c_void) -> Result<(), KeychainError> {
+    let context = unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }
+        .ok_or_else(|| KeychainError::from(anyhow!("null LAContext pointer")))?;
+    set_reuse_duration(&context);
+
+    let (tx, rx) = mpsc::channel();
+    AUTH_THREAD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(AuthMessage::AdoptContext(ForeignContext(context), tx))
+        .expect("shared-auth thread stopped");
+    rx.recv().expect("shared-auth thread stopped");
+    Ok(())
+}
+
+/// Serialize an authentication prompt driven from outside this crate. The UI
+/// calls `evaluatePolicy` for the embedded prompt, bypassing [`authenticate`]
+/// and the lock it takes. Hold the returned file while the prompt is on screen.
+pub fn external_auth_lock() -> std::fs::File {
+    acquire_auth_lock()
 }
 
 // evaluatePolicy shows OS authentication UI; if a second process calls it while
