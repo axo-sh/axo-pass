@@ -99,6 +99,17 @@ impl VaultWrapper {
         Ok(())
     }
 
+    /// Drop the decrypted vault from memory, keeping only the name shown in the
+    /// vault list. Reading items again requires `unlock`, and so a fresh
+    /// authentication.
+    pub fn lock(&mut self) {
+        if let VaultState::Unlocked { vault } = &self.state {
+            self.state = VaultState::Locked {
+                name: vault.name.clone(),
+            };
+        }
+    }
+
     fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
         match &self.state {
             VaultState::Unlocked { vault } => Ok(vault),

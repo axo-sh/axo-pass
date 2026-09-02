@@ -147,6 +147,15 @@ impl VaultsManager {
         self.vaults.iter()
     }
 
+    /// Drop every decrypted vault from memory. Pair with `invalidate_auth` so
+    /// that reading items again costs both a decryption and a fresh prompt.
+    pub fn lock_all(&mut self) {
+        for (key, vault) in self.vaults.iter_mut() {
+            log::debug!("Locking vault {key}");
+            vault.lock();
+        }
+    }
+
     /// Get-or-create + unlock a vault, run `f`, then save. Generic over the
     /// caller's own error type so each frontend (CLI, FFI) can keep its own
     /// error taxonomy — it just needs `From<Error>` to absorb failures from

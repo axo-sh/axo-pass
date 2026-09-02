@@ -375,10 +375,16 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
-    /// Invalidate the shared LAContext, requiring re-authentication.
+    /// Drop every decrypted vault from memory and invalidate the shared
+    /// LAContext. Reading items again costs a decryption and a fresh prompt.
     /// Mirrors `lock_axo` in the Tauri app.
-    pub fn lock(&self) {
+    pub fn lock(&self) -> Result<(), FfiError> {
+        self.manager
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .lock_all();
         invalidate_auth();
+        Ok(())
     }
 
     /// List all known vaults. Does not require authentication.

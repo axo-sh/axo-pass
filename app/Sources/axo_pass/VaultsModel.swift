@@ -188,7 +188,13 @@ final class VaultsModel {
   }
 
   func lock() {
-    core.lock()
+    // A failure here means the core's state is poisoned, not that the vaults
+    // stayed decrypted. Lock the UI either way.
+    do {
+      try core.lock()
+    } catch {
+      actionError = String(describing: error)
+    }
     unlockTask = nil
     resetAuthContext(invalidatingCurrent: true)
     isAppUnlocked = false
