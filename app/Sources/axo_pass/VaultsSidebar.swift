@@ -5,6 +5,8 @@ struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
   @State private var showingNewVaultSheet = false
   @State private var renamingVaultKey: String? = nil
+  @AppStorage("sidebar.secretsExpanded") private var secretsExpanded = true
+  @AppStorage("sidebar.toolsExpanded") private var toolsExpanded = true
 
   private var selectionBinding: Binding<SidebarDestination?> {
     Binding(
@@ -15,20 +17,24 @@ struct VaultsSidebar: View {
 
   var body: some View {
     List(selection: selectionBinding) {
-      Section {
+      Section(isExpanded: $secretsExpanded) {
         vaultItems
       } header: {
-        // Label("Secrets", systemImage: "list.bullet.rectangle.fill")
-        Text("Secrets")
+        SidebarSectionHeader("Secrets")
       }
 
-      Label("SSH", systemImage: "asterisk")
-        .tag(SidebarDestination.ssh)
-      Label("Keys", systemImage: "key.fill")
-        .tag(SidebarDestination.gpg)
-      Label("Setup", systemImage: "terminal")
-        .tag(SidebarDestination.setup)
+      Section(isExpanded: $toolsExpanded) {
+        Label("SSH", systemImage: "asterisk")
+          .tag(SidebarDestination.ssh)
+        Label("Keys", systemImage: "key.fill")
+          .tag(SidebarDestination.gpg)
+        Label("Setup", systemImage: "terminal")
+          .tag(SidebarDestination.setup)
+      } header: {
+        SidebarSectionHeader("Tools")
+      }
     }
+    .listStyle(.sidebar)
     .navigationSplitViewColumnWidth(min: 160, ideal: 200)
     .safeAreaInset(edge: .bottom) {
       HStack(spacing: 8) {
@@ -78,19 +84,56 @@ struct VaultsSidebar: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     } else {
-      Label("All", systemImage: "lock")
-        .tag(SidebarDestination.vault("all"))
-      ForEach(model.vaults, id: \.key) { vault in
-        Label(vault.name ?? vault.key, systemImage: "lock")
-          .tag(SidebarDestination.vault(vault.key))
-          .contextMenu {
-            Button("Rename…") { renamingVaultKey = vault.key }
-            Button("Delete", role: .destructive) {
-              Task { await model.deleteVault(vault.key) }
-            }
-          }
+      Label {
+        Text("All Secrets")
+      } icon: {
+        Image(systemName: "square.stack.3d.up.fill")
+          .foregroundStyle(.tint)
       }
+      .tag(SidebarDestination.vault("all"))
+
+      ForEach(model.vaults, id: \.key) { vault in
+        Label {
+          Text(vault.name ?? vault.key)
+        } icon: {
+          Image(systemName: "lock.fill")
+            .foregroundStyle(.secondary)
+        }
+        .tag(SidebarDestination.vault(vault.key))
+        .contextMenu {
+          Button("Rename…") { renamingVaultKey = vault.key }
+          Button("Delete", role: .destructive) {
+            Task { await model.deleteVault(vault.key) }
+          }
+        }
+      }
+
+      Button {
+        showingNewVaultSheet = true
+      } label: {
+        Label("New Vault", systemImage: "plus")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .listRowSeparator(.hidden)
     }
+  }
+}
+
+private struct SidebarSectionHeader: View {
+  let title: String
+
+  init(_ title: String) { self.title = title }
+
+  var body: some View {
+    Text(title)
+      .font(.caption2)
+      .fontWeight(.semibold)
+      .textCase(.uppercase)
+      .kerning(0.6)
+      .foregroundStyle(.tertiary)
+      .padding(.top, 6)
   }
 }
 
