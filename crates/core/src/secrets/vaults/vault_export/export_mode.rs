@@ -6,7 +6,12 @@ use secrecy::SecretString;
 
 use crate::secrets::vaults::errors::Error;
 
+/// scrypt log_n work factor. A log_n of 21 needs about 2 GB of memory.
+/// Lowered under test so the round-trip tests do not take minutes.
+#[cfg(not(test))]
 pub const SCRYPT_WORK_FACTOR: u8 = 21;
+#[cfg(test)]
+pub const SCRYPT_WORK_FACTOR: u8 = 10;
 
 pub enum ExportMode {
     /// Encrypt the file key with a passphrase (age scrypt)
