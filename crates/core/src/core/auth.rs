@@ -62,6 +62,10 @@ pub enum AuthContext {
 }
 
 pub enum AuthMethod {
+    /// Run the work with the context as it stands, evaluating nothing. For
+    /// probes that must not raise a prompt; the work is responsible for coping
+    /// with a context that is not authenticated.
+    None,
     // maps to evaluatePolicy_localizedReason_reply
     Policy {
         reason: String,
@@ -234,11 +238,18 @@ const AUTH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(2
 
 // Authenticate the LAContext using the specified method
 fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(), KeychainError> {
+    // Nothing to evaluate and no prompt to serialize against, so skip the lock.
+    if matches!(method, AuthMethod::None) {
+        return Ok(());
+    }
+
     let _lock = acquire_auth_lock();
     let mut attempts_left = AUTH_RETRY_ATTEMPTS;
     loop {
         let (callback, rx) = create_la_auth_callback();
         match &method {
+            // Returned above, before the lock.
+            AuthMethod::None => return Ok(()),
             AuthMethod::Policy { reason } => unsafe {
                 la_context.evaluatePolicy_localizedReason_reply(
                     LAPolicy::DeviceOwnerAuthentication,
@@ -311,8 +322,8 @@ where
     F: FnOnce(Retained<LAContext>) -> R + Send + 'static,
     R: Send + 'static,
 {
-    // alternative to running on shared thread with AuthContext::OneTime,
-    // sort of AuthMethod::None
+    // alternative to running on shared thread with AuthContext::OneTime and
+    // AuthMethod::None, on a context of its own rather than the shared one
     unsafe {
         let la_context = LAContext::new();
         la_context.setInteractionNotAllowed(true);
@@ -320,19 +331,26 @@ where
     }
 }
 
-/// Verify that the user is still authenticated. Returns Ok(()) if auth is
-/// still valid, or Err if it has expired (which also invalidates cached
-/// contexts).
-pub fn check_auth_still_valid() -> Result<(), KeychainError> {
-    // todo: handle the case where we call this as the initial auth check -
-    // we shouldn't prompt for auth, we should only be checking if an existing auth
-    // is still valid
+/// Run `probe_fn` against the shared context with interaction disallowed, so a
+/// keychain read reports that authentication is needed rather than prompting
+/// for it. The flag is restored afterwards.
+///
+/// The shared context is only touched on the auth thread, so the window where
+/// interaction is disallowed cannot overlap other work.
+pub fn probe_shared_context<F, R>(probe_fn: F) -> Result<R, KeychainError>
+where
+    F: FnOnce(Retained<LAContext>) -> R + Send + 'static,
+    R: Send + 'static,
+{
     run_on_auth_thread(
         AuthContext::SharedThreadLocal,
-        AuthMethod::Policy {
-            reason: "unlock".to_string(),
+        AuthMethod::None,
+        move |la_context| unsafe {
+            la_context.setInteractionNotAllowed(true);
+            let result = probe_fn(la_context.clone());
+            la_context.setInteractionNotAllowed(false);
+            result
         },
-        |_| {},
     )
 }
 

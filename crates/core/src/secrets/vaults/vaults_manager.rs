@@ -5,12 +5,13 @@ use std::process::Command;
 
 use secrecy::ExposeSecret;
 
-use crate::core::auth::check_auth_still_valid;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault_export::{ImportIdentity, import_vault};
-use crate::secrets::vaults::vault_wrapper::{VaultWrapper, get_vault_encryption_key};
+use crate::secrets::vaults::vault_wrapper::{
+    VaultWrapper, check_vault_auth_still_valid, get_vault_encryption_key,
+};
 
 #[derive(Default)]
 pub struct VaultsManager {
@@ -165,7 +166,7 @@ impl VaultsManager {
         F: FnOnce(&mut VaultWrapper) -> Result<R, E>,
         E: From<Error>,
     {
-        check_auth_still_valid().map_err(Error::VaultInvalidAuth)?;
+        check_vault_auth_still_valid()?;
 
         let vw = self.get_or_create_vault_mut(vault_key)?;
         vw.unlock()?;

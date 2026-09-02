@@ -5,8 +5,9 @@ use std::{fs, io};
 use secrecy::{SecretBox, SecretString};
 use url::Url;
 
-use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
 use crate::core::provenance::Provenance;
+use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
@@ -289,6 +290,34 @@ pub fn normalized_key(key: &str) -> Option<String> {
         Some(normalized)
     } else {
         None
+    }
+}
+
+/// Check whether the shared authentication still covers the vault encryption
+/// key, without prompting for it.
+///
+/// Being able to read the key authentication is still valid. A key that is
+/// present but blocked means auth has lapsed. A key that is absent is not an
+/// auth failure at all: it has yet to be created, and
+/// `get_vault_encryption_key` will make one on the next unlock.
+pub fn check_vault_auth_still_valid() -> Result<(), Error> {
+    let result = probe_shared_context(|la_context| {
+        ManagedKeyQuery::build()
+            .with_label(VAULT_ENCRYPTION_KEY_LABEL)
+            .with_key_class(KeyClass::Private)
+            .one_with_retry(la_context, false)
+    })
+    .map_err(Error::VaultInvalidAuth)?;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(KeychainError::ItemNotAccessible) => {
+            log::debug!("Vault encryption key is gated; authentication has lapsed");
+            Err(Error::VaultInvalidAuth(
+                KeychainError::AuthenticationExpired,
+            ))
+        },
+        Err(e) => Err(Error::VaultInvalidAuth(e)),
     }
 }
 
