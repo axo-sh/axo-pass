@@ -556,6 +556,7 @@ dependencies = [
  "glob",
  "indoc",
  "itertools",
+ "libc",
  "libproc",
  "log",
  "lru",
@@ -596,7 +597,9 @@ name = "axo-pass-ffi"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axo-pass-core",
+ "log",
  "secrecy",
  "thiserror 2.0.18",
  "tokio",

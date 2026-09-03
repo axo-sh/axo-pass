@@ -8,7 +8,10 @@ struct AxoPassApp: App {
     Window("Axo Pass", id: "main") {
       ContentView()
         .environment(model)
-        .task { model.reload() }
+        .task {
+          model.reload()
+          await model.startSigningBroker()
+        }
     }
     .windowStyle(.hiddenTitleBar)
     .defaultSize(width: 960, height: 560)

@@ -32,6 +32,14 @@ path = "src-tauri/icons/icon.icns"
 # `ap` CLI binary, staged by `axo app:cli` (see scripts/build-cli.sh) into
 # target/dist/ap; copied into Contents/MacOS/ap and signed so it passes
 # `codesign --verify --deep --strict` / notarization as a nested executable.
+#
+#
+# It signs without entitlements, which is why the agent cannot see managed SSH
+# keys: those live in the data protection keychain, reachable only with
+# keychain-access-groups. That entitlement is restricted, AMFI validates it
+# against a provisioning profile, and a plain executable has nowhere to carry
+# one — claiming it here gets the process killed on launch instead. Fixing it
+# means giving `ap` a bundle of its own to hold the profile.
 [[build.copy]]
 src      = "target/dist/ap"
 dest_dir = "Contents/MacOS"

@@ -1,9 +1,10 @@
 use std::fs::{self, Permissions};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axo_pass_core::core::provenance::Provenance;
+use axo_pass_core::core::provenance::PeerIdentity;
 use axo_pass_core::ssh::agent_client::default_socket_path;
 use ssh_agent_lib::agent::{Agent, Session};
 use thiserror::Error;
@@ -105,13 +106,14 @@ impl SshAgentServer {
 
 impl Agent<UnixListener> for SshAgentServer {
     fn new_session(&mut self, socket: &UnixStream) -> impl Session {
-        let caller = socket
-            .peer_cred()
+        // From the audit token, not `peer_cred().pid()`: a pid can be recycled
+        // onto an unrelated process between reading it and resolving it, and
+        // this name ends up in a signing prompt.
+        let caller = PeerIdentity::identify(socket.as_raw_fd())
+            .inspect_err(|e| log::debug!("SSH agent caller unidentified: {e}"))
             .ok()
-            .and_then(|cred| cred.pid())
-            .map(|pid| Provenance::resolve(pid as u32))
-            .inspect(|provenance| log::debug!("SSH agent: {provenance:?}"))
-            .and_then(|chain| chain.caller());
+            .inspect(|peer| log::debug!("SSH agent caller: {peer:#?}"))
+            .and_then(|peer| peer.caller());
 
         SshAgentSession::new(
             self.credentials.clone(),

@@ -41,7 +41,24 @@ enum AuthMessage {
 /// thread. The UI owns the context it authenticates with so it can attach an
 /// `LAAuthenticationView` and draw the biometric prompt inline rather than in
 /// the system dialog.
-struct ForeignContext(Retained<LAContext>);
+pub struct ForeignContext(Retained<LAContext>);
+
+impl ForeignContext {
+    /// # Safety
+    /// `context_ptr` must point to a live `LAContext`. The caller keeps its own
+    /// reference; this takes an additional one.
+    pub unsafe fn from_ptr(context_ptr: *mut c_void) -> Result<Self, KeychainError> {
+        let context = unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }
+            .ok_or_else(|| KeychainError::from(anyhow!("null LAContext pointer")))?;
+        Ok(Self(context))
+    }
+}
+
+impl std::fmt::Debug for ForeignContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ForeignContext")
+    }
+}
 
 // SAFETY: LAContext supports use from any thread, and every other context in
 // this module already moves onto the shared-auth thread the same way.
@@ -59,6 +76,10 @@ pub enum AuthContext {
     SharedThreadLocal,
     WithContext(String),
     OneTime,
+    /// A context the caller owns, so it can attach an `LAAuthenticationView`
+    /// and draw the prompt itself. Used by the signing broker, where the app
+    /// supplies the context and the requesting process does the signing.
+    Foreign(ForeignContext),
 }
 
 pub enum AuthMethod {
@@ -119,6 +140,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                             },
                             AuthContext::SharedThreadLocal => thread_la_context.clone(),
                             AuthContext::OneTime => unsafe { LAContext::new() },
+                            AuthContext::Foreign(ref context) => context.0.clone(),
                         };
                         match authenticate(selected_la_ctx.clone(), work.auth) {
                             Ok(_) => {
@@ -189,8 +211,7 @@ fn set_reuse_duration(ctx: &LAContext) {
 /// `context_ptr` must point to a live `LAContext`. The caller keeps its own
 /// reference; this takes an additional one.
 pub unsafe fn adopt_shared_context(context_ptr: *mut c_void) -> Result<(), KeychainError> {
-    let context = unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }
-        .ok_or_else(|| KeychainError::from(anyhow!("null LAContext pointer")))?;
+    let context = unsafe { ForeignContext::from_ptr(context_ptr) }?;
     // The reuse duration is deliberately not set here: it only affects
     // evaluations that follow it, and the caller has already evaluated. See the
     // note on TOUCH_ID_REUSE_DURATION_SECS for why it would not matter anyway.
@@ -199,7 +220,7 @@ pub unsafe fn adopt_shared_context(context_ptr: *mut c_void) -> Result<(), Keych
     AUTH_THREAD
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .send(AuthMessage::AdoptContext(ForeignContext(context), tx))
+        .send(AuthMessage::AdoptContext(context, tx))
         .expect("shared-auth thread stopped");
     rx.recv().expect("shared-auth thread stopped");
     Ok(())
@@ -365,20 +386,44 @@ pub fn invalidate_auth() {
     rx.recv().expect("shared-auth thread stopped");
 }
 
+/// Reason string shown in the authentication prompt for an SSH signature.
+pub fn signing_reason(managed_key_label: &str, caller: Option<&str>) -> String {
+    match caller {
+        Some(c) => format!("sign with SSH key {managed_key_label} for {c}"),
+        None => format!("sign with SSH key {managed_key_label}"),
+    }
+}
+
 pub fn sign_with_managed_key(
     managed_key_label: &str,
     data: &[u8],
     caller: Option<&str>,
 ) -> Result<Signature, String> {
+    sign_with_managed_key_on(
+        AuthContext::WithContext(managed_key_label.to_string()),
+        managed_key_label,
+        data,
+        caller,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Sign on a specific [`AuthContext`]. The signing broker passes
+/// [`AuthContext::Foreign`] so the app that owns the context draws the prompt.
+/// Unlike [`sign_with_managed_key`] this keeps the error typed, so a caller can
+/// tell a cancelled prompt from a failure.
+pub fn sign_with_managed_key_on(
+    auth_context: AuthContext,
+    managed_key_label: &str,
+    data: &[u8],
+    caller: Option<&str>,
+) -> Result<Signature, KeychainError> {
     let managed_key_label = managed_key_label.to_string();
     let data = data.to_vec();
-    let reason = match caller {
-        Some(c) => format!("sign with SSH key {} for {c}", managed_key_label),
-        None => format!("sign with SSH key {}", managed_key_label),
-    };
+    let reason = signing_reason(&managed_key_label, caller);
 
     run_on_auth_thread(
-        AuthContext::WithContext(managed_key_label.clone()),
+        auth_context,
         AuthMethod::AccessControl {
             access_control: AccessControl::ManagedKey,
             operation: LAAccessControlOperation::UseKeySign,
@@ -389,10 +434,11 @@ pub fn sign_with_managed_key(
             Ok(Some(managed_key)) => managed_key
                 .sign(&data)
                 .inspect(|_| log::debug!("Completed signing with key {managed_key_label}"))
-                .map_err(|e| e.to_string()),
-            Ok(None) => Err(format!("{managed_key_label} not found")),
-            Err(e) => Err(format!("{managed_key_label} error: {e}")),
+                .map_err(|e| KeychainError::SigningFailed(e.to_string())),
+            Ok(None) => Err(KeychainError::SigningFailed(format!(
+                "{managed_key_label} not found"
+            ))),
+            Err(e) => Err(e),
         },
-    )
-    .map_err(|e| e.to_string())?
+    )?
 }

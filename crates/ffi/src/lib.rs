@@ -1,9 +1,12 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use axo_pass_core::core::auth::{
-    AuthContext, AuthMethod, adopt_shared_context, external_auth_lock, invalidate_auth,
-    run_on_auth_thread,
+    AuthContext, AuthMethod, ForeignContext, adopt_shared_context, external_auth_lock,
+    invalidate_auth, run_on_auth_thread,
 };
+use axo_pass_core::core::sign_broker;
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
@@ -304,6 +307,8 @@ pub struct AxoPass {
     /// Held between `begin_embedded_auth` and `end_embedded_auth` so a
     /// UI-driven prompt still serializes against other processes.
     embedded_auth_lock: Mutex<Option<std::fs::File>>,
+    /// Shuts the signing broker down; `Some` while it is serving.
+    sign_broker: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -314,6 +319,7 @@ impl AxoPass {
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
             embedded_auth_lock: Mutex::new(None),
+            sign_broker: Mutex::new(None),
         })
     }
 
@@ -801,5 +807,140 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // Signing broker
+    // -----------------------------------------------------------------------
+
+    /// Serve SSH signing requests from the agent, prompting through `delegate`
+    /// so the app draws the prompt instead of the agent raising the system
+    /// dialog. Returns once the socket is bound; serving continues in the
+    /// background until [`Self::stop_sign_broker`] or app exit.
+    pub async fn start_sign_broker(
+        &self,
+        delegate: Arc<dyn SignPromptDelegate>,
+    ) -> Result<(), FfiError> {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        {
+            let mut slot = self.sign_broker.lock().map_err(|_| FfiError::Poisoned)?;
+            if slot.is_some() {
+                return Err(FfiError::InvalidInput(
+                    "Signing broker is already running".to_string(),
+                ));
+            }
+            *slot = Some(shutdown_tx);
+        }
+
+        let authorizer = Arc::new(DelegatingAuthorizer { delegate });
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            // `serve` binds before it accepts and only returns at shutdown, so
+            // readiness is reported before awaiting it. Bind failures surface
+            // in the log.
+            let _ = ready_tx.send(());
+            if let Err(e) = sign_broker::serve(authorizer, shutdown_rx).await {
+                log::error!("Signing broker stopped: {e}");
+            }
+        });
+        let _ = ready_rx.await;
+        Ok(())
+    }
+
+    /// Stop serving signing requests and remove the socket, so the agent falls
+    /// back to the system dialog.
+    pub fn stop_sign_broker(&self) -> Result<(), FfiError> {
+        if let Some(shutdown) = self
+            .sign_broker
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .take()
+        {
+            let _ = shutdown.send(());
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Signing broker delegate
+// ---------------------------------------------------------------------------
+
+/// How a signing attempt ended, as the app sees it.
+#[derive(uniffi::Enum, Clone)]
+pub enum SignOutcome {
+    /// The user approved, or a still-valid approval was reused.
+    Succeeded,
+    /// The user dismissed the prompt. Nothing was authorized.
+    Cancelled,
+    Failed {
+        message: String,
+    },
+}
+
+impl From<sign_broker::SignOutcome> for SignOutcome {
+    fn from(outcome: sign_broker::SignOutcome) -> Self {
+        match outcome {
+            sign_broker::SignOutcome::Succeeded => Self::Succeeded,
+            sign_broker::SignOutcome::Cancelled => Self::Cancelled,
+            sign_broker::SignOutcome::Failed(message) => Self::Failed { message },
+        }
+    }
+}
+
+/// Implemented by the app. `begin_authorization` prepares an `LAContext` with
+/// an `LAAuthenticationView` attached and puts the prompt on screen;
+/// `end_authorization` takes it down again.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait SignPromptDelegate: Send + Sync {
+    /// Return the address of a live `LAContext` to sign on. The app must keep
+    /// its own reference to that context until `end_authorization`.
+    async fn begin_authorization(
+        &self,
+        key_label: String,
+        caller: Option<String>,
+    ) -> Result<u64, FfiError>;
+
+    /// The attempt finished. Called once for every `begin_authorization`.
+    async fn end_authorization(&self, key_label: String, outcome: SignOutcome);
+}
+
+struct DelegatingAuthorizer {
+    delegate: Arc<dyn SignPromptDelegate>,
+}
+
+impl sign_broker::SignAuthorizer for DelegatingAuthorizer {
+    fn begin(
+        &self,
+        prompt: sign_broker::SignPrompt,
+    ) -> Pin<Box<dyn Future<Output = Result<ForeignContext, String>> + Send>> {
+        let delegate = self.delegate.clone();
+        Box::pin(async move {
+            let context_ptr = delegate
+                .begin_authorization(prompt.key_label, prompt.caller)
+                .await
+                .map_err(|e| e.to_string())?;
+            if context_ptr == 0 {
+                return Err("null LAContext pointer".to_string());
+            }
+            // SAFETY: the app holds a reference to the context until
+            // `end_authorization`, which the broker calls after signing.
+            unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
+                .map_err(|e| e.to_string())
+        })
+    }
+
+    fn end(
+        &self,
+        prompt: sign_broker::SignPrompt,
+        outcome: sign_broker::SignOutcome,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        let delegate = self.delegate.clone();
+        Box::pin(async move {
+            delegate
+                .end_authorization(prompt.key_label, outcome.into())
+                .await;
+        })
     }
 }

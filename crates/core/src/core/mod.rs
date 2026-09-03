@@ -7,4 +7,5 @@ pub mod interpolate;
 mod objc_helpers;
 pub mod provenance;
 pub mod read_input;
+pub mod sign_broker;
 pub mod updates;

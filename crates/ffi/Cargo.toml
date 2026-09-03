@@ -15,7 +15,9 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 anyhow.workspace = true
+async-trait = "0.1"
 axo-pass-core.workspace = true
+log.workspace = true
 secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

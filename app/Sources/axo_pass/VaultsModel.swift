@@ -64,6 +64,10 @@ final class VaultsModel {
   private var unlockTask: Task<Void, Never>? = nil
   private var autoLock: AutoLock! = nil
 
+  // Draws the prompt for SSH signatures the agent delegates to us.
+  private let signingPrompt = SigningPromptModel()
+  private var signingBridge: SigningPromptBridge? = nil
+
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
   var selectedItemRef: ItemRef? = nil
@@ -90,6 +94,27 @@ final class VaultsModel {
     } catch {
       vaults = []
       loadError = String(describing: error)
+    }
+  }
+
+  // MARK: - Signing broker
+
+  /// Serve the agent's signing requests for as long as the app runs. Signing
+  /// uses its own Secure Enclave key, so this does not wait on the vault being
+  /// unlocked. With the app closed the agent falls back to the system dialog.
+  func startSigningBroker() async {
+    guard signingBridge == nil else { return }
+    let bridge = SigningPromptBridge(model: signingPrompt)
+    signingBridge = bridge
+    do {
+      try await core.startSignBroker(delegate: bridge)
+      // Signing authorizations expire on their own clocks, and on sleep and
+      // screen lock. Those events belong to the broker's lifetime: signing is
+      // served with the vault locked, where AutoLock does not run.
+      signingPrompt.start()
+    } catch {
+      signingBridge = nil
+      NSLog("Failed to start the signing broker: %@", String(describing: error))
     }
   }
 
@@ -231,6 +256,8 @@ final class VaultsModel {
       actionError = String(describing: error)
     }
     unlockTask = nil
+    // A lock drops every authorization the user has given, signing included.
+    signingPrompt.forgetAll()
     resetAuthContext(invalidatingCurrent: true)
     isAppUnlocked = false
     itemCache = [:]

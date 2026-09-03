@@ -1,9 +1,13 @@
 mod helpers;
+mod peer;
 mod proc_info;
 mod signing_info;
 
 use std::fmt;
 
+use objc2_security::SecCode;
+
+pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
 use crate::core::provenance::proc_info::ProcInfo;
 
 pub struct Provenance {
@@ -27,6 +31,21 @@ impl Provenance {
         ProcInfo::lookup(std::process::id())?
             .parent_pid()
             .map(Self::resolve)
+    }
+
+    /// Resolve the chain from a process whose SecCode is already in hand. The
+    /// head of the chain is then the process that was identified, not whatever
+    /// holds `pid` by the time the chain is walked.
+    pub(crate) fn resolve_from_sec_code(pid: u32, code: &SecCode) -> Self {
+        let Some(head) = ProcInfo::from_sec_code(pid, code) else {
+            return Self::resolve(pid);
+        };
+        let parent_pid = head.parent_pid();
+        let mut proc_info = vec![head];
+        if let Some(parent_pid) = parent_pid {
+            proc_info.extend(Self::get_process_chain(parent_pid));
+        }
+        Provenance { proc_info }
     }
 
     /// Recursively get the process chain for a given pid

@@ -2,6 +2,7 @@ use std::fmt::{self, Display};
 
 use libproc::bsd_info::BSDInfo;
 use libproc::proc_pid::pidinfo;
+use objc2_security::SecCode;
 
 use crate::core::provenance::helpers::{
     get_host_for_sec_code, get_sec_code_for_pid, get_static_code_for_sec_code,
@@ -32,7 +33,13 @@ impl ProcInfo {
         let code = get_sec_code_for_pid(pid)
             .inspect_err(|e| log::error!("ProcInfo lookup: {e}"))
             .ok()?;
-        let static_code = get_static_code_for_sec_code(&code)
+        Self::from_sec_code(pid, &code)
+    }
+
+    /// Describe a process whose SecCode is already in hand, so the process is
+    /// not looked up by pid a second time.
+    pub fn from_sec_code(pid: u32, code: &SecCode) -> Option<Self> {
+        let static_code = get_static_code_for_sec_code(code)
             .inspect_err(|e| log::error!("ProcInfo lookup: {e}"))
             .ok()?;
 
@@ -45,7 +52,7 @@ impl ProcInfo {
             .map(|info| info.pbi_ppid);
 
         // get the process host
-        let host_signing_info = get_host_for_sec_code(&code)
+        let host_signing_info = get_host_for_sec_code(code)
             .inspect_err(|e| log::error!("ProcInfo lookup host: {e}"))
             .ok()
             .and_then(|h| SigningInfo::from_sec_code(&h));

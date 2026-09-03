@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
@@ -12,7 +11,7 @@ use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::credential::Credential;
-use crate::cli::commands::ssh_agent::managed_credential::ManagedCredential;
+use crate::cli::commands::ssh_agent::managed_credential::list_managed_credentials;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
@@ -49,9 +48,14 @@ impl SshAgentSession {
     ) {
         let credential = StoredCredential::from(credential).add_constraints(constraints);
 
-        // if credential already exists, remove it first
+        // if credential already exists, remove it first. Only stored
+        // credentials matter here: a managed key cannot be added over the agent
+        // protocol, and consulting the app about one would start it.
         if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential)
-            && self.find_credential(&identity.pubkey).await.is_some()
+            && self
+                .find_stored_credential(&identity.pubkey)
+                .await
+                .is_some()
         {
             log::debug!("Credential already exists, will replace.");
             self.remove_credential(&identity.pubkey).await;
@@ -61,25 +65,36 @@ impl SshAgentSession {
         self.state.lock().await.push(credential);
     }
 
-    pub async fn find_credential(&self, pubkey: &KeyData) -> Option<Box<dyn Credential>> {
+    /// Look only among the credentials added to this agent, leaving the app's
+    /// managed keys alone.
+    pub async fn find_stored_credential(&self, pubkey: &KeyData) -> Option<StoredCredential> {
         for cred in self.state.lock().await.iter() {
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
                 && identity.pubkey == *pubkey
             {
                 log::debug!("Found {:?}", cred);
-                return Some(Box::new(cred.clone()) as _);
+                return Some(cred.clone());
             }
+        }
+        None
+    }
+
+    pub async fn find_credential(&self, pubkey: &KeyData) -> Option<Box<dyn Credential>> {
+        if let Some(cred) = self.find_stored_credential(pubkey).await {
+            return Some(Box::new(cred) as _);
         }
 
         // also look for credential in managed keys
-        if let Ok(Some(managed_ssh_key)) = ManagedSshKey::find_by_pubkey(pubkey)
-            .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
+        if let Some(managed) = list_managed_credentials()
+            .into_iter()
+            .find(|cred| cred.public_key == *pubkey)
         {
             log::debug!(
-                "Found managed_ssh_key {}",
+                "Found managed key {} {}",
+                managed.key_label,
                 compute_short_sha256_fingerprint(pubkey)
             );
-            return Some(Box::new(ManagedCredential(managed_ssh_key)) as _);
+            return Some(Box::new(managed) as _);
         }
 
         None
@@ -120,12 +135,7 @@ impl Session for SshAgentSession {
         }
 
         // get managed keys as well
-        let managed_keys = ManagedSshKey::list()
-            .inspect_err(|e| log::error!("Failed to list managed SSH keys: {e}"))
-            .unwrap_or_default();
-        for managed_key in managed_keys {
-            identities.push(managed_key.into());
-        }
+        identities.extend(list_managed_credentials().iter().map(Into::into));
         Ok(identities)
     }
 

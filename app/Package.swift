@@ -17,7 +17,12 @@ let package = Package(
         .target(
             name: "AxoPassFFI",
             dependencies: ["axo_pass_ffiFFI"],
-            path: "Sources/AxoPassFFI"
+            path: "Sources/AxoPassFFI",
+            // uniffi-bindgen's output for foreign-implemented callback
+            // interfaces keeps a static vtable pointer, which Swift 6 rejects
+            // as a non-Sendable global. It is generated code, so build it in
+            // Swift 5 mode rather than patching it after every codegen run.
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
             name: "axo_pass",
