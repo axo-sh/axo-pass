@@ -17,21 +17,25 @@ struct VaultsSidebar: View {
 
   var body: some View {
     List(selection: selectionBinding) {
-      Section(isExpanded: $secretsExpanded) {
-        vaultItems
+      Section {
+        if secretsExpanded {
+          vaultItems
+        }
       } header: {
-        SidebarSectionHeader("Secrets")
+        SidebarSectionHeader("Secrets", isExpanded: $secretsExpanded)
       }
 
-      Section(isExpanded: $toolsExpanded) {
-        Label("SSH", systemImage: "asterisk")
-          .tag(SidebarDestination.ssh)
-        Label("Keys", systemImage: "key.fill")
-          .tag(SidebarDestination.gpg)
-        Label("Setup", systemImage: "terminal")
-          .tag(SidebarDestination.setup)
+      Section {
+        if toolsExpanded {
+          Label("SSH", systemImage: "asterisk")
+            .tag(SidebarDestination.ssh)
+          Label("Keys", systemImage: "key.fill")
+            .tag(SidebarDestination.gpg)
+          Label("Setup", systemImage: "terminal")
+            .tag(SidebarDestination.setup)
+        }
       } header: {
-        SidebarSectionHeader("Tools")
+        SidebarSectionHeader("Tools", isExpanded: $toolsExpanded)
       }
     }
     .listStyle(.sidebar)
@@ -96,8 +100,7 @@ struct VaultsSidebar: View {
         Label {
           Text(vault.name ?? vault.key)
         } icon: {
-          Image(systemName: "lock.fill")
-            .foregroundStyle(.secondary)
+          Image(systemName: "circle.fill").hidden()
         }
         .tag(SidebarDestination.vault(vault.key))
         .contextMenu {
@@ -123,17 +126,33 @@ struct VaultsSidebar: View {
 
 private struct SidebarSectionHeader: View {
   let title: String
+  @Binding var isExpanded: Bool
 
-  init(_ title: String) { self.title = title }
+  init(_ title: String, isExpanded: Binding<Bool>) {
+    self.title = title
+    self._isExpanded = isExpanded
+  }
 
   var body: some View {
-    Text(title)
-      .font(.caption2)
-      .fontWeight(.semibold)
-      .textCase(.uppercase)
-      .kerning(0.6)
+    Button {
+      withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: "chevron.right")
+          .font(.system(size: 9, weight: .bold))
+          .rotationEffect(.degrees(isExpanded ? 90 : 0))
+        Text(title)
+          .font(.caption2)
+          .fontWeight(.semibold)
+          .textCase(.uppercase)
+          .kerning(0.6)
+        Spacer(minLength: 0)
+      }
       .foregroundStyle(.tertiary)
-      .padding(.top, 6)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .padding(.top, 6)
   }
 }
 

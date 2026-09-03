@@ -12,6 +12,28 @@ enum SidebarDestination: Hashable {
   case setup
 }
 
+/// The sidebar's "All Secrets" row selects this key. It is not a real vault;
+/// the model expands it to every vault.
+let allSecretsKey = "all"
+
+/// Identifies one item within one vault. Item keys are unique only inside a
+/// vault, so the "All Secrets" list needs the vault key to disambiguate.
+struct ItemRef: Hashable {
+  var vaultKey: String
+  var itemKey: String
+}
+
+/// An item paired with the vault it lives in, for display and selection.
+struct DisplayItem: Identifiable, Hashable {
+  let vaultKey: String
+  let item: ItemInfo
+
+  var id: ItemRef { ItemRef(vaultKey: vaultKey, itemKey: item.key) }
+
+  static func == (lhs: DisplayItem, rhs: DisplayItem) -> Bool { lhs.id == rhs.id }
+  func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 @Observable
 @MainActor
 final class VaultsModel {
@@ -44,7 +66,7 @@ final class VaultsModel {
 
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
-  var selectedItemKey: String? = nil
+  var selectedItemRef: ItemRef? = nil
 
   // Surfaces failures from vault/item/credential mutations (create, rename,
   // delete) to whichever pane triggered them.
@@ -134,7 +156,7 @@ final class VaultsModel {
       try? core.endEmbeddedAuth()
       isAppUnlocked = true
       autoLock.start()
-      if let key = selectedVaultKey { await loadItems(for: key) }
+      await loadItemsForSelection()
     } catch {
       try? core.endEmbeddedAuth()
       unlockError = Self.describeUnlockFailure(error)
@@ -212,7 +234,7 @@ final class VaultsModel {
     resetAuthContext(invalidatingCurrent: true)
     isAppUnlocked = false
     itemCache = [:]
-    selectedItemKey = nil
+    selectedItemRef = nil
     unlockError = nil
     autoPromptPending = !automatic
   }
@@ -224,34 +246,55 @@ final class VaultsModel {
     let prevVaultKey = selectedVaultKey
     sidebarSelection = dest
     if selectedVaultKey != prevVaultKey {
-      selectedItemKey = selectedVaultKey.flatMap { itemCache[$0]?.first?.key }
-      if let key = selectedVaultKey, isAppUnlocked, itemCache[key] == nil {
-        Task { await loadItems(for: key) }
-      }
+      // Settle on a cached row synchronously so the detail pane does not flash
+      // its "select an item" placeholder before the async load fixes it up.
+      selectedItemRef = displayItems.first?.id
+      if isAppUnlocked { Task { await loadItemsForSelection() } }
     }
   }
 
   // MARK: - Items
 
+  /// Which vault keys the current selection covers: every vault for "All
+  /// Secrets", otherwise the one selected vault.
+  private var selectedVaultKeys: [String] {
+    guard let key = selectedVaultKey else { return [] }
+    return isAllSecrets ? vaults.map { $0.key } : [key]
+  }
+
+  /// Load the items every pane needs for the current selection, then settle
+  /// `selectedItemRef` on a row that still exists.
+  private func loadItemsForSelection() async {
+    guard isAppUnlocked else { return }
+    for vaultKey in selectedVaultKeys where itemCache[vaultKey] == nil {
+      await loadItems(for: vaultKey)
+    }
+    if selectedItemRef == nil || !displayItems.contains(where: { $0.id == selectedItemRef }) {
+      selectedItemRef = displayItems.first?.id
+    }
+  }
+
   private func loadItems(for vaultKey: String) async {
     do {
-      let loaded = try await core.listItems(vaultKey: vaultKey)
-      itemCache[vaultKey] = loaded
-      if selectedVaultKey == vaultKey, selectedItemKey == nil {
-        selectedItemKey = loaded.first?.key
-      }
+      itemCache[vaultKey] = try await core.listItems(vaultKey: vaultKey)
     } catch let e as FfiError {
       switch e {
-      case .AuthExpired, .AuthCancelled: lock()
-      default: break
+      case .AuthExpired, .AuthCancelled:
+        lock()
+      default:
+        // Record the failure so the pane stops spinning and shows it.
+        itemCache[vaultKey] = []
+        actionError = String(describing: e)
       }
-    } catch {}
+    } catch {
+      itemCache[vaultKey] = []
+      actionError = String(describing: error)
+    }
   }
 
   // MARK: - Credentials
 
-  func credentialSecret(itemKey: String, credKey: String) async throws -> SymmetricKey {
-    guard let vaultKey = selectedVaultKey else { throw ModelError.noVaultSelected }
+  func credentialSecret(vaultKey: String, itemKey: String, credKey: String) async throws -> SymmetricKey {
     var raw = try await core.getCredentialSecret(
       vaultKey: vaultKey, itemKey: itemKey, credKey: credKey
     )
@@ -312,7 +355,7 @@ final class VaultsModel {
     do {
       try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle)
       await loadItems(for: vaultKey)
-      selectedItemKey = itemKey
+      selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: itemKey)
       return true
     } catch {
       actionError = String(describing: error)
@@ -325,7 +368,7 @@ final class VaultsModel {
     actionError = nil
     do {
       try await core.deleteItem(vaultKey: vaultKey, itemKey: itemKey)
-      if selectedItemKey == itemKey { selectedItemKey = nil }
+      if selectedItemRef == ItemRef(vaultKey: vaultKey, itemKey: itemKey) { selectedItemRef = nil }
       await loadItems(for: vaultKey)
       return true
     } catch {
@@ -338,12 +381,8 @@ final class VaultsModel {
 
   @discardableResult
   func addOrUpdateCredential(
-    itemKey: String, credKey: String, title: String, value: String
+    vaultKey: String, itemKey: String, credKey: String, title: String, value: String
   ) async -> Bool {
-    guard let vaultKey = selectedVaultKey else {
-      actionError = ModelError.noVaultSelected.errorDescription
-      return false
-    }
     actionError = nil
     do {
       try await core.addOrUpdateCredential(
@@ -358,11 +397,7 @@ final class VaultsModel {
   }
 
   @discardableResult
-  func deleteCredential(itemKey: String, credKey: String) async -> Bool {
-    guard let vaultKey = selectedVaultKey else {
-      actionError = ModelError.noVaultSelected.errorDescription
-      return false
-    }
+  func deleteCredential(vaultKey: String, itemKey: String, credKey: String) async -> Bool {
     actionError = nil
     do {
       try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
@@ -385,17 +420,35 @@ final class VaultsModel {
     vaults.first { $0.key == selectedVaultKey }
   }
 
-  var items: [ItemInfo] {
+  /// True when the sidebar's "All Secrets" row is selected.
+  var isAllSecrets: Bool { selectedVaultKey == allSecretsKey }
+
+  /// The items to show for the current selection, each tagged with its vault.
+  /// "All Secrets" merges every vault and sorts by title.
+  var displayItems: [DisplayItem] {
+    guard selectedVaultKey != nil else { return [] }
+    if isAllSecrets {
+      return vaults
+        .flatMap { vault in (itemCache[vault.key] ?? []).map { DisplayItem(vaultKey: vault.key, item: $0) } }
+        .sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
+    }
     guard let key = selectedVaultKey else { return [] }
-    return itemCache[key] ?? []
+    return (itemCache[key] ?? []).map { DisplayItem(vaultKey: key, item: $0) }
   }
 
-  var selectedItem: ItemInfo? {
-    items.first { $0.key == selectedItemKey }
+  var selectedItem: DisplayItem? {
+    guard let ref = selectedItemRef else { return nil }
+    return displayItems.first { $0.id == ref }
   }
 
-  enum ModelError: Error, LocalizedError {
-    case noVaultSelected
-    var errorDescription: String? { "No vault selected" }
+  /// A selection is active and its items have not finished loading yet. Panes
+  /// use this to show a loading state instead of an empty "select" placeholder.
+  var isLoadingSelectedItems: Bool {
+    guard isAppUnlocked, selectedVaultKey != nil else { return false }
+    if isAllSecrets {
+      return !vaults.isEmpty && vaults.contains { itemCache[$0.key] == nil }
+    }
+    guard let key = selectedVaultKey else { return false }
+    return itemCache[key] == nil
   }
 }

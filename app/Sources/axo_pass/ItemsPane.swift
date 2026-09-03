@@ -8,43 +8,37 @@ struct ItemsPane: View {
   var body: some View {
     @Bindable var model = model
     Group {
-      // if model.selectedVaultKey == nil {
-      //   ContentUnavailableView("Select a vault", systemImage: "sidebar.left")
-      // } else if model.items.isEmpty {
-      //   ProgressView()
-      // } else {
-      if model.selectedVault != nil && !model.items.isEmpty {
-        List(selection: $model.selectedItemKey) {
-          ForEach(model.items, id: \.key) { item in
-            ItemRow(item: item)
-              .tag(item.key)
+      if model.isLoadingSelectedItems {
+        DelayedProgressView()
+      } else if (model.selectedVault != nil || model.isAllSecrets) && !model.displayItems.isEmpty {
+        List(selection: $model.selectedItemRef) {
+          ForEach(model.displayItems) { display in
+            ItemRow(item: display.item)
+              .tag(display.id)
               .padding(6)
               .contextMenu {
                 Button("Delete", role: .destructive) {
-                  guard let vaultKey = model.selectedVaultKey else { return }
-                  Task { await model.deleteItem(vaultKey: vaultKey, itemKey: item.key) }
+                  Task { await model.deleteItem(vaultKey: display.vaultKey, itemKey: display.item.key) }
                 }
               }
           }
         }
+        .scrollContentBackground(.hidden)
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(.windowBackground)
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
-    .navigationTitle(model.selectedVault.map { $0.name ?? $0.key } ?? "Items")
-    .safeAreaInset(edge: .bottom) {
+    .navigationTitle(model.selectedVault.map { $0.name ?? $0.key } ?? (model.isAllSecrets ? "All Secrets" : "Items"))
+    .toolbar {
       if model.selectedVault != nil {
-        HStack {
-          Spacer()
+        ToolbarItem(placement: .primaryAction) {
           Button {
             showingNewItemSheet = true
           } label: {
             Label("New Item", systemImage: "plus")
           }
-          .labelStyle(.iconOnly)
-          .buttonStyle(.borderless)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
       }
     }
     .sheet(isPresented: $showingNewItemSheet) {

@@ -6,17 +6,24 @@ struct VaultDetailView: View {
   @Environment(VaultsModel.self) private var model
 
   var body: some View {
-    if let item = model.selectedItem {
-      CredentialList(item: item)
-    } else {
-      ContentUnavailableView("Select an item", systemImage: "list.bullet.rectangle")
+    Group {
+      if let selected = model.selectedItem {
+        CredentialList(item: selected.item, vaultKey: selected.vaultKey)
+      } else if model.isLoadingSelectedItems {
+        DelayedProgressView()
+      } else {
+        ContentUnavailableView("Select an item", systemImage: "list.bullet.rectangle")
+      }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(.windowBackground)
   }
 }
 
 private struct CredentialList: View {
   @Environment(VaultsModel.self) private var model
   let item: ItemInfo
+  let vaultKey: String
 
   @State private var secrets: [String: SymmetricKey] = [:]
   @State private var errors: [String: String] = [:]
@@ -27,13 +34,6 @@ private struct CredentialList: View {
   var body: some View {
     ScrollView {
       VStack(spacing: 0) {
-        Text(item.title)
-          .font(.title2)
-          .fontWeight(.bold)
-          .padding(.horizontal, 20)
-          .padding(.vertical, 0)
-          .frame(maxWidth: .infinity, alignment: .leading)
-
         InsetGroupedSection {
           if item.credentials.isEmpty {
             Text("No credentials")
@@ -63,12 +63,11 @@ private struct CredentialList: View {
           }
         }
         .padding()
-        .padding(.top, 0)
       }
     }
-    .safeAreaInset(edge: .top) {
-      HStack(spacing: 8) {
-        Spacer()
+    .navigationTitle(item.title)
+    .toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
         Button(allRevealed ? "Hide All" : "Reveal All") {
           if allRevealed {
             hideAll()
@@ -76,29 +75,19 @@ private struct CredentialList: View {
             Task { await revealAll() }
           }
         }
-        .buttonStyle(.bordered)
-        // .controlSize(.small)
         .disabled(!revealing.isEmpty)
 
         Button(isEditing ? "Done" : "Edit") {
           isEditing.toggle()
         }
-        .buttonStyle(.bordered)
-        // .controlSize(.small)
 
         Button {
           showingNewCredentialSheet = true
         } label: {
           Label("Add Credential", systemImage: "plus")
         }
-        .buttonStyle(.bordered)
-        .labelStyle(.iconOnly)
       }
-      .padding(.horizontal)
-      .padding(.vertical, 8)
-      .background(.ultraThinMaterial)
     }
-    .ignoresSafeArea(edges: [.top, .bottom])
     .onChange(of: item.key) {
       secrets = [:]
       errors = [:]
@@ -107,7 +96,9 @@ private struct CredentialList: View {
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value in
-        await model.addOrUpdateCredential(itemKey: item.key, credKey: key, title: title, value: value)
+        await model.addOrUpdateCredential(
+          vaultKey: vaultKey, itemKey: item.key, credKey: key, title: title, value: value
+        )
       }
     }
   }
@@ -133,7 +124,7 @@ private struct CredentialList: View {
     errors.removeValue(forKey: cred.key)
     do {
       secrets[cred.key] = try await model.credentialSecret(
-        itemKey: item.key, credKey: cred.key
+        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key
       )
     } catch {
       errors[cred.key] = String(describing: error)
@@ -165,7 +156,7 @@ private struct CredentialList: View {
       String(bytes: ptr, encoding: .utf8) ?? ""
     }
     let ok = await model.addOrUpdateCredential(
-      itemKey: item.key, credKey: cred.key, title: newTitle, value: value
+      vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: newTitle, value: value
     )
     if !ok, let err = model.actionError {
       errors[cred.key] = err
@@ -173,7 +164,7 @@ private struct CredentialList: View {
   }
 
   private func delete(_ cred: CredentialInfo) async {
-    let ok = await model.deleteCredential(itemKey: item.key, credKey: cred.key)
+    let ok = await model.deleteCredential(vaultKey: vaultKey, itemKey: item.key, credKey: cred.key)
     if ok {
       secrets.removeValue(forKey: cred.key)
       errors.removeValue(forKey: cred.key)
