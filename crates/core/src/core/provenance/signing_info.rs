@@ -100,6 +100,12 @@ impl SigningInfo {
         }
     }
 
+    /// Returns true if this is the kernel host (the default host for any
+    /// normally-launched process).
+    pub fn is_kernel(&self) -> bool {
+        self.identifier.is_empty() && self.display_label() == "mach_kernel"
+    }
+
     #[allow(dead_code)]
     /// Returns true if the hardened runtime flag is set (flags & 0x10000).
     pub fn is_hardened_runtime(&self) -> bool {

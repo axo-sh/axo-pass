@@ -116,8 +116,10 @@ impl Display for ProcInfo {
                 None => write!(f, "{}", self.command)?,
             };
             match self.host {
-                Some(ref host_info) => write!(f, " [{}]", host_info.display_label()),
-                None => Ok(()),
+                Some(ref host_info) if !host_info.is_kernel() => {
+                    write!(f, " [{}]", host_info.display_label())
+                },
+                _ => Ok(()),
             }
         } else {
             write!(f, "{}", self.command)

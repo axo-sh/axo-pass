@@ -64,15 +64,14 @@ impl Provenance {
 impl fmt::Debug for Provenance {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
-            writeln!(f, "Provenance {{")?;
-            for info in &self.proc_info {
-                if info.is_system() {
-                    continue;
-                }
-                writeln!(f, "    {info:#}")?;
-            }
-            write!(f, "}}")?;
-            return Ok(());
+            let chain = self
+                .proc_info
+                .iter()
+                .filter(|info| !info.is_system())
+                .map(|info| format!("{info:#}"))
+                .collect::<Vec<_>>()
+                .join(" <- ");
+            return write!(f, "{chain}");
         }
         f.debug_struct("Provenance")
             .field("proc_info", &self.proc_info)
