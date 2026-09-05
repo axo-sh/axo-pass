@@ -1,0 +1,6 @@
+#!/bin/sh
+# SSH_ASKPASS helper script, SSH_ASKPASS does not accept args
+# Usage: Add the following to your shell config:
+#   export SSH_ASKPASS="/Applications/Axo Pass.app/Contents/Resources/ap-ssh-askpass"
+#   export SSH_ASKPASS_REQUIRE=force
+exec "$(dirname "$0")/../MacOS/ap" ssh-askpass "$1"

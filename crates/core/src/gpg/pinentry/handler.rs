@@ -5,7 +5,7 @@ use std::io;
 
 use secrecy::SecretString;
 
-use crate::core::app_broker::{self, BrokerError, PassphrasePrompt};
+use crate::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
 use crate::core::provenance::Provenance;
 use crate::gpg::pinentry::server::PinentryServerHandler;
 
@@ -40,6 +40,7 @@ impl BrokerPinentryHandler {
         error_message: Option<&str>,
     ) -> PassphrasePrompt {
         PassphrasePrompt {
+            kind: PassphraseKind::Gpg,
             key_id: key_id_from_keyinfo(keyinfo),
             description: desc.map(String::from),
             prompt: prompt.map(String::from),

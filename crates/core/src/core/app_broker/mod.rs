@@ -2,8 +2,9 @@
 //! `keychain-access-groups` entitlement. `ap` does not and cannot hold
 //! entitlements.
 //!
-//! Two callers use the broker: the SSH agent, for managed Secure Enclave keys
-//! (see [`ssh`]), and `ap pinentry`, for GPG passphrases (see [`gpg`]).
+//! Three callers use the broker: the SSH agent, for managed Secure Enclave
+//! keys; `ap ssh-askpass`, for SSH key passphrases (see [`ssh`]); and `ap
+//! pinentry`, for GPG passphrases (see [`gpg`]).
 //!
 //! Requests are served whether or not the vault is unlocked. Signing and
 //! passphrase will prompt, but just listing identities will not.
@@ -37,10 +38,13 @@ pub mod gpg;
 pub mod ssh;
 
 pub use gpg::{
-    CollectedPassphrase, PassphraseAuthorizer, PassphrasePrompt, request_confirm, request_message,
-    request_passphrase,
+    CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
+    request_message, request_passphrase,
 };
-pub use ssh::{ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_signature};
+pub use ssh::{
+    ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_signature,
+    request_ssh_passphrase,
+};
 
 /// How long the agent waits for the user to answer the app's prompt before
 /// giving up and falling back to the system dialog.
@@ -122,6 +126,20 @@ enum WireRequest {
         description: Option<String>,
         prompt: Option<String>,
         error_message: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        caller: Option<String>,
+    },
+
+    /// A passphrase for `SSH_ASKPASS`: either unlocked from the keychain
+    /// behind a biometric prompt or typed by the user. See
+    /// [`ssh::get_passphrase`].
+    GetSshPassphrase {
+        /// The keychain fingerprint of the key this prompt names, resolved by
+        /// `ap ssh-askpass` from the prompt text. Absent for a prompt that
+        /// names no key, e.g. `user@host's password:`.
+        key_id: Option<String>,
+        /// ssh's own prompt text.
+        prompt: String,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         caller: Option<String>,
     },
@@ -399,6 +417,7 @@ async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std:
             caller,
         } => {
             let prompt = PassphrasePrompt {
+                kind: PassphraseKind::Gpg,
                 key_id,
                 description,
                 prompt,
@@ -407,6 +426,22 @@ async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std:
             };
             log::debug!("App broker request: {prompt:?}");
             gpg::get_passphrase(&*authorizers.passphrase, prompt).await
+        },
+        WireRequest::GetSshPassphrase {
+            key_id,
+            prompt,
+            caller,
+        } => {
+            let prompt = PassphrasePrompt {
+                kind: PassphraseKind::Ssh,
+                key_id,
+                description: None,
+                prompt: Some(prompt),
+                error_message: None,
+                caller,
+            };
+            log::debug!("App broker request: {prompt:?}");
+            ssh::get_passphrase(&*authorizers.passphrase, prompt).await
         },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");

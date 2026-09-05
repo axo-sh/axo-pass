@@ -14,6 +14,7 @@ use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 use axo_pass_core::secrets::vaults::{Error as VaultError, VaultsManager};
 use axo_pass_core::shell_integration;
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
+use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
@@ -319,6 +320,46 @@ impl From<agent_conf::Status> for GpgAgentConfStatus {
             conf_path: s.conf_path.to_string_lossy().to_string(),
             expected_line: s.expected_line,
             current_program: s.current_program,
+        }
+    }
+}
+
+/// Whether ssh's `IdentityAgent` resolves to this app's agent socket.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshIdentityAgentState {
+    Configured,
+    NotConfigured,
+    OtherAgent,
+}
+
+impl From<CoreSshAgentConfState> for SshIdentityAgentState {
+    fn from(s: CoreSshAgentConfState) -> Self {
+        match s {
+            CoreSshAgentConfState::Configured => SshIdentityAgentState::Configured,
+            CoreSshAgentConfState::NotConfigured => SshIdentityAgentState::NotConfigured,
+            CoreSshAgentConfState::OtherAgent => SshIdentityAgentState::OtherAgent,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct SshAgentConfStatus {
+    pub state: SshIdentityAgentState,
+    /// Absolute path to `~/.ssh/config`, whether or not it exists.
+    pub config_path: String,
+    /// The socket path this app writes.
+    pub expected_agent: String,
+    /// The currently effective `IdentityAgent`, when it is not this app's socket.
+    pub current_agent: Option<String>,
+}
+
+impl From<ssh_agent_conf::Status> for SshAgentConfStatus {
+    fn from(s: ssh_agent_conf::Status) -> Self {
+        SshAgentConfStatus {
+            state: s.state.into(),
+            config_path: s.config_path.to_string_lossy().to_string(),
+            expected_agent: s.expected_agent,
+            current_agent: s.current_agent,
         }
     }
 }
@@ -781,6 +822,39 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
+    /// Start the Axo Pass SSH agent. Mirrors `ap ssh-agent start`.
+    pub async fn start_ssh_agent(&self) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(agent_client::start_agent)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::Internal)
+    }
+
+    /// Stop the Axo Pass SSH agent. Mirrors `ap ssh-agent stop`.
+    pub async fn stop_ssh_agent(&self) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(agent_client::stop_agent)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::Internal)
+    }
+
+    /// Report whether ssh's `IdentityAgent` resolves to this app's agent
+    /// socket.
+    pub fn check_ssh_agent_conf(&self) -> SshAgentConfStatus {
+        ssh_agent_conf::check_status().into()
+    }
+
+    /// Point `IdentityAgent` at this app's agent socket for all hosts,
+    /// commenting out any line naming another agent. Takes effect immediately
+    /// since ssh reads its config fresh on every invocation.
+    pub async fn configure_ssh_agent_conf(&self) -> Result<SshAgentConfStatus, FfiError> {
+        tokio::task::spawn_blocking(ssh_agent_conf::configure)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map(SshAgentConfStatus::from)
+            .map_err(FfiError::Internal)
+    }
+
     // -----------------------------------------------------------------------
     // GPG / Keys pane
     // -----------------------------------------------------------------------
@@ -1001,17 +1075,38 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
     }
 }
 
-/// A GPG passphrase prompt, as the app sees it. Mirrors
-/// [`app_broker::PassphrasePrompt`]; the strings are gpg's own wording.
+/// Which agent a [`PassphrasePrompt`] is on behalf of. Mirrors
+/// [`app_broker::PassphraseKind`].
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum PassphraseKind {
+    Gpg,
+    Ssh,
+}
+
+impl From<app_broker::PassphraseKind> for PassphraseKind {
+    fn from(kind: app_broker::PassphraseKind) -> Self {
+        match kind {
+            app_broker::PassphraseKind::Gpg => Self::Gpg,
+            app_broker::PassphraseKind::Ssh => Self::Ssh,
+        }
+    }
+}
+
+/// A passphrase prompt, as the app sees it. Mirrors
+/// [`app_broker::PassphrasePrompt`]; for GPG the strings are gpg's own
+/// wording, for SSH they are ssh/ssh-add's.
 #[derive(uniffi::Record, Clone)]
 pub struct PassphrasePrompt {
-    /// The key grip, which names the keychain entry. Absent when gpg-agent sent
-    /// no key info, in which case nothing can be saved or read back.
+    pub kind: PassphraseKind,
+    /// The key grip (GPG) or key fingerprint (SSH) naming the keychain entry.
+    /// Absent when nothing identifies a key, in which case nothing can be
+    /// saved or read back.
     pub key_id: Option<String>,
     pub description: Option<String>,
     pub prompt: Option<String>,
     /// gpg's report of the previous attempt. Set means the saved passphrase is
-    /// wrong, so the app asks for a new one rather than unlocking.
+    /// wrong, so the app asks for a new one rather than unlocking. Always
+    /// `None` for SSH.
     pub error_message: Option<String>,
     pub caller: Option<String>,
 }
@@ -1019,6 +1114,7 @@ pub struct PassphrasePrompt {
 impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
     fn from(prompt: app_broker::PassphrasePrompt) -> Self {
         Self {
+            kind: prompt.kind.into(),
             key_id: prompt.key_id,
             description: prompt.description,
             prompt: prompt.prompt,

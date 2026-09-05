@@ -13,26 +13,41 @@ use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
-/// What the app needs to describe a GPG passphrase prompt.
+/// Which agent this passphrase prompt is on behalf of. The two share a
+/// prompt UI, but need different wording: gpg's key grips and assuan
+/// commands mean nothing to an SSH prompt, and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassphraseKind {
+    Gpg,
+    Ssh,
+}
+
+/// What the app needs to describe a passphrase prompt, from either gpg-agent
+/// (via `ap pinentry`) or `SSH_ASKPASS` (via `ap ssh-askpass`).
 ///
-/// The strings come from gpg-agent through the assuan `SETDESC`, `SETPROMPT`
-/// and `SETERROR` commands, so they are gpg's own wording rather than ours.
+/// For GPG, the strings come from gpg-agent through the assuan `SETDESC`,
+/// `SETPROMPT` and `SETERROR` commands, so they are gpg's own wording rather
+/// than ours; for SSH they are lifted from ssh/ssh-add's own prompt text.
 #[derive(Debug, Clone)]
 pub struct PassphrasePrompt {
-    /// The keygrip gpg-agent sent with `SETKEYINFO`, which names the entry in
-    /// the keychain. Absent when gpg-agent sends no key info, in which case
-    /// nothing can be saved or read back and the user types the passphrase.
+    pub kind: PassphraseKind,
+
+    /// The keychain entry this prompt names: a GPG key grip from
+    /// `SETKEYINFO`, or an SSH key's fingerprint. Absent when nothing
+    /// identifies a key, in which case nothing can be saved or read back and
+    /// the user types the passphrase.
     pub key_id: Option<String>,
 
     pub description: Option<String>,
     pub prompt: Option<String>,
 
     /// gpg's report of the previous attempt, set when the passphrase was
-    /// rejected. Its presence means any saved passphrase is wrong.
+    /// rejected. Its presence means any saved passphrase is wrong. Always
+    /// `None` for SSH.
     pub error_message: Option<String>,
 
-    /// Who asked, as `ap pinentry` resolved it. Carries the same delegated
-    /// trust as [`WireRequest::Sign`]'s caller.
+    /// Who asked, as `ap pinentry` / `ap ssh-askpass` resolved it. Carries the
+    /// same delegated trust as [`WireRequest::Sign`]'s caller.
     pub caller: Option<String>,
 }
 

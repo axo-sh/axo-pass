@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::client::Client;
@@ -8,6 +9,7 @@ use thiserror::Error;
 use tokio::net::UnixStream;
 
 use crate::core::dirs::app_data_dir;
+use crate::shell_integration::ap_bin_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -34,6 +36,65 @@ pub fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatu
         Ok(_) => AgentStatus::Running,
         Err(_) => AgentStatus::StaleSocket,
     }
+}
+
+/// Starts the Axo Pass SSH agent by running `ap ssh-agent start`. That process
+/// forks and the invoked process exits as soon as the fork succeeds, before
+/// the detached child has bound the socket, so this polls briefly afterward
+/// rather than trusting the exit status alone.
+///
+/// A stale socket is removed first, since the CLI's interactive prompt for
+/// that can't be answered from here.
+pub fn start_agent() -> Result<(), String> {
+    let socket_path = default_socket_path();
+    if get_agent_status_for_socket(&socket_path) == AgentStatus::StaleSocket {
+        std::fs::remove_file(&socket_path)
+            .map_err(|e| format!("Failed to remove stale socket: {e}"))?;
+    }
+
+    let ap = ap_bin_path().ok_or("Could not determine ap binary path")?;
+    let status = Command::new(&ap)
+        .args(["ssh-agent", "start"])
+        .status()
+        .map_err(|e| format!("Failed to run ap ssh-agent start: {e}"))?;
+    if !status.success() {
+        return Err(format!("ap ssh-agent start exited with {status}"));
+    }
+
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+    const POLL_ATTEMPTS: u32 = 40; // 2s
+    for _ in 0..POLL_ATTEMPTS {
+        if get_agent_status_for_socket(&socket_path) == AgentStatus::Running {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Err("SSH agent did not come up in time".to_string())
+}
+
+/// Stops the Axo Pass SSH agent by running `ap ssh-agent stop`. The stop
+/// request is delivered before the CLI exits, but the agent's own socket
+/// cleanup runs after that, so this polls briefly for the socket to go away.
+pub fn stop_agent() -> Result<(), String> {
+    let socket_path = default_socket_path();
+    let ap = ap_bin_path().ok_or("Could not determine ap binary path")?;
+    let status = Command::new(&ap)
+        .args(["ssh-agent", "stop"])
+        .status()
+        .map_err(|e| format!("Failed to run ap ssh-agent stop: {e}"))?;
+    if !status.success() {
+        return Err(format!("ap ssh-agent stop exited with {status}"));
+    }
+
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+    const POLL_ATTEMPTS: u32 = 40; // 2s
+    for _ in 0..POLL_ATTEMPTS {
+        if get_agent_status_for_socket(&socket_path) != AgentStatus::Running {
+            return Ok(());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Err("SSH agent did not shut down in time".to_string())
 }
 
 pub fn get_system_socket_path() -> Option<String> {
