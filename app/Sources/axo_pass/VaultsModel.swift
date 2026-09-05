@@ -9,7 +9,7 @@ enum SidebarDestination: Hashable {
   case vault(String)
   case ssh
   case gpg
-  case setup
+  case shell
 }
 
 /// The sidebar's "All Secrets" row selects this key. It is not a real vault;

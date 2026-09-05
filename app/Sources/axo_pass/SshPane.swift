@@ -1,15 +1,31 @@
+import AppKit
 import AxoPassFFI
 import SwiftUI
 
 struct SshPane: View {
   @State private var model = SshModel()
   @State private var showingSavePasswordSheet: SshKeyEntry? = nil
+  @State private var showingSetup = false
 
   var body: some View {
     List {
-      Section("Agents") {
-        agentStatusRow("Axo Pass Agent", status: model.axoAgentStatus)
+      Section {
+        axoAgentRow
         agentStatusRow("System Agent", status: model.systemAgentStatus)
+        agentConfRow
+        if let error = model.agentError {
+          Label(error, systemImage: "xmark.circle.fill")
+            .font(.caption)
+            .foregroundStyle(.red)
+            .lineLimit(2)
+        }
+      } header: {
+        HStack {
+          Text("Agents")
+          Spacer()
+          HelpLink { showingSetup = true }
+            .controlSize(.mini)
+        }
       }
 
       Section("Keys") {
@@ -58,7 +74,74 @@ struct SshPane: View {
         await model.savePassword(fingerprint: key.fingerprintSha256, password: password)
       }
     }
+    .sheet(isPresented: $showingSetup) {
+      SshSetupSheet(model: model)
+    }
     .task { await model.reload() }
+    // The file may be edited outside the app, so re-read it on reactivation.
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      model.refreshConfStatus()
+    }
+  }
+
+  @ViewBuilder
+  private var axoAgentRow: some View {
+    HStack {
+      Text("Axo Pass Agent")
+      Spacer()
+      if let status = model.axoAgentStatus {
+        Label(statusLabel(status.status), systemImage: statusIcon(status.status))
+          .foregroundStyle(statusColor(status.status))
+          .font(.caption)
+        if model.isTogglingAgent {
+          ProgressView().controlSize(.small)
+        } else if status.status == .running {
+          Button("Stop") { Task { await model.stopAgent() } }
+            .controlSize(.small)
+        } else {
+          Button("Start") { Task { await model.startAgent() } }
+            .controlSize(.small)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var agentConfRow: some View {
+    HStack {
+      Text("IdentityAgent")
+      Spacer()
+      if let state = model.confStatus?.state {
+        Label(confLabel(state), systemImage: confIcon(state))
+          .foregroundStyle(confColor(state))
+          .font(.caption)
+      }
+    }
+  }
+
+  private func confLabel(_ state: SshIdentityAgentState) -> String {
+    switch state {
+    case .configured: return "Configured"
+    case .notConfigured: return "Not Configured"
+    case .otherAgent: return "Other Agent"
+    }
+  }
+
+  private func confIcon(_ state: SshIdentityAgentState) -> String {
+    switch state {
+    case .configured: return "checkmark.circle.fill"
+    case .notConfigured: return "circle"
+    case .otherAgent: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private func confColor(_ state: SshIdentityAgentState) -> Color {
+    switch state {
+    case .configured: return .green
+    case .notConfigured: return .secondary
+    case .otherAgent: return .orange
+    }
   }
 
   @ViewBuilder

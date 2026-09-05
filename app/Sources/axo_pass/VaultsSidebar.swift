@@ -32,7 +32,7 @@ struct VaultsSidebar: View {
           Label("Keys", systemImage: "key.fill")
             .tag(SidebarDestination.gpg)
           Label("Setup", systemImage: "terminal")
-            .tag(SidebarDestination.setup)
+            .tag(SidebarDestination.shell)
         }
       } header: {
         SidebarSectionHeader("Tools", isExpanded: $toolsExpanded)

@@ -198,7 +198,7 @@ private struct PassphraseUnlockView: View {
       icon
 
       VStack(spacing: 4) {
-        Text("Unlock your OpenPGP key")
+        Text(prompt.kind == .ssh ? "Unlock your SSH key" : "Unlock your OpenPGP key")
           .font(.headline)
           .multilineTextAlignment(.center)
 
@@ -239,7 +239,7 @@ private struct PassphraseEntryView: View {
         .frame(width: 40, height: 40)
 
       VStack(spacing: 4) {
-        Text("Enter your OpenPGP passphrase")
+        Text(prompt.kind == .ssh ? "Enter your SSH key passphrase" : "Enter your OpenPGP passphrase")
           .font(.headline)
           .multilineTextAlignment(.center)
 
@@ -280,18 +280,23 @@ private struct PassphraseEntryView: View {
   }
 }
 
-/// A terminal-styled snippet of the gpg-agent pinentry request that triggered
-/// this prompt: the key grip, any rejected-passphrase error, and the prompt
-/// text gpg itself asked for.
+/// A terminal-styled snippet of the request that triggered this prompt: the
+/// key grip or fingerprint, any rejected-passphrase error, and the prompt
+/// text gpg (or ssh) itself asked for.
 private struct PinentryTranscript: View {
   let prompt: PassphrasePrompt
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      line(label: "#", text: "gpg-agent — request", labelColor: .secondary, textColor: .secondary)
-        + Text(" ").font(monoFont)
-        + Text("NEED_PASSPHRASE").font(monoFont.weight(.semibold)).foregroundStyle(
-          Color.accentColor)
+      switch prompt.kind {
+      case .gpg:
+        line(label: "#", text: "gpg-agent — request", labelColor: .secondary, textColor: .secondary)
+          + Text(" ").font(monoFont)
+          + Text("NEED_PASSPHRASE").font(monoFont.weight(.semibold)).foregroundStyle(
+            Color.accentColor)
+      case .ssh:
+        line(label: "#", text: "SSH_ASKPASS — request", labelColor: .secondary, textColor: .secondary)
+      }
 
       if let keyId = prompt.keyId, !keyId.isEmpty {
         Text(keyId)
