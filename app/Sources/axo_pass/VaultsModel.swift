@@ -62,6 +62,10 @@ final class VaultsModel {
   // Selects the lock screen copy, which differs when this Mac has no Touch ID.
   private(set) var biometry: LABiometryType = .none
   private var unlockTask: Task<Void, Never>? = nil
+  // The context `authenticate` is currently evaluating on, which is not always
+  // `authContext`: the password path runs on one of its own. Invalidating this
+  // is how a prompt on screen gets taken down.
+  private var evaluatingContext: LAContext? = nil
   private var autoLock: AutoLock! = nil
 
   // Draws the prompt for SSH signatures the agent delegates to us.
@@ -113,6 +117,16 @@ final class VaultsModel {
     let passphrase = PassphrasePromptBridge(model: passphrasePrompt)
     signingBridge = signing
     passphraseBridge = passphrase
+
+    // A broker panel carries its own biometric on its own context and takes the
+    // cross-process auth lock. Step the lock screen's auto-unlock aside for it,
+    // so the two do not deadlock on that lock with one panel hiding the other.
+    // It does not resume on its own afterward: the user unlocks deliberately.
+    let onPanel: (Bool) -> Void = { [weak self] visible in
+      if visible { self?.suspendAutoUnlock() }
+    }
+    signingPrompt.panel.onVisibleChange = onPanel
+    passphrasePrompt.panel.onVisibleChange = onPanel
     do {
       try await core.startAppBroker(signDelegate: signing, passphraseDelegate: passphrase)
       signingPrompt.start()
@@ -144,22 +158,52 @@ final class VaultsModel {
 
   // MARK: - Global lock / unlock
 
-  /// Unlock with the embedded biometric prompt. Without Touch ID the icon has
-  /// no state to show, so this falls back to the system dialog and its password
-  /// field.
   /// Prompt when the lock screen appears, but only if a prompt is wanted and
   /// answerable: an automatic lock waits for a deliberate Unlock, and a prompt
   /// raised while the app is in the background fails at once.
   func unlockIfActive() {
     guard autoPromptPending, NSApp.isActive else { return }
+    // A broker panel holds the auth lock and carries its own biometric; the
+    // lock screen must not raise a competing one behind it.
+    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible else { return }
     unlock()
   }
 
+  /// Whether this launch or reopen came from the broker rather than a person.
+  /// Consumes the marker, so a second call reports false.
+  func takeBrokerLaunchRequest() -> Bool {
+    core.takeBrokerLaunchRequest()
+  }
+
+  /// Give up an auto-unlock in flight so a broker prompt can take the auth lock
+  /// and the biometric hardware. The attempt cleans up after itself: the failed
+  /// evaluation releases the lock and clears `isUnlocking` on its way out. The
+  /// lock screen stays put; the user unlocks deliberately afterward.
+  private func suspendAutoUnlock() {
+    // Cancelling covers the window between `unlock` and the task reaching
+    // `authenticate`, where there is no evaluation to fail yet.
+    unlockTask?.cancel()
+    cancelEvaluation()
+  }
+
+  /// Fail the evaluation in flight, which is how a prompt on screen gets
+  /// dismissed. Does nothing when there is none.
+  private func cancelEvaluation() {
+    guard let context = evaluatingContext else { return }
+    context.invalidate()
+    // An invalidated context cannot be evaluated again, so replace it.
+    if context === authContext { resetAuthContext() }
+  }
+
+  /// Unlock with the embedded biometric prompt. Without Touch ID the icon has
+  /// no state to show, so this falls back to the system dialog and its password
+  /// field.
   func unlock() {
     guard !isUnlocking else { return }
     // The model owns the task. The lock screen's `.task` would cancel the
     // attempt as soon as a successful unlock swapped the view out.
     unlockTask = Task { [self] in
+      guard !Task.isCancelled else { return }
       await authenticate(with: biometry == .touchID ? authContext : LAContext())
     }
   }
@@ -172,7 +216,7 @@ final class VaultsModel {
   /// prompt and waits for the attempt to finish first.
   func unlockWithPassword() {
     let pending = unlockTask
-    if isUnlocking { resetAuthContext(invalidatingCurrent: true) }
+    cancelEvaluation()
     unlockTask = Task { [self] in
       await pending?.value
       await authenticate(with: LAContext())
@@ -183,7 +227,9 @@ final class VaultsModel {
     guard !isUnlocking else { return }
     isUnlocking = true
     unlockError = nil
+    evaluatingContext = context
     defer {
+      evaluatingContext = nil
       isUnlocking = false
       autoPromptPending = false
     }
@@ -200,26 +246,25 @@ final class VaultsModel {
     do {
       try await context.evaluatePolicy(
         .deviceOwnerAuthentication, localizedReason: "unlock Axo Pass")
-      try core.adoptAuthContext(
-        contextPtr: UInt64(UInt(bitPattern: Unmanaged.passUnretained(context).toOpaque())))
+      // Release the cross-process auth lock before adopting the context.
+      // adoptAuthContext runs on the core's shared-auth thread, which takes the
+      // same lock for its own work; holding it here while that call blocks
+      // deadlocks the two. Evaluation is done, so the lock is no longer needed.
       try? core.endEmbeddedAuth()
+      // adoptAuthContext blocks until the shared-auth thread services it, so
+      // keep it off the main thread.
+      let contextPtr = UInt64(UInt(bitPattern: Unmanaged.passUnretained(context).toOpaque()))
+      try await Task.detached { [core] in try core.adoptAuthContext(contextPtr: contextPtr) }.value
       isAppUnlocked = true
       autoLock.start()
       await loadItemsForSelection()
     } catch {
       try? core.endEmbeddedAuth()
       unlockError = Self.describeUnlockFailure(error)
-      // An invalidated context cannot be evaluated again, so replace it.
-      if (error as? LAError)?.code == .invalidContext, context === authContext {
-        resetAuthContext()
-      }
     }
   }
 
-  private func resetAuthContext(invalidatingCurrent: Bool = false) {
-    // Invalidating fails any evaluation in flight on the old context, which is
-    // how an embedded prompt on screen gets dismissed.
-    if invalidatingCurrent { authContext.invalidate() }
+  private func resetAuthContext() {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
   }
@@ -285,7 +330,11 @@ final class VaultsModel {
     // GPG passphrases pinentry unlocked.
     signingPrompt.forgetAll()
     passphrasePrompt.forgetAll()
-    resetAuthContext(invalidatingCurrent: true)
+    // Fail whatever prompt is on screen, which is not always on `authContext`,
+    // then drop the authenticated context itself.
+    cancelEvaluation()
+    authContext.invalidate()
+    resetAuthContext()
     isAppUnlocked = false
     itemCache = [:]
     selectedItemRef = nil

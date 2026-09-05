@@ -11,13 +11,19 @@ import SwiftUI
 @MainActor
 final class PassphrasePromptModel {
   private let grants = AuthorizationGrants<String>(label: "PassphrasePrompt")
-  private var panel: NSPanel?
   private var showTask: Task<Void, Never>?
 
   /// Resumed when the user answers the text field, the confirmation, or the
   /// message. Only one prompt is ever on screen: the broker serves requests
   /// serially.
   private var pending: CheckedContinuation<PromptAnswer, Never>?
+
+  /// Where the prompts are drawn. `VaultsModel` watches it, so the app can step
+  /// aside while one is up. Watching the panel rather than the broker's
+  /// `begin`/`end` pair means a request served with no UI at all does not
+  /// disturb the app's own unlock, and a caller that goes away mid-read cannot
+  /// leave the app stepped aside for good.
+  let panel = PromptPanel()
 
   private enum PromptAnswer {
     case passphrase(value: String, saveToKeychain: Bool)
@@ -49,7 +55,7 @@ final class PassphrasePromptModel {
   func end(prompt: PassphrasePrompt, outcome: PromptOutcome) {
     showTask?.cancel()
     showTask = nil
-    hidePanel()
+    panel.hide()
     grants.end(Self.grantKey(prompt), outcome: outcome)
   }
 
@@ -62,7 +68,7 @@ final class PassphrasePromptModel {
       pending = continuation
       showEntryPanel(prompt: prompt)
     }
-    hidePanel()
+    panel.hide()
 
     guard case .passphrase(let value, let save) = answer else { return nil }
     // The value crosses to the core as bytes, so the core never holds it as a
@@ -75,7 +81,7 @@ final class PassphrasePromptModel {
       pending = continuation
       showMessagePanel(description: description, cancellable: true)
     }
-    hidePanel()
+    panel.hide()
     if case .confirmed = answer { return true }
     return false
   }
@@ -85,7 +91,7 @@ final class PassphrasePromptModel {
       pending = continuation
       showMessagePanel(description: description, cancellable: false)
     }
-    hidePanel()
+    panel.hide()
   }
 
   /// Dismiss the biometric prompt on the user's behalf. Invalidating the
@@ -108,9 +114,7 @@ final class PassphrasePromptModel {
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) }
     )
-    // Non-activating, like the signing panel: gpg is driven from a terminal,
-    // which keeps focus while a fingerprint is all we need.
-    showPanel(NSHostingView(rootView: content), width: 420, activating: false)
+    panel.show(NSHostingView(rootView: content), width: 420)
   }
 
   private func showEntryPanel(prompt: PassphrasePrompt) {
@@ -123,8 +127,7 @@ final class PassphrasePromptModel {
       },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    // Activating, unlike every other panel here: the user has to type into it.
-    showPanel(NSHostingView(rootView: content), width: 420, activating: true)
+    panel.show(NSHostingView(rootView: content), width: 420)
   }
 
   private func showMessagePanel(description: String?, cancellable: Bool) {
@@ -134,41 +137,7 @@ final class PassphrasePromptModel {
       onConfirm: { [weak self] in self?.answer(.confirmed) },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    showPanel(NSHostingView(rootView: content), width: 360, activating: true)
-  }
-
-  private func showPanel(_ view: NSView, width: CGFloat, activating: Bool) {
-    hidePanel()
-
-    var style: NSWindow.StyleMask = [.titled, .fullSizeContentView]
-    if !activating { style.insert(.nonactivatingPanel) }
-    let panel = NSPanel(
-      contentRect: NSRect(x: 0, y: 0, width: width, height: 200),
-      styleMask: style,
-      backing: .buffered,
-      defer: false
-    )
-    panel.titleVisibility = .hidden
-    panel.titlebarAppearsTransparent = true
-    panel.isMovableByWindowBackground = true
-    panel.isFloatingPanel = true
-    panel.level = .floating
-    panel.hidesOnDeactivate = false
-    panel.contentView = view
-    panel.setContentSize(view.fittingSize)
-    panel.center()
-    if activating {
-      NSApp.activate(ignoringOtherApps: true)
-      panel.makeKeyAndOrderFront(nil)
-    } else {
-      panel.orderFrontRegardless()
-    }
-    self.panel = panel
-  }
-
-  private func hidePanel() {
-    panel?.orderOut(nil)
-    panel = nil
+    panel.show(NSHostingView(rootView: content), width: 360)
   }
 
   /// Resume whatever the panel is waiting on. Guarded because a continuation
@@ -239,9 +208,11 @@ private struct PassphraseEntryView: View {
         .frame(width: 40, height: 40)
 
       VStack(spacing: 4) {
-        Text(prompt.kind == .ssh ? "Enter your SSH key passphrase" : "Enter your OpenPGP passphrase")
-          .font(.headline)
-          .multilineTextAlignment(.center)
+        Text(
+          prompt.kind == .ssh ? "Enter your SSH key passphrase" : "Enter your OpenPGP passphrase"
+        )
+        .font(.headline)
+        .multilineTextAlignment(.center)
 
         if let caller = prompt.caller, !caller.isEmpty {
           Text("Requested by \(caller)")
@@ -295,7 +266,8 @@ private struct PinentryTranscript: View {
           + Text("NEED_PASSPHRASE").font(monoFont.weight(.semibold)).foregroundStyle(
             Color.accentColor)
       case .ssh:
-        line(label: "#", text: "SSH_ASKPASS — request", labelColor: .secondary, textColor: .secondary)
+        line(
+          label: "#", text: "SSH_ASKPASS — request", labelColor: .secondary, textColor: .secondary)
       }
 
       if let keyId = prompt.keyId, !keyId.isEmpty {

@@ -2,4 +2,7 @@
 # pinentry helper script, pinentry does not accept args
 # Usage: Add the following line to your ~/.gnupg/gpg-agent.conf:
 #   pinentry-program /Applications/Axo Pass.app/Contents/Resources/ap-pinentry
-exec "$(dirname "$0")/../MacOS/ap" pinentry
+#
+# Exec an absolute path with no `..` in it, so `ap` sees a clean argv[0].
+dir=$(cd "$(dirname "$0")/../MacOS" && pwd) || exit 1
+exec "$dir/ap" pinentry

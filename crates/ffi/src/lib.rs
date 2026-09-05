@@ -1001,6 +1001,13 @@ impl AxoPass {
         }
         Ok(())
     }
+
+    /// Whether this launch or reopen came from the broker starting the app to
+    /// serve a request, rather than from a person opening it. Consumes the
+    /// marker, so a second call reports false.
+    pub fn take_broker_launch_request(&self) -> bool {
+        app_broker::take_launch_request()
+    }
 }
 
 // ---------------------------------------------------------------------------

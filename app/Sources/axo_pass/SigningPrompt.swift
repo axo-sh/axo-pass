@@ -15,8 +15,14 @@ import UserNotifications
 @MainActor
 final class SigningPromptModel {
   private let grants = AuthorizationGrants<String>(label: "SigningPrompt")
-  private var panel: NSPanel?
   private var showTask: Task<Void, Never>?
+
+  /// Where the prompt is drawn. `VaultsModel` watches it, so the app can step
+  /// aside while one is up. Watching the panel rather than the broker's
+  /// `begin`/`end` pair means a signature served with no UI at all does not
+  /// disturb the app's own unlock, and a caller that goes away mid-signature
+  /// cannot leave the app stepped aside for good.
+  let panel = PromptPanel()
 
   /// Ask for the notification permission used to report a signature. The events
   /// that drop an approval are watched by `VaultsModel`, which owns both
@@ -53,7 +59,7 @@ final class SigningPromptModel {
   func end(keyLabel: String, outcome: PromptOutcome) {
     showTask?.cancel()
     showTask = nil
-    hidePanel()
+    panel.hide()
 
     // Cancelling through our own button forgets the grant before the evaluation
     // fails, so there may be nothing left to settle.
@@ -103,44 +109,20 @@ final class SigningPromptModel {
   // MARK: - Panel
 
   private func showPanel(keyLabel: String, caller: String?, view: LAAuthenticationView) {
-    hidePanel()
-
     let content = SigningPromptView(
       caller: caller,
       keyName: Self.shortKeyName(keyLabel),
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(keyLabel: keyLabel) }
     )
-
-    // Non-activating: signing is triggered from another app (a terminal, an
-    // editor), which keeps focus while this panel is on screen.
-    let panel = NSPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
-      styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
-      backing: .buffered,
-      defer: false
-    )
-    panel.titleVisibility = .hidden
-    panel.titlebarAppearsTransparent = true
-    panel.isMovableByWindowBackground = true
-    panel.isFloatingPanel = true
-    panel.level = .floating
-    panel.hidesOnDeactivate = false
-    panel.contentView = NSHostingView(rootView: content)
-    panel.center()
-    panel.orderFrontRegardless()
-    self.panel = panel
-  }
-
-  private func hidePanel() {
-    panel?.orderOut(nil)
-    panel = nil
+    panel.show(NSHostingView(rootView: content), width: 320)
   }
 
   /// Shorten `ssh-key-<uuid>` for display. The leading characters are enough to
   /// tell two keys apart.
   private static func shortKeyName(_ keyLabel: String) -> String {
-    let id = keyLabel.hasPrefix("ssh-key-") ? String(keyLabel.dropFirst("ssh-key-".count)) : keyLabel
+    let id =
+      keyLabel.hasPrefix("ssh-key-") ? String(keyLabel.dropFirst("ssh-key-".count)) : keyLabel
     return String(id.prefix(6))
   }
 }

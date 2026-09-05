@@ -46,7 +46,7 @@ sign     = true
 # invoke `ap pinentry` directly. This wrapper is what gets pointed to instead;
 # see crates/cli/src/cli/commands/pinentry.rs.
 [[build.copy]]
-src      = "src-tauri/misc/ap-pinentry"
+src      = "app/misc/ap-pinentry"
 dest_dir = "Contents/Resources"
 
 # SSH_ASKPASS takes a bare path with no arguments, so ssh/ssh-add can't invoke

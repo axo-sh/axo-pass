@@ -20,7 +20,7 @@ use std::fs::{self, Permissions};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +60,32 @@ const AGENT_EXECUTABLE_NAME: &str = "ap";
 pub fn broker_socket_path() -> PathBuf {
     // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
     app_data_dir().join("app-broker.sock")
+}
+
+/// Marks an `open` issued by [`launch_app`]. `open` delivers a reopen event to
+/// an app that is already running and drops `--args` when it does, so a marker
+/// is the only way to tell a broker launch from a person opening the app.
+fn launch_request_path() -> PathBuf {
+    app_data_dir().join("app-broker.launch")
+}
+
+/// How long a launch marker stays meaningful: long enough to cover a cold
+/// launch, short enough that a stale one does not swallow a real reopen.
+const LAUNCH_REQUEST_TTL: Duration = Duration::from_secs(30);
+
+/// Consume the marker left by [`launch_app`]. True when this launch or reopen
+/// came from the broker, in which case the app must stay headless.
+pub fn take_launch_request() -> bool {
+    let path = launch_request_path();
+    let Ok(metadata) = fs::metadata(&path) else {
+        return false;
+    };
+    let _ = fs::remove_file(&path);
+    metadata
+        .modified()
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age < LAUNCH_REQUEST_TTL)
 }
 
 #[derive(Debug, Error)]
@@ -224,10 +250,18 @@ fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
 
 /// The bundle holding this executable, i.e. `.../Axo Pass.app` for the `ap`
 /// staged at `Contents/MacOS/ap`.
+///
+/// Walks up from the executable looking for a `.app` component rather than
+/// assuming a fixed depth: `current_exe` is not always canonical (a wrapper
+/// that execs `.../Contents/Resources/../MacOS/ap` leaves the `..` in place),
+/// so a fixed number of `parent()` calls can land in the wrong directory.
 fn app_bundle_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let bundle = exe.parent()?.parent()?.parent()?;
-    (bundle.extension()? == "app").then(|| bundle.to_path_buf())
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    log::debug!("Resolving the app bundle from {}", exe.display());
+    exe.ancestors()
+        .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+        .map(Path::to_path_buf)
 }
 
 /// Start the app in the background, so a signature request does not pull focus
@@ -239,6 +273,11 @@ fn launch_app() -> Result<(), BrokerError> {
     };
 
     log::debug!("Starting {} for the app broker", bundle.display());
+    // The marker tells the app this launch is only to serve the broker, so it
+    // stays headless: no main window, no Dock icon, no focus taken.
+    if let Err(e) = fs::write(launch_request_path(), b"") {
+        log::debug!("Could not write the broker launch marker: {e}");
+    }
     let status = std::process::Command::new("/usr/bin/open")
         .arg("-g")
         .arg(&bundle)

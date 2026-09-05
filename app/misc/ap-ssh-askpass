@@ -3,4 +3,7 @@
 # Usage: Add the following to your shell config:
 #   export SSH_ASKPASS="/Applications/Axo Pass.app/Contents/Resources/ap-ssh-askpass"
 #   export SSH_ASKPASS_REQUIRE=force
-exec "$(dirname "$0")/../MacOS/ap" ssh-askpass "$1"
+#
+# Exec an absolute path with no `..` in it, so `ap` sees a clean argv[0].
+dir=$(cd "$(dirname "$0")/../MacOS" && pwd) || exit 1
+exec "$dir/ap" ssh-askpass "$1"
