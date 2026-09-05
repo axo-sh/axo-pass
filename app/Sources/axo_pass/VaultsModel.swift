@@ -1,9 +1,9 @@
 import AppKit
+import AxoPassFFI
 import CryptoKit
 import Foundation
 import LocalAuthentication
 import Observation
-import AxoPassFFI
 
 enum SidebarDestination: Hashable {
   case vault(String)
@@ -68,6 +68,10 @@ final class VaultsModel {
   private let signingPrompt = SigningPromptModel()
   private var signingBridge: SigningPromptBridge? = nil
 
+  // Draws the prompts `ap pinentry` delegates to us for GPG.
+  private let passphrasePrompt = PassphrasePromptModel()
+  private var passphraseBridge: PassphrasePromptBridge? = nil
+
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
   var selectedItemRef: ItemRef? = nil
@@ -97,24 +101,44 @@ final class VaultsModel {
     }
   }
 
-  // MARK: - Signing broker
+  // MARK: - App broker
 
-  /// Serve the agent's signing requests for as long as the app runs. Signing
-  /// uses its own Secure Enclave key, so this does not wait on the vault being
-  /// unlocked. With the app closed the agent falls back to the system dialog.
-  func startSigningBroker() async {
+  /// Serve the CLI's requests while the app is running: SSH signatures from
+  /// the agent, GPG passphrases from `ap pinentry`. Both use their own keychain
+  /// items, so this does not wait on the vault being unlocked. With the app
+  /// unavailable the agent falls back to the system dialog.
+  func startBroker() async {
     guard signingBridge == nil else { return }
-    let bridge = SigningPromptBridge(model: signingPrompt)
-    signingBridge = bridge
+    let signing = SigningPromptBridge(model: signingPrompt)
+    let passphrase = PassphrasePromptBridge(model: passphrasePrompt)
+    signingBridge = signing
+    passphraseBridge = passphrase
     do {
-      try await core.startSignBroker(delegate: bridge)
-      // Signing authorizations expire on their own clocks, and on sleep and
-      // screen lock. Those events belong to the broker's lifetime: signing is
-      // served with the vault locked, where AutoLock does not run.
+      try await core.startAppBroker(signDelegate: signing, passphraseDelegate: passphrase)
       signingPrompt.start()
+      // Authorizations also expire on their own clocks, but sleep and screen
+      // lock belong to the broker's lifetime: requests are served with the
+      // vault locked, where AutoLock does not run, so without these an approval
+      // given to a locked app would only expire on its own clocks.
+      observePromptExpiry(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification)
+      observePromptExpiry(
+        DistributedNotificationCenter.default(),
+        Notification.Name("com.apple.screenIsLocked"))
     } catch {
       signingBridge = nil
-      NSLog("Failed to start the signing broker: %@", String(describing: error))
+      passphraseBridge = nil
+      NSLog("Failed to start the app broker: %@", String(describing: error))
+    }
+  }
+
+  /// Drop every authorization the prompts are holding when `name` fires. The
+  /// observers live as long as the app, like the broker they belong to.
+  private func observePromptExpiry(_ center: NotificationCenter, _ name: Notification.Name) {
+    center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.signingPrompt.forgetAll()
+        self?.passphrasePrompt.forgetAll()
+      }
     }
   }
 
@@ -233,7 +257,8 @@ final class VaultsModel {
     case .userCancel, .appCancel, .systemCancel: return nil
     case .userFallback: return nil
     case .biometryNotEnrolled:
-      return "No fingerprints are enrolled. Use your login password, or add one in System Settings › Touch ID & Password."
+      return
+        "No fingerprints are enrolled. Use your login password, or add one in System Settings › Touch ID & Password."
     case .biometryLockout:
       return "Touch ID is locked after too many failed attempts. Use your login password instead."
     case .passcodeNotSet:
@@ -256,8 +281,10 @@ final class VaultsModel {
       actionError = String(describing: error)
     }
     unlockTask = nil
-    // A lock drops every authorization the user has given, signing included.
+    // A lock drops every authorization the user has given: signing, and the
+    // GPG passphrases pinentry unlocked.
     signingPrompt.forgetAll()
+    passphrasePrompt.forgetAll()
     resetAuthContext(invalidatingCurrent: true)
     isAppUnlocked = false
     itemCache = [:]
@@ -321,7 +348,9 @@ final class VaultsModel {
 
   // MARK: - Credentials
 
-  func credentialSecret(vaultKey: String, itemKey: String, credKey: String) async throws -> SymmetricKey {
+  func credentialSecret(vaultKey: String, itemKey: String, credKey: String) async throws
+    -> SymmetricKey
+  {
     var raw = try await core.getCredentialSecret(
       vaultKey: vaultKey, itemKey: itemKey, credKey: credKey
     )
@@ -455,9 +484,14 @@ final class VaultsModel {
   var displayItems: [DisplayItem] {
     guard selectedVaultKey != nil else { return [] }
     if isAllSecrets {
-      return vaults
-        .flatMap { vault in (itemCache[vault.key] ?? []).map { DisplayItem(vaultKey: vault.key, item: $0) } }
-        .sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
+      return
+        vaults
+        .flatMap { vault in
+          (itemCache[vault.key] ?? []).map { DisplayItem(vaultKey: vault.key, item: $0) }
+        }
+        .sorted {
+          $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending
+        }
     }
     guard let key = selectedVaultKey else { return [] }
     return (itemCache[key] ?? []).map { DisplayItem(vaultKey: key, item: $0) }

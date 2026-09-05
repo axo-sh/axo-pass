@@ -77,7 +77,7 @@ pub enum AuthContext {
     WithContext(String),
     OneTime,
     /// A context the caller owns, so it can attach an `LAAuthenticationView`
-    /// and draw the prompt itself. Used by the signing broker, where the app
+    /// and draw the prompt itself. Used by the app broker, where the app
     /// supplies the context and the requesting process does the signing.
     Foreign(ForeignContext),
 }
@@ -408,7 +408,7 @@ pub fn sign_with_managed_key(
     .map_err(|e| e.to_string())
 }
 
-/// Sign on a specific [`AuthContext`]. The signing broker passes
+/// Sign on a specific [`AuthContext`]. The app broker passes
 /// [`AuthContext::Foreign`] so the app that owns the context draws the prompt.
 /// Unlike [`sign_with_managed_key`] this keeps the error typed, so a caller can
 /// tell a cancelled prompt from a failure.

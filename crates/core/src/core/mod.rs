@@ -1,3 +1,4 @@
+pub mod app_broker;
 pub mod auth;
 pub mod build_sha;
 pub mod config;
@@ -7,5 +8,4 @@ pub mod interpolate;
 mod objc_helpers;
 pub mod provenance;
 pub mod read_input;
-pub mod sign_broker;
 pub mod updates;

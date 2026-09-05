@@ -87,11 +87,10 @@ impl SystemSshKey {
         Ok(keys)
     }
 
-    // Given a private key path, try to get information about the SSH key. We
-    // attempt to read the public key file first, then fall back to parsing the
-    // private key. The latter only works for unencrypted keys.
-    // Note: Only OpenSSH private key formats are supported for now (since we rely
-    // on ssh-keys for parsing)
+    // Read the key's information from a private key path. Reads the public key
+    // file first, then falls back to parsing the private key, which only works
+    // for unencrypted keys. Only the OpenSSH private key format is supported,
+    // since parsing goes through the ssh-key crate.
     fn load_from_path(path: &Path) -> anyhow::Result<SystemSshKey> {
         // Try to read the corresponding public key file first (most reliable)
         let public_key_path = path.with_extension("pub");

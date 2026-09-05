@@ -1,5 +1,5 @@
 #!/bin/sh
 # pinentry helper script, pinentry does not accept args
 # Usage: Add the following line to your ~/.gnupg/gpg-agent.conf:
-#   pinentry-program /path/to/this/file
-exec "$(dirname "$0")/../MacOS/axo-pass" pinentry
+#   pinentry-program /Applications/Axo Pass.app/Contents/Resources/ap-pinentry
+exec "$(dirname "$0")/../MacOS/ap" pinentry

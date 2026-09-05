@@ -1,7 +1,7 @@
 //! Identifies the process on the other end of a Unix domain socket.
 //!
 //! File permissions bound a socket to one user, so on a personal Mac any code
-//! the user runs can connect. The signing broker needs more than that, so it
+//! the user runs can connect. The app broker needs more than that, so it
 //! identifies the peer and checks it against a policy.
 //!
 //! Identification starts from the peer's audit token rather than its pid.

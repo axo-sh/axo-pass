@@ -1,3 +1,6 @@
+pub mod agent_conf;
+pub mod pinentry;
+
 use std::process::Command;
 
 use thiserror::Error;

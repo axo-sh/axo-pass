@@ -1,48 +1,46 @@
-//! Hands the agent's managed-key work to the app.
+//! Proxies prompts and keychain reads to the app, which holds the
+//! `keychain-access-groups` entitlement. `ap` does not and cannot hold
+//! entitlements.
 //!
-//! The agent cannot do this work itself, for two reasons. It runs headless, so
-//! it can only raise the system authentication dialog; drawing the prompt
-//! inline needs an `LAAuthenticationView` attached to a context owned by a
-//! process that can put a window on screen, and an `LAContext` cannot cross a
-//! process boundary. It also cannot reach the keys: they live in the data
-//! protection keychain, which needs the restricted `keychain-access-groups`
-//! entitlement, and AMFI only honours that for code carrying a provisioning
-//! profile, which a plain executable has nowhere to hold.
+//! Two callers use the broker: the SSH agent, for managed Secure Enclave keys
+//! (see [`ssh`]), and `ap pinentry`, for GPG passphrases (see [`gpg`]).
 //!
-//! The app has both the window and the entitlement, so the agent proxies to it
-//! over a Unix socket and never touches the keychain itself. Requests are
-//! served whether or not the vault is unlocked. Signing prompts; listing does
-//! not.
+//! Requests are served whether or not the vault is unlocked. Signing and
+//! passphrase will prompt, but just listing identities will not.
 //!
-//! With no app running the client launches it and waits for the socket, so
-//! `ssh-add -l` against a closed app starts it rather than reporting no keys.
+//! With no app running, `ap` will launch it and waits for the socket, so
+//! `ssh-add -l` or a `git commit -S` against a closed app starts it rather than
+//! failing.
 //!
 //! The broker identifies the peer before reading a request: it must be the `ap`
 //! staged in this bundle, signed by the same team. See `agent_policy`.
 
 use std::fs::{self, Permissions};
-use std::future::Future;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
 use serde::{Deserialize, Serialize};
-use ssh_key::{Algorithm, Signature};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::core::auth::{AuthContext, ForeignContext, sign_with_managed_key_on};
 use crate::core::dirs::app_data_dir;
 use crate::core::provenance::{PeerIdentity, PeerPolicy};
-use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
+
+pub mod gpg;
+pub mod ssh;
+
+pub use gpg::{
+    CollectedPassphrase, PassphraseAuthorizer, PassphrasePrompt, request_confirm, request_message,
+    request_passphrase,
+};
+pub use ssh::{ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_signature};
 
 /// How long the agent waits for the user to answer the app's prompt before
 /// giving up and falling back to the system dialog.
@@ -56,69 +54,43 @@ const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const AGENT_EXECUTABLE_NAME: &str = "ap";
 
 pub fn broker_socket_path() -> PathBuf {
-    // typically: ~/Library/Application Support/Axo Pass/sign-broker.sock
-    app_data_dir().join("sign-broker.sock")
+    // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
+    app_data_dir().join("app-broker.sock")
 }
 
 #[derive(Debug, Error)]
-pub enum SignBrokerError {
+pub enum BrokerError {
     /// No app is listening. The caller should fall back to its own prompt.
-    #[error("Signing broker unavailable")]
+    #[error("App broker unavailable")]
     Unavailable,
 
-    #[error("User cancelled the signing prompt")]
+    #[error("User cancelled the prompt")]
     Cancelled,
 
-    #[error("Signing broker failed: {0}")]
+    #[error("App broker failed: {0}")]
     Failed(String),
 }
 
-/// What the app needs to describe the prompt.
-#[derive(Debug, Clone)]
-pub struct SignPrompt {
-    pub key_label: String,
-
-    /// Who asked, as the agent resolved it. See [`WireRequest::Sign`] for why
-    /// this can be shown to the user.
-    pub caller: Option<String>,
-}
-
-/// How a signing attempt ended.
+/// How a prompt ended.
 ///
 /// The app distinguishes an approval from a dismissed prompt. Only an approval
 /// starts the clocks that bound how long it is reused, and only an approval is
 /// reported to the user.
 #[derive(Debug, Clone)]
-pub enum SignOutcome {
+pub enum PromptOutcome {
     Succeeded,
     Cancelled,
     Failed(String),
 }
 
-/// Supplies an `LAContext` to sign on, and learns how the attempt ended so it
-/// can take its prompt down.
-pub trait SignAuthorizer: Send + Sync + 'static {
-    /// Prepare a context for `prompt` and put the prompt on screen. The broker
-    /// evaluates the returned context, which is what makes the attached
-    /// `LAAuthenticationView` draw.
-    fn begin(
-        &self,
-        prompt: SignPrompt,
-    ) -> Pin<Box<dyn Future<Output = Result<ForeignContext, String>> + Send>>;
-
-    /// The attempt finished. Always called once `begin` has been called, so the
-    /// app can take the prompt down and settle the authorization it handed out.
-    fn end(
-        &self,
-        prompt: SignPrompt,
-        outcome: SignOutcome,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send>>;
+/// The app's side of every request the broker serves.
+#[derive(Clone)]
+pub struct Authorizers {
+    pub sign: Arc<dyn SignAuthorizer>,
+    pub passphrase: Arc<dyn PassphraseAuthorizer>,
 }
 
-// --------------------------------------------------------------------------
-// Wire format: one JSON line each way, one request per connection.
-// --------------------------------------------------------------------------
-
+/// The wire format: one JSON line each way, one request per connection.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "snake_case")]
 enum WireRequest {
@@ -142,6 +114,27 @@ enum WireRequest {
         /// Base64 of the bytes to sign.
         data: String,
     },
+
+    /// A GPG passphrase, either unlocked from the keychain behind a biometric
+    /// prompt or typed by the user. See [`PassphrasePrompt`].
+    GetPassphrase {
+        key_id: Option<String>,
+        description: Option<String>,
+        prompt: Option<String>,
+        error_message: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        caller: Option<String>,
+    },
+
+    /// gpg's `CONFIRM`: a yes/no question with no secret attached.
+    Confirm {
+        description: Option<String>,
+    },
+
+    /// gpg's `MESSAGE`: something to show and acknowledge.
+    Message {
+        description: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -155,71 +148,24 @@ enum WireResponse {
         /// Base64 of the raw SSH signature body.
         signature: String,
     },
+    /// Base64 of the passphrase bytes. Base64 rather than a bare string so a
+    /// passphrase is never mangled by JSON escaping of odd bytes.
+    Passphrase {
+        passphrase: String,
+    },
+    Confirmed {
+        ok: bool,
+    },
+    Acknowledged,
     Cancelled,
     Failed {
         message: String,
     },
 }
 
-/// A managed key as the agent sees it: enough to advertise the identity and to
-/// ask for a signature later, with no keychain access of its own.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManagedIdentity {
-    pub key_label: String,
-    /// One OpenSSH public key line: algorithm, base64 key, comment.
-    pub public_key: String,
-}
+// Client (the agent).
 
-// --------------------------------------------------------------------------
-// Client (the agent)
-// --------------------------------------------------------------------------
-
-/// List the managed keys the app can sign with. Blocking, and starts the app if
-/// it is not already running.
-pub fn list_identities() -> Result<Vec<ManagedIdentity>, SignBrokerError> {
-    match send_request(&WireRequest::ListIdentities)? {
-        WireResponse::Identities { keys } => Ok(keys),
-        WireResponse::Failed { message } => Err(SignBrokerError::Failed(message)),
-        _ => Err(SignBrokerError::Failed(
-            "Unexpected response to identity listing".to_string(),
-        )),
-    }
-}
-
-/// Ask the app to authorize and produce a signature. Blocking: it waits for the
-/// user to answer a prompt, so call it from a thread that can block.
-pub fn request_signature(
-    key_label: &str,
-    data: &[u8],
-    caller: Option<&str>,
-) -> Result<Signature, SignBrokerError> {
-    let request = WireRequest::Sign {
-        key_label: key_label.to_string(),
-        caller: caller.map(String::from),
-        data: b64.encode(data),
-    };
-    match send_request(&request)? {
-        WireResponse::Signed {
-            algorithm,
-            signature,
-        } => {
-            let algorithm = Algorithm::new(&algorithm)
-                .map_err(|e| SignBrokerError::Failed(format!("Unknown algorithm: {e}")))?;
-            let body = b64
-                .decode(signature)
-                .map_err(|e| SignBrokerError::Failed(format!("Malformed signature: {e}")))?;
-            Signature::new(algorithm, body)
-                .map_err(|e| SignBrokerError::Failed(format!("Invalid signature: {e}")))
-        },
-        WireResponse::Cancelled => Err(SignBrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(SignBrokerError::Failed(message)),
-        _ => Err(SignBrokerError::Failed(
-            "Unexpected response to signing request".to_string(),
-        )),
-    }
-}
-
-fn send_request(request: &WireRequest) -> Result<WireResponse, SignBrokerError> {
+fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
     let stream = match connect() {
         Ok(stream) => stream,
         Err(_) => {
@@ -232,27 +178,26 @@ fn send_request(request: &WireRequest) -> Result<WireResponse, SignBrokerError> 
 
     stream
         .set_read_timeout(Some(RESPONSE_TIMEOUT))
-        .map_err(|e| SignBrokerError::Failed(e.to_string()))?;
+        .map_err(|e| BrokerError::Failed(e.to_string()))?;
 
-    let mut line =
-        serde_json::to_vec(request).map_err(|e| SignBrokerError::Failed(e.to_string()))?;
+    let mut line = serde_json::to_vec(request).map_err(|e| BrokerError::Failed(e.to_string()))?;
     line.push(b'\n');
     (&stream)
         .write_all(&line)
         .and_then(|_| (&stream).flush())
-        .map_err(|e| SignBrokerError::Failed(format!("Failed to send request: {e}")))?;
+        .map_err(|e| BrokerError::Failed(format!("Failed to send request: {e}")))?;
 
     let mut response_line = String::new();
     BufReader::new(&stream)
         .read_line(&mut response_line)
-        .map_err(|e| SignBrokerError::Failed(format!("Failed to read response: {e}")))?;
+        .map_err(|e| BrokerError::Failed(format!("Failed to read response: {e}")))?;
     if response_line.trim().is_empty() {
         // The app went away mid-request.
-        return Err(SignBrokerError::Unavailable);
+        return Err(BrokerError::Unavailable);
     }
 
     serde_json::from_str(&response_line)
-        .map_err(|e| SignBrokerError::Failed(format!("Malformed response: {e}")))
+        .map_err(|e| BrokerError::Failed(format!("Malformed response: {e}")))
 }
 
 fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
@@ -269,20 +214,20 @@ fn app_bundle_path() -> Option<PathBuf> {
 
 /// Start the app in the background, so a signature request does not pull focus
 /// away from whatever asked for it.
-fn launch_app() -> Result<(), SignBrokerError> {
+fn launch_app() -> Result<(), BrokerError> {
     let Some(bundle) = app_bundle_path() else {
         log::debug!("Not running from an app bundle; cannot start the broker");
-        return Err(SignBrokerError::Unavailable);
+        return Err(BrokerError::Unavailable);
     };
 
-    log::debug!("Starting {} for the signing broker", bundle.display());
+    log::debug!("Starting {} for the app broker", bundle.display());
     let status = std::process::Command::new("/usr/bin/open")
         .arg("-g")
         .arg(&bundle)
         .status()
-        .map_err(|e| SignBrokerError::Failed(format!("Failed to start the app: {e}")))?;
+        .map_err(|e| BrokerError::Failed(format!("Failed to start the app: {e}")))?;
     if !status.success() {
-        return Err(SignBrokerError::Failed(format!(
+        return Err(BrokerError::Failed(format!(
             "Failed to start {}: open exited with {status}",
             bundle.display()
         )));
@@ -290,7 +235,7 @@ fn launch_app() -> Result<(), SignBrokerError> {
     Ok(())
 }
 
-fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, SignBrokerError> {
+fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, BrokerError> {
     let deadline = std::time::Instant::now() + LAUNCH_TIMEOUT;
     loop {
         if let Ok(stream) = connect() {
@@ -298,22 +243,20 @@ fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, SignBrokerError> 
         }
         if std::time::Instant::now() >= deadline {
             log::warn!("The app did not start serving signing requests in time");
-            return Err(SignBrokerError::Unavailable);
+            return Err(BrokerError::Unavailable);
         }
         std::thread::sleep(LAUNCH_POLL_INTERVAL);
     }
 }
 
-// --------------------------------------------------------------------------
-// Server (the app)
-// --------------------------------------------------------------------------
+// Server (the app).
 
-/// Serve signing requests until `shutdown` resolves, then remove the socket.
+/// Serve requests until `shutdown` resolves, then remove the socket.
 pub async fn serve(
-    authorizer: Arc<dyn SignAuthorizer>,
+    authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
-    serve_on(broker_socket_path(), agent_policy(), authorizer, shutdown).await
+    serve_on(broker_socket_path(), agent_policy(), authorizers, shutdown).await
 }
 
 /// The body of [`serve`], with the socket path and the peer policy supplied
@@ -326,7 +269,7 @@ pub async fn serve(
 async fn serve_on(
     socket_path: PathBuf,
     policy: PeerPolicy,
-    authorizer: Arc<dyn SignAuthorizer>,
+    authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
     if let Some(parent) = socket_path.parent() {
@@ -338,11 +281,11 @@ async fn serve_on(
             Ok(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AddrInUse,
-                    format!("another signing broker owns {}", socket_path.display()),
+                    format!("another app broker owns {}", socket_path.display()),
                 ));
             },
             Err(_) => {
-                log::debug!("Replacing stale signing broker socket {socket_path:?}");
+                log::debug!("Replacing stale app broker socket {socket_path:?}");
                 fs::remove_file(&socket_path)?;
             },
         }
@@ -352,11 +295,11 @@ async fn serve_on(
     fs::set_permissions(&socket_path, Permissions::from_mode(0o600)).inspect_err(|_| {
         let _ = fs::remove_file(&socket_path);
     })?;
-    log::debug!("Signing broker listening on {}", socket_path.display());
+    log::debug!("App broker listening on {}", socket_path.display());
 
     tokio::select! {
-        _ = accept_loop(listener, authorizer, policy) => {},
-        _ = shutdown => log::debug!("Signing broker shutting down"),
+        _ = accept_loop(listener, authorizers, policy) => {},
+        _ = shutdown => log::debug!("App broker shutting down"),
     }
     let _ = fs::remove_file(&socket_path);
     Ok(())
@@ -378,52 +321,45 @@ fn agent_policy() -> PeerPolicy {
         |path| path.display().to_string(),
     );
     if policy.requirement.is_some() {
-        log::debug!("Signing broker accepts {accepts}, signed by our own team");
+        log::debug!("App broker accepts {accepts}, signed by our own team");
     } else {
         log::warn!(
-            "Signing broker cannot check its peer's code signature: this build carries no team \
+            "App broker cannot check its peer's code signature: this build carries no team \
              identifier. Accepting {accepts}"
         );
     }
     policy
 }
 
-async fn accept_loop(
-    listener: UnixListener,
-    authorizer: Arc<dyn SignAuthorizer>,
-    policy: PeerPolicy,
-) {
+async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: PeerPolicy) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let peer = match PeerIdentity::verify(stream.as_raw_fd(), &policy) {
                     Ok(peer) => peer,
                     Err(e) => {
-                        log::warn!("Signing broker refused a connection: {e}");
+                        log::warn!("App broker refused a connection: {e}");
                         continue;
                     },
                 };
-                log::debug!("Signing broker peer: {peer:#?}");
+                log::debug!("App broker peer: {peer:#?}");
 
-                let authorizer = authorizer.clone();
+                let authorizers = authorizers.clone();
                 // Serially, not spawned: two prompts at once would contend for
                 // the screen and the system's authentication session.
-                if let Err(e) = handle_connection(stream, authorizer).await {
-                    log::debug!("Signing broker connection failed: {e}");
+                if let Err(e) = handle_connection(stream, authorizers).await {
+                    log::debug!("App broker connection failed: {e}");
                 }
             },
             Err(e) => {
-                log::error!("Signing broker accept failed: {e}");
+                log::error!("App broker accept failed: {e}");
                 return;
             },
         }
     }
 }
 
-async fn handle_connection(
-    stream: UnixStream,
-    authorizer: Arc<dyn SignAuthorizer>,
-) -> std::io::Result<()> {
+async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut request_line = String::new();
     AsyncBufReader::new(read_half)
@@ -434,8 +370,8 @@ async fn handle_connection(
 
     let response = match request {
         WireRequest::ListIdentities => {
-            log::debug!("Signing broker request: list identities");
-            tokio::task::spawn_blocking(list_identities_locally)
+            log::debug!("App broker request: list identities");
+            tokio::task::spawn_blocking(ssh::list_identities_locally)
                 .await
                 .unwrap_or_else(|e| Err(format!("Failed to list managed keys: {e}")))
                 .map_or_else(
@@ -452,8 +388,36 @@ async fn handle_connection(
                 .decode(&data)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             let prompt = SignPrompt { key_label, caller };
-            log::debug!("Signing broker request: {prompt:?}");
-            authorize_and_sign(&*authorizer, prompt, data).await
+            log::debug!("App broker request: {prompt:?}");
+            ssh::authorize_and_sign(&*authorizers.sign, prompt, data).await
+        },
+        WireRequest::GetPassphrase {
+            key_id,
+            description,
+            prompt,
+            error_message,
+            caller,
+        } => {
+            let prompt = PassphrasePrompt {
+                key_id,
+                description,
+                prompt,
+                error_message,
+                caller,
+            };
+            log::debug!("App broker request: {prompt:?}");
+            gpg::get_passphrase(&*authorizers.passphrase, prompt).await
+        },
+        WireRequest::Confirm { description } => {
+            log::debug!("App broker request: confirm");
+            WireResponse::Confirmed {
+                ok: authorizers.passphrase.confirm(description).await,
+            }
+        },
+        WireRequest::Message { description } => {
+            log::debug!("App broker request: message");
+            authorizers.passphrase.message(description).await;
+            WireResponse::Acknowledged
         },
     };
 
@@ -464,84 +428,6 @@ async fn handle_connection(
     write_half.flush().await
 }
 
-/// Read the managed keys out of the keychain. Listing needs no authentication,
-/// so this raises no prompt and works with the vault still locked.
-fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> {
-    let keys = ManagedSshKey::list().map_err(|e| format!("Failed to list managed keys: {e}"))?;
-    let mut identities = Vec::with_capacity(keys.len());
-    for key in keys {
-        let comment = format!("axo-secure-enclave:{}", &key.name()[0..6]);
-        let public_key = ssh_key::PublicKey::new(key.public_key().clone(), comment)
-            .to_openssh()
-            .map_err(|e| format!("Failed to encode public key: {e}"))?;
-        identities.push(ManagedIdentity {
-            key_label: key.label(),
-            public_key,
-        });
-    }
-    Ok(identities)
-}
-
-async fn authorize_and_sign(
-    authorizer: &dyn SignAuthorizer,
-    prompt: SignPrompt,
-    data: Vec<u8>,
-) -> WireResponse {
-    let context = match authorizer.begin(prompt.clone()).await {
-        Ok(context) => context,
-        Err(message) => {
-            log::debug!("Signing broker authorization declined: {message}");
-            // `begin` may already have put a prompt on screen, so end the
-            // attempt rather than leaving it there.
-            authorizer
-                .end(prompt, SignOutcome::Failed(message.clone()))
-                .await;
-            return WireResponse::Failed { message };
-        },
-    };
-
-    let key_label = prompt.key_label.clone();
-    let caller = prompt.caller.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        sign_with_managed_key_on(
-            AuthContext::Foreign(context),
-            &key_label,
-            &data,
-            caller.as_deref(),
-        )
-    })
-    .await
-    .unwrap_or_else(|e| {
-        Err(KeychainError::SigningFailed(format!(
-            "Signing task failed: {e}"
-        )))
-    });
-
-    let (response, outcome) = match result {
-        Ok(signature) => (
-            WireResponse::Signed {
-                algorithm: signature.algorithm().to_string(),
-                signature: b64.encode(signature.as_bytes()),
-            },
-            SignOutcome::Succeeded,
-        ),
-        // A dismissed prompt is the user's answer, so report a cancellation
-        // rather than a failure.
-        Err(KeychainError::UserCancelled) => (WireResponse::Cancelled, SignOutcome::Cancelled),
-        Err(e) => {
-            let message = e.to_string();
-            (
-                WireResponse::Failed {
-                    message: message.clone(),
-                },
-                SignOutcome::Failed(message),
-            )
-        },
-    };
-    authorizer.end(prompt, outcome).await;
-    response
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsRawFd;
@@ -549,34 +435,68 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use async_trait::async_trait;
+
     use super::*;
 
-    /// Stands in for the app. It cannot produce a real `LAContext`, so `begin`
-    /// always declines. A request that reaches it has still been accepted,
-    /// framed, parsed and routed, which is what these tests cover.
+    /// The passphrase the stub hands back when asked to collect one.
+    const STUB_PASSPHRASE: &str = "hunter2";
+
+    /// Stands in for the app. It cannot produce a real `LAContext`, so both
+    /// `begin` methods decline. A request that reaches it has still been
+    /// accepted, framed, parsed and routed, which is what these tests cover.
     #[derive(Default)]
     struct StubAuthorizer {
         prompts: Mutex<Vec<SignPrompt>>,
+        passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
         ended: AtomicUsize,
     }
 
+    #[async_trait]
     impl SignAuthorizer for StubAuthorizer {
-        fn begin(
+        async fn begin(
             &self,
             prompt: SignPrompt,
-        ) -> Pin<Box<dyn Future<Output = Result<ForeignContext, String>> + Send>> {
+        ) -> Result<crate::core::auth::ForeignContext, String> {
             self.prompts.lock().unwrap().push(prompt);
-            Box::pin(async { Err("stub authorizer".to_string()) })
+            Err("stub authorizer".to_string())
         }
 
-        fn end(
-            &self,
-            _prompt: SignPrompt,
-            _outcome: SignOutcome,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        async fn end(&self, _prompt: SignPrompt, _outcome: PromptOutcome) {
             self.ended.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async {})
         }
+    }
+
+    #[async_trait]
+    impl PassphraseAuthorizer for StubAuthorizer {
+        async fn begin(
+            &self,
+            _prompt: PassphrasePrompt,
+        ) -> Result<crate::core::auth::ForeignContext, String> {
+            Err("stub authorizer".to_string())
+        }
+
+        async fn collect(
+            &self,
+            prompt: PassphrasePrompt,
+        ) -> Result<Option<CollectedPassphrase>, String> {
+            self.passphrase_prompts.lock().unwrap().push(prompt);
+            Ok(Some(CollectedPassphrase {
+                value: secrecy::SecretString::from(STUB_PASSPHRASE),
+                // Nothing may touch the real keychain from a test.
+                save_to_keychain: false,
+            }))
+        }
+
+        async fn end(&self, _prompt: PassphrasePrompt, _outcome: PromptOutcome) {
+            self.ended.fetch_add(1, Ordering::SeqCst);
+        }
+
+        async fn confirm(&self, _description: Option<String>) -> bool {
+            true
+        }
+
+        async fn message(&self, _description: Option<String>) {}
     }
 
     /// A broker on a scratch socket, shut down when dropped.
@@ -590,14 +510,17 @@ mod tests {
     impl TestBroker {
         async fn start(policy: PeerPolicy) -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let socket_path = dir.path().join("sign-broker.sock");
+            let socket_path = dir.path().join("app-broker.sock");
             let authorizer = Arc::new(StubAuthorizer::default());
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
             tokio::spawn(serve_on(
                 socket_path.clone(),
                 policy,
-                authorizer.clone(),
+                Authorizers {
+                    sign: authorizer.clone(),
+                    passphrase: authorizer.clone(),
+                },
                 shutdown_rx,
             ));
             wait_for_socket(&socket_path).await;
@@ -688,6 +611,65 @@ mod tests {
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
     }
 
+    /// With no key id there is nothing to unlock, so the request goes straight
+    /// to the app's text field and comes back with what the user typed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn collects_a_passphrase_for_a_key_with_nothing_saved() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response = broker.request(
+            r#"{"request":"get_passphrase","key_id":null,"description":"Enter passphrase","prompt":null,"error_message":null,"caller":"git (gpg)"}"#,
+        );
+
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        let WireResponse::Passphrase { passphrase } = response else {
+            panic!("unexpected response to a passphrase request");
+        };
+        assert_eq!(b64.decode(passphrase).unwrap(), STUB_PASSPHRASE.as_bytes());
+
+        let prompts = broker.authorizer.passphrase_prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].description.as_deref(), Some("Enter passphrase"));
+        assert_eq!(prompts[0].caller.as_deref(), Some("git (gpg)"));
+    }
+
+    /// Confirm and message carry no secret, but they draw a window, so they are
+    /// gated on the same peer check.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn answers_confirm_and_message() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(r#"{"request":"confirm","description":"ok?"}"#))
+                .unwrap();
+        assert!(matches!(response, WireResponse::Confirmed { ok: true }));
+
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(r#"{"request":"message","description":"hi"}"#))
+                .unwrap();
+        assert!(matches!(response, WireResponse::Acknowledged));
+    }
+
+    /// A rejected peer cannot ask for a passphrase either.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hangs_up_on_a_rejected_peer_asking_for_a_passphrase() {
+        let broker = TestBroker::start(rejecting_policy()).await;
+
+        let response = broker.request(
+            r#"{"request":"get_passphrase","key_id":null,"description":null,"prompt":null,"error_message":null,"caller":"evil"}"#,
+        );
+
+        assert!(response.is_empty(), "broker answered a rejected peer");
+        assert!(
+            broker
+                .authorizer
+                .passphrase_prompts
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// A process that is not the agent is hung up on and never reaches the
     /// authorizer.
     #[tokio::test(flavor = "multi_thread")]
@@ -717,16 +699,20 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn replaces_a_stale_socket() {
         let dir = tempfile::tempdir().unwrap();
-        let socket_path = dir.path().join("sign-broker.sock");
+        let socket_path = dir.path().join("app-broker.sock");
         // What a crashed app leaves behind: a socket file nothing is listening
         // on.
         fs::write(&socket_path, b"").unwrap();
 
         let (_shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let authorizer = Arc::new(StubAuthorizer::default());
         tokio::spawn(serve_on(
             socket_path.clone(),
             accepting_policy(),
-            Arc::new(StubAuthorizer::default()),
+            Authorizers {
+                sign: authorizer.clone(),
+                passphrase: authorizer,
+            },
             shutdown_rx,
         ));
         wait_for_socket(&socket_path).await;

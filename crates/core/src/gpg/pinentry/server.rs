@@ -1,6 +1,13 @@
+//! The assuan side of pinentry: reads gpg-agent's commands and answers them.
+//!
+//! A partial implementation, covering the commands gpg-agent actually sends.
+//! Where the answers come from is the handler's business; see
+//! [`super::handler::BrokerPinentryHandler`].
+
 use std::io;
 
 use percent_encoding::percent_decode_str;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 pub struct PinentryServer<R, W> {
@@ -8,25 +15,21 @@ pub struct PinentryServer<R, W> {
     writer: W,
 }
 
-#[async_trait::async_trait]
-pub trait PinentryServerHandler: Send + Sync {
+pub trait PinentryServerHandler {
     /// GETPIN handler
-    async fn get_pin(
+    fn get_pin(
         &mut self,
         desc: Option<&str>,
         prompt: Option<&str>,
         keyinfo: Option<&str>,
         error_message: Option<&str>,
-    ) -> io::Result<String>;
+    ) -> impl Future<Output = io::Result<SecretString>>;
 
     /// CONFIRM handler
-    async fn confirm(&mut self, desc: Option<&str>) -> io::Result<bool>;
+    fn confirm(&mut self, desc: Option<&str>) -> impl Future<Output = io::Result<bool>>;
 
     /// MESSAGE handler
-    async fn message(&mut self, desc: Option<&str>) -> io::Result<()>;
-
-    /// BYE/QUIT handler (signals that the server should exit)
-    fn signal_exit(&mut self);
+    fn message(&mut self, desc: Option<&str>) -> impl Future<Output = io::Result<()>>;
 }
 
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
@@ -40,7 +43,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
         Ok(server)
     }
 
-    /// Read and answer commands until `BYE`, `QUIT` or EOF.
+    // Run the server loop, handling commands until BYE QUIT or EOF. Very basic
+    // implementation
     pub async fn run<H: PinentryServerHandler>(&mut self, handler: &mut H) -> io::Result<()> {
         let mut description: Option<String> = None;
         let mut prompt: Option<String> = None;
@@ -82,7 +86,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                         .await
                     {
                         Ok(pin) => {
-                            self.send_data(pin.as_bytes()).await?;
+                            self.send_data(pin.expose_secret().as_bytes()).await?;
                             self.send_ok(None).await?;
                             error_message = None;
                         },
@@ -169,7 +173,6 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
 
                 "BYE" | "QUIT" => {
                     self.send_ok(None).await?;
-                    handler.signal_exit();
                     return Ok(());
                 },
 
@@ -208,10 +211,22 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
         Ok(())
     }
 
+    /// Send a `D` line. Assuan reserves `%`, CR and LF inside data, so those
+    /// three bytes go out percent-escaped; a passphrase containing one would
+    /// otherwise arrive truncated or mangled.
     async fn send_data(&mut self, data: &[u8]) -> io::Result<()> {
-        self.writer.write_all(b"D ").await?;
-        self.writer.write_all(data).await?;
-        self.writer.write_all(b"\n").await?;
+        let mut line = Vec::with_capacity(data.len() + 2);
+        line.extend_from_slice(b"D ");
+        for byte in data {
+            match byte {
+                b'%' => line.extend_from_slice(b"%25"),
+                b'\r' => line.extend_from_slice(b"%0D"),
+                b'\n' => line.extend_from_slice(b"%0A"),
+                _ => line.push(*byte),
+            }
+        }
+        line.push(b'\n');
+        self.writer.write_all(&line).await?;
         self.writer.flush().await?;
         Ok(())
     }

@@ -33,14 +33,22 @@ path = "src-tauri/icons/icon.icns"
 # target/dist/ap; copied into Contents/MacOS/ap and signed so it passes
 # `codesign --verify --deep --strict` / notarization as a nested executable.
 #
-#
-# It signs without entitlements, which is why the agent cannot see managed SSH
-# keys: those live in the data protection keychain, reachable only with
+# It is signed without entitlements, so the agent cannot see managed SSH keys:
+# those live in the data protection keychain, reachable only with
 # keychain-access-groups. That entitlement is restricted, AMFI validates it
 # against a provisioning profile, and a plain executable has nowhere to carry
-# one — claiming it here gets the process killed on launch instead. Fixing it
-# means giving `ap` a bundle of its own to hold the profile.
+# one. Claiming it here gets the process killed on launch. Granting it would
+# mean giving `ap` a bundle of its own to hold the profile. The signing broker
+# in crates/core/src/core/app_broker.rs works around this by proxying managed
+# key operations to the app.
 [[build.copy]]
 src      = "target/dist/ap"
 dest_dir = "Contents/MacOS"
 sign     = true
+
+# `pinentry-program` takes a bare path with no arguments, so gpg-agent can't
+# invoke `ap pinentry` directly. This wrapper is what gets pointed to instead;
+# see crates/cli/src/cli/commands/pinentry.rs.
+[[build.copy]]
+src      = "src-tauri/misc/ap-pinentry"
+dest_dir = "Contents/Resources"

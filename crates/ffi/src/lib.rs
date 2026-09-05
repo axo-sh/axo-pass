@@ -1,12 +1,11 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use axo_pass_core::core::app_broker;
 use axo_pass_core::core::auth::{
     AuthContext, AuthMethod, ForeignContext, adopt_shared_context, external_auth_lock,
     invalidate_auth, run_on_auth_thread,
 };
-use axo_pass_core::core::sign_broker;
+use axo_pass_core::gpg::agent_conf::{self, State as CoreAgentConfState};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
@@ -282,6 +281,48 @@ pub struct ShellIntegrationStatus {
     pub zshrc_path: String,
 }
 
+/// Whether gpg-agent's `pinentry-program` points at this app's helper.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GpgPinentryState {
+    Configured,
+    NotConfigured,
+    OtherProgram,
+}
+
+impl From<CoreAgentConfState> for GpgPinentryState {
+    fn from(s: CoreAgentConfState) -> Self {
+        match s {
+            CoreAgentConfState::Configured => GpgPinentryState::Configured,
+            CoreAgentConfState::NotConfigured => GpgPinentryState::NotConfigured,
+            CoreAgentConfState::OtherProgram => GpgPinentryState::OtherProgram,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct GpgAgentConfStatus {
+    pub state: GpgPinentryState,
+    /// Absolute path to the `gpg-agent.conf` that was read, whether or not it
+    /// exists.
+    pub conf_path: String,
+    /// The `pinentry-program` line this app writes. `None` when the bundled
+    /// helper cannot be located, meaning setup is unavailable.
+    pub expected_line: Option<String>,
+    /// The currently configured program, when it is not this app's helper.
+    pub current_program: Option<String>,
+}
+
+impl From<agent_conf::Status> for GpgAgentConfStatus {
+    fn from(s: agent_conf::Status) -> Self {
+        GpgAgentConfStatus {
+            state: s.state.into(),
+            conf_path: s.conf_path.to_string_lossy().to_string(),
+            expected_line: s.expected_line,
+            current_program: s.current_program,
+        }
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct PasswordEntryInfo {
     pub password_type: PasswordEntryType,
@@ -307,8 +348,8 @@ pub struct AxoPass {
     /// Held between `begin_embedded_auth` and `end_embedded_auth` so a
     /// UI-driven prompt still serializes against other processes.
     embedded_auth_lock: Mutex<Option<std::fs::File>>,
-    /// Shuts the signing broker down; `Some` while it is serving.
-    sign_broker: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Shuts the app broker down; `Some` while it is serving.
+    app_broker: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
@@ -319,7 +360,7 @@ impl AxoPass {
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
             embedded_auth_lock: Mutex::new(None),
-            sign_broker: Mutex::new(None),
+            app_broker: Mutex::new(None),
         })
     }
 
@@ -754,6 +795,23 @@ impl AxoPass {
             .map_err(FfiError::from)
     }
 
+    /// Report whether `gpg-agent.conf` points `pinentry-program` at this app's
+    /// helper.
+    pub fn check_gpg_agent_conf(&self) -> GpgAgentConfStatus {
+        agent_conf::check_status().into()
+    }
+
+    /// Point `pinentry-program` at this app's helper, commenting out any line
+    /// naming another program. gpg-agent keeps using the old program until it
+    /// is reloaded, which [`Self::gpg_test_integration`] does.
+    pub async fn configure_gpg_agent_conf(&self) -> Result<GpgAgentConfStatus, FfiError> {
+        tokio::task::spawn_blocking(agent_conf::configure)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map(GpgAgentConfStatus::from)
+            .map_err(FfiError::Internal)
+    }
+
     /// List generic keychain-managed passwords (GPG/SSH/age keys with a saved
     /// password). Mirrors `list_passwords` in the Tauri app.
     pub async fn list_passwords(&self) -> Result<Vec<PasswordEntryInfo>, FfiError> {
@@ -810,48 +868,57 @@ impl AxoPass {
     }
 
     // -----------------------------------------------------------------------
-    // Signing broker
+    // App broker
     // -----------------------------------------------------------------------
 
-    /// Serve SSH signing requests from the agent, prompting through `delegate`
-    /// so the app draws the prompt instead of the agent raising the system
+    /// Serve the CLI's requests: SSH signatures for the agent, and GPG
+    /// passphrases for `ap pinentry`. Each prompts through its delegate, so the
+    /// app draws the prompt instead of a headless process raising the system
     /// dialog. Returns once the socket is bound; serving continues in the
-    /// background until [`Self::stop_sign_broker`] or app exit.
-    pub async fn start_sign_broker(
+    /// background until [`Self::stop_app_broker`] or app exit.
+    pub async fn start_app_broker(
         &self,
-        delegate: Arc<dyn SignPromptDelegate>,
+        sign_delegate: Arc<dyn SignPromptDelegate>,
+        passphrase_delegate: Arc<dyn PassphrasePromptDelegate>,
     ) -> Result<(), FfiError> {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         {
-            let mut slot = self.sign_broker.lock().map_err(|_| FfiError::Poisoned)?;
+            let mut slot = self.app_broker.lock().map_err(|_| FfiError::Poisoned)?;
             if slot.is_some() {
                 return Err(FfiError::InvalidInput(
-                    "Signing broker is already running".to_string(),
+                    "App broker is already running".to_string(),
                 ));
             }
             *slot = Some(shutdown_tx);
         }
 
-        let authorizer = Arc::new(DelegatingAuthorizer { delegate });
+        let authorizers = app_broker::Authorizers {
+            sign: Arc::new(DelegatingAuthorizer {
+                delegate: sign_delegate,
+            }),
+            passphrase: Arc::new(DelegatingPassphraseAuthorizer {
+                delegate: passphrase_delegate,
+            }),
+        };
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             // `serve` binds before it accepts and only returns at shutdown, so
             // readiness is reported before awaiting it. Bind failures surface
             // in the log.
             let _ = ready_tx.send(());
-            if let Err(e) = sign_broker::serve(authorizer, shutdown_rx).await {
-                log::error!("Signing broker stopped: {e}");
+            if let Err(e) = app_broker::serve(authorizers, shutdown_rx).await {
+                log::error!("App broker stopped: {e}");
             }
         });
         let _ = ready_rx.await;
         Ok(())
     }
 
-    /// Stop serving signing requests and remove the socket, so the agent falls
-    /// back to the system dialog.
-    pub fn stop_sign_broker(&self) -> Result<(), FfiError> {
+    /// Stop serving and remove the socket, so the agent falls back to the
+    /// system dialog and pinentry reports an error rather than hanging.
+    pub fn stop_app_broker(&self) -> Result<(), FfiError> {
         if let Some(shutdown) = self
-            .sign_broker
+            .app_broker
             .lock()
             .map_err(|_| FfiError::Poisoned)?
             .take()
@@ -863,12 +930,12 @@ impl AxoPass {
 }
 
 // ---------------------------------------------------------------------------
-// Signing broker delegate
+// App broker delegates
 // ---------------------------------------------------------------------------
 
-/// How a signing attempt ended, as the app sees it.
+/// How a prompt ended, as the app sees it.
 #[derive(uniffi::Enum, Clone)]
-pub enum SignOutcome {
+pub enum PromptOutcome {
     /// The user approved, or a still-valid approval was reused.
     Succeeded,
     /// The user dismissed the prompt. Nothing was authorized.
@@ -878,12 +945,12 @@ pub enum SignOutcome {
     },
 }
 
-impl From<sign_broker::SignOutcome> for SignOutcome {
-    fn from(outcome: sign_broker::SignOutcome) -> Self {
+impl From<app_broker::PromptOutcome> for PromptOutcome {
+    fn from(outcome: app_broker::PromptOutcome) -> Self {
         match outcome {
-            sign_broker::SignOutcome::Succeeded => Self::Succeeded,
-            sign_broker::SignOutcome::Cancelled => Self::Cancelled,
-            sign_broker::SignOutcome::Failed(message) => Self::Failed { message },
+            app_broker::PromptOutcome::Succeeded => Self::Succeeded,
+            app_broker::PromptOutcome::Cancelled => Self::Cancelled,
+            app_broker::PromptOutcome::Failed(message) => Self::Failed { message },
         }
     }
 }
@@ -903,44 +970,152 @@ pub trait SignPromptDelegate: Send + Sync {
     ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
-    async fn end_authorization(&self, key_label: String, outcome: SignOutcome);
+    async fn end_authorization(&self, key_label: String, outcome: PromptOutcome);
 }
 
 struct DelegatingAuthorizer {
     delegate: Arc<dyn SignPromptDelegate>,
 }
 
-impl sign_broker::SignAuthorizer for DelegatingAuthorizer {
-    fn begin(
-        &self,
-        prompt: sign_broker::SignPrompt,
-    ) -> Pin<Box<dyn Future<Output = Result<ForeignContext, String>> + Send>> {
-        let delegate = self.delegate.clone();
-        Box::pin(async move {
-            let context_ptr = delegate
-                .begin_authorization(prompt.key_label, prompt.caller)
-                .await
-                .map_err(|e| e.to_string())?;
-            if context_ptr == 0 {
-                return Err("null LAContext pointer".to_string());
-            }
-            // SAFETY: the app holds a reference to the context until
-            // `end_authorization`, which the broker calls after signing.
-            unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
-                .map_err(|e| e.to_string())
-        })
+#[async_trait::async_trait]
+impl app_broker::SignAuthorizer for DelegatingAuthorizer {
+    async fn begin(&self, prompt: app_broker::SignPrompt) -> Result<ForeignContext, String> {
+        let context_ptr = self
+            .delegate
+            .begin_authorization(prompt.key_label, prompt.caller)
+            .await
+            .map_err(|e| e.to_string())?;
+        if context_ptr == 0 {
+            return Err("null LAContext pointer".to_string());
+        }
+        // SAFETY: the app holds a reference to the context until
+        // `end_authorization`, which the broker calls after signing.
+        unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
+            .map_err(|e| e.to_string())
     }
 
-    fn end(
+    async fn end(&self, prompt: app_broker::SignPrompt, outcome: app_broker::PromptOutcome) {
+        self.delegate
+            .end_authorization(prompt.key_label, outcome.into())
+            .await;
+    }
+}
+
+/// A GPG passphrase prompt, as the app sees it. Mirrors
+/// [`app_broker::PassphrasePrompt`]; the strings are gpg's own wording.
+#[derive(uniffi::Record, Clone)]
+pub struct PassphrasePrompt {
+    /// The key grip, which names the keychain entry. Absent when gpg-agent sent
+    /// no key info, in which case nothing can be saved or read back.
+    pub key_id: Option<String>,
+    pub description: Option<String>,
+    pub prompt: Option<String>,
+    /// gpg's report of the previous attempt. Set means the saved passphrase is
+    /// wrong, so the app asks for a new one rather than unlocking.
+    pub error_message: Option<String>,
+    pub caller: Option<String>,
+}
+
+impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
+    fn from(prompt: app_broker::PassphrasePrompt) -> Self {
+        Self {
+            key_id: prompt.key_id,
+            description: prompt.description,
+            prompt: prompt.prompt,
+            error_message: prompt.error_message,
+            caller: prompt.caller,
+        }
+    }
+}
+
+/// A passphrase the user typed. The value crosses as bytes, never a `String`,
+/// so the app can zero the buffer it came from.
+#[derive(uniffi::Record)]
+pub struct CollectedPassphrase {
+    pub value: Vec<u8>,
+    pub save_to_keychain: bool,
+}
+
+/// Implemented by the app. `begin_authorization` prepares an `LAContext` with
+/// an `LAAuthenticationView` attached so the saved passphrase can be unlocked
+/// inline; `collect_passphrase` asks the user to type one.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait PassphrasePromptDelegate: Send + Sync {
+    /// Return the address of a live `LAContext` to read the keychain on. The
+    /// app must keep its own reference to that context until
+    /// `end_authorization`.
+    async fn begin_authorization(&self, prompt: PassphrasePrompt) -> Result<u64, FfiError>;
+
+    /// Ask the user for the passphrase. `None` means they dismissed the prompt.
+    async fn collect_passphrase(
         &self,
-        prompt: sign_broker::SignPrompt,
-        outcome: sign_broker::SignOutcome,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        let delegate = self.delegate.clone();
-        Box::pin(async move {
-            delegate
-                .end_authorization(prompt.key_label, outcome.into())
-                .await;
-        })
+        prompt: PassphrasePrompt,
+    ) -> Result<Option<CollectedPassphrase>, FfiError>;
+
+    /// The attempt finished. Called once for every `begin_authorization`.
+    async fn end_authorization(&self, prompt: PassphrasePrompt, outcome: PromptOutcome);
+
+    /// Put gpg's `CONFIRM` question to the user.
+    async fn confirm(&self, description: Option<String>) -> bool;
+
+    /// Show gpg's `MESSAGE` and wait for the user to dismiss it.
+    async fn message(&self, description: Option<String>);
+}
+
+struct DelegatingPassphraseAuthorizer {
+    delegate: Arc<dyn PassphrasePromptDelegate>,
+}
+
+#[async_trait::async_trait]
+impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
+    async fn begin(&self, prompt: app_broker::PassphrasePrompt) -> Result<ForeignContext, String> {
+        let context_ptr = self
+            .delegate
+            .begin_authorization(prompt.into())
+            .await
+            .map_err(|e| e.to_string())?;
+        if context_ptr == 0 {
+            return Err("null LAContext pointer".to_string());
+        }
+        // SAFETY: the app holds a reference to the context until
+        // `end_authorization`, which the broker calls after the read.
+        unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
+            .map_err(|e| e.to_string())
+    }
+
+    async fn collect(
+        &self,
+        prompt: app_broker::PassphrasePrompt,
+    ) -> Result<Option<app_broker::CollectedPassphrase>, String> {
+        let collected = self
+            .delegate
+            .collect_passphrase(prompt.into())
+            .await
+            .map_err(|e| e.to_string())?;
+        collected
+            .map(|collected| {
+                let value = String::from_utf8(collected.value)
+                    .map_err(|_| "Passphrase is not valid UTF-8".to_string())?;
+                Ok(app_broker::CollectedPassphrase {
+                    value: SecretString::from(value),
+                    save_to_keychain: collected.save_to_keychain,
+                })
+            })
+            .transpose()
+    }
+
+    async fn end(&self, prompt: app_broker::PassphrasePrompt, outcome: app_broker::PromptOutcome) {
+        self.delegate
+            .end_authorization(prompt.into(), outcome.into())
+            .await;
+    }
+
+    async fn confirm(&self, description: Option<String>) -> bool {
+        self.delegate.confirm(description).await
+    }
+
+    async fn message(&self, description: Option<String>) {
+        self.delegate.message(description).await
     }
 }

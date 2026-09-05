@@ -549,6 +549,7 @@ dependencies = [
  "age",
  "age-core",
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "block2",
  "color-print",

@@ -19,7 +19,13 @@ final class GpgModel {
   var isTesting = false
   var testResult: TestResult? = nil
 
+  /// State of the `pinentry-program` line in `gpg-agent.conf`.
+  var confStatus: GpgAgentConfStatus? = nil
+  var isConfiguring = false
+  var configureError: String? = nil
+
   func reload() async {
+    refreshConfStatus()
     do {
       passwords = try await core.listPasswords()
       loadError = nil
@@ -27,6 +33,24 @@ final class GpgModel {
       passwords = []
       loadError = String(describing: error)
     }
+  }
+
+  /// Pick up edits made in the terminal, cheap enough to run whenever the pane appears or the app
+  /// is reactivated.
+  func refreshConfStatus() {
+    confStatus = core.checkGpgAgentConf()
+  }
+
+  func configureAgentConf() async {
+    isConfiguring = true
+    configureError = nil
+    testResult = nil
+    do {
+      confStatus = try await core.configureGpgAgentConf()
+    } catch {
+      configureError = String(describing: error)
+    }
+    isConfiguring = false
   }
 
   func testIntegration() async {

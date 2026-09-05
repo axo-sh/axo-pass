@@ -1,4 +1,4 @@
-use axo_pass_core::core::sign_broker::{self, ManagedIdentity, SignBrokerError};
+use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity};
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
 use ssh_key::PublicKey;
@@ -68,7 +68,7 @@ where
 /// serves the keys added to it directly, and failing here would break
 /// `ssh-add -l` for those too.
 pub fn list_managed_credentials() -> Vec<ManagedCredential> {
-    let identities = match call_broker(sign_broker::list_identities) {
+    let identities = match call_broker(app_broker::list_identities) {
         Ok(identities) => identities,
         Err(e) => {
             log::warn!("Could not list managed keys: {e}");
@@ -102,11 +102,11 @@ impl Credential for ManagedCredential {
         caller: Option<&str>,
     ) -> Result<ssh_key::Signature, CredentialError> {
         let result =
-            call_broker(|| sign_broker::request_signature(&self.key_label, &req.data, caller));
+            call_broker(|| app_broker::request_signature(&self.key_label, &req.data, caller));
 
         result.map_err(|e| {
             match e {
-                SignBrokerError::Cancelled => {
+                BrokerError::Cancelled => {
                     log::debug!("User declined signing with {}", self.key_label)
                 },
                 e => log::error!("Failed to sign with managed key {}: {e}", self.key_label),

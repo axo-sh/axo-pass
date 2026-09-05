@@ -17,6 +17,7 @@ use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
+use crate::cli::commands::pinentry;
 use crate::cli::commands::ssh_agent::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 
@@ -55,6 +56,10 @@ pub enum AxoPassCommand {
     Info,
 
     SshAgent(SshAgentCommand),
+
+    /// Serve gpg-agent's pinentry protocol on stdin/stdout
+    #[command(hide = true)]
+    Pinentry,
 
     #[command(hide = true)]
     Shellenv {
@@ -150,6 +155,7 @@ impl AxoPassCommand {
                 println!("Vault dir: {}", vaults_dir().display());
             },
             AxoPassCommand::SshAgent(ssh_agent) => ssh_agent.run().await,
+            AxoPassCommand::Pinentry => pinentry::run().await,
             AxoPassCommand::Shellenv { shell } => {
                 // add the following to ~/.zshrc:
                 // source <(ap shellenv zsh)

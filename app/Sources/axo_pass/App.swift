@@ -10,7 +10,7 @@ struct AxoPassApp: App {
         .environment(model)
         .task {
           model.reload()
-          await model.startSigningBroker()
+          await model.startBroker()
         }
     }
     .windowStyle(.hiddenTitleBar)

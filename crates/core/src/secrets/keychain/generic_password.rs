@@ -220,6 +220,19 @@ impl PasswordEntry {
         Ok(())
     }
 
+    /// Store the password, replacing any entry already held for this key.
+    /// [`Self::save_password`] adds, and adding over an existing account fails,
+    /// so a passphrase the user re-enters after gpg rejected the old one needs
+    /// the old entry gone first.
+    pub fn set_password(&self, password: SecretString) -> Result<(), KeychainError> {
+        if self.exists().unwrap_or(false) {
+            log::debug!("Replacing the existing keychain entry for {self:?}");
+            self.delete()
+                .map_err(|e| KeychainError::Generic(anyhow!(e)))?;
+        }
+        self.save_password(password)
+    }
+
     pub fn get_password(&self) -> Result<Option<SecretString>, KeychainError> {
         // todo: maybe move up somewhere
         let parent = Provenance::resolve_current_parent()
@@ -230,6 +243,18 @@ impl PasswordEntry {
 
     pub fn get_password_for_caller(
         &self,
+        caller: Option<&str>,
+    ) -> Result<Option<SecretString>, KeychainError> {
+        self.get_password_on(AuthContext::SharedThreadLocal, caller)
+    }
+
+    /// Read the password, authenticating on a specific [`AuthContext`]. The app
+    /// broker passes [`AuthContext::Foreign`] so the app that owns the context
+    /// draws the prompt, the same split as
+    /// [`crate::core::auth::sign_with_managed_key_on`].
+    pub fn get_password_on(
+        &self,
+        auth_context: AuthContext,
         caller: Option<&str>,
     ) -> Result<Option<SecretString>, KeychainError> {
         log::debug!("Attempting to retrieve password for key_id: {self:?}");
@@ -244,7 +269,7 @@ impl PasswordEntry {
             None => format!("unlock password for {account_display}"),
         };
         run_on_auth_thread(
-            AuthContext::SharedThreadLocal,
+            auth_context,
             AuthMethod::AccessControl {
                 access_control: AccessControl::GenericPassword,
                 operation: LAAccessControlOperation::UseItem,
