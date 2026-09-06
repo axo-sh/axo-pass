@@ -88,10 +88,6 @@ final class VaultsModel {
   // delete) to whichever pane triggered them.
   var actionError: String? = nil
 
-  // Called when the vault locks. AppDelegate sets this to close auxiliary
-  // windows, such as the Audit Log, that are only available while unlocked.
-  var onLock: (() -> Void)? = nil
-
   init() {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
@@ -362,7 +358,6 @@ final class VaultsModel {
     selectedItemRef = nil
     unlockError = nil
     autoPromptPending = trigger == nil
-    onLock?()
   }
 
   // MARK: - Navigation

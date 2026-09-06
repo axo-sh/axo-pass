@@ -7,6 +7,8 @@ struct AuditLogWindow: View {
   @State private var model = AuditLogModel()
   @State private var selection: AuditLogRow.ID? = nil
   @State private var showInspector = false
+  @Environment(VaultsModel.self) private var vaults
+  @Environment(\.dismiss) private var dismiss
 
   private var selectedRow: AuditLogRow? {
     model.events.first { $0.id == selection }
@@ -26,6 +28,10 @@ struct AuditLogWindow: View {
     .task { await model.reload() }
     .onChange(of: selection) { _, newValue in
       if newValue != nil { showInspector = true }
+    }
+    // The log is only available unlocked, so locking takes the window down.
+    .onChange(of: vaults.isAppUnlocked) { _, unlocked in
+      if !unlocked { dismiss() }
     }
     .overlay(alignment: .bottom) {
       if let error = model.loadError {
