@@ -48,8 +48,8 @@ pub use ssh::{
     request_signature, request_ssh_passphrase,
 };
 pub use vault::{
-    BrokerCredential, BrokerVaultItem, VaultAccessPrompt, VaultAction, VaultAuthorizer,
-    request_vault_items, request_vault_secret,
+    BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
+    VaultAuthorizer, VaultRef, request_resolve_secrets, request_vault_items, request_vault_secret,
 };
 
 /// How long the agent waits for the user to answer the app's prompt before
@@ -229,6 +229,16 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
+    /// possibly across several vaults, behind one prompt.
+    ResolveSecrets {
+        refs: Vec<vault::VaultRef>,
+        purpose: vault::ResolvePurpose,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
@@ -251,7 +261,8 @@ impl WireRequest {
             | WireRequest::GetPassphrase { caller, .. }
             | WireRequest::GetSshPassphrase { caller, .. }
             | WireRequest::ListVaultItems { caller, .. }
-            | WireRequest::ReadVaultSecret { caller, .. } => caller.as_deref(),
+            | WireRequest::ReadVaultSecret { caller, .. }
+            | WireRequest::ResolveSecrets { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
@@ -284,6 +295,11 @@ enum WireResponse {
     /// `None` when the credential does not exist.
     VaultSecret {
         value: Option<String>,
+    },
+    /// Positionally matched to the request's `refs`. `None` where a reference
+    /// does not resolve.
+    ResolvedSecrets {
+        values: Vec<Option<String>>,
     },
     Acknowledged,
     Cancelled,
@@ -671,6 +687,22 @@ async fn handle_connection(
             log::debug!("App broker request: {prompt:?}");
             vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
         },
+        WireRequest::ResolveSecrets {
+            refs,
+            purpose,
+            caller,
+        } => {
+            let mut vault_keys: Vec<String> = refs.iter().map(|r| r.vault_key.clone()).collect();
+            vault_keys.sort();
+            vault_keys.dedup();
+            let prompt = vault::VaultAccessPrompt {
+                vault_key: vault_keys.join(", "),
+                caller,
+                action: vault::VaultAction::ResolveSecrets { purpose, refs },
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
+        },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");
             WireResponse::Confirmed {
@@ -917,7 +949,10 @@ mod tests {
         // This process is the peer, so the pid is ours and the chain is
         // whatever started the test runner.
         assert_eq!(peers[0].pid, Some(std::process::id()));
-        assert!(peers[0].executable.is_some(), "peer executable not resolved");
+        assert!(
+            peers[0].executable.is_some(),
+            "peer executable not resolved"
+        );
         // The delegated caller wins over the peer's own chain root: the peer is
         // the agent, and only the agent knows git asked it.
         assert_eq!(peers[0].caller.as_deref(), Some("git (ssh)"));
@@ -1001,6 +1036,28 @@ mod tests {
             serde_json::from_str(&broker.request(r#"{"request":"message","description":"hi"}"#))
                 .unwrap();
         assert!(matches!(response, WireResponse::Acknowledged));
+    }
+
+    /// A batch resolve reaches the vault authorizer, carrying the delegated
+    /// caller and spanning whatever vaults its refs name.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn routes_a_batch_resolve_to_the_vault_authorizer() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response = broker.request(
+            r#"{"request":"resolve_secrets","purpose":"exec","caller":"git","refs":[{"vault_key":"v1","item_key":"i1","credential_key":"c1"},{"vault_key":"v2","item_key":"i2","credential_key":"c2"}]}"#,
+        );
+
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
+            "unexpected response to a batch resolve"
+        );
+
+        let peers = broker.authorizer.peers.lock().unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].caller.as_deref(), Some("git"));
+        assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
     }
 
     /// A rejected peer cannot ask for a passphrase either.

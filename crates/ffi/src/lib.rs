@@ -1651,6 +1651,28 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+    /// `ap exec` / `ap inject`: resolve `count` references, possibly across
+    /// several vaults, behind one prompt.
+    ResolveSecrets {
+        purpose: ResolvePurpose,
+        count: u32,
+    },
+}
+
+/// Mirrors [`app_broker::ResolvePurpose`].
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum ResolvePurpose {
+    Exec,
+    Inject,
+}
+
+impl From<app_broker::ResolvePurpose> for ResolvePurpose {
+    fn from(purpose: app_broker::ResolvePurpose) -> Self {
+        match purpose {
+            app_broker::ResolvePurpose::Exec => Self::Exec,
+            app_broker::ResolvePurpose::Inject => Self::Inject,
+        }
+    }
 }
 
 impl From<app_broker::VaultAction> for VaultAction {
@@ -1663,6 +1685,10 @@ impl From<app_broker::VaultAction> for VaultAction {
             } => Self::ReadSecret {
                 item_key,
                 credential_key,
+            },
+            app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
+                purpose: purpose.into(),
+                count: refs.len() as u32,
             },
         }
     }

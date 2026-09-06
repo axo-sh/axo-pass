@@ -52,7 +52,7 @@ final class VaultUnlockPromptModel {
     // panel briefly so that case does not flash a window. A read always
     // prompts, so it does not wait.
     showTask?.cancel()
-    if Self.isRead(prompt.action) {
+    if Self.promptsEveryTime(prompt.action) {
       showPanel(prompt: prompt, view: grant.view)
     } else {
       showTask = Task { [weak self] in
@@ -117,7 +117,7 @@ final class VaultUnlockPromptModel {
     let content = VaultUnlockView(
       vaultKey: prompt.vaultKey,
       caller: prompt.caller,
-      isRead: Self.isRead(prompt.action),
+      headline: Self.headline(for: prompt.action),
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
     )
@@ -126,19 +126,28 @@ final class VaultUnlockPromptModel {
 
   /// The localized reason `LocalAuthentication` shows in its own chrome.
   private static func reason(for prompt: VaultAccessPrompt) -> String {
-    let what =
-      isRead(prompt.action)
-      ? "read a secret from vault \(prompt.vaultKey)"
-      : "list items in vault \(prompt.vaultKey)"
+    let what: String
+    switch prompt.action {
+    case .readSecret:
+      what = "read a secret from vault \(prompt.vaultKey)"
+    case let .resolveSecrets(_, count):
+      what = "resolve \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
+    case .listItems:
+      what = "list items in vault \(prompt.vaultKey)"
+    }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
     }
     return what
   }
 
-  private static func isRead(_ action: VaultAction) -> Bool {
-    if case .readSecret = action { return true }
-    return false
+  /// True for the accesses that expose secret values and so prompt on every
+  /// request. A listing does not.
+  private static func promptsEveryTime(_ action: VaultAction) -> Bool {
+    switch action {
+    case .readSecret, .resolveSecrets: return true
+    case .listItems: return false
+    }
   }
 
   /// One grant per vault, action and requesting process, so approving one
@@ -150,20 +159,33 @@ final class VaultUnlockPromptModel {
   }
 
   private static func scope(for action: VaultAction) -> String {
-    isRead(action) ? "read" : "list"
+    switch action {
+    case .readSecret: return "read"
+    case .resolveSecrets: return "resolve"
+    case .listItems: return "list"
+    }
   }
 
-  /// Reading a secret prompts every time. Listing exposes no values, so its
-  /// approval is reused for the standard window.
+  /// Reading or resolving a secret prompts every time. Listing exposes no
+  /// values, so its approval is reused for the standard window.
   private static func policy(for action: VaultAction) -> GrantPolicy {
-    isRead(action) ? .everyUse : .standard
+    promptsEveryTime(action) ? .everyUse : .standard
+  }
+
+  private static func headline(for action: VaultAction) -> String {
+    switch action {
+    case .readSecret: return "read a secret"
+    case let .resolveSecrets(_, count):
+      return "resolve \(count) \(count == 1 ? "secret" : "secrets")"
+    case .listItems: return "list a vault"
+    }
   }
 }
 
 private struct VaultUnlockView: View {
   let vaultKey: String
   let caller: String?
-  let isRead: Bool
+  let headline: String
   let icon: AuthenticationIcon
   let onCancel: () -> Void
 
@@ -190,11 +212,11 @@ private struct VaultUnlockView: View {
   }
 
   private var title: String {
-    let what = isRead ? "read a secret" : "list a vault"
     if let caller, !caller.isEmpty {
-      return "\(caller) wants to \(what)"
+      return "\(caller) wants to \(headline)"
     }
-    return isRead ? "Authorize reading a secret" : "Authorize listing a vault"
+    let capitalized = headline.prefix(1).uppercased() + headline.dropFirst()
+    return "Authorize: \(capitalized)"
   }
 }
 

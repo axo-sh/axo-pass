@@ -21,6 +21,25 @@ use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::VaultWrapper;
 
+/// One `axo://` reference to resolve, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultRef {
+    pub vault_key: String,
+    pub item_key: String,
+    pub credential_key: String,
+}
+
+/// Which command asked for a batch resolve, so the app records the matching
+/// audit action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvePurpose {
+    /// `ap exec`.
+    Exec,
+    /// `ap inject`.
+    Inject,
+}
+
 /// What the app is being asked to do with the vault. Grants are keyed on the
 /// action as well as the vault, so authorizing a listing does not also
 /// authorize a read of the same vault.
@@ -34,11 +53,21 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+
+    /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
+    /// possibly across several vaults, behind one prompt.
+    ResolveSecrets {
+        purpose: ResolvePurpose,
+        refs: Vec<VaultRef>,
+    },
 }
 
 /// What the app needs to describe the prompt for a vault access.
 #[derive(Debug, Clone)]
 pub struct VaultAccessPrompt {
+    /// The vault a single-vault access names. For
+    /// [`VaultAction::ResolveSecrets`], the distinct vault keys joined with
+    /// `, `, since one resolve can span several vaults.
     pub vault_key: String,
 
     /// Who asked, as `ap` resolved it. Carries the same delegated trust as
@@ -69,11 +98,8 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// Prepare a context for `prompt` and put the prompt on screen. The broker
     /// unlocks on the returned context, which is what makes the attached
     /// `LAAuthenticationView` draw. `peer` is the process the broker verified.
-    async fn begin(
-        &self,
-        prompt: VaultAccessPrompt,
-        peer: Actor,
-    ) -> Result<ForeignContext, String>;
+    async fn begin(&self, prompt: VaultAccessPrompt, peer: Actor)
+    -> Result<ForeignContext, String>;
 
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
@@ -122,6 +148,32 @@ pub fn request_vault_secret(
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
         _ => Err(BrokerError::Failed(
             "Unexpected response to vault secret read".to_string(),
+        )),
+    }
+}
+
+/// Ask the app to resolve many `axo://` references at once, behind one prompt.
+/// The returned vector is positionally matched to `refs`; `None` means that
+/// reference does not resolve. Blocking, same as [`request_vault_items`].
+pub fn request_resolve_secrets(
+    refs: &[VaultRef],
+    purpose: ResolvePurpose,
+    caller: Option<&str>,
+) -> Result<Vec<Option<SecretString>>, BrokerError> {
+    let request = WireRequest::ResolveSecrets {
+        refs: refs.to_vec(),
+        purpose,
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::ResolvedSecrets { values } => Ok(values
+            .into_iter()
+            .map(|v| v.map(SecretString::from))
+            .collect()),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to secret resolution".to_string(),
         )),
     }
 }
@@ -192,6 +244,13 @@ fn record_access(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
+        VaultAction::ResolveSecrets { purpose, .. } => {
+            let action = match purpose {
+                ResolvePurpose::Exec => Action::SecretExec,
+                ResolvePurpose::Inject => Action::SecretInject,
+            };
+            (action, Subject::new(SubjectKind::Vault, vault_key.clone()))
+        },
     };
 
     let mut event = AuditEvent::new(audit::process_source(), action, outcome)
@@ -199,12 +258,19 @@ fn record_access(
         .actor(actor.clone())
         .detail("vault", vault_key.clone())
         .detail("via", "broker");
+    if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
+        event = event.detail("secret_count", refs.len().to_string());
+    }
     match response {
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
         },
         Some(WireResponse::VaultSecret { value }) => {
             event = event.detail("found", value.is_some().to_string());
+        },
+        Some(WireResponse::ResolvedSecrets { values }) => {
+            let resolved = values.iter().filter(|v| v.is_some()).count();
+            event = event.detail("resolved_count", resolved.to_string());
         },
         _ => {},
     }
@@ -220,6 +286,10 @@ fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
 ) -> Result<WireResponse, String> {
+    if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
+        return resolve_secrets(refs, context);
+    }
+
     let mut vw = VaultWrapper::load(&vaults_dir(), Some(prompt.vault_key.clone()))
         .map_err(|e| format!("Failed to load vault: {e}"))?;
     vw.unlock_on(AuthContext::Foreign(context))
@@ -239,7 +309,57 @@ fn serve_on_context(
                 .map(|secret| secret.expose_secret().to_string());
             Ok(WireResponse::VaultSecret { value })
         },
+        VaultAction::ResolveSecrets { .. } => unreachable!("handled above"),
     }
+}
+
+/// Resolve every reference, unlocking each distinct vault once on the app's
+/// context. The result is positionally matched to `refs`. A reference whose
+/// vault fails to load or unlock resolves to `None` rather than failing the
+/// whole batch.
+fn resolve_secrets(refs: &[VaultRef], context: ForeignContext) -> Result<WireResponse, String> {
+    use std::collections::HashMap;
+
+    let vaults_dir = vaults_dir();
+    let mut vaults: HashMap<String, Option<VaultWrapper>> = HashMap::new();
+    let mut values = Vec::with_capacity(refs.len());
+
+    for r in refs {
+        let vw = vaults.entry(r.vault_key.clone()).or_insert_with(|| {
+            match VaultWrapper::load(&vaults_dir, Some(r.vault_key.clone())) {
+                Ok(mut vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
+                    Ok(()) => Some(vw),
+                    Err(e) => {
+                        log::error!("Failed to unlock vault {}: {e}", r.vault_key);
+                        None
+                    },
+                },
+                Err(e) => {
+                    log::error!("Failed to load vault {}: {e}", r.vault_key);
+                    None
+                },
+            }
+        });
+
+        let value = match vw {
+            Some(vw) => match vw.get_secret(&r.item_key, &r.credential_key) {
+                Ok(secret) => secret.map(|s| s.expose_secret().to_string()),
+                Err(e) => {
+                    log::error!(
+                        "Failed to get secret {}/{}/{}: {e}",
+                        r.vault_key,
+                        r.item_key,
+                        r.credential_key
+                    );
+                    None
+                },
+            },
+            None => None,
+        };
+        values.push(value);
+    }
+
+    Ok(WireResponse::ResolvedSecrets { values })
 }
 
 fn collect_items(vw: &VaultWrapper) -> Result<Vec<BrokerVaultItem>, String> {

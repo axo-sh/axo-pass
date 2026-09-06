@@ -3,8 +3,8 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{anyhow, bail};
-use axo_pass_core::core::interpolate::interpolate_secrets;
-use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::core::app_broker::ResolvePurpose;
+use axo_pass_core::core::interpolate::{find_refs, interpolate_secrets};
 use clap::Parser;
 use glob::glob;
 use itertools::Itertools;
@@ -73,12 +73,21 @@ impl ExecCommand {
             }
         }
 
-        // Interpolate axo:// references in every environment value
-        let mut vaults = VaultsManager::new();
+        // Resolve every axo:// reference across all values in one broker
+        // request, then substitute offline so a multi-secret invocation raises
+        // one prompt.
+        let refs: Vec<_> = env_vars.values().flat_map(|v| find_refs(v)).collect();
+        let mut resolver = super::secret_resolver::BrokerSecretResolver::new(ResolvePurpose::Exec);
+        resolver.prepare(&refs).map_err(|e| anyhow!("{e}"))?;
+
         let interpolated_env: HashMap<String, String> = env_vars
             .into_iter()
-            .map(|(k, v)| (k, interpolate_secrets(&v, &mut vaults)))
-            .collect();
+            .map(|(k, v)| {
+                interpolate_secrets(&v, &mut resolver)
+                    .map(|value| (k, value))
+                    .map_err(|e| anyhow!("{e}"))
+            })
+            .collect::<Result<_, _>>()?;
 
         Ok(interpolated_env)
     }
