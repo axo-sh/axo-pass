@@ -17,6 +17,7 @@ const STYLES: styling::Styles = styling::Styles::styled()
     bin_name = "ap",
     version = env!("CARGO_PKG_VERSION"),
     styles = STYLES,
+    arg_required_else_help = true,
 )]
 pub struct AxoPass {
     #[command(subcommand)]
