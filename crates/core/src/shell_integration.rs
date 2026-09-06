@@ -189,7 +189,10 @@ mod tests {
         let script_path = dir.path().join("test.zsh");
         std::fs::write(
             &script_path,
-            format!("alias ap={}\nap one two\n", quote_alias_path(&ap.to_string_lossy())),
+            format!(
+                "alias ap={}\nap one two\n",
+                quote_alias_path(&ap.to_string_lossy())
+            ),
         )
         .unwrap();
         let out = std::process::Command::new("zsh")
@@ -197,7 +200,11 @@ mod tests {
             .arg(&script_path)
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "argc=2");
     }
 
