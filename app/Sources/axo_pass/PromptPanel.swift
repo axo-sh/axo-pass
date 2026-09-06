@@ -15,9 +15,8 @@ final class PromptPanel {
 
   var isVisible: Bool { panel != nil }
 
-  /// Replace whatever is on screen with `view` and bring the app forward: gpg,
-  /// ssh or a git commit in a terminal triggered this, so the user is looking
-  /// at another app.
+  /// Replace whatever is on screen with `view`: gpg, ssh or a git commit in a
+  /// terminal triggered this, so the user is looking at another app.
   func show(_ view: NSView, width: CGFloat) {
     hide()
 
@@ -36,14 +35,11 @@ final class PromptPanel {
     panel.contentView = view
     panel.setContentSize(view.fittingSize)
     panel.center()
+    // The panel is non-activating and sits at `.floating`, so it draws above
+    // other apps and takes key for typing without activating axo-pass. Calling
+    // `NSApp.activate` or `NSRunningApplication.activate` here would pull every
+    // other axo-pass window to the front along with the panel.
     panel.orderFrontRegardless()
-
-    // `NSApplication.activate(ignoringOtherApps:)` is deprecated on macOS 14+
-    // and does nothing while another app is frontmost; `NSRunningApplication`
-    // still takes effect there. The panel is non-activating, so it takes key
-    // and receives typing either way.
-    NSApp.activate(ignoringOtherApps: true)
-    NSRunningApplication.current.activate(options: [.activateAllWindows])
     panel.makeKey()
 
     self.panel = panel
