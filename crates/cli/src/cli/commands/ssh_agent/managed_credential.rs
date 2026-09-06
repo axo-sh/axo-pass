@@ -48,7 +48,7 @@ impl From<&ManagedCredential> for proto::Identity {
 /// gets its worker thread back for the duration. `block_in_place` does that but
 /// requires the multi-threaded runtime the agent runs on. Elsewhere, in tests
 /// above all, the work runs on a scratch thread instead.
-fn call_broker<T, F>(work: F) -> T
+pub(super) fn call_broker<T, F>(work: F) -> T
 where
     F: FnOnce() -> T + Send,
     T: Send,

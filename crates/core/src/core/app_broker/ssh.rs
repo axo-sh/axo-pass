@@ -15,7 +15,9 @@ use super::{
     BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, WireRequest, WireResponse,
     send_request,
 };
-use crate::core::auth::{AuthContext, ForeignContext, sign_with_managed_key_on};
+use crate::core::auth::{
+    AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,
+};
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
@@ -36,6 +38,11 @@ pub struct SignPrompt {
     /// Who asked, as the agent resolved it. See [`WireRequest::Sign`] for why
     /// this can be shown to the user.
     pub caller: Option<String>,
+
+    /// True for a managed Secure Enclave key, false for a key the agent holds
+    /// directly (a confirm-on-use gate from `ssh-add -c`). The app words its
+    /// prompt differently for each.
+    pub managed: bool,
 }
 
 /// Supplies an `LAContext` to sign on, and learns how the attempt ended so it
@@ -110,6 +117,36 @@ pub fn request_signature(
     }
 }
 
+/// Ask the app to gate a confirm-on-use signature (`ssh-add -c`) for a key the
+/// agent holds itself. The app draws the prompt and evaluates the biometric
+/// check; the agent does the signing once this returns `Ok`. Blocking, for the
+/// same reason as [`request_signature`].
+///
+/// `Err(BrokerError::Cancelled)` means the user declined. Any other error means
+/// the app could not be reached or the prompt failed, and the caller should
+/// fall back to the system dialog.
+pub fn request_authorize_key_use(
+    fingerprint: Option<&str>,
+    comment: Option<&str>,
+    caller: Option<&str>,
+) -> Result<(), BrokerError> {
+    let request = WireRequest::AuthorizeKeyUse {
+        fingerprint: fingerprint.map(String::from),
+        comment: comment.map(String::from),
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::Confirmed { ok: true } => Ok(()),
+        WireResponse::Confirmed { ok: false } | WireResponse::Cancelled => {
+            Err(BrokerError::Cancelled)
+        },
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to a key-use authorization request".to_string(),
+        )),
+    }
+}
+
 /// Read the managed keys out of the keychain. Listing needs no authentication,
 /// so this raises no prompt and works with the vault still locked.
 pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> {
@@ -174,6 +211,65 @@ pub(super) async fn authorize_and_sign(
         // A dismissed prompt is the user's answer, so report a cancellation
         // rather than a failure.
         Err(KeychainError::UserCancelled) => (WireResponse::Cancelled, PromptOutcome::Cancelled),
+        Err(e) => {
+            let message = e.to_string();
+            (
+                WireResponse::Failed {
+                    message: message.clone(),
+                },
+                PromptOutcome::Failed(message),
+            )
+        },
+    };
+    authorizer.end(prompt, outcome).await;
+    response
+}
+
+/// Draw the confirm-on-use prompt and evaluate the biometric check on a
+/// context the app owns. The agent signs once this returns `Confirmed`.
+pub(super) async fn authorize_key_use(
+    authorizer: &dyn SignAuthorizer,
+    prompt: SignPrompt,
+) -> WireResponse {
+    let context = match authorizer.begin(prompt.clone()).await {
+        Ok(context) => context,
+        Err(message) => {
+            log::debug!("App broker key-use authorization declined: {message}");
+            authorizer
+                .end(prompt, PromptOutcome::Failed(message.clone()))
+                .await;
+            return WireResponse::Failed { message };
+        },
+    };
+
+    let reason = match prompt.caller.as_deref() {
+        Some(caller) => format!("approve use of an SSH key for {caller}"),
+        None => "approve use of an SSH key".to_string(),
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        run_on_auth_thread(
+            AuthContext::Foreign(context),
+            AuthMethod::Policy { reason },
+            |_| (),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(KeychainError::Generic(anyhow!(
+            "Authorization task failed: {e}"
+        )))
+    });
+
+    let (response, outcome) = match result {
+        Ok(()) => (
+            WireResponse::Confirmed { ok: true },
+            PromptOutcome::Succeeded,
+        ),
+        // A dismissed prompt, whether through the biometric sheet or our own
+        // Cancel button, which invalidates the context.
+        Err(KeychainError::UserCancelled | KeychainError::AuthenticationExpired) => {
+            (WireResponse::Cancelled, PromptOutcome::Cancelled)
+        },
         Err(e) => {
             let message = e.to_string();
             (

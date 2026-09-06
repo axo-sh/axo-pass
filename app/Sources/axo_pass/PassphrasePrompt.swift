@@ -36,7 +36,7 @@ final class PassphrasePromptModel {
   /// Prepare a context to read the saved passphrase on, and put the biometric
   /// prompt on screen.
   func begin(prompt: PassphrasePrompt) -> UInt64 {
-    let grant = grants.begin(Self.grantKey(prompt), caller: prompt.caller)
+    let grant = grants.begin(Self.grantKey(prompt))
 
     // A context that is still authenticated reads the keychain with no prompt
     // at all. Delay the panel briefly so that case does not flash a window.

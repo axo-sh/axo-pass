@@ -43,8 +43,8 @@ pub use gpg::{
     request_message, request_passphrase,
 };
 pub use ssh::{
-    ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_signature,
-    request_ssh_passphrase,
+    ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_authorize_key_use,
+    request_signature, request_ssh_passphrase,
 };
 
 /// How long the agent waits for the user to answer the app's prompt before
@@ -178,6 +178,24 @@ enum WireRequest {
         /// ssh's own prompt text.
         prompt: String,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        caller: Option<String>,
+    },
+
+    /// A confirm-on-use prompt for a key held by the agent, added with
+    /// `ssh-add -c`. The agent still signs; the app only draws the prompt and
+    /// evaluates the auth check on a context it owns. Falls back to the
+    /// system dialog when no app is listening.
+    AuthorizeKeyUse {
+        /// Canonical `SHA256:...` fingerprint, resolved by the agent.
+        #[serde(default)]
+        fingerprint: Option<String>,
+
+        /// The key's OpenSSH comment, when it has one.
+        #[serde(default)]
+        comment: Option<String>,
+
+        /// Who asked, delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
         caller: Option<String>,
     },
 
@@ -489,9 +507,25 @@ async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std:
                 fingerprint,
                 comment,
                 caller,
+                managed: true,
             };
             log::debug!("App broker request: {prompt:?}");
             ssh::authorize_and_sign(&*authorizers.sign, prompt, data).await
+        },
+        WireRequest::AuthorizeKeyUse {
+            fingerprint,
+            comment,
+            caller,
+        } => {
+            let prompt = SignPrompt {
+                key_label: String::new(),
+                fingerprint,
+                comment,
+                caller,
+                managed: false,
+            };
+            log::debug!("App broker request: authorize key use {prompt:?}");
+            ssh::authorize_key_use(&*authorizers.sign, prompt).await
         },
         WireRequest::GetPassphrase {
             key_id,
@@ -727,6 +761,34 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].key_label, "key-1");
         assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
+        assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// A confirm-on-use request reaches the sign authorizer, worded for a key
+    /// the agent holds rather than a managed one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn routes_a_key_use_authorization_to_the_sign_authorizer() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response = broker.request(
+            r#"{"request":"authorize_key_use","fingerprint":"SHA256:abc","comment":"work laptop","caller":"git (ssh)"}"#,
+        );
+
+        // The stub declines to hand back a context, so the request is answered
+        // rather than confirmed. Reaching the stub means the peer was accepted
+        // and the request routed.
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
+            "unexpected response to a key-use authorization"
+        );
+
+        let prompts = broker.authorizer.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].fingerprint.as_deref(), Some("SHA256:abc"));
+        assert_eq!(prompts[0].comment.as_deref(), Some("work laptop"));
+        assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
+        assert!(!prompts[0].managed);
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
     }
 

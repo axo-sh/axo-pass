@@ -86,15 +86,17 @@ final class Grant {
   let context: LAContext
   let view: LAAuthenticationView
 
+  /// How long this approval is reused. Fixed for the life of the grant: it is
+  /// a property of the key, and a key's constraints do not change between
+  /// requests.
+  let policy: GrantPolicy
+
   /// When the user approved. Set once and never refreshed: a reused approval
   /// reports success too, so refreshing this would turn the absolute bound into
   /// a second idle timer. Nil until the first approval, so a context is not
   /// expired before it has ever been used.
   var approvedAt: Date?
   var lastUsedAt: Date?
-
-  /// Shown in the notification for a use that raised no prompt.
-  var lastCaller: String?
 
   /// Requests evaluating on this context right now. Expiry must not run while
   /// one is in flight: invalidating the context is how a cancellation is
@@ -104,9 +106,10 @@ final class Grant {
 
   var expiry: Timer?
 
-  init(context: LAContext, view: LAAuthenticationView) {
+  init(context: LAContext, view: LAAuthenticationView, policy: GrantPolicy) {
     self.context = context
     self.view = view
+    self.policy = policy
   }
 }
 
@@ -118,40 +121,38 @@ final class Grant {
 final class AuthorizationGrants {
   typealias Key = GrantKey
 
-  private let policy: GrantPolicy
   private let label: String
   private var grants: [Key: Grant] = [:]
 
-  init(label: String, policy: GrantPolicy = .standard) {
+  init(label: String) {
     self.label = label
-    self.policy = policy
   }
 
   /// The grant to evaluate on, created if there is none and dropped first if
   /// its window has closed. The caller owns the returned context until it calls
   /// `end`.
-  func begin(_ key: Key, caller: String?) -> Grant {
+  ///
+  /// `policy` applies to a grant this call creates. An existing grant keeps the
+  /// policy it was created with.
+  func begin(_ key: Key, policy: GrantPolicy = .standard) -> Grant {
     // Check the clocks here as well as on the timer. A timer cannot fire while
     // a request is in flight, and none run while the machine is asleep, so an
     // approval can be past its deadline with its timer still pending.
     if let grant = grants[key], grant.inFlight == 0, hasExpired(grant) {
       log("approval for \(key) expired, prompting again")
-      AuditBridge.recordGrant(.expired, subject: key.subject, caller: grant.lastCaller)
+      AuditBridge.recordGrant(.expired, subject: key.subject, caller: key.caller)
       forget(key)
     }
 
     let existing = grants[key]
-    let grant = existing ?? newGrant(for: key)
-    // Set before recording, so the created and reused events carry the caller
-    // rather than a stale value.
-    grant.lastCaller = caller
+    let grant = existing ?? newGrant(for: key, policy: policy)
 
     if existing == nil {
-      AuditBridge.recordGrant(.created, subject: key.subject, caller: caller)
+      AuditBridge.recordGrant(.created, subject: key.subject, caller: key.caller)
     } else if existing?.approvedAt != nil {
       // A still-valid approval, reused without a prompt. The agent or pinentry
       // records the key use; this explains why no prompt appeared.
-      AuditBridge.recordGrant(.reused, subject: key.subject, caller: caller)
+      AuditBridge.recordGrant(.reused, subject: key.subject, caller: key.caller)
     }
 
     // Incremented before the context leaves this method: the broker retains it
@@ -163,11 +164,10 @@ final class AuthorizationGrants {
   }
 
   /// Settle the clocks for a finished request and schedule the next expiry.
-  /// Returns the grant, or nil if it was already forgotten, which is what
-  /// cancelling through our own button does.
-  @discardableResult
-  func end(_ key: Key, outcome: PromptOutcome) -> Grant? {
-    guard let grant = grants[key] else { return nil }
+  /// Does nothing if the grant was already forgotten, which is what cancelling
+  /// through our own button does.
+  func end(_ key: Key, outcome: PromptOutcome) {
+    guard let grant = grants[key] else { return }
     grant.inFlight = max(0, grant.inFlight - 1)
 
     switch outcome {
@@ -186,7 +186,6 @@ final class AuthorizationGrants {
     }
 
     armExpiry(key)
-    return grants[key] ?? grant
   }
 
   /// Drop one approval. Invalidating the context fails any evaluation in
@@ -206,13 +205,14 @@ final class AuthorizationGrants {
     }
   }
 
-  private func newGrant(for key: Key) -> Grant {
+  private func newGrant(for key: Key, policy: GrantPolicy) -> Grant {
     let context = LAContext()
     // Creating the view is what suppresses the system dialog for this context,
     // so it has to exist before the broker evaluates rather than when the panel
     // appears.
     let grant = Grant(
-      context: context, view: LAAuthenticationView(context: context, controlSize: .regular))
+      context: context, view: LAAuthenticationView(context: context, controlSize: .regular),
+      policy: policy)
     grants[key] = grant
     return grant
   }
@@ -252,14 +252,15 @@ final class AuthorizationGrants {
     // `end` re-arms, and `begin` re-checks the clocks.
     guard grant.inFlight == 0 else { return }
     log("approval for \(key) expired")
-    AuditBridge.recordGrant(.expired, subject: key.subject, caller: grant.lastCaller)
+    AuditBridge.recordGrant(.expired, subject: key.subject, caller: key.caller)
     forget(key)
   }
 
   /// Seconds until the approval on `grant` runs out, or nil if this policy
   /// reuses nothing.
   private func timeUntilExpiry(_ grant: Grant) -> TimeInterval? {
-    guard case .cache(let idle, let absolute) = policy, let approvedAt = grant.approvedAt else {
+    guard case .cache(let idle, let absolute) = grant.policy, let approvedAt = grant.approvedAt
+    else {
       return nil
     }
     let idleDeadline = (grant.lastUsedAt ?? approvedAt).addingTimeInterval(idle)

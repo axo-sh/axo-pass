@@ -2,16 +2,18 @@ mod rsa_signing;
 
 use std::fmt::Debug;
 
+use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use rsa::signature::Signer;
 use ssh_agent_lib::proto::{self, extension};
-use ssh_key::Algorithm;
 use ssh_key::public::KeyData;
+use ssh_key::{Algorithm, HashAlg};
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
+use crate::cli::commands::ssh_agent::managed_credential::call_broker;
 
 #[derive(Clone)]
 pub struct StoredCredential {
@@ -55,18 +57,43 @@ impl StoredCredential {
         }
 
         if self.requires_auth {
-            let reason = match caller {
-                Some(c) => format!("unlock a ssh key for {c}"),
-                None => "unlock a ssh key".to_string(),
-            };
-            if let Err(e) =
-                run_on_auth_thread(AuthContext::OneTime, AuthMethod::Policy { reason }, |_| {})
-            {
-                log::error!("Authentication failed: {e}");
-                return Err(CredentialError::Locked);
-            }
+            self.confirm_use(caller)?;
         }
         Ok(())
+    }
+
+    /// Handles a confirm-on-use signature (`ssh-add -c`). Asks the app to
+    /// render the prompt and run authentication, so the user sees the same
+    /// panel as for a managed key. Falls back to the system dialog when no
+    /// app is listening or the prompt fails.
+    fn confirm_use(&self, caller: Option<&str>) -> Result<(), CredentialError> {
+        let fingerprint = self
+            .public_key_data()
+            .fingerprint(HashAlg::Sha256)
+            .to_string();
+        let comment = self.comment();
+
+        match call_broker(|| {
+            app_broker::request_authorize_key_use(Some(&fingerprint), comment.as_deref(), caller)
+        }) {
+            Ok(()) => Ok(()),
+            Err(BrokerError::Cancelled) => {
+                log::debug!("User declined use of ssh key {fingerprint}");
+                Err(CredentialError::Locked)
+            },
+            Err(e) => {
+                log::debug!("App broker unavailable for confirm prompt ({e}); using system dialog");
+                let reason = match caller {
+                    Some(c) => format!("approve use of an SSH key for {c}"),
+                    None => "approve use of an SSH key".to_string(),
+                };
+                run_on_auth_thread(AuthContext::OneTime, AuthMethod::Policy { reason }, |_| {})
+                    .map_err(|e| {
+                        log::error!("Authentication failed: {e}");
+                        CredentialError::Locked
+                    })
+            },
+        }
     }
 }
 

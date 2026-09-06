@@ -15,13 +15,23 @@ import UserNotifications
 @MainActor
 final class SigningPromptModel {
   private let grants = AuthorizationGrants(label: "SigningPrompt")
+
   private var showTask: Task<Void, Never>?
 
-  /// The grant the current request is evaluating on. The broker serves requests
-  /// serially and pairs each `begin` with an `end`, but `end` and `cancel` are
-  /// handed only the key label, so the caller is stashed here to rebuild the
-  /// full `GrantKey`.
-  private var activeKey: GrantKey?
+  /// The request being served. The broker serves requests serially and pairs
+  /// each `begin` with an `end`, but `end` and `cancel` are handed only the key
+  /// label, so what `begin` was given is stashed here.
+  private var active: ActiveRequest?
+
+  private struct ActiveRequest {
+    /// Rebuilt from the fingerprint and caller, neither of which `end` is
+    /// handed.
+    let key: GrantKey
+
+    /// Whether the key is managed, so `end` words its notification to match the
+    /// panel `begin` put up.
+    let managed: Bool
+  }
 
   /// Where the prompt is drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
@@ -45,12 +55,16 @@ final class SigningPromptModel {
 
   /// Prepare a context for the key and return its address for the broker. The
   /// context stays referenced here, so it outlives the signing attempt.
-  func begin(keyLabel: String, fingerprint: String?, comment: String?, caller: String?) -> UInt64 {
+  func begin(
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool
+  ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
     let key = GrantKey(subject: subject, caller: caller)
-    activeKey = key
-    let grant = grants.begin(key, caller: caller)
-    let keyName = comment ?? Self.shortKeyName(keyLabel)
+    active = ActiveRequest(key: key, managed: managed)
+    // Confirm-on-use keys (`ssh-add -c`) prompt every time: the point of the
+    // constraint is that every signature is approved, so no approval is reused.
+    let grant = grants.begin(key, policy: managed ? .standard : .everyUse)
+    let keyName = comment ?? Self.shortName(keyLabel: keyLabel, fingerprint: fingerprint)
 
     // A context that is still authenticated signs with no prompt at all. Delay
     // the panel briefly so that case does not flash a window on screen.
@@ -58,7 +72,7 @@ final class SigningPromptModel {
     showTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
-      self?.showPanel(key: key, keyName: keyName, view: grant.view)
+      self?.showPanel(key: key, keyName: keyName, managed: managed, view: grant.view)
     }
 
     return contextPointer(grant.context)
@@ -70,12 +84,14 @@ final class SigningPromptModel {
     showTask = nil
     panel.hide()
 
-    guard let key = activeKey else { return }
-    activeKey = nil
+    guard let active else { return }
+    self.active = nil
+    let key = active.key
     // Cancelling through our own button forgets the grant before the evaluation
     // fails, so there may be nothing left to settle.
-    let grant = grants.end(key, outcome: outcome)
-    report(keyLabel: keyLabel, caller: grant?.lastCaller, outcome: outcome)
+    grants.end(key, outcome: outcome)
+    let name = key.subject.label ?? Self.shortName(keyLabel: keyLabel, fingerprint: key.subject.id)
+    report(name: name, caller: key.caller, managed: active.managed, outcome: outcome)
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
@@ -96,16 +112,16 @@ final class SigningPromptModel {
   /// Tell the user a key was used. A signature served from a still-valid
   /// approval raises no prompt and shows no window, so this notification is the
   /// only indication it happened.
-  private func report(keyLabel: String, caller: String?, outcome: PromptOutcome) {
+  private func report(name: String, caller: String?, managed: Bool, outcome: PromptOutcome) {
     guard case .succeeded = outcome else { return }
 
     let content = UNMutableNotificationContent()
     content.title = "SSH key used"
-    let name = Self.shortKeyName(keyLabel)
+    let kind = managed ? "Secure Enclave key" : "SSH key"
     if let caller, !caller.isEmpty {
-      content.body = "Signed with Secure Enclave key \(name) for \(caller)."
+      content.body = "Signed with \(kind) \(name) for \(caller)."
     } else {
-      content.body = "Signed with Secure Enclave key \(name)."
+      content.body = "Signed with \(kind) \(name)."
     }
 
     let request = UNNotificationRequest(
@@ -119,28 +135,38 @@ final class SigningPromptModel {
 
   // MARK: - Panel
 
-  private func showPanel(key: GrantKey, keyName: String, view: LAAuthenticationView) {
+  private func showPanel(
+    key: GrantKey, keyName: String, managed: Bool, view: LAAuthenticationView
+  ) {
     let content = SigningPromptView(
       caller: key.caller,
       keyName: keyName,
+      managed: managed,
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(key: key) }
     )
     panel.show(NSHostingView(rootView: content), width: 320)
   }
 
-  /// Shorten `ssh-key-<uuid>` for display. The leading characters are enough to
-  /// tell two keys apart.
-  private static func shortKeyName(_ keyLabel: String) -> String {
-    let id =
-      keyLabel.hasPrefix("ssh-key-") ? String(keyLabel.dropFirst("ssh-key-".count)) : keyLabel
-    return String(id.prefix(6))
+  /// A short display name for a key. Prefers the shortened `ssh-key-<uuid>`
+  /// label of a managed key, and falls back to the tail of the fingerprint for
+  /// a key the agent holds directly, which has no label.
+  private static func shortName(keyLabel: String, fingerprint: String?) -> String {
+    if !keyLabel.isEmpty {
+      let id =
+        keyLabel.hasPrefix("ssh-key-") ? String(keyLabel.dropFirst("ssh-key-".count)) : keyLabel
+      return String(id.prefix(6))
+    }
+    guard let fingerprint, !fingerprint.isEmpty else { return "key" }
+    let body = fingerprint.hasPrefix("SHA256:") ? String(fingerprint.dropFirst("SHA256:".count)) : fingerprint
+    return String(body.suffix(8))
   }
 }
 
 private struct SigningPromptView: View {
   let caller: String?
   let keyName: String
+  let managed: Bool
   let icon: AuthenticationIcon
   let onCancel: () -> Void
 
@@ -154,7 +180,7 @@ private struct SigningPromptView: View {
           .font(.headline)
           .multilineTextAlignment(.center)
 
-        Text("Secure Enclave key \(keyName)")
+        Text("\(managed ? "Secure Enclave key" : "SSH key") \(keyName)")
           .font(.subheadline)
           .foregroundStyle(.secondary)
       }
@@ -184,10 +210,11 @@ final class SigningPromptBridge: SignPromptDelegate {
   }
 
   func beginAuthorization(
-    keyLabel: String, fingerprint: String?, comment: String?, caller: String?
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool
   ) async throws -> UInt64 {
     await model.begin(
-      keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller)
+      keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
+      managed: managed)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

@@ -1372,6 +1372,10 @@ pub trait SignPromptDelegate: Send + Sync {
         fingerprint: Option<String>,
         comment: Option<String>,
         caller: Option<String>,
+        // True for a managed Secure Enclave key. False for a confirm-on-use
+        // gate on a key the agent holds directly, which the app words
+        // differently and never reuses across requests.
+        managed: bool,
     ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
@@ -1392,6 +1396,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 prompt.fingerprint,
                 prompt.comment,
                 prompt.caller,
+                prompt.managed,
             )
             .await
             .map_err(|e| e.to_string())?;
