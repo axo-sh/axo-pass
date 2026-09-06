@@ -42,13 +42,24 @@ pub fn check_status() -> (bool, PathBuf) {
     (configured, path)
 }
 
+/// Quotes a path for a zshrc assignment such as `export NAME=<value>`.
+fn shell_quote(value: &str) -> String {
+    shlex::try_quote(value).unwrap().into_owned()
+}
+
+/// Quotes a path for use as an alias body. Zsh re-parses the alias value when
+/// the alias runs, so the quoting has to survive one round of expansion. That
+/// means quoting the already-quoted path a second time.
+fn quote_alias_path(value: &str) -> String {
+    shell_quote(&shell_quote(value))
+}
+
 /// Builds the current shell integration block, sentinels included, with a
 /// trailing newline.
 fn build_block() -> Result<String, String> {
     let ap_path = ap_bin_path().ok_or("Could not determine ap binary path")?;
 
-    // we need to escape spaces in the path
-    let escaped_ap_path = shlex::try_quote(&ap_path).unwrap();
+    let escaped_ap_path = quote_alias_path(&ap_path);
 
     let mut block = formatdoc! {r#"
         {SENTINEL_START}
@@ -61,7 +72,7 @@ fn build_block() -> Result<String, String> {
     // running from the installed app bundle, same as the pinentry wrapper.
     if let Some(askpass_path) = askpass::wrapper_path() {
         let askpass_path = askpass_path.to_string_lossy();
-        let escaped_askpass_path = shlex::try_quote(&askpass_path).unwrap();
+        let escaped_askpass_path = shell_quote(&askpass_path);
         block.push_str(&formatdoc! {r#"
             export SSH_ASKPASS={escaped_askpass_path}
             export SSH_ASKPASS_REQUIRE=force
@@ -139,6 +150,55 @@ mod tests {
 
     fn read(path: &Path) -> String {
         std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn quote_alias_path_survives_one_reparse() {
+        // The alias value is re-tokenized when the alias runs. After one round
+        // of shell word splitting it must reduce to the literal path.
+        let path = "/Applications/Axo Pass.app/ap";
+        let quoted = quote_alias_path(path);
+        let once = shlex::split(&quoted).unwrap();
+        assert_eq!(once, vec![shell_quote(path)]);
+        let twice = shlex::split(&once[0]).unwrap();
+        assert_eq!(twice, vec![path]);
+    }
+
+    #[test]
+    fn alias_body_is_double_quoted() {
+        let block = build_block().unwrap();
+        assert!(block.contains("alias ap="));
+        let line = block.lines().find(|l| l.starts_with("alias ap=")).unwrap();
+        assert_eq!(shlex::split(&line["alias ap=".len()..]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn alias_runs_a_spaced_path_in_zsh() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("Axo Pass.app");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let ap = bin_dir.join("ap");
+        std::fs::write(&ap, "#!/bin/sh\necho \"argc=$#\"\n").unwrap();
+        let mut perms = std::fs::metadata(&ap).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&ap, perms).unwrap();
+
+        // Aliases are expanded during parsing, so the definition and the use
+        // must be in separate source units. A script file gives that; a single
+        // `zsh -c` string does not.
+        let script_path = dir.path().join("test.zsh");
+        std::fs::write(
+            &script_path,
+            format!("alias ap={}\nap one two\n", quote_alias_path(&ap.to_string_lossy())),
+        )
+        .unwrap();
+        let out = std::process::Command::new("zsh")
+            .arg("-f")
+            .arg(&script_path)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "argc=2");
     }
 
     #[test]
