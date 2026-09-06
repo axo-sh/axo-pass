@@ -84,10 +84,14 @@ final class VaultsModel {
   // delete) to whichever pane triggered them.
   var actionError: String? = nil
 
+  // Called when the vault locks. AppDelegate sets this to close auxiliary
+  // windows, such as the Audit Log, that are only available while unlocked.
+  var onLock: (() -> Void)? = nil
+
   init() {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
-    autoLock = AutoLock { [weak self] in self?.lock(automatic: true) }
+    autoLock = AutoLock { [weak self] trigger in self?.lock(automatic: trigger) }
   }
 
   // MARK: - Vault list
@@ -256,6 +260,7 @@ final class VaultsModel {
       let contextPtr = UInt64(UInt(bitPattern: Unmanaged.passUnretained(context).toOpaque()))
       try await Task.detached { [core] in try core.adoptAuthContext(contextPtr: contextPtr) }.value
       isAppUnlocked = true
+      AuditBridge.recordVault(.unlocked)
       autoLock.start()
       await loadItemsForSelection()
     } catch {
@@ -316,7 +321,7 @@ final class VaultsModel {
   /// screen lock. Those land on the lock screen without a prompt, so returning
   /// to the app takes a deliberate Unlock rather than a Touch ID prompt the user
   /// did not expect.
-  func lock(automatic: Bool = false) {
+  func lock(automatic trigger: AutoLockTrigger? = nil) {
     autoLock.stop()
     // A failure here means the core's state is poisoned, not that the vaults
     // stayed decrypted. Lock the UI either way.
@@ -324,6 +329,10 @@ final class VaultsModel {
       try core.lock()
     } catch {
       actionError = String(describing: error)
+    }
+    // `core.lock()` records `vault.lock`; add the automatic cause on top.
+    if let trigger {
+      AuditBridge.recordVault(.autolocked, trigger: trigger.rawValue)
     }
     unlockTask = nil
     // A lock drops every authorization the user has given: signing, and the
@@ -339,7 +348,8 @@ final class VaultsModel {
     itemCache = [:]
     selectedItemRef = nil
     unlockError = nil
-    autoPromptPending = !automatic
+    autoPromptPending = trigger == nil
+    onLock?()
   }
 
   // MARK: - Navigation

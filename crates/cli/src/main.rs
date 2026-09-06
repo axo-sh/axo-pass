@@ -32,5 +32,6 @@ impl AxoPass {
 }
 
 fn main() {
+    axo_pass_core::audit::set_process_source(axo_pass_core::audit::Source::Cli);
     AxoPass::parse().execute();
 }

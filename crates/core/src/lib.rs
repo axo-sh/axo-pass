@@ -1,4 +1,5 @@
 pub mod age;
+pub mod audit;
 pub mod core;
 pub mod gpg;
 pub mod logging;

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axo_pass_core::core::app_broker;
@@ -12,13 +13,13 @@ use axo_pass_core::secrets::keychain::generic_password::{
 };
 use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
 use axo_pass_core::secrets::vaults::{Error as VaultError, VaultsManager};
-use axo_pass_core::shell_integration;
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
 use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
+use axo_pass_core::{audit, shell_integration};
 use secrecy::{ExposeSecret, SecretString};
 
 uniffi::setup_scaffolding!();
@@ -349,7 +350,8 @@ pub struct SshAgentConfStatus {
     pub config_path: String,
     /// The socket path this app writes.
     pub expected_agent: String,
-    /// The currently effective `IdentityAgent`, when it is not this app's socket.
+    /// The currently effective `IdentityAgent`, when it is not this app's
+    /// socket.
     pub current_agent: Option<String>,
 }
 
@@ -380,6 +382,222 @@ impl From<PasswordEntry> for PasswordEntryInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditSourceKind {
+    Agent,
+    Pinentry,
+    App,
+    Cli,
+    Askpass,
+}
+
+impl From<audit::Source> for AuditSourceKind {
+    fn from(s: audit::Source) -> Self {
+        match s {
+            audit::Source::Agent => Self::Agent,
+            audit::Source::Pinentry => Self::Pinentry,
+            audit::Source::App => Self::App,
+            audit::Source::Cli => Self::Cli,
+            audit::Source::Askpass => Self::Askpass,
+        }
+    }
+}
+
+impl From<AuditSourceKind> for audit::Source {
+    fn from(s: AuditSourceKind) -> Self {
+        match s {
+            AuditSourceKind::Agent => Self::Agent,
+            AuditSourceKind::Pinentry => Self::Pinentry,
+            AuditSourceKind::App => Self::App,
+            AuditSourceKind::Cli => Self::Cli,
+            AuditSourceKind::Askpass => Self::Askpass,
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditOutcomeKind {
+    Succeeded,
+    Cancelled,
+    Denied,
+    Failed,
+}
+
+impl From<audit::Outcome> for AuditOutcomeKind {
+    fn from(o: audit::Outcome) -> Self {
+        match o {
+            audit::Outcome::Succeeded => Self::Succeeded,
+            audit::Outcome::Cancelled => Self::Cancelled,
+            audit::Outcome::Denied => Self::Denied,
+            audit::Outcome::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<AuditOutcomeKind> for audit::Outcome {
+    fn from(o: AuditOutcomeKind) -> Self {
+        match o {
+            AuditOutcomeKind::Succeeded => Self::Succeeded,
+            AuditOutcomeKind::Cancelled => Self::Cancelled,
+            AuditOutcomeKind::Denied => Self::Denied,
+            AuditOutcomeKind::Failed => Self::Failed,
+        }
+    }
+}
+
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditSubjectKind {
+    SshKey,
+    GpgKey,
+    Credential,
+    Vault,
+    AgeIdentity,
+}
+
+impl From<audit::SubjectKind> for AuditSubjectKind {
+    fn from(k: audit::SubjectKind) -> Self {
+        match k {
+            audit::SubjectKind::SshKey => Self::SshKey,
+            audit::SubjectKind::GpgKey => Self::GpgKey,
+            audit::SubjectKind::Credential => Self::Credential,
+            audit::SubjectKind::Vault => Self::Vault,
+            audit::SubjectKind::AgeIdentity => Self::AgeIdentity,
+        }
+    }
+}
+
+/// One audit record, flattened for Swift.
+#[derive(uniffi::Record)]
+pub struct AuditEventRecord {
+    pub id: String,
+    /// RFC 3339 timestamp.
+    pub at: String,
+    pub source: AuditSourceKind,
+    /// Dotted action string, e.g. `ssh.sign`.
+    pub action: String,
+    pub outcome: AuditOutcomeKind,
+    pub subject_kind: Option<AuditSubjectKind>,
+    pub subject_id: Option<String>,
+    pub subject_label: Option<String>,
+    pub subject_fingerprint: Option<String>,
+    pub caller: Option<String>,
+    pub actor_pid: Option<u32>,
+    pub actor_executable: Option<String>,
+    pub actor_bundle_id: Option<String>,
+    pub actor_team_id: Option<String>,
+    pub actor_chain: Vec<String>,
+    pub detail: HashMap<String, String>,
+    pub message: Option<String>,
+}
+
+impl From<audit::AuditEvent> for AuditEventRecord {
+    fn from(e: audit::AuditEvent) -> Self {
+        let at = e.at_rfc3339();
+        let action = e.action.as_str().to_string();
+        let (subject_kind, subject_id, subject_label, subject_fingerprint) = match e.subject {
+            Some(s) => (Some(s.kind.into()), Some(s.id), s.label, s.fingerprint),
+            None => (None, None, None, None),
+        };
+        let actor = e.actor.unwrap_or_default();
+        AuditEventRecord {
+            id: e.id.to_string(),
+            at,
+            source: e.source.into(),
+            action,
+            outcome: e.outcome.into(),
+            subject_kind,
+            subject_id,
+            subject_label,
+            subject_fingerprint,
+            caller: actor.caller,
+            actor_pid: actor.pid,
+            actor_executable: actor.executable,
+            actor_bundle_id: actor.bundle_id,
+            actor_team_id: actor.team_id,
+            actor_chain: actor.chain,
+            detail: e.detail.into_iter().collect(),
+            message: e.message,
+        }
+    }
+}
+
+/// Filter for `list_audit_events`. Empty fields mean no constraint.
+#[derive(uniffi::Record)]
+pub struct AuditFilterInput {
+    pub since_rfc3339: Option<String>,
+    pub until_rfc3339: Option<String>,
+    /// Dotted action strings. Unknown values are ignored.
+    pub actions: Vec<String>,
+    pub sources: Vec<AuditSourceKind>,
+    pub outcomes: Vec<AuditOutcomeKind>,
+    pub query: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: u32,
+}
+
+impl From<AuditFilterInput> for audit::AuditFilter {
+    fn from(input: AuditFilterInput) -> Self {
+        audit::AuditFilter {
+            since: input
+                .since_rfc3339
+                .as_deref()
+                .and_then(audit::parse_rfc3339),
+            until: input
+                .until_rfc3339
+                .as_deref()
+                .and_then(audit::parse_rfc3339),
+            actions: input
+                .actions
+                .iter()
+                .filter_map(|a| audit::Action::parse(a))
+                .collect(),
+            sources: input.sources.into_iter().map(Into::into).collect(),
+            outcomes: input.outcomes.into_iter().map(Into::into).collect(),
+            query: input.query.filter(|q| !q.is_empty()),
+            limit: input.limit.map(|l| l as usize),
+            offset: input.offset as usize,
+        }
+    }
+}
+
+/// Which grant lifecycle event the app is recording.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GrantEventKind {
+    Created,
+    Reused,
+    Expired,
+}
+
+/// Which kind of key a grant is for.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GrantSubjectKind {
+    SshKey,
+    GpgKey,
+}
+
+/// Identifies the key a grant event is about. `id` is the canonical
+/// `SHA256:...` fingerprint for an SSH key and the keygrip for a GPG key, so a
+/// grant event names its key the same way the agent's `ssh.sign` or the
+/// pinentry's own events do.
+#[derive(uniffi::Record, Clone)]
+pub struct GrantSubjectInput {
+    pub kind: GrantSubjectKind,
+    pub id: String,
+    pub label: Option<String>,
+}
+
+/// Which vault state transition the app is recording.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum VaultEventKind {
+    Unlocked,
+    Locked,
+    Autolocked,
+}
+
+// ---------------------------------------------------------------------------
 // AxoPass object
 // ---------------------------------------------------------------------------
 
@@ -398,6 +616,7 @@ impl AxoPass {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         axo_pass_core::logging::init("app.log");
+        audit::set_process_source(audit::Source::App);
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
             embedded_auth_lock: Mutex::new(None),
@@ -450,7 +669,7 @@ impl AxoPass {
     /// draw the prompt inline. This remains for callers with no UI, such as the
     /// `ap` CLI.
     pub async fn unlock(&self) -> Result<(), FfiError> {
-        tokio::task::spawn_blocking(|| {
+        let result: Result<(), FfiError> = tokio::task::spawn_blocking(|| {
             run_on_auth_thread(
                 AuthContext::SharedThreadLocal,
                 AuthMethod::Policy {
@@ -461,7 +680,20 @@ impl AxoPass {
             .map_err(FfiError::from)
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
+
+        let (outcome, message) = match &result {
+            Ok(()) => (audit::Outcome::Succeeded, None),
+            Err(FfiError::AuthCancelled) => (audit::Outcome::Cancelled, None),
+            Err(e) => (audit::Outcome::Failed, Some(e.to_string())),
+        };
+        let mut event =
+            audit::AuditEvent::new(audit::process_source(), audit::Action::VaultUnlock, outcome);
+        if let Some(message) = message {
+            event = event.message(message);
+        }
+        audit::record(event);
+        result
     }
 
     /// Drop every decrypted vault from memory and invalidate the shared
@@ -473,6 +705,11 @@ impl AxoPass {
             .map_err(|_| FfiError::Poisoned)?
             .lock_all();
         invalidate_auth();
+        audit::record(audit::AuditEvent::new(
+            audit::process_source(),
+            audit::Action::VaultLock,
+            audit::Outcome::Succeeded,
+        ));
         Ok(())
     }
 
@@ -1008,6 +1245,91 @@ impl AxoPass {
     pub fn take_broker_launch_request(&self) -> bool {
         app_broker::take_launch_request()
     }
+
+    /// Read audit events, newest first. Not gated on an unlocked vault: the
+    /// file is plaintext and readable by anything running as this user.
+    pub async fn list_audit_events(
+        &self,
+        filter: AuditFilterInput,
+    ) -> Result<Vec<AuditEventRecord>, FfiError> {
+        let filter: audit::AuditFilter = filter.into();
+        let page = tokio::task::spawn_blocking(move || audit::read(&filter))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?;
+        Ok(page.events.into_iter().map(Into::into).collect())
+    }
+
+    /// Path of the current month's audit file, for a "Reveal in Finder"
+    /// button.
+    pub fn audit_log_path(&self) -> String {
+        audit::audit_log_path().display().to_string()
+    }
+
+    /// Record a grant lifecycle event. These explain why a key use raised no
+    /// prompt: the agent logs the signature, the app logs the reused grant.
+    pub fn record_grant_event(
+        &self,
+        kind: GrantEventKind,
+        subject: GrantSubjectInput,
+        caller: Option<String>,
+    ) {
+        let action = match kind {
+            GrantEventKind::Created => audit::Action::AuthGrantCreated,
+            GrantEventKind::Reused => audit::Action::AuthGrantReused,
+            GrantEventKind::Expired => audit::Action::AuthGrantExpired,
+        };
+        let actor = caller.map(|caller| audit::Actor {
+            caller: Some(caller),
+            ..Default::default()
+        });
+
+        let subject_kind = match subject.kind {
+            GrantSubjectKind::SshKey => audit::SubjectKind::SshKey,
+            GrantSubjectKind::GpgKey => audit::SubjectKind::GpgKey,
+        };
+        // An SSH fingerprint arrives with or without the `SHA256:` prefix
+        // depending on the path that produced it. Normalize to the canonical
+        // form so it matches the agent's `ssh.sign` events.
+        let id = match subject.kind {
+            GrantSubjectKind::SshKey
+                if !subject.id.starts_with("SHA256:") && !subject.id.starts_with("ssh-key-") =>
+            {
+                format!("SHA256:{}", subject.id)
+            },
+            _ => subject.id,
+        };
+        let mut s = audit::Subject::new(subject_kind, id.clone());
+        // For an SSH key the id is the canonical fingerprint. Record it in the
+        // fingerprint field too, so it matches the agent's `ssh.sign` events.
+        if subject.kind == GrantSubjectKind::SshKey && id.starts_with("SHA256:") {
+            s = s.fingerprint(id);
+        }
+        if let Some(label) = subject.label.filter(|l| !l.is_empty()) {
+            s = s.label(label);
+        }
+
+        audit::record(
+            audit::AuditEvent::new(audit::process_source(), action, audit::Outcome::Succeeded)
+                .maybe_subject(Some(s))
+                .maybe_actor(actor),
+        );
+    }
+
+    /// Record a vault state transition the app drives. `trigger` names the
+    /// cause of an automatic lock (`timer`, `sleep`, `screen_lock`).
+    pub fn record_vault_event(&self, kind: VaultEventKind, trigger: Option<String>) {
+        let action = match kind {
+            VaultEventKind::Unlocked => audit::Action::VaultUnlock,
+            VaultEventKind::Locked => audit::Action::VaultLock,
+            VaultEventKind::Autolocked => audit::Action::VaultAutolock,
+        };
+        let mut event =
+            audit::AuditEvent::new(audit::process_source(), action, audit::Outcome::Succeeded);
+        if let Some(trigger) = trigger {
+            event = event.detail("trigger", trigger);
+        }
+        audit::record(event);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,6 +1369,8 @@ pub trait SignPromptDelegate: Send + Sync {
     async fn begin_authorization(
         &self,
         key_label: String,
+        fingerprint: Option<String>,
+        comment: Option<String>,
         caller: Option<String>,
     ) -> Result<u64, FfiError>;
 
@@ -1063,7 +1387,12 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
     async fn begin(&self, prompt: app_broker::SignPrompt) -> Result<ForeignContext, String> {
         let context_ptr = self
             .delegate
-            .begin_authorization(prompt.key_label, prompt.caller)
+            .begin_authorization(
+                prompt.key_label,
+                prompt.fingerprint,
+                prompt.comment,
+                prompt.caller,
+            )
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {

@@ -31,6 +31,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::audit;
 use crate::core::dirs::app_data_dir;
 use crate::core::provenance::{PeerIdentity, PeerPolicy};
 
@@ -127,6 +128,16 @@ enum WireRequest {
     ListIdentities,
     Sign {
         key_label: String,
+
+        /// Canonical `SHA256:...` fingerprint of the key, resolved by the agent
+        /// so the app's grant events name the key the same way its `ssh.sign`
+        /// events do.
+        #[serde(default)]
+        fingerprint: Option<String>,
+
+        /// The key's OpenSSH comment, when it has one.
+        #[serde(default)]
+        comment: Option<String>,
 
         /// Who asked the agent for the signature, resolved by the agent from
         /// its own peer's audit token.
@@ -396,6 +407,21 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                     Ok(peer) => peer,
                     Err(e) => {
                         log::warn!("App broker refused a connection: {e}");
+                        let mut event = audit::AuditEvent::new(
+                            audit::process_source(),
+                            audit::Action::BrokerPeerRejected,
+                            audit::Outcome::Denied,
+                        )
+                        .message(e.to_string())
+                        .detail("peer_verified", "false");
+                        // Describe the rejected peer with no policy applied. The
+                        // executable and signature here come from code that
+                        // failed the policy, so the event marks them unverified.
+                        if let Ok(peer) = PeerIdentity::identify(stream.as_raw_fd()) {
+                            log::debug!("App broker rejected peer: {peer:#?}");
+                            event = event.actor(unverified_actor(&peer));
+                        }
+                        audit::record(event);
                         continue;
                     },
                 };
@@ -413,6 +439,18 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                 return;
             },
         }
+    }
+}
+
+/// Build an audit actor from a peer identified without policy checks.
+fn unverified_actor(peer: &PeerIdentity) -> audit::Actor {
+    audit::Actor {
+        caller: peer.caller(),
+        pid: Some(peer.pid()),
+        executable: peer.executable(),
+        bundle_id: peer.bundle_id(),
+        team_id: peer.team_id(),
+        chain: peer.provenance().chain_labels(),
     }
 }
 
@@ -438,13 +476,20 @@ async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std:
         },
         WireRequest::Sign {
             key_label,
+            fingerprint,
+            comment,
             caller,
             data,
         } => {
             let data = b64
                 .decode(&data)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let prompt = SignPrompt { key_label, caller };
+            let prompt = SignPrompt {
+                key_label,
+                fingerprint,
+                comment,
+                caller,
+            };
             log::debug!("App broker request: {prompt:?}");
             ssh::authorize_and_sign(&*authorizers.sign, prompt, data).await
         },

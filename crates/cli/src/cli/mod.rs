@@ -17,10 +17,9 @@ use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
-use crate::cli::commands::pinentry;
 use crate::cli::commands::ssh_agent::SshAgentCommand;
-use crate::cli::commands::ssh_askpass;
 use crate::cli::commands::vault::VaultCommand;
+use crate::cli::commands::{pinentry, ssh_askpass};
 
 #[derive(Parser, Debug)]
 pub struct AxoPassCli {

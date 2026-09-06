@@ -30,6 +30,56 @@ enum GrantPolicy {
   #endif
 }
 
+/// Identifies the key an approval is for, in the form the audit log records.
+///
+/// `id` is the canonical `SHA256:...` fingerprint for an SSH key and the
+/// keygrip for a GPG key, matching how the agent's `ssh.sign` and the
+/// pinentry's own events name the same key.
+struct GrantSubject: Hashable, Sendable {
+  enum Kind: Hashable, Sendable {
+    case ssh
+    case gpg
+  }
+
+  let kind: Kind
+  let id: String
+  var label: String?
+
+  /// Equality and hashing are on `kind` and `id` alone: `label` is derived from
+  /// the key and only carries display detail.
+  static func == (lhs: GrantSubject, rhs: GrantSubject) -> Bool {
+    lhs.kind == rhs.kind && lhs.id == rhs.id
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(kind)
+    hasher.combine(id)
+  }
+
+  var ffiInput: GrantSubjectInput {
+    GrantSubjectInput(
+      kind: kind == .ssh ? .sshKey : .gpgKey,
+      id: id,
+      label: label)
+  }
+}
+
+/// Identifies an approval. Reuse is scoped to the requesting process as well as
+/// the key, so approving a request for one caller does not silently authorize a
+/// different caller's request on the same key inside the reuse window.
+///
+/// A nil caller is its own bucket. It means the caller could not be resolved,
+/// which happens on an unsigned local build.
+///
+/// `description` is the key alone. It names the subject in the process log; the
+/// caller is recorded separately as the event's actor.
+struct GrantKey: Hashable, CustomStringConvertible, Sendable {
+  let subject: GrantSubject
+  let caller: String?
+
+  var description: String { subject.id }
+}
+
 /// An approval the user has given, and the context that carries it.
 @MainActor
 final class Grant {
@@ -62,11 +112,12 @@ final class Grant {
 
 /// The approvals one prompt has outstanding, and the clocks that end them.
 ///
-/// Keyed by whatever identifies a grant to its caller: an SSH key label, a GPG
-/// key grip. The identified peer will join that key, so that one process cannot
-/// reuse an approval another process was given.
+/// Keyed by the key and the requesting process, so one process cannot reuse an
+/// approval another process was given.
 @MainActor
-final class AuthorizationGrants<Key: Hashable & CustomStringConvertible & Sendable> {
+final class AuthorizationGrants {
+  typealias Key = GrantKey
+
   private let policy: GrantPolicy
   private let label: String
   private var grants: [Key: Grant] = [:]
@@ -79,16 +130,30 @@ final class AuthorizationGrants<Key: Hashable & CustomStringConvertible & Sendab
   /// The grant to evaluate on, created if there is none and dropped first if
   /// its window has closed. The caller owns the returned context until it calls
   /// `end`.
-  func begin(_ key: Key) -> Grant {
+  func begin(_ key: Key, caller: String?) -> Grant {
     // Check the clocks here as well as on the timer. A timer cannot fire while
     // a request is in flight, and none run while the machine is asleep, so an
     // approval can be past its deadline with its timer still pending.
     if let grant = grants[key], grant.inFlight == 0, hasExpired(grant) {
       log("approval for \(key) expired, prompting again")
+      AuditBridge.recordGrant(.expired, subject: key.subject, caller: grant.lastCaller)
       forget(key)
     }
 
-    let grant = grants[key] ?? newGrant(for: key)
+    let existing = grants[key]
+    let grant = existing ?? newGrant(for: key)
+    // Set before recording, so the created and reused events carry the caller
+    // rather than a stale value.
+    grant.lastCaller = caller
+
+    if existing == nil {
+      AuditBridge.recordGrant(.created, subject: key.subject, caller: caller)
+    } else if existing?.approvedAt != nil {
+      // A still-valid approval, reused without a prompt. The agent or pinentry
+      // records the key use; this explains why no prompt appeared.
+      AuditBridge.recordGrant(.reused, subject: key.subject, caller: caller)
+    }
+
     // Incremented before the context leaves this method: the broker retains it
     // and evaluates it, and expiry in that gap fails the evaluation.
     grant.inFlight += 1
@@ -187,6 +252,7 @@ final class AuthorizationGrants<Key: Hashable & CustomStringConvertible & Sendab
     // `end` re-arms, and `begin` re-checks the clocks.
     guard grant.inFlight == 0 else { return }
     log("approval for \(key) expired")
+    AuditBridge.recordGrant(.expired, subject: key.subject, caller: grant.lastCaller)
     forget(key)
   }
 

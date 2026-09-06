@@ -1,3 +1,4 @@
+mod audit;
 mod client;
 mod credential;
 mod destination_constraint;

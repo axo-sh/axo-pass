@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axo_pass_core::audit::{Action, Actor, Outcome};
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
@@ -10,6 +11,7 @@ use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
+use crate::cli::commands::ssh_agent::audit;
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::managed_credential::list_managed_credentials;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
@@ -20,6 +22,7 @@ pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
 
 pub struct SshAgentSession {
     caller: Option<String>,
+    actor: Option<Actor>,
     state: Arc<Mutex<Vec<StoredCredential>>>,
     pub(crate) sessions: Vec<SessionBinding>,
     pub(crate) session_bind_attempted: bool,
@@ -30,10 +33,12 @@ impl SshAgentSession {
     pub fn new(
         state: Arc<Mutex<Vec<StoredCredential>>>,
         caller: Option<String>,
+        actor: Option<Actor>,
         shutdown_sender: broadcast::Sender<()>,
     ) -> Self {
         SshAgentSession {
             caller,
+            actor,
             state,
             sessions: Vec::new(),
             session_bind_attempted: false,
@@ -62,6 +67,29 @@ impl SshAgentSession {
         }
 
         log::debug!("Adding {:?}", credential);
+        if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential) {
+            let mut detail: Vec<(&str, String)> = Vec::new();
+            if credential.expires_at.is_some() {
+                detail.push(("lifetime_constrained", "true".to_string()));
+            }
+            if credential.requires_auth {
+                detail.push(("confirm", "true".to_string()));
+            }
+            if !credential.dest_constraints.is_empty() {
+                detail.push((
+                    "destination_constraints",
+                    credential.dest_constraints.len().to_string(),
+                ));
+            }
+            audit::record_key_change(
+                Action::SshKeyAdd,
+                self.actor.as_ref(),
+                self.caller.as_deref(),
+                &identity.pubkey,
+                credential.comment().as_deref(),
+                &detail,
+            );
+        }
         self.state.lock().await.push(credential);
     }
 
@@ -157,10 +185,19 @@ impl Session for SshAgentSession {
     }
 
     async fn remove_identity(&mut self, req: RemoveIdentity) -> Result<(), AgentError> {
-        if self.remove_credential(&req.pubkey).await.is_none() {
-            log::debug!("request: remove ssh identity - key not found");
-        } else {
-            log::debug!("request: remove ssh identity");
+        match self.remove_credential(&req.pubkey).await {
+            None => log::debug!("request: remove ssh identity - key not found"),
+            Some(removed) => {
+                log::debug!("request: remove ssh identity");
+                audit::record_key_change(
+                    Action::SshKeyRemove,
+                    self.actor.as_ref(),
+                    self.caller.as_deref(),
+                    &req.pubkey,
+                    removed.comment().as_deref(),
+                    &[],
+                );
+            },
         }
         Ok(())
     }
@@ -171,6 +208,22 @@ impl Session for SshAgentSession {
     }
 
     async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
+        let pubkey = req.pubkey.clone();
+        let request_data = req.data.clone();
+
+        // Looked up once here for the audit record. The signing path below does
+        // its own lookup, with the checks that gate the signature. The credential
+        // is not held past this block: it is not `Send`, and the block below
+        // awaits.
+        let (key_label, comment, managed) = {
+            let cred = self.find_credential(&pubkey).await;
+            let key_label = cred.as_ref().and_then(|c| c.key_label());
+            let comment = cred.as_ref().and_then(|c| c.comment());
+            (key_label.clone(), comment, key_label.is_some())
+        };
+
+        // One `ssh.sign` event is recorded on every exit path below.
+        let result: Result<Signature, AgentError> = async {
         let fingerprint = compute_short_sha256_fingerprint(&req.pubkey);
         let Some(stored_cred) = self.find_credential(&req.pubkey).await else {
             log::debug!("request: sign with identity {fingerprint} - key not found");
@@ -257,6 +310,20 @@ impl Session for SshAgentSession {
         stored_cred
             .sign(req, self.caller.as_deref())
             .map_err(|e| AgentError::Other(e.into()))
+        }
+        .await;
+
+        audit::record_sign(
+            self.actor.as_ref(),
+            self.caller.as_deref(),
+            &pubkey,
+            &request_data,
+            managed,
+            comment.as_deref(),
+            key_label.as_deref(),
+            &result,
+        );
+        result
     }
 
     async fn extension(
@@ -281,6 +348,12 @@ impl Session for SshAgentSession {
             bind.verify_signature()?;
 
             self.sessions.push(SessionBinding::new(bind));
+            audit::record_lifecycle(
+                Action::SshSessionBind,
+                Outcome::Succeeded,
+                self.actor.as_ref(),
+                self.caller.as_deref(),
+            );
             log::debug!(
                 "Session bindings after bind: {}",
                 self.sessions
@@ -331,6 +404,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_sign() {
+        let audit_dir = std::env::temp_dir().join(format!("axo-audit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&audit_dir);
+        unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", &audit_dir) };
+
         let data = include_str!("./fixtures/b64_rsa");
         let private_key = PrivateKey::from_bytes(b64.decode(data).unwrap().as_slice()).unwrap();
 
@@ -345,7 +422,7 @@ mod tests {
         // Setup session
         let state = Arc::new(Mutex::new(Vec::new()));
         let (shutdown_tx, _) = broadcast::channel(1);
-        let mut session = SshAgentSession::new(state, None, shutdown_tx);
+        let mut session = SshAgentSession::new(state, None, None, shutdown_tx);
 
         // Add identity
         session
@@ -362,5 +439,19 @@ mod tests {
 
         // Test signing
         session.sign(sign_req).await.expect("Signing failed");
+
+        // The sign path recorded one `ssh.sign` event.
+        let page = axo_pass_core::audit::read(&axo_pass_core::audit::AuditFilter {
+            actions: vec![axo_pass_core::audit::Action::SshSign],
+            ..Default::default()
+        });
+        assert!(
+            page.events
+                .iter()
+                .any(|e| e.outcome == axo_pass_core::audit::Outcome::Succeeded),
+            "expected a successful ssh.sign audit event"
+        );
+
+        let _ = std::fs::remove_dir_all(&audit_dir);
     }
 }

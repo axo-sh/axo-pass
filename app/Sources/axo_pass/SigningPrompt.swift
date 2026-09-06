@@ -14,8 +14,14 @@ import UserNotifications
 /// broker's evaluation on that same context drives the icon.
 @MainActor
 final class SigningPromptModel {
-  private let grants = AuthorizationGrants<String>(label: "SigningPrompt")
+  private let grants = AuthorizationGrants(label: "SigningPrompt")
   private var showTask: Task<Void, Never>?
+
+  /// The grant the current request is evaluating on. The broker serves requests
+  /// serially and pairs each `begin` with an `end`, but `end` and `cancel` are
+  /// handed only the key label, so the caller is stashed here to rebuild the
+  /// full `GrantKey`.
+  private var activeKey: GrantKey?
 
   /// Where the prompt is drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
@@ -37,11 +43,14 @@ final class SigningPromptModel {
 
   // MARK: - Broker delegate
 
-  /// Prepare a context for `keyLabel` and return its address for the broker.
-  /// The context stays referenced here, so it outlives the signing attempt.
-  func begin(keyLabel: String, caller: String?) -> UInt64 {
-    let grant = grants.begin(keyLabel)
-    grant.lastCaller = caller
+  /// Prepare a context for the key and return its address for the broker. The
+  /// context stays referenced here, so it outlives the signing attempt.
+  func begin(keyLabel: String, fingerprint: String?, comment: String?, caller: String?) -> UInt64 {
+    let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
+    let key = GrantKey(subject: subject, caller: caller)
+    activeKey = key
+    let grant = grants.begin(key, caller: caller)
+    let keyName = comment ?? Self.shortKeyName(keyLabel)
 
     // A context that is still authenticated signs with no prompt at all. Delay
     // the panel briefly so that case does not flash a window on screen.
@@ -49,7 +58,7 @@ final class SigningPromptModel {
     showTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
-      self?.showPanel(keyLabel: keyLabel, caller: caller, view: grant.view)
+      self?.showPanel(key: key, keyName: keyName, view: grant.view)
     }
 
     return contextPointer(grant.context)
@@ -61,16 +70,18 @@ final class SigningPromptModel {
     showTask = nil
     panel.hide()
 
+    guard let key = activeKey else { return }
+    activeKey = nil
     // Cancelling through our own button forgets the grant before the evaluation
     // fails, so there may be nothing left to settle.
-    let grant = grants.end(keyLabel, outcome: outcome)
+    let grant = grants.end(key, outcome: outcome)
     report(keyLabel: keyLabel, caller: grant?.lastCaller, outcome: outcome)
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
   /// the evaluation in flight, which the broker reports as a cancellation.
-  func cancel(keyLabel: String) {
-    grants.forget(keyLabel)
+  func cancel(key: GrantKey) {
+    grants.forget(key)
   }
 
   /// Drop every signing authorization, so the next signature prompts again.
@@ -108,12 +119,12 @@ final class SigningPromptModel {
 
   // MARK: - Panel
 
-  private func showPanel(keyLabel: String, caller: String?, view: LAAuthenticationView) {
+  private func showPanel(key: GrantKey, keyName: String, view: LAAuthenticationView) {
     let content = SigningPromptView(
-      caller: caller,
-      keyName: Self.shortKeyName(keyLabel),
+      caller: key.caller,
+      keyName: keyName,
       icon: AuthenticationIcon(view: view),
-      onCancel: { [weak self] in self?.cancel(keyLabel: keyLabel) }
+      onCancel: { [weak self] in self?.cancel(key: key) }
     )
     panel.show(NSHostingView(rootView: content), width: 320)
   }
@@ -172,8 +183,11 @@ final class SigningPromptBridge: SignPromptDelegate {
     self.model = model
   }
 
-  func beginAuthorization(keyLabel: String, caller: String?) async throws -> UInt64 {
-    await model.begin(keyLabel: keyLabel, caller: caller)
+  func beginAuthorization(
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?
+  ) async throws -> UInt64 {
+    await model.begin(
+      keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

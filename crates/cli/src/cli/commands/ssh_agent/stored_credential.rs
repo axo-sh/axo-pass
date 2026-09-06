@@ -71,6 +71,15 @@ impl StoredCredential {
 }
 
 impl Credential for StoredCredential {
+    fn comment(&self) -> Option<String> {
+        let comment = match &self.credential {
+            proto::Credential::Key { comment, .. } | proto::Credential::Cert { comment, .. } => {
+                comment.clone()
+            },
+        };
+        Some(comment).filter(|c| !c.is_empty())
+    }
+
     fn key_type(&self) -> SshKeyType {
         match &self.credential {
             proto::Credential::Key { privkey, .. } => privkey

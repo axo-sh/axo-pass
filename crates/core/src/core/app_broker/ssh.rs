@@ -25,6 +25,14 @@ use crate::secrets::keychain::managed_key::ManagedSshKey;
 pub struct SignPrompt {
     pub key_label: String,
 
+    /// Canonical `SHA256:...` fingerprint of the key, resolved by the agent.
+    /// Used as the subject of the grant events the app records, so they match
+    /// the `ssh.sign` events the agent records.
+    pub fingerprint: Option<String>,
+
+    /// The key's OpenSSH comment, when it has one.
+    pub comment: Option<String>,
+
     /// Who asked, as the agent resolved it. See [`WireRequest::Sign`] for why
     /// this can be shown to the user.
     pub caller: Option<String>,
@@ -69,11 +77,15 @@ pub fn list_identities() -> Result<Vec<ManagedIdentity>, BrokerError> {
 /// user to answer a prompt, so call it from a thread that can block.
 pub fn request_signature(
     key_label: &str,
+    fingerprint: Option<&str>,
+    comment: Option<&str>,
     data: &[u8],
     caller: Option<&str>,
 ) -> Result<Signature, BrokerError> {
     let request = WireRequest::Sign {
         key_label: key_label.to_string(),
+        fingerprint: fingerprint.map(String::from),
+        comment: comment.map(String::from),
         caller: caller.map(String::from),
         data: b64.encode(data),
     };

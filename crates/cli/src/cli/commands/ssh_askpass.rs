@@ -18,6 +18,9 @@
 
 use std::io::Write;
 
+use axo_pass_core::audit::{
+    self, Action, Actor, AuditEvent, Outcome, Source, Subject, SubjectKind,
+};
 use axo_pass_core::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::ssh::askpass::key_id_from_prompt;
@@ -37,16 +40,18 @@ pub async fn run(prompt: String) {
 
     let request = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
-        key_id,
+        key_id: key_id.clone(),
         description: None,
         prompt: Some(prompt),
         error_message: None,
-        caller,
+        caller: caller.clone(),
     };
 
     let result = tokio::task::spawn_blocking(move || app_broker::request_ssh_passphrase(&request))
         .await
         .unwrap_or_else(|e| Err(BrokerError::Failed(format!("Task failed: {e}"))));
+
+    record_passphrase(key_id.as_deref(), caller.as_deref(), &result);
 
     match result {
         Ok(passphrase) => {
@@ -70,4 +75,41 @@ pub async fn run(prompt: String) {
             std::process::exit(1);
         },
     }
+}
+
+/// Record one `ssh.passphrase` event for a completed askpass request.
+///
+/// The actor carries only a single-level caller string: this helper resolves
+/// just its immediate parent, unlike the agent, which holds the full peer
+/// identity.
+fn record_passphrase(
+    key_id: Option<&str>,
+    caller: Option<&str>,
+    result: &Result<secrecy::SecretString, BrokerError>,
+) {
+    let (outcome, message) = match result {
+        Ok(_) => (Outcome::Succeeded, None),
+        Err(BrokerError::Cancelled) => (Outcome::Cancelled, None),
+        Err(e) => (Outcome::Failed, Some(e.to_string())),
+    };
+
+    let subject = key_id.map(|id| {
+        let fingerprint = if id.starts_with("SHA256:") {
+            id.to_string()
+        } else {
+            format!("SHA256:{id}")
+        };
+        Subject::new(SubjectKind::SshKey, fingerprint.clone()).fingerprint(fingerprint)
+    });
+
+    let mut event = AuditEvent::new(Source::Askpass, Action::SshPassphrase, outcome)
+        .maybe_subject(subject)
+        .maybe_actor(caller.map(|c| Actor {
+            caller: Some(c.to_string()),
+            ..Default::default()
+        }));
+    if let Some(message) = message {
+        event = event.message(message);
+    }
+    audit::record(event);
 }

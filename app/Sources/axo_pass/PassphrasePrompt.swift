@@ -10,7 +10,7 @@ import SwiftUI
 /// Otherwise, or if gpg just rejected the saved passphrase, shows a text field for the passphrase.
 @MainActor
 final class PassphrasePromptModel {
-  private let grants = AuthorizationGrants<String>(label: "PassphrasePrompt")
+  private let grants = AuthorizationGrants(label: "PassphrasePrompt")
   private var showTask: Task<Void, Never>?
 
   /// Resumed when the user answers the text field, the confirmation, or the
@@ -36,8 +36,7 @@ final class PassphrasePromptModel {
   /// Prepare a context to read the saved passphrase on, and put the biometric
   /// prompt on screen.
   func begin(prompt: PassphrasePrompt) -> UInt64 {
-    let grant = grants.begin(Self.grantKey(prompt))
-    grant.lastCaller = prompt.caller
+    let grant = grants.begin(Self.grantKey(prompt), caller: prompt.caller)
 
     // A context that is still authenticated reads the keychain with no prompt
     // at all. Delay the panel briefly so that case does not flash a window.
@@ -149,10 +148,13 @@ final class PassphrasePromptModel {
     continuation.resume(returning: answer)
   }
 
-  /// One grant per key. A prompt with no key grip never reaches `begin`, since
-  /// there is nothing in the keychain to unlock.
-  private static func grantKey(_ prompt: PassphrasePrompt) -> String {
-    prompt.keyId ?? ""
+  /// One grant per key and requesting process. A prompt with no key grip never
+  /// reaches `begin`, since there is nothing in the keychain to unlock.
+  private static func grantKey(_ prompt: PassphrasePrompt) -> GrantKey {
+    let kind: GrantSubject.Kind = prompt.kind == .ssh ? .ssh : .gpg
+    let id = prompt.keyId ?? ""
+    let subject = GrantSubject(kind: kind, id: id, label: nil)
+    return GrantKey(subject: subject, caller: prompt.caller)
   }
 }
 

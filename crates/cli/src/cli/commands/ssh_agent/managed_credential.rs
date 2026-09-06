@@ -88,6 +88,14 @@ pub fn list_managed_credentials() -> Vec<ManagedCredential> {
 }
 
 impl Credential for ManagedCredential {
+    fn comment(&self) -> Option<String> {
+        Some(self.comment.clone()).filter(|c| !c.is_empty())
+    }
+
+    fn key_label(&self) -> Option<String> {
+        Some(self.key_label.clone())
+    }
+
     fn key_type(&self) -> SshKeyType {
         SshKeyType::Ecdsa
     }
@@ -101,8 +109,20 @@ impl Credential for ManagedCredential {
         req: proto::SignRequest,
         caller: Option<&str>,
     ) -> Result<ssh_key::Signature, CredentialError> {
-        let result =
-            call_broker(|| app_broker::request_signature(&self.key_label, &req.data, caller));
+        let fingerprint = self
+            .public_key
+            .fingerprint(ssh_key::HashAlg::Sha256)
+            .to_string();
+        let comment = (!self.comment.is_empty()).then_some(self.comment.as_str());
+        let result = call_broker(|| {
+            app_broker::request_signature(
+                &self.key_label,
+                Some(&fingerprint),
+                comment,
+                &req.data,
+                caller,
+            )
+        });
 
         result.map_err(|e| {
             match e {

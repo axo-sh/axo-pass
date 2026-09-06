@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axo_pass_core::audit::{Action, Actor, Outcome};
 use axo_pass_core::core::provenance::PeerIdentity;
 use axo_pass_core::ssh::agent_client::default_socket_path;
 use ssh_agent_lib::agent::{Agent, Session};
@@ -11,6 +12,7 @@ use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, broadcast};
 
+use crate::cli::commands::ssh_agent::audit;
 use crate::cli::commands::ssh_agent::session::SshAgentSession;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 
@@ -85,6 +87,8 @@ impl SshAgentServer {
             ))
         })?;
 
+        audit::record_lifecycle(Action::SshAgentStart, Outcome::Succeeded, None, None);
+
         let mut shutdown_rx = self.shutdown_sender.subscribe();
         tokio::select! {
             result = ssh_agent_lib::agent::listen(listener, self.clone()) => {
@@ -99,6 +103,7 @@ impl SshAgentServer {
                 log::info!("ssh-agent: Shutting down...");
             }
         }
+        audit::record_lifecycle(Action::SshAgentStop, Outcome::Succeeded, None, None);
         let _ = fs::remove_file(&socket_path);
         Ok(())
     }
@@ -109,15 +114,17 @@ impl Agent<UnixListener> for SshAgentServer {
         // From the audit token, not `peer_cred().pid()`: a pid can be recycled
         // onto an unrelated process between reading it and resolving it, and
         // this name ends up in a signing prompt.
-        let caller = PeerIdentity::identify(socket.as_raw_fd())
+        let peer = PeerIdentity::identify(socket.as_raw_fd())
             .inspect_err(|e| log::debug!("SSH agent caller unidentified: {e}"))
             .ok()
-            .inspect(|peer| log::debug!("SSH agent caller: {peer:#?}"))
-            .and_then(|peer| peer.caller());
+            .inspect(|peer| log::debug!("SSH agent caller: {peer:#?}"));
+        let caller = peer.as_ref().and_then(|peer| peer.caller());
+        let actor = peer.as_ref().map(Actor::from_peer);
 
         SshAgentSession::new(
             self.credentials.clone(),
             caller,
+            actor,
             self.shutdown_sender.clone(),
         )
     }

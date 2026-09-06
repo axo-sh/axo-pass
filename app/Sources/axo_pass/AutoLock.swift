@@ -6,12 +6,19 @@ import Foundation
 ///
 /// Only input delivered to this app counts as activity. Working in another app
 /// is not a reason to keep the vaults decrypted.
+/// Why an automatic lock fired.
+enum AutoLockTrigger: String {
+  case timer
+  case sleep
+  case screenLock = "screen_lock"
+}
+
 @MainActor
 final class AutoLock {
   /// Idle time before locking.
   static let timeout: TimeInterval = 5 * 60
 
-  private let onLock: () -> Void
+  private let onLock: (AutoLockTrigger) -> Void
   private var timer: Timer?
   private var eventMonitor: Any?
   private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -21,7 +28,7 @@ final class AutoLock {
     .scrollWheel, .mouseMoved,
   ]
 
-  init(onLock: @escaping () -> Void) {
+  init(onLock: @escaping (AutoLockTrigger) -> Void) {
     self.onLock = onLock
   }
 
@@ -35,10 +42,11 @@ final class AutoLock {
       return event
     }
 
-    observe(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification)
+    observe(
+      NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification, trigger: .sleep)
     observe(
       DistributedNotificationCenter.default(),
-      Notification.Name("com.apple.screenIsLocked"))
+      Notification.Name("com.apple.screenIsLocked"), trigger: .screenLock)
 
     restartTimer()
   }
@@ -53,9 +61,11 @@ final class AutoLock {
     observers = []
   }
 
-  private func observe(_ center: NotificationCenter, _ name: Notification.Name) {
+  private func observe(
+    _ center: NotificationCenter, _ name: Notification.Name, trigger: AutoLockTrigger
+  ) {
     let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-      MainActor.assumeIsolated { self?.fire() }
+      MainActor.assumeIsolated { self?.fire(trigger) }
     }
     observers.append((center, observer))
   }
@@ -63,12 +73,12 @@ final class AutoLock {
   private func restartTimer() {
     timer?.invalidate()
     timer = Timer.scheduledTimer(withTimeInterval: Self.timeout, repeats: false) { [weak self] _ in
-      MainActor.assumeIsolated { self?.fire() }
+      MainActor.assumeIsolated { self?.fire(.timer) }
     }
   }
 
-  private func fire() {
+  private func fire(_ trigger: AutoLockTrigger) {
     stop()
-    onLock()
+    onLock(trigger)
   }
 }

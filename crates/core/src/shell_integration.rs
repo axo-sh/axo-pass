@@ -108,7 +108,7 @@ fn write_integration_to(path: &Path) -> Result<(), String> {
             std::fs::write(path, updated)
                 .map_err(|e| format!("Failed to write to {}: {e}", path.display()))?;
             log::debug!("Updated shell integration block in {}", path.display());
-        }
+        },
         None => {
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
@@ -127,7 +127,7 @@ fn write_integration_to(path: &Path) -> Result<(), String> {
                 .map_err(|e| format!("Failed to write to {}: {e}", path.display()))?;
 
             log::debug!("Wrote shell integration block to {}", path.display());
-        }
+        },
     }
 
     Ok(())

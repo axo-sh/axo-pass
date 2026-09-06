@@ -7,6 +7,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::audit;
+
 const OPTION: &str = "pinentry-program";
 const BACKUP_SUFFIX: &str = "bak";
 
@@ -150,6 +152,15 @@ pub fn configure() -> Result<Status, String> {
     set_owner_only(&conf_path, 0o600);
 
     log::debug!("Configured pinentry-program in {}", conf_path.display());
+
+    audit::record(
+        audit::AuditEvent::new(
+            audit::process_source(),
+            audit::Action::GpgAgentConfChanged,
+            audit::Outcome::Succeeded,
+        )
+        .detail("path", conf_path.display().to_string()),
+    );
 
     Ok(check_status())
 }

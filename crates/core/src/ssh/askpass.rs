@@ -36,7 +36,9 @@ pub fn extract_key_path(prompt: &str) -> Option<String> {
     if !prompt.to_lowercase().contains("enter passphrase") {
         return None;
     }
-    PATH_REGEX.find(prompt).map(|m| m.as_str().trim().to_string())
+    PATH_REGEX
+        .find(prompt)
+        .map(|m| m.as_str().trim().to_string())
 }
 
 /// The keychain fingerprint for the key an askpass prompt names, if any.

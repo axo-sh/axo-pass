@@ -43,12 +43,16 @@ pub struct Status {
     pub config_path: PathBuf,
     /// The socket path this app writes.
     pub expected_agent: String,
-    /// The currently effective `IdentityAgent`, when it is not this app's socket.
+    /// The currently effective `IdentityAgent`, when it is not this app's
+    /// socket.
     pub current_agent: Option<String>,
 }
 
 pub fn config_path() -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(".ssh").join("config")
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".ssh")
+        .join("config")
 }
 
 fn expected_agent() -> String {
@@ -231,14 +235,17 @@ mod tests {
     #[test]
     fn rewrite_comments_out_an_existing_identity_agent() {
         let out = rewrite_config("IdentityAgent /other/agent.sock\n", "/tmp/axo/agent.sock");
-        assert!(out.contains(&format!("{DISABLED_NOTE}\n# IdentityAgent /other/agent.sock")));
+        assert!(out.contains(&format!(
+            "{DISABLED_NOTE}\n# IdentityAgent /other/agent.sock"
+        )));
         assert!(out.contains("IdentityAgent \"/tmp/axo/agent.sock\""));
         assert_eq!(out.matches("\nIdentityAgent ").count(), 0);
     }
 
     #[test]
     fn strip_app_block_removes_only_the_block() {
-        let content = format!("# keep\n{BLOCK_START}\nHost *\n  IdentityAgent \"x\"\n{BLOCK_END}\n# tail\n");
+        let content =
+            format!("# keep\n{BLOCK_START}\nHost *\n  IdentityAgent \"x\"\n{BLOCK_END}\n# tail\n");
         assert_eq!(strip_app_block(&content), "# keep\n# tail\n");
         assert_eq!(strip_app_block("# no block here\n"), "# no block here\n");
     }

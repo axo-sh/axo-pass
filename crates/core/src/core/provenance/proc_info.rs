@@ -77,6 +77,31 @@ impl ProcInfo {
         self.parent_pid
     }
 
+    pub(crate) fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub(crate) fn executable_path(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .and_then(|s| s.main_executable.to_file_path().ok())
+            .map(|p| p.display().to_string())
+    }
+
+    pub(crate) fn bundle_id(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .map(|s| s.identifier.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub(crate) fn team_id(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .map(|s| s.team_identifier.clone())
+            .filter(|s| !s.is_empty())
+    }
+
     // Returns true if this process appears to be part of axo/axo-pass.
     // pub fn is_axo(&self) -> bool {
     //     let name = self.short_name();

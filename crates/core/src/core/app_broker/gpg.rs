@@ -9,6 +9,7 @@ use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request};
+use crate::audit;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
@@ -263,11 +264,28 @@ async fn unlock_saved_passphrase(
 /// Store a passphrase the user asked us to remember. A failure here is logged
 /// and no more: gpg still gets the passphrase it asked for.
 async fn save_passphrase(entry: PasswordEntry, passphrase: SecretString) {
+    let key_id = entry.key_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         entry.set_password(passphrase).map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("Saving task failed: {e}")));
+
+    let (outcome, message) = match &result {
+        Ok(()) => (audit::Outcome::Succeeded, None),
+        Err(e) => (audit::Outcome::Failed, Some(e.clone())),
+    };
+    let mut event = audit::AuditEvent::new(
+        audit::process_source(),
+        audit::Action::GpgPassphraseSaved,
+        outcome,
+    )
+    .subject(audit::Subject::new(audit::SubjectKind::GpgKey, key_id));
+    if let Some(message) = message {
+        event = event.message(message);
+    }
+    audit::record(event);
+
     if let Err(e) = result {
         log::error!("Failed to save the passphrase to the keychain: {e}");
     }

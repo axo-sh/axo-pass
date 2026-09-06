@@ -5,12 +5,14 @@ use std::io;
 
 use secrecy::SecretString;
 
+use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Source, Subject, SubjectKind};
 use crate::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
 use crate::core::provenance::Provenance;
 use crate::gpg::pinentry::server::PinentryServerHandler;
 
 pub struct BrokerPinentryHandler {
     caller: Option<String>,
+    actor: Option<Actor>,
 }
 
 impl Default for BrokerPinentryHandler {
@@ -26,10 +28,27 @@ impl BrokerPinentryHandler {
         // whatever launched it, which is as far as the process tree goes: the
         // program that wanted the signature talks to the agent over its own
         // socket and is not our ancestor.
-        let caller = Provenance::resolve_current_parent()
-            .inspect(|provenance| log::debug!("pinentry caller: {provenance:#?}"))
-            .and_then(|provenance| provenance.caller());
-        Self { caller }
+        let provenance = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("pinentry caller: {provenance:#?}"));
+        let caller = provenance.as_ref().and_then(|p| p.caller());
+        let actor = provenance.as_ref().map(Actor::from_provenance);
+        Self { caller, actor }
+    }
+
+    /// Record a `gpg.*` event for a completed prompt.
+    fn record<T>(&self, action: Action, subject: Option<Subject>, result: &io::Result<T>) {
+        let (outcome, message) = match result {
+            Ok(_) => (Outcome::Succeeded, None),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => (Outcome::Cancelled, None),
+            Err(e) => (Outcome::Failed, Some(e.to_string())),
+        };
+        let mut event = AuditEvent::new(Source::Pinentry, action, outcome)
+            .maybe_subject(subject)
+            .maybe_actor(self.actor.clone());
+        if let Some(message) = message {
+            event = event.message(message);
+        }
+        audit::record(event);
     }
 
     fn prompt(
@@ -72,28 +91,38 @@ impl PinentryServerHandler for BrokerPinentryHandler {
         error_message: Option<&str>,
     ) -> io::Result<SecretString> {
         let request = self.prompt(desc, prompt, keyinfo, error_message);
+        let key_id = request.key_id.clone();
         // The broker blocks on the user answering a prompt, so it runs off the
         // reactor.
-        tokio::task::spawn_blocking(move || app_broker::request_passphrase(&request))
+        let result = tokio::task::spawn_blocking(move || app_broker::request_passphrase(&request))
             .await
             .map_err(io::Error::other)?
-            .map_err(to_io_error)
+            .map_err(to_io_error);
+        let subject = key_id.map(|id| Subject::new(SubjectKind::GpgKey, id));
+        self.record(Action::GpgPassphrase, subject, &result);
+        result
     }
 
     async fn confirm(&mut self, desc: Option<&str>) -> io::Result<bool> {
         let desc = desc.map(String::from);
-        tokio::task::spawn_blocking(move || app_broker::request_confirm(desc.as_deref()))
-            .await
-            .map_err(io::Error::other)?
-            .map_err(to_io_error)
+        let result =
+            tokio::task::spawn_blocking(move || app_broker::request_confirm(desc.as_deref()))
+                .await
+                .map_err(io::Error::other)?
+                .map_err(to_io_error);
+        self.record(Action::GpgConfirm, None, &result);
+        result
     }
 
     async fn message(&mut self, desc: Option<&str>) -> io::Result<()> {
         let desc = desc.map(String::from);
-        tokio::task::spawn_blocking(move || app_broker::request_message(desc.as_deref()))
-            .await
-            .map_err(io::Error::other)?
-            .map_err(to_io_error)
+        let result =
+            tokio::task::spawn_blocking(move || app_broker::request_message(desc.as_deref()))
+                .await
+                .map_err(io::Error::other)?
+                .map_err(to_io_error);
+        self.record(Action::GpgMessage, None, &result);
+        result
     }
 }
 

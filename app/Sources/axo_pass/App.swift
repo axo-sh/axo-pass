@@ -11,6 +11,10 @@ struct AxoPassApp: App {
     Settings { EmptyView() }
       .commands {
         CommandGroup(replacing: .appSettings) {}
+        CommandGroup(after: .help) {
+          Button("Audit Log") { appDelegate.openAuditLog() }
+            .disabled(!appDelegate.model.isAppUnlocked)
+        }
         // Declared rather than left to the default menu: the passphrase panel
         // is shown from a launch that builds no window, and pasting a
         // passphrase out of a password manager needs these key equivalents.

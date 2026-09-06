@@ -178,6 +178,35 @@ impl PeerIdentity {
     pub fn caller(&self) -> Option<String> {
         self.provenance.caller()
     }
+
+    /// The peer's resolved process chain.
+    pub fn provenance(&self) -> &Provenance {
+        &self.provenance
+    }
+
+    /// The peer's main executable path.
+    pub fn executable(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .and_then(|info| info.main_executable.to_file_path().ok())
+            .map(|p| p.display().to_string())
+    }
+
+    /// The peer's bundle identifier, from its code signature.
+    pub fn bundle_id(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .map(|info| info.identifier.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The peer's team identifier, from its code signature.
+    pub fn team_id(&self) -> Option<String> {
+        self.signing_info
+            .as_ref()
+            .map(|info| info.team_identifier.clone())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 impl fmt::Debug for PeerIdentity {
