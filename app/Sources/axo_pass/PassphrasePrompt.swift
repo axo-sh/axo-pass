@@ -113,7 +113,7 @@ final class PassphrasePromptModel {
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) }
     )
-    panel.show(NSHostingView(rootView: content), width: 420)
+    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
   }
 
   private func showEntryPanel(prompt: PassphrasePrompt) {
@@ -126,7 +126,7 @@ final class PassphrasePromptModel {
       },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    panel.show(NSHostingView(rootView: content), width: 420)
+    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
   }
 
   private func showMessagePanel(description: String?, cancellable: Bool) {
@@ -136,7 +136,7 @@ final class PassphrasePromptModel {
       onConfirm: { [weak self] in self?.answer(.confirmed) },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    panel.show(NSHostingView(rootView: content), width: 360)
+    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
   }
 
   /// Resume whatever the panel is waiting on. Guarded because a continuation
@@ -248,7 +248,7 @@ private struct PassphraseEntryView: View {
       }
     }
     .padding(24)
-    .frame(width: 420)
+    .frame(maxWidth: .infinity)
     .onAppear { fieldFocused = true }
   }
 }
@@ -260,6 +260,19 @@ private struct PinentryTranscript: View {
   let prompt: PassphrasePrompt
 
   var body: some View {
+    ScrollView(.horizontal, showsIndicators: true) {
+      content
+        .padding(14)
+    }
+    .textSelection(.enabled)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(.quaternary.opacity(0.5))
+    )
+  }
+
+  private var content: some View {
     VStack(alignment: .leading, spacing: 6) {
       switch prompt.kind {
       case .gpg:
@@ -294,13 +307,7 @@ private struct PinentryTranscript: View {
         .font(monoFont.weight(.semibold))
         .foregroundStyle(Color.accentColor)
     }
-    .textSelection(.enabled)
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(.quaternary.opacity(0.5))
-    )
+    .fixedSize(horizontal: true, vertical: false)
   }
 
   private var monoFont: Font { .system(.body, design: .monospaced) }
@@ -338,7 +345,7 @@ private struct PassphraseMessageView: View {
       }
     }
     .padding(20)
-    .frame(width: 360)
+    .frame(maxWidth: .infinity)
   }
 }
 

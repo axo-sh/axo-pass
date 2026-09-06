@@ -121,7 +121,7 @@ final class VaultUnlockPromptModel {
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
     )
-    panel.show(NSHostingView(rootView: content), width: 340)
+    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
   }
 
   /// The localized reason `LocalAuthentication` shows in its own chrome.

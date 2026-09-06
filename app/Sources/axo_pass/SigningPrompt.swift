@@ -146,7 +146,7 @@ final class SigningPromptModel {
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(key: key) }
     )
-    panel.show(NSHostingView(rootView: content), width: 320)
+    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
   }
 
   /// A short display name for a key. Prefers the shortened `ssh-key-<uuid>`

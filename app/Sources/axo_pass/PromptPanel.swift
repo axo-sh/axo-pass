@@ -6,6 +6,10 @@ import AppKit
 /// it is visible whether or not the system lets us come forward.
 @MainActor
 final class PromptPanel {
+  /// Every broker prompt is drawn at this width, so the panels the user sees
+  /// for signing, vault access and passphrase entry line up.
+  static let standardWidth: CGFloat = 400
+
   /// Called when the panel goes up, and again when it comes down. The app steps
   /// back from the biometric hardware and the cross-process auth lock while one
   /// is up, so its own lock screen does not fight the panel for Touch ID.
@@ -33,7 +37,17 @@ final class PromptPanel {
     panel.level = .floating
     panel.hidesOnDeactivate = false
     panel.contentView = view
-    panel.setContentSize(view.fittingSize)
+    // Pin the view to `width` and take only the height from its fit. Left to
+    // `view.fittingSize`, a wide line in the request transcript would stretch
+    // the panel past `width`, so the panels would not line up.
+    view.translatesAutoresizingMaskIntoConstraints = false
+    let widthConstraint = view.widthAnchor.constraint(equalToConstant: width)
+    widthConstraint.isActive = true
+    view.layoutSubtreeIfNeeded()
+    let height = view.fittingSize.height
+    widthConstraint.isActive = false
+    view.translatesAutoresizingMaskIntoConstraints = true
+    panel.setContentSize(NSSize(width: width, height: height))
     panel.center()
     // The panel is non-activating and sits at `.floating`, so it draws above
     // other apps and takes key for typing without activating axo-pass. Calling
