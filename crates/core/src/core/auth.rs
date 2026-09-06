@@ -41,6 +41,7 @@ enum AuthMessage {
 /// thread. The UI owns the context it authenticates with so it can attach an
 /// `LAAuthenticationView` and draw the biometric prompt inline rather than in
 /// the system dialog.
+#[derive(Clone)]
 pub struct ForeignContext(Retained<LAContext>);
 
 impl ForeignContext {
@@ -71,7 +72,7 @@ struct AuthWork {
     work: Box<dyn FnOnce(Retained<LAContext>) + Send + 'static>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AuthContext {
     SharedThreadLocal,
     WithContext(String),

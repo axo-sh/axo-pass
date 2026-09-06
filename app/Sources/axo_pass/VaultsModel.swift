@@ -76,6 +76,10 @@ final class VaultsModel {
   private let passphrasePrompt = PassphrasePromptModel()
   private var passphraseBridge: PassphrasePromptBridge? = nil
 
+  // Draws the prompt `ap item list` and `ap read` delegate to us.
+  private let vaultUnlockPrompt = VaultUnlockPromptModel()
+  private var vaultUnlockBridge: VaultUnlockPromptBridge? = nil
+
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
   var selectedItemRef: ItemRef? = nil
@@ -119,8 +123,11 @@ final class VaultsModel {
     guard signingBridge == nil else { return }
     let signing = SigningPromptBridge(model: signingPrompt)
     let passphrase = PassphrasePromptBridge(model: passphrasePrompt)
+    let vaultUnlock = VaultUnlockPromptBridge(model: vaultUnlockPrompt)
     signingBridge = signing
     passphraseBridge = passphrase
+    vaultUnlockBridge = vaultUnlock
+    vaultUnlockPrompt.core = core
 
     // A broker panel carries its own biometric on its own context and takes the
     // cross-process auth lock. Step the lock screen's auto-unlock aside for it,
@@ -131,8 +138,10 @@ final class VaultsModel {
     }
     signingPrompt.panel.onVisibleChange = onPanel
     passphrasePrompt.panel.onVisibleChange = onPanel
+    vaultUnlockPrompt.panel.onVisibleChange = onPanel
     do {
-      try await core.startAppBroker(signDelegate: signing, passphraseDelegate: passphrase)
+      try await core.startAppBroker(
+        signDelegate: signing, passphraseDelegate: passphrase, vaultDelegate: vaultUnlock)
       signingPrompt.start()
       // Authorizations also expire on their own clocks, but sleep and screen
       // lock belong to the broker's lifetime: requests are served with the
@@ -145,6 +154,7 @@ final class VaultsModel {
     } catch {
       signingBridge = nil
       passphraseBridge = nil
+      vaultUnlockBridge = nil
       NSLog("Failed to start the app broker: %@", String(describing: error))
     }
   }
@@ -156,6 +166,7 @@ final class VaultsModel {
       MainActor.assumeIsolated {
         self?.signingPrompt.forgetAll()
         self?.passphrasePrompt.forgetAll()
+        self?.vaultUnlockPrompt.forgetAll()
       }
     }
   }
@@ -169,7 +180,9 @@ final class VaultsModel {
     guard autoPromptPending, NSApp.isActive else { return }
     // A broker panel holds the auth lock and carries its own biometric; the
     // lock screen must not raise a competing one behind it.
-    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible else { return }
+    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible,
+      !vaultUnlockPrompt.panel.isVisible
+    else { return }
     unlock()
   }
 

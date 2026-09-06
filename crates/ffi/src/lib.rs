@@ -576,6 +576,7 @@ pub enum GrantEventKind {
 pub enum GrantSubjectKind {
     SshKey,
     GpgKey,
+    Vault,
 }
 
 /// Identifies the key a grant event is about. `id` is the canonical
@@ -1191,6 +1192,7 @@ impl AxoPass {
         &self,
         sign_delegate: Arc<dyn SignPromptDelegate>,
         passphrase_delegate: Arc<dyn PassphrasePromptDelegate>,
+        vault_delegate: Arc<dyn VaultPromptDelegate>,
     ) -> Result<(), FfiError> {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         {
@@ -1209,6 +1211,9 @@ impl AxoPass {
             }),
             passphrase: Arc::new(DelegatingPassphraseAuthorizer {
                 delegate: passphrase_delegate,
+            }),
+            vault: Arc::new(DelegatingVaultAuthorizer {
+                delegate: vault_delegate,
             }),
         };
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -1286,6 +1291,7 @@ impl AxoPass {
         let subject_kind = match subject.kind {
             GrantSubjectKind::SshKey => audit::SubjectKind::SshKey,
             GrantSubjectKind::GpgKey => audit::SubjectKind::GpgKey,
+            GrantSubjectKind::Vault => audit::SubjectKind::Vault,
         };
         // An SSH fingerprint arrives with or without the `SHA256:` prefix
         // depending on the path that produced it. Normalize to the canonical
@@ -1554,5 +1560,92 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
 
     async fn message(&self, description: Option<String>) {
         self.delegate.message(description).await
+    }
+}
+
+/// What the app is being asked to do with a vault. Mirrors
+/// [`app_broker::VaultAction`].
+#[derive(uniffi::Enum, Clone)]
+pub enum VaultAction {
+    ListItems,
+    ReadSecret {
+        item_key: String,
+        credential_key: String,
+    },
+}
+
+impl From<app_broker::VaultAction> for VaultAction {
+    fn from(action: app_broker::VaultAction) -> Self {
+        match action {
+            app_broker::VaultAction::ListItems => Self::ListItems,
+            app_broker::VaultAction::ReadSecret {
+                item_key,
+                credential_key,
+            } => Self::ReadSecret {
+                item_key,
+                credential_key,
+            },
+        }
+    }
+}
+
+/// A vault access prompt, as the app sees it. Mirrors
+/// [`app_broker::VaultAccessPrompt`].
+#[derive(uniffi::Record, Clone)]
+pub struct VaultAccessPrompt {
+    pub vault_key: String,
+    pub caller: Option<String>,
+    pub action: VaultAction,
+}
+
+impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
+    fn from(prompt: app_broker::VaultAccessPrompt) -> Self {
+        Self {
+            vault_key: prompt.vault_key,
+            caller: prompt.caller,
+            action: prompt.action.into(),
+        }
+    }
+}
+
+/// Implemented by the app. `begin_authorization` prepares an `LAContext` with
+/// an `LAAuthenticationView` attached so a lapsed authentication can be
+/// re-evaluated inline; `end_authorization` takes the prompt down again.
+#[uniffi::export(with_foreign)]
+#[async_trait::async_trait]
+pub trait VaultPromptDelegate: Send + Sync {
+    /// Return the address of a live `LAContext` to unlock the vault on. The app
+    /// must keep its own reference to that context until `end_authorization`.
+    async fn begin_authorization(&self, prompt: VaultAccessPrompt) -> Result<u64, FfiError>;
+
+    /// The attempt finished. Called once for every `begin_authorization`.
+    async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
+}
+
+struct DelegatingVaultAuthorizer {
+    delegate: Arc<dyn VaultPromptDelegate>,
+}
+
+#[async_trait::async_trait]
+impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
+    async fn begin(&self, prompt: app_broker::VaultAccessPrompt) -> Result<ForeignContext, String> {
+        let context_ptr = self
+            .delegate
+            .begin_authorization(prompt.into())
+            .await
+            .map_err(|e| e.to_string())?;
+        if context_ptr == 0 {
+            return Err("null LAContext pointer".to_string());
+        }
+        // SAFETY: the app holds a reference to the context until
+        // `end_authorization`, which the broker calls after the unlock.
+        unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
+            .map_err(|e| e.to_string())
+    }
+
+    async fn end(&self, prompt: app_broker::VaultAccessPrompt, outcome: app_broker::PromptOutcome) {
+        self.delegate
+            .end_authorization(prompt.into(), outcome.into())
+            .await;
     }
 }

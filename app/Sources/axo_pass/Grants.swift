@@ -39,6 +39,7 @@ struct GrantSubject: Hashable, Sendable {
   enum Kind: Hashable, Sendable {
     case ssh
     case gpg
+    case vault
   }
 
   let kind: Kind
@@ -57,10 +58,13 @@ struct GrantSubject: Hashable, Sendable {
   }
 
   var ffiInput: GrantSubjectInput {
-    GrantSubjectInput(
-      kind: kind == .ssh ? .sshKey : .gpgKey,
-      id: id,
-      label: label)
+    let ffiKind: GrantSubjectKind =
+      switch kind {
+      case .ssh: .sshKey
+      case .gpg: .gpgKey
+      case .vault: .vault
+      }
+    return GrantSubjectInput(kind: ffiKind, id: id, label: label)
   }
 }
 
@@ -71,13 +75,21 @@ struct GrantSubject: Hashable, Sendable {
 /// A nil caller is its own bucket. It means the caller could not be resolved,
 /// which happens on an unsigned local build.
 ///
+/// `scope` narrows a key further when one subject covers operations of
+/// different weight. A vault uses it to keep a listing's approval from
+/// authorizing a read of the same vault.
+///
 /// `description` is the key alone. It names the subject in the process log; the
 /// caller is recorded separately as the event's actor.
 struct GrantKey: Hashable, CustomStringConvertible, Sendable {
   let subject: GrantSubject
   let caller: String?
+  var scope: String? = nil
 
-  var description: String { subject.id }
+  var description: String {
+    guard let scope else { return subject.id }
+    return "\(subject.id) (\(scope))"
+  }
 }
 
 /// An approval the user has given, and the context that carries it.

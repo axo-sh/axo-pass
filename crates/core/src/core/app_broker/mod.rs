@@ -37,6 +37,7 @@ use crate::core::provenance::{PeerIdentity, PeerPolicy};
 
 pub mod gpg;
 pub mod ssh;
+pub mod vault;
 
 pub use gpg::{
     CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
@@ -45,6 +46,10 @@ pub use gpg::{
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_authorize_key_use,
     request_signature, request_ssh_passphrase,
+};
+pub use vault::{
+    BrokerCredential, BrokerVaultItem, VaultAccessPrompt, VaultAction, VaultAuthorizer,
+    request_vault_items, request_vault_secret,
 };
 
 /// How long the agent waits for the user to answer the app's prompt before
@@ -63,9 +68,7 @@ pub fn broker_socket_path() -> PathBuf {
     app_data_dir().join("app-broker.sock")
 }
 
-/// Marks an `open` issued by [`launch_app`]. `open` delivers a reopen event to
-/// an app that is already running and drops `--args` when it does, so a marker
-/// is the only way to tell a broker launch from a person opening the app.
+/// Marks an `open` issued by [`launch_app`].
 fn launch_request_path() -> PathBuf {
     app_data_dir().join("app-broker.launch")
 }
@@ -91,9 +94,16 @@ pub fn take_launch_request() -> bool {
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
-    /// No app is listening. The caller should fall back to its own prompt.
+    /// No app is listening and none could be started. The caller should fall
+    /// back to its own prompt.
     #[error("App broker unavailable")]
     Unavailable,
+
+    /// The app accepted the connection and then went away before answering.
+    /// Distinct from [`BrokerError::Unavailable`]: an app was there, so falling
+    /// back to a local unlock would only fail again with a worse message.
+    #[error("App broker closed the connection")]
+    Disconnected,
 
     #[error("User cancelled the prompt")]
     Cancelled,
@@ -119,6 +129,7 @@ pub enum PromptOutcome {
 pub struct Authorizers {
     pub sign: Arc<dyn SignAuthorizer>,
     pub passphrase: Arc<dyn PassphraseAuthorizer>,
+    pub vault: Arc<dyn VaultAuthorizer>,
 }
 
 /// The wire format: one JSON line each way, one request per connection.
@@ -199,6 +210,25 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap item list`: unlock a vault and return its item overview, never a
+    /// secret.
+    ListVaultItems {
+        vault_key: String,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap read`: unlock a vault and return one credential's secret value.
+    ReadVaultSecret {
+        vault_key: String,
+        item_key: String,
+        credential_key: String,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
@@ -228,6 +258,13 @@ enum WireResponse {
     },
     Confirmed {
         ok: bool,
+    },
+    VaultItems {
+        items: Vec<vault::BrokerVaultItem>,
+    },
+    /// `None` when the credential does not exist.
+    VaultSecret {
+        value: Option<String>,
     },
     Acknowledged,
     Cancelled,
@@ -266,7 +303,7 @@ fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
         .map_err(|e| BrokerError::Failed(format!("Failed to read response: {e}")))?;
     if response_line.trim().is_empty() {
         // The app went away mid-request.
-        return Err(BrokerError::Unavailable);
+        return Err(BrokerError::Disconnected);
     }
 
     serde_json::from_str(&response_line)
@@ -303,7 +340,9 @@ fn launch_app() -> Result<(), BrokerError> {
 
     log::debug!("Starting {} for the app broker", bundle.display());
     // The marker tells the app this launch is only to serve the broker, so it
-    // stays headless: no main window, no Dock icon, no focus taken.
+    // stays headless: no main window, no Dock icon, no focus taken. A file is
+    // used because `open` drops `--args` when the app is already running and
+    // only delivers a reopen event.
     if let Err(e) = fs::write(launch_request_path(), b"") {
         log::debug!("Could not write the broker launch marker: {e}");
     }
@@ -437,7 +476,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                         // failed the policy, so the event marks them unverified.
                         if let Ok(peer) = PeerIdentity::identify(stream.as_raw_fd()) {
                             log::debug!("App broker rejected peer: {peer:#?}");
-                            event = event.actor(unverified_actor(&peer));
+                            event = event.actor(peer_actor(&peer));
                         }
                         audit::record(event);
                         continue;
@@ -448,7 +487,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                 let authorizers = authorizers.clone();
                 // Serially, not spawned: two prompts at once would contend for
                 // the screen and the system's authentication session.
-                if let Err(e) = handle_connection(stream, authorizers).await {
+                if let Err(e) = handle_connection(stream, &peer, authorizers).await {
                     log::debug!("App broker connection failed: {e}");
                 }
             },
@@ -460,8 +499,9 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
     }
 }
 
-/// Build an audit actor from a peer identified without policy checks.
-fn unverified_actor(peer: &PeerIdentity) -> audit::Actor {
+/// Build an audit actor from a peer. Whether the peer passed the policy is the
+/// caller's to record: the same fields are read either way.
+fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
     audit::Actor {
         caller: peer.caller(),
         pid: Some(peer.pid()),
@@ -472,7 +512,11 @@ fn unverified_actor(peer: &PeerIdentity) -> audit::Actor {
     }
 }
 
-async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std::io::Result<()> {
+async fn handle_connection(
+    stream: UnixStream,
+    peer: &PeerIdentity,
+    authorizers: Authorizers,
+) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut request_line = String::new();
     AsyncBufReader::new(read_half)
@@ -560,6 +604,32 @@ async fn handle_connection(stream: UnixStream, authorizers: Authorizers) -> std:
             };
             log::debug!("App broker request: {prompt:?}");
             ssh::get_passphrase(&*authorizers.passphrase, prompt).await
+        },
+        WireRequest::ListVaultItems { vault_key, caller } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key,
+                caller,
+                action: vault::VaultAction::ListItems,
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(&*authorizers.vault, prompt, peer_actor(peer)).await
+        },
+        WireRequest::ReadVaultSecret {
+            vault_key,
+            item_key,
+            credential_key,
+            caller,
+        } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key,
+                caller,
+                action: vault::VaultAction::ReadSecret {
+                    item_key,
+                    credential_key,
+                },
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(&*authorizers.vault, prompt, peer_actor(peer)).await
         },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");
@@ -652,6 +722,20 @@ mod tests {
         async fn message(&self, _description: Option<String>) {}
     }
 
+    #[async_trait]
+    impl vault::VaultAuthorizer for StubAuthorizer {
+        async fn begin(
+            &self,
+            _prompt: vault::VaultAccessPrompt,
+        ) -> Result<crate::core::auth::ForeignContext, String> {
+            Err("stub authorizer".to_string())
+        }
+
+        async fn end(&self, _prompt: vault::VaultAccessPrompt, _outcome: PromptOutcome) {
+            self.ended.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     /// A broker on a scratch socket, shut down when dropped.
     struct TestBroker {
         socket_path: PathBuf,
@@ -673,6 +757,7 @@ mod tests {
                 Authorizers {
                     sign: authorizer.clone(),
                     passphrase: authorizer.clone(),
+                    vault: authorizer.clone(),
                 },
                 shutdown_rx,
             ));
@@ -892,7 +977,8 @@ mod tests {
             accepting_policy(),
             Authorizers {
                 sign: authorizer.clone(),
-                passphrase: authorizer,
+                passphrase: authorizer.clone(),
+                vault: authorizer,
             },
             shutdown_rx,
         ));

@@ -90,9 +90,16 @@ impl VaultWrapper {
     }
 
     pub fn unlock(&mut self) -> Result<(), Error> {
+        self.unlock_on(AuthContext::SharedThreadLocal)
+    }
+
+    /// Unlock on a specific [`AuthContext`]. The app broker passes
+    /// [`AuthContext::Foreign`] so the app that owns the context draws the
+    /// prompt for a lapsed authentication.
+    pub fn unlock_on(&mut self, auth_context: AuthContext) -> Result<(), Error> {
         // note: does not check if the LAContext is still valid
         let encrypted_vault = EncryptedVault::load(&self.path)?;
-        let managed_key = get_vault_encryption_key()?;
+        let managed_key = get_vault_encryption_key_on(auth_context)?;
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)
             .inspect_err(|e| log::debug!("failed to build vault: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
@@ -322,6 +329,17 @@ pub fn check_vault_auth_still_valid() -> Result<(), Error> {
 }
 
 pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
+    get_vault_encryption_key_on(AuthContext::SharedThreadLocal)
+}
+
+/// Read the vault encryption key on a specific [`AuthContext`], creating it if
+/// it does not exist yet. Key creation runs on the same context, so the Secure
+/// Enclave biometric prompt is drawn wherever the caller's context draws it.
+///
+/// A foreign context arrives already authenticated by the process that owns it,
+/// so nothing is evaluated here: a second evaluation of the same context would
+/// put a second prompt in front of the user for one request.
+pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedKey, Error> {
     let reason = match Provenance::resolve_current_parent()
         .inspect(|provenance| log::debug!("get_vault_encryption_key: {provenance:#?}"))
         .and_then(|p| p.caller())
@@ -329,23 +347,27 @@ pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
         Some(parent) => format!("unlock the vault for {parent}"),
         None => "unlock the vault".to_string(),
     };
-    let key_result = run_on_auth_thread(
-        AuthContext::SharedThreadLocal,
-        AuthMethod::Policy { reason },
-        move |la_context| {
-            ManagedKeyQuery::build()
-                .with_label(VAULT_ENCRYPTION_KEY_LABEL)
-                .with_key_class(KeyClass::Private)
-                .one(la_context)
-        },
-    )
+    let auth_method = match auth_context {
+        AuthContext::Foreign(_) => AuthMethod::None,
+        _ => AuthMethod::Policy { reason },
+    };
+    let key_result = run_on_auth_thread(auth_context.clone(), auth_method, move |la_context| {
+        ManagedKeyQuery::build()
+            .with_label(VAULT_ENCRYPTION_KEY_LABEL)
+            .with_key_class(KeyClass::Private)
+            .one(la_context)
+    })
     .map_err(Error::KeyRetrievalFailed)?;
 
     match key_result {
         Ok(Some(user_encryption_key)) => Ok(user_encryption_key),
         Ok(None) => {
             log::debug!("Vault encryption key not found, initializing new key...");
-            Ok(ManagedKey::create(VAULT_ENCRYPTION_KEY_LABEL).map_err(Error::KeyCreationFailed)?)
+            run_on_auth_thread(auth_context, AuthMethod::None, move |la_context| {
+                ManagedKey::create_with_context(VAULT_ENCRYPTION_KEY_LABEL, Some(la_context))
+            })
+            .map_err(Error::KeyCreationFailed)?
+            .map_err(Error::KeyCreationFailed)
         },
         Err(e) => Err(Error::KeyRetrievalFailed(e)),
     }

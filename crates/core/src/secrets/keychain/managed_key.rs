@@ -14,11 +14,13 @@ use objc2::rc::Retained;
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType, Type,
 };
+use objc2_local_authentication::LAContext;
 use objc2_security::{
     SecItemDelete, SecKey, kSecAttrAccessControl, kSecAttrApplicationLabel, kSecAttrApplicationTag,
     kSecAttrIsPermanent, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
     kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecMatchItemList,
-    kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseDataProtectionKeychain,
+    kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseAuthenticationContext,
+    kSecUseDataProtectionKeychain,
 };
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
@@ -58,6 +60,17 @@ impl ManagedKey {
     }
 
     pub fn create(label: &str) -> Result<ManagedKey, KeychainError> {
+        Self::create_with_context(label, None)
+    }
+
+    /// Create a managed key, optionally on a caller-owned `LAContext`. Secure
+    /// Enclave key generation with a `UserPresence` access control prompts for
+    /// biometrics, so the app broker passes its own context to draw that prompt
+    /// in the app panel rather than the system dialog.
+    pub fn create_with_context(
+        label: &str,
+        la_context: Option<Retained<LAContext>>,
+    ) -> Result<ManagedKey, KeychainError> {
         log::debug!("Creating new user key with label: {label}");
         unsafe {
             let public_attrs = CFMutableDictionary::<CFString, CFType>::empty();
@@ -68,6 +81,11 @@ impl ManagedKey {
 
             let access_control = AccessControl::ManagedKey.to_sec_access_control()?;
             private_attrs.add(kSecAttrAccessControl, &*access_control);
+
+            if let Some(la_context) = &la_context {
+                let la_context = Retained::as_ptr(la_context) as *const CFType;
+                private_attrs.add(kSecUseAuthenticationContext, &*la_context);
+            }
 
             let query = Self::common_attrs(Some(label.to_string()));
             query.add(kSecPublicKeyAttrs, &public_attrs);

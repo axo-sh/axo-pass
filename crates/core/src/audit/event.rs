@@ -227,6 +227,8 @@ pub enum Action {
     VaultLock,
     #[serde(rename = "vault.autolock")]
     VaultAutolock,
+    #[serde(rename = "vault.items_listed")]
+    VaultItemsListed,
     #[serde(rename = "vault.item_created")]
     VaultItemCreated,
     #[serde(rename = "vault.item_updated")]
@@ -275,6 +277,7 @@ impl Action {
             Action::VaultUnlock => "vault.unlock",
             Action::VaultLock => "vault.lock",
             Action::VaultAutolock => "vault.autolock",
+            Action::VaultItemsListed => "vault.items_listed",
             Action::VaultItemCreated => "vault.item_created",
             Action::VaultItemUpdated => "vault.item_updated",
             Action::VaultItemDeleted => "vault.item_deleted",

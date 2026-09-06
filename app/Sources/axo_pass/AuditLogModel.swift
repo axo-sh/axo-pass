@@ -123,7 +123,7 @@ enum AuditActionGroup: String, CaseIterable, Identifiable {
       return ["secret.read", "secret.inject", "secret.exec", "age.decrypt", "age.encrypt"]
     case .vault:
       return [
-        "vault.unlock", "vault.lock", "vault.autolock", "vault.item_created",
+        "vault.unlock", "vault.lock", "vault.autolock", "vault.items_listed", "vault.item_created",
         "vault.item_updated", "vault.item_deleted", "vault.created", "vault.exported",
         "vault.imported",
       ]

@@ -1,8 +1,10 @@
 use std::io::{IsTerminal, Read};
 use std::str::FromStr;
 
+use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::dirs::vaults_dir;
-use axo_pass_core::secrets::vaults::VaultWrapper;
+use axo_pass_core::core::provenance::Provenance;
+use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
 use clap::{Parser, Subcommand};
 use color_print::{cformat, cprintln};
 use inquire::Password;
@@ -71,25 +73,20 @@ enum ItemSubcommand {
 
 impl ItemCommand {
     pub async fn execute(&self) {
-        match &self.subcommand {
-            ItemSubcommand::Get { item_reference } => {
-                self.cmd_get_item(item_reference)
-                    .expect("Failed to get item");
-            },
-            ItemSubcommand::Read { item_reference } => {
-                self.cmd_read_item(item_reference)
-                    .expect("Failed to read item");
-            },
-            ItemSubcommand::List => {
-                self.cmd_list_items().expect("Failed to list items");
-            },
+        let result = match &self.subcommand {
+            ItemSubcommand::Get { item_reference } => self.cmd_get_item(item_reference),
+            ItemSubcommand::Read { item_reference } => self.cmd_read_item(item_reference),
+            ItemSubcommand::List => self.cmd_list_items(),
             ItemSubcommand::Set {
                 item_reference,
                 secret_value,
-            } => {
-                self.cmd_set_item(item_reference, secret_value.clone())
-                    .expect("Failed to set item");
-            },
+            } => self.cmd_set_item(item_reference, secret_value.clone()),
+        };
+        // A dismissed prompt and a vault that will not open are both ordinary
+        // outcomes, so they exit with a message rather than a panic.
+        if let Err(e) = result {
+            cprintln!("<red>{e}</red>");
+            std::process::exit(1);
         }
     }
 
@@ -149,30 +146,101 @@ impl ItemCommand {
         Self::cmd_read(item_reference, self.vault.clone())
     }
 
+    /// Read a secret through the app broker. `ap` holds no keychain
+    /// entitlements, so the app unlocks the vault and returns the value. A
+    /// build that is not staged in an app bundle has no broker to reach and
+    /// unlocks locally.
     pub fn cmd_read(item_reference: &ItemReference, vault: Option<String>) -> Result<(), String> {
         let item_reference = item_reference.clone();
-        let vw = Self::unlock_vault(item_reference.vault.or(vault))?;
         let item_key = item_reference.item;
-
         let Some(credential_key) = item_reference.credential else {
             return Err("Credential key must be specified".to_string());
         };
+        let vault_key = item_reference
+            .vault
+            .or(vault)
+            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+        let caller = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("read caller: {provenance:#?}"))
+            .and_then(|provenance| provenance.caller());
 
-        match vw.get_secret(&item_key, &credential_key) {
-            Ok(Some(secret)) => {
-                println!("{}", secret.expose_secret());
+        let value = match app_broker::request_vault_secret(
+            &vault_key,
+            &item_key,
+            &credential_key,
+            caller.as_deref(),
+        ) {
+            Ok(value) => value,
+            Err(BrokerError::Unavailable) => {
+                return Self::read_locally(&vault_key, &item_key, &credential_key);
             },
-            Ok(None) => {
-                // no-op
-            },
-            Err(e) => {
-                return Err(format!("Failed to get secret: {e}"));
-            },
-        }
+            Err(e) => return Err(format!("Failed to read secret: {e}")),
+        };
+
+        let Some(value) = value else {
+            return Err(cformat!(
+                "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
+            ));
+        };
+        println!("{}", value.expose_secret());
         Ok(())
     }
 
+    fn read_locally(vault_key: &str, item_key: &str, credential_key: &str) -> Result<(), String> {
+        let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
+        match vw.get_secret(item_key, credential_key) {
+            Ok(Some(secret)) => {
+                println!("{}", secret.expose_secret());
+                Ok(())
+            },
+            Ok(None) => Err(cformat!(
+                "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
+            )),
+            Err(e) => Err(format!("Failed to get secret: {e}")),
+        }
+    }
+
+    /// List items through the app broker. `ap` holds no keychain entitlements,
+    /// so the app unlocks the vault and returns the overview. A build that is
+    /// not staged in an app bundle has no broker to reach and unlocks locally.
     fn cmd_list_items(&self) -> Result<(), String> {
+        let vault_key = self
+            .vault
+            .clone()
+            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+        let caller = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("item list caller: {provenance:#?}"))
+            .and_then(|provenance| provenance.caller());
+
+        let items = match app_broker::request_vault_items(&vault_key, caller.as_deref()) {
+            Ok(items) => items,
+            Err(BrokerError::Unavailable) => return self.list_items_locally(),
+            Err(e) => return Err(format!("Failed to list items: {e}")),
+        };
+
+        cprintln!("<green>Vault</green>: <blue>{vault_key}</blue>");
+        // Counted per credential, not per item: an item with no credentials
+        // prints nothing, so it must not suppress the empty notice.
+        let mut has_items = false;
+        for item in &items {
+            for cred in &item.credentials {
+                cprintln!(
+                    "  {} <dim>axo://{vault_key}/{}/{}</dim>",
+                    cred.title,
+                    item.key,
+                    cred.key
+                );
+                has_items = true;
+            }
+        }
+        if !has_items {
+            println!("<no items>");
+        }
+
+        Ok(())
+    }
+
+    fn list_items_locally(&self) -> Result<(), String> {
         let vw = Self::unlock_vault(self.vault.clone())?;
         let vault_key = vw.key.clone();
         cprintln!("<green>Vault</green>: <blue>{vault_key}</blue>");
@@ -191,8 +259,8 @@ impl ItemCommand {
                     item.key,
                     cred.key
                 );
+                has_items = true;
             }
-            has_items = true;
         }
         if !has_items {
             println!("<no items>");
