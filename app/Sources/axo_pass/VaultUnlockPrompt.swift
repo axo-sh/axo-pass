@@ -44,9 +44,9 @@ final class VaultUnlockPromptModel {
   /// Authorize the access and return the address of the context the core should
   /// unlock on. Returns 0 when the user dismisses the prompt or the evaluation
   /// fails, which the broker reports as a cancellation.
-  func begin(prompt: VaultAccessPrompt) async -> UInt64 {
+  func begin(prompt: VaultAccessPrompt, peer: RequestActor) async -> UInt64 {
     let key = Self.grantKey(prompt)
-    let grant = grants.begin(key, policy: Self.policy(for: prompt.action))
+    let grant = grants.begin(key, policy: Self.policy(for: prompt.action), peer: peer)
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
@@ -207,8 +207,8 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
     self.model = model
   }
 
-  func beginAuthorization(prompt: VaultAccessPrompt) async throws -> UInt64 {
-    await model.begin(prompt: prompt)
+  func beginAuthorization(prompt: VaultAccessPrompt, peer: RequestActor) async throws -> UInt64 {
+    await model.begin(prompt: prompt, peer: peer)
   }
 
   func endAuthorization(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {

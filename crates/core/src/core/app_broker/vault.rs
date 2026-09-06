@@ -68,8 +68,12 @@ pub struct BrokerCredential {
 pub trait VaultAuthorizer: Send + Sync + 'static {
     /// Prepare a context for `prompt` and put the prompt on screen. The broker
     /// unlocks on the returned context, which is what makes the attached
-    /// `LAAuthenticationView` draw.
-    async fn begin(&self, prompt: VaultAccessPrompt) -> Result<ForeignContext, String>;
+    /// `LAAuthenticationView` draw. `peer` is the process the broker verified.
+    async fn begin(
+        &self,
+        prompt: VaultAccessPrompt,
+        peer: Actor,
+    ) -> Result<ForeignContext, String>;
 
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
@@ -127,7 +131,7 @@ pub(super) async fn authorize_and_serve(
     prompt: VaultAccessPrompt,
     actor: Actor,
 ) -> WireResponse {
-    let context = match authorizer.begin(prompt.clone()).await {
+    let context = match authorizer.begin(prompt.clone(), actor.clone()).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");
@@ -195,11 +199,6 @@ fn record_access(
         .actor(actor.clone())
         .detail("vault", vault_key.clone())
         .detail("via", "broker");
-    // The caller `ap` resolved for the prompt. The actor above is the peer the
-    // app verified itself, so the two are recorded separately.
-    if let Some(caller) = &prompt.caller {
-        event = event.detail("requested_for", caller.clone());
-    }
     match response {
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());

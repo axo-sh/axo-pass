@@ -45,26 +45,25 @@ pub use event::{
 pub use reader::{AuditFilter, AuditPage, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};
 
+/// Points the audit log at a scratch directory for the duration of a test.
+///
+/// Any test that records an event needs one, not only the tests that read the
+/// log back: the directory is process-global, so an event written without a
+/// guard lands in whichever test's directory is current and breaks its counts.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::sync::{Mutex, MutexGuard};
 
-    use serde_json::Value;
-    use time::OffsetDateTime;
-    use time::ext::NumericalDuration;
-
-    use super::*;
-
-    // The audit dir is process-global via an env var, so tests that set it
-    // must not run concurrently.
+    /// The audit dir is process-global via an env var, so tests that set it
+    /// must not run concurrently.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    struct TestDir {
+    pub(crate) struct TestDir {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
     }
 
-    fn test_dir() -> TestDir {
+    pub(crate) fn test_dir() -> TestDir {
         let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", dir.path()) };
@@ -73,6 +72,16 @@ mod tests {
             _dir: dir,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+    use time::OffsetDateTime;
+    use time::ext::NumericalDuration;
+
+    use super::test_support::test_dir;
+    use super::*;
 
     fn event(action: Action, outcome: Outcome) -> AuditEvent {
         AuditEvent::new(Source::Cli, action, outcome)

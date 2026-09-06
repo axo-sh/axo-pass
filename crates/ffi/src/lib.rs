@@ -1272,21 +1272,36 @@ impl AxoPass {
 
     /// Record a grant lifecycle event. These explain why a key use raised no
     /// prompt: the agent logs the signature, the app logs the reused grant.
+    ///
+    /// `scope` names the operation the grant covers when one subject carries
+    /// more than one, e.g. `list` and `read` against the same vault. Nil where
+    /// the subject is the whole grant.
+    ///
+    /// `peer` is the process the broker verified when it served the request
+    /// that created or reused the grant, so a grant event describes the
+    /// requester as fully as the key-use event it explains. An expiry carries
+    /// the last requester, since nothing is in flight when the clock runs out.
+    /// Falls back to `caller` alone when the app has no peer for the grant.
     pub fn record_grant_event(
         &self,
         kind: GrantEventKind,
         subject: GrantSubjectInput,
         caller: Option<String>,
+        scope: Option<String>,
+        peer: Option<RequestActor>,
     ) {
         let action = match kind {
             GrantEventKind::Created => audit::Action::AuthGrantCreated,
             GrantEventKind::Reused => audit::Action::AuthGrantReused,
             GrantEventKind::Expired => audit::Action::AuthGrantExpired,
         };
-        let actor = caller.map(|caller| audit::Actor {
-            caller: Some(caller),
-            ..Default::default()
-        });
+        let actor = match peer {
+            Some(peer) => Some(audit::Actor::from(peer)),
+            None => caller.map(|caller| audit::Actor {
+                caller: Some(caller),
+                ..Default::default()
+            }),
+        };
 
         let subject_kind = match subject.kind {
             GrantSubjectKind::SshKey => audit::SubjectKind::SshKey,
@@ -1314,10 +1329,14 @@ impl AxoPass {
             s = s.label(label);
         }
 
+        // A subject alone does not identify a grant: one vault carries a
+        // separate grant per action, so the scope is what tells a listing's
+        // approval from a read's.
         audit::record(
             audit::AuditEvent::new(audit::process_source(), action, audit::Outcome::Succeeded)
                 .maybe_subject(Some(s))
-                .maybe_actor(actor),
+                .maybe_actor(actor)
+                .maybe_detail("scope", scope.filter(|s| !s.is_empty())),
         );
     }
 
@@ -1382,6 +1401,9 @@ pub trait SignPromptDelegate: Send + Sync {
         // gate on a key the agent holds directly, which the app words
         // differently and never reuses across requests.
         managed: bool,
+        // The process the broker verified, for the grant events the app
+        // records. Not shown to the user: `caller` is what the prompt says.
+        peer: RequestActor,
     ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
@@ -1394,7 +1416,11 @@ struct DelegatingAuthorizer {
 
 #[async_trait::async_trait]
 impl app_broker::SignAuthorizer for DelegatingAuthorizer {
-    async fn begin(&self, prompt: app_broker::SignPrompt) -> Result<ForeignContext, String> {
+    async fn begin(
+        &self,
+        prompt: app_broker::SignPrompt,
+        peer: audit::Actor,
+    ) -> Result<ForeignContext, String> {
         let context_ptr = self
             .delegate
             .begin_authorization(
@@ -1403,6 +1429,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 prompt.comment,
                 prompt.caller,
                 prompt.managed,
+                peer.into(),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -1419,6 +1446,49 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
         self.delegate
             .end_authorization(prompt.key_label, outcome.into())
             .await;
+    }
+}
+
+/// The process a broker request came from, as the broker verified it. Mirrors
+/// [`audit::Actor`].
+///
+/// `caller` is who that process says asked it, falling back to the root of its
+/// own chain. The rest describes the process on the other end of the socket,
+/// read from its audit token and code signature rather than from anything it
+/// sent us.
+#[derive(uniffi::Record, Clone, Default)]
+pub struct RequestActor {
+    pub caller: Option<String>,
+    pub pid: Option<u32>,
+    pub executable: Option<String>,
+    pub bundle_id: Option<String>,
+    pub team_id: Option<String>,
+    pub chain: Vec<String>,
+}
+
+impl From<audit::Actor> for RequestActor {
+    fn from(actor: audit::Actor) -> Self {
+        Self {
+            caller: actor.caller,
+            pid: actor.pid,
+            executable: actor.executable,
+            bundle_id: actor.bundle_id,
+            team_id: actor.team_id,
+            chain: actor.chain,
+        }
+    }
+}
+
+impl From<RequestActor> for audit::Actor {
+    fn from(actor: RequestActor) -> Self {
+        Self {
+            caller: actor.caller,
+            pid: actor.pid,
+            executable: actor.executable,
+            bundle_id: actor.bundle_id,
+            team_id: actor.team_id,
+            chain: actor.chain,
+        }
     }
 }
 
@@ -1487,8 +1557,13 @@ pub struct CollectedPassphrase {
 pub trait PassphrasePromptDelegate: Send + Sync {
     /// Return the address of a live `LAContext` to read the keychain on. The
     /// app must keep its own reference to that context until
-    /// `end_authorization`.
-    async fn begin_authorization(&self, prompt: PassphrasePrompt) -> Result<u64, FfiError>;
+    /// `end_authorization`. `peer` is the process the broker verified, for the
+    /// grant events the app records.
+    async fn begin_authorization(
+        &self,
+        prompt: PassphrasePrompt,
+        peer: RequestActor,
+    ) -> Result<u64, FfiError>;
 
     /// Ask the user for the passphrase. `None` means they dismissed the prompt.
     async fn collect_passphrase(
@@ -1512,10 +1587,14 @@ struct DelegatingPassphraseAuthorizer {
 
 #[async_trait::async_trait]
 impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
-    async fn begin(&self, prompt: app_broker::PassphrasePrompt) -> Result<ForeignContext, String> {
+    async fn begin(
+        &self,
+        prompt: app_broker::PassphrasePrompt,
+        peer: audit::Actor,
+    ) -> Result<ForeignContext, String> {
         let context_ptr = self
             .delegate
-            .begin_authorization(prompt.into())
+            .begin_authorization(prompt.into(), peer.into())
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {
@@ -1616,7 +1695,13 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
 pub trait VaultPromptDelegate: Send + Sync {
     /// Return the address of a live `LAContext` to unlock the vault on. The app
     /// must keep its own reference to that context until `end_authorization`.
-    async fn begin_authorization(&self, prompt: VaultAccessPrompt) -> Result<u64, FfiError>;
+    /// `peer` is the process the broker verified, for the grant events the app
+    /// records.
+    async fn begin_authorization(
+        &self,
+        prompt: VaultAccessPrompt,
+        peer: RequestActor,
+    ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
@@ -1628,10 +1713,14 @@ struct DelegatingVaultAuthorizer {
 
 #[async_trait::async_trait]
 impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
-    async fn begin(&self, prompt: app_broker::VaultAccessPrompt) -> Result<ForeignContext, String> {
+    async fn begin(
+        &self,
+        prompt: app_broker::VaultAccessPrompt,
+        peer: audit::Actor,
+    ) -> Result<ForeignContext, String> {
         let context_ptr = self
             .delegate
-            .begin_authorization(prompt.into())
+            .begin_authorization(prompt.into(), peer.into())
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {

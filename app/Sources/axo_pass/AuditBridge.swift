@@ -10,8 +10,9 @@ import Foundation
 enum AuditBridge {
   private static let core = AxoPass()
 
-  static func recordGrant(_ kind: GrantEventKind, subject: GrantSubject, caller: String?) {
-    core.recordGrantEvent(kind: kind, subject: subject.ffiInput, caller: caller)
+  static func recordGrant(_ key: GrantKey, _ kind: GrantEventKind, peer: RequestActor?) {
+    core.recordGrantEvent(
+      kind: kind, subject: key.subject.ffiInput, caller: key.caller, scope: key.scope, peer: peer)
   }
 
   static func recordVault(_ kind: VaultEventKind, trigger: String? = nil) {

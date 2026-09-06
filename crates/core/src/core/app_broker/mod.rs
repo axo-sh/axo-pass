@@ -240,6 +240,25 @@ enum WireRequest {
     },
 }
 
+impl WireRequest {
+    /// Who the requesting process says asked it. See [`WireRequest::Sign`] for
+    /// why this is trusted by delegation. `None` for the requests that carry no
+    /// caller: they raise no prompt, or draw one with nothing to attribute.
+    fn caller(&self) -> Option<&str> {
+        match self {
+            WireRequest::Sign { caller, .. }
+            | WireRequest::AuthorizeKeyUse { caller, .. }
+            | WireRequest::GetPassphrase { caller, .. }
+            | WireRequest::GetSshPassphrase { caller, .. }
+            | WireRequest::ListVaultItems { caller, .. }
+            | WireRequest::ReadVaultSecret { caller, .. } => caller.as_deref(),
+            WireRequest::ListIdentities
+            | WireRequest::Confirm { .. }
+            | WireRequest::Message { .. } => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum WireResponse {
@@ -512,6 +531,22 @@ fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
     }
 }
 
+/// Describe who a request is for: the peer we verified, named by the caller it
+/// delegated to us.
+///
+/// The process identity comes from the peer, which we checked ourselves. The
+/// caller comes from the request when it carries one, because a long-running
+/// peer's own chain leads to launchd rather than to whoever asked it: the
+/// agent knows `git` made the request, and we cannot see that from the socket.
+/// A peer that names nobody falls back to its own chain root.
+fn request_actor(peer: &PeerIdentity, delegated_caller: Option<&str>) -> audit::Actor {
+    let mut actor = peer_actor(peer);
+    if let Some(caller) = delegated_caller.filter(|c| !c.is_empty()) {
+        actor.caller = Some(caller.to_string());
+    }
+    actor
+}
+
 async fn handle_connection(
     stream: UnixStream,
     peer: &PeerIdentity,
@@ -524,6 +559,11 @@ async fn handle_connection(
         .await?;
     let request: WireRequest = serde_json::from_str(&request_line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Resolved once per connection and handed to whichever authorizer serves
+    // the request, so the grant the app hands out is attributed to the process
+    // we verified rather than to a caller string alone.
+    let actor = request_actor(peer, request.caller());
 
     let response = match request {
         WireRequest::ListIdentities => {
@@ -554,7 +594,7 @@ async fn handle_connection(
                 managed: true,
             };
             log::debug!("App broker request: {prompt:?}");
-            ssh::authorize_and_sign(&*authorizers.sign, prompt, data).await
+            ssh::authorize_and_sign(&*authorizers.sign, prompt, actor, data).await
         },
         WireRequest::AuthorizeKeyUse {
             fingerprint,
@@ -569,7 +609,7 @@ async fn handle_connection(
                 managed: false,
             };
             log::debug!("App broker request: authorize key use {prompt:?}");
-            ssh::authorize_key_use(&*authorizers.sign, prompt).await
+            ssh::authorize_key_use(&*authorizers.sign, prompt, actor).await
         },
         WireRequest::GetPassphrase {
             key_id,
@@ -587,7 +627,7 @@ async fn handle_connection(
                 caller,
             };
             log::debug!("App broker request: {prompt:?}");
-            gpg::get_passphrase(&*authorizers.passphrase, prompt).await
+            gpg::get_passphrase(&*authorizers.passphrase, prompt, actor).await
         },
         WireRequest::GetSshPassphrase {
             key_id,
@@ -603,7 +643,7 @@ async fn handle_connection(
                 caller,
             };
             log::debug!("App broker request: {prompt:?}");
-            ssh::get_passphrase(&*authorizers.passphrase, prompt).await
+            ssh::get_passphrase(&*authorizers.passphrase, prompt, actor).await
         },
         WireRequest::ListVaultItems { vault_key, caller } => {
             let prompt = vault::VaultAccessPrompt {
@@ -612,7 +652,7 @@ async fn handle_connection(
                 action: vault::VaultAction::ListItems,
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, peer_actor(peer)).await
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
         },
         WireRequest::ReadVaultSecret {
             vault_key,
@@ -629,7 +669,7 @@ async fn handle_connection(
                 },
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, peer_actor(peer)).await
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
         },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");
@@ -672,6 +712,7 @@ mod tests {
     struct StubAuthorizer {
         prompts: Mutex<Vec<SignPrompt>>,
         passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
+        peers: Mutex<Vec<audit::Actor>>,
         ended: AtomicUsize,
     }
 
@@ -680,8 +721,10 @@ mod tests {
         async fn begin(
             &self,
             prompt: SignPrompt,
+            peer: audit::Actor,
         ) -> Result<crate::core::auth::ForeignContext, String> {
             self.prompts.lock().unwrap().push(prompt);
+            self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
         }
 
@@ -695,7 +738,9 @@ mod tests {
         async fn begin(
             &self,
             _prompt: PassphrasePrompt,
+            peer: audit::Actor,
         ) -> Result<crate::core::auth::ForeignContext, String> {
+            self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
         }
 
@@ -727,7 +772,9 @@ mod tests {
         async fn begin(
             &self,
             _prompt: vault::VaultAccessPrompt,
+            peer: audit::Actor,
         ) -> Result<crate::core::auth::ForeignContext, String> {
+            self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
         }
 
@@ -741,11 +788,16 @@ mod tests {
         socket_path: PathBuf,
         authorizer: Arc<StubAuthorizer>,
         shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+        // Rejecting a peer and serving a vault request both write audit
+        // events. Held so they land in a scratch directory instead of the one
+        // an audit test is counting.
+        _audit_dir: crate::audit::test_support::TestDir,
         _dir: tempfile::TempDir,
     }
 
     impl TestBroker {
         async fn start(policy: PeerPolicy) -> Self {
+            let audit_dir = crate::audit::test_support::test_dir();
             let dir = tempfile::tempdir().unwrap();
             let socket_path = dir.path().join("app-broker.sock");
             let authorizer = Arc::new(StubAuthorizer::default());
@@ -767,6 +819,7 @@ mod tests {
                 socket_path,
                 authorizer,
                 shutdown: Some(shutdown_tx),
+                _audit_dir: audit_dir,
                 _dir: dir,
             }
         }
@@ -847,6 +900,40 @@ mod tests {
         assert_eq!(prompts[0].key_label, "key-1");
         assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// The authorizer is told who asked: the process on the other end of the
+    /// socket, named by the caller that process delegated.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hands_the_verified_peer_to_the_authorizer() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        broker.request(
+            r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#,
+        );
+
+        let peers = broker.authorizer.peers.lock().unwrap();
+        assert_eq!(peers.len(), 1);
+        // This process is the peer, so the pid is ours and the chain is
+        // whatever started the test runner.
+        assert_eq!(peers[0].pid, Some(std::process::id()));
+        assert!(peers[0].executable.is_some(), "peer executable not resolved");
+        // The delegated caller wins over the peer's own chain root: the peer is
+        // the agent, and only the agent knows git asked it.
+        assert_eq!(peers[0].caller.as_deref(), Some("git (ssh)"));
+    }
+
+    /// A request that delegates no caller still names the peer, falling back to
+    /// the root of its own process chain.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn names_the_peer_when_no_caller_is_delegated() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
+
+        let peers = broker.authorizer.peers.lock().unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].pid, Some(std::process::id()));
     }
 
     /// A confirm-on-use request reaches the sign authorizer, worded for a key

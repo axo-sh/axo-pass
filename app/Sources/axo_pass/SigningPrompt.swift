@@ -56,14 +56,15 @@ final class SigningPromptModel {
   /// Prepare a context for the key and return its address for the broker. The
   /// context stays referenced here, so it outlives the signing attempt.
   func begin(
-    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool,
+    peer: RequestActor
   ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
     let key = GrantKey(subject: subject, caller: caller)
     active = ActiveRequest(key: key, managed: managed)
     // Confirm-on-use keys (`ssh-add -c`) prompt every time: the point of the
     // constraint is that every signature is approved, so no approval is reused.
-    let grant = grants.begin(key, policy: managed ? .standard : .everyUse)
+    let grant = grants.begin(key, policy: managed ? .standard : .everyUse, peer: peer)
     let keyName = comment ?? Self.shortName(keyLabel: keyLabel, fingerprint: fingerprint)
 
     // A context that is still authenticated signs with no prompt at all. Delay
@@ -210,11 +211,12 @@ final class SigningPromptBridge: SignPromptDelegate {
   }
 
   func beginAuthorization(
-    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool,
+    peer: RequestActor
   ) async throws -> UInt64 {
     await model.begin(
       keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
-      managed: managed)
+      managed: managed, peer: peer)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

@@ -163,6 +163,19 @@ struct AuditLogRow: Identifiable, Hashable {
     return "—"
   }
 
+  /// What the subject is. An id alone does not say: a grant on vault `default`
+  /// and a credential in it read the same way otherwise.
+  var subjectKindText: String? {
+    switch record.subjectKind {
+    case .sshKey: return "SSH key"
+    case .gpgKey: return "GPG key"
+    case .credential: return "Credential"
+    case .vault: return "Vault"
+    case .ageIdentity: return "age identity"
+    case nil: return nil
+    }
+  }
+
   var callerText: String {
     record.caller ?? record.actorExecutable ?? "—"
   }

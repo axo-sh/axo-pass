@@ -15,6 +15,7 @@ use super::{
     BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, WireRequest, WireResponse,
     send_request,
 };
+use crate::audit;
 use crate::core::auth::{
     AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,
 };
@@ -52,7 +53,15 @@ pub trait SignAuthorizer: Send + Sync + 'static {
     /// Prepare a context for `prompt` and put the prompt on screen. The broker
     /// evaluates the returned context, which is what makes the attached
     /// `LAAuthenticationView` draw.
-    async fn begin(&self, prompt: SignPrompt) -> Result<ForeignContext, String>;
+    ///
+    /// `peer` is the process the broker verified at accept time. The app
+    /// attributes the grant it hands out to it, so the audit log names the
+    /// process that asked and not only the caller it claimed.
+    async fn begin(
+        &self,
+        prompt: SignPrompt,
+        peer: audit::Actor,
+    ) -> Result<ForeignContext, String>;
 
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
@@ -168,9 +177,10 @@ pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> 
 pub(super) async fn authorize_and_sign(
     authorizer: &dyn SignAuthorizer,
     prompt: SignPrompt,
+    peer: audit::Actor,
     data: Vec<u8>,
 ) -> WireResponse {
-    let context = match authorizer.begin(prompt.clone()).await {
+    let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker authorization declined: {message}");
@@ -230,8 +240,9 @@ pub(super) async fn authorize_and_sign(
 pub(super) async fn authorize_key_use(
     authorizer: &dyn SignAuthorizer,
     prompt: SignPrompt,
+    peer: audit::Actor,
 ) -> WireResponse {
-    let context = match authorizer.begin(prompt.clone()).await {
+    let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker key-use authorization declined: {message}");
@@ -317,13 +328,14 @@ pub fn request_ssh_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString,
 pub(super) async fn get_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: PassphrasePrompt,
+    peer: audit::Actor,
 ) -> WireResponse {
     let entry = prompt.key_id.as_deref().map(PasswordEntry::ssh);
 
     if let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, entry).await {
+        match unlock_saved_passphrase(authorizer, &prompt, peer, entry).await {
             SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
             // Dismissing the biometric prompt answers the request: the user
             // was asked and said no. Falling through to a text field instead
@@ -378,9 +390,10 @@ async fn has_saved_passphrase(entry: &PasswordEntry) -> bool {
 async fn unlock_saved_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: &PassphrasePrompt,
+    peer: audit::Actor,
     entry: PasswordEntry,
 ) -> SavedPassphrase {
-    let context = match authorizer.begin(prompt.clone()).await {
+    let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker passphrase authorization declined: {message}");

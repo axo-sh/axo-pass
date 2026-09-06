@@ -65,8 +65,12 @@ pub trait PassphraseAuthorizer: Send + Sync + 'static {
     /// Prepare a context to read the saved passphrase on, and put the biometric
     /// prompt on screen. As with [`super::SignAuthorizer::begin`], the broker's
     /// evaluation on the returned context is what draws the attached
-    /// `LAAuthenticationView`.
-    async fn begin(&self, prompt: PassphrasePrompt) -> Result<ForeignContext, String>;
+    /// `LAAuthenticationView`, and `peer` is the process the broker verified.
+    async fn begin(
+        &self,
+        prompt: PassphrasePrompt,
+        peer: audit::Actor,
+    ) -> Result<ForeignContext, String>;
 
     /// Ask the user to type the passphrase, for a key with nothing saved or one
     /// whose saved passphrase gpg has just rejected. `None` means they
@@ -148,6 +152,7 @@ pub fn request_message(description: Option<&str>) -> Result<(), BrokerError> {
 pub(super) async fn get_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: PassphrasePrompt,
+    peer: audit::Actor,
 ) -> WireResponse {
     let entry = prompt.key_id.as_deref().map(PasswordEntry::gpg);
 
@@ -157,7 +162,7 @@ pub(super) async fn get_passphrase(
         && let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, entry).await {
+        match unlock_saved_passphrase(authorizer, &prompt, peer, entry).await {
             SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
             // Dismissing the biometric prompt answers the request: the user was
             // asked and said no. Falling through to a text field instead would
@@ -212,9 +217,10 @@ async fn has_saved_passphrase(entry: &PasswordEntry) -> bool {
 async fn unlock_saved_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: &PassphrasePrompt,
+    peer: audit::Actor,
     entry: PasswordEntry,
 ) -> SavedPassphrase {
-    let context = match authorizer.begin(prompt.clone()).await {
+    let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker passphrase authorization declined: {message}");

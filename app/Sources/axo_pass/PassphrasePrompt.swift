@@ -35,8 +35,8 @@ final class PassphrasePromptModel {
 
   /// Prepare a context to read the saved passphrase on, and put the biometric
   /// prompt on screen.
-  func begin(prompt: PassphrasePrompt) -> UInt64 {
-    let grant = grants.begin(Self.grantKey(prompt))
+  func begin(prompt: PassphrasePrompt, peer: RequestActor) -> UInt64 {
+    let grant = grants.begin(Self.grantKey(prompt), peer: peer)
 
     // A context that is still authenticated reads the keychain with no prompt
     // at all. Delay the panel briefly so that case does not flash a window.
@@ -351,8 +351,8 @@ final class PassphrasePromptBridge: PassphrasePromptDelegate {
     self.model = model
   }
 
-  func beginAuthorization(prompt: PassphrasePrompt) async throws -> UInt64 {
-    await model.begin(prompt: prompt)
+  func beginAuthorization(prompt: PassphrasePrompt, peer: RequestActor) async throws -> UInt64 {
+    await model.begin(prompt: prompt, peer: peer)
   }
 
   func collectPassphrase(prompt: PassphrasePrompt) async throws -> CollectedPassphrase? {

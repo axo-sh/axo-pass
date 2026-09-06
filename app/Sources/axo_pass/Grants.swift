@@ -118,6 +118,11 @@ final class Grant {
 
   var expiry: Timer?
 
+  /// The process behind the most recent request on this grant, as the broker
+  /// verified it. Expiry events carry it because nothing is in flight when a
+  /// clock runs out, so the last requester is the only one there is to name.
+  var lastPeer: RequestActor?
+
   init(context: LAContext, view: LAAuthenticationView, policy: GrantPolicy) {
     self.context = context
     self.view = view
@@ -146,25 +151,30 @@ final class AuthorizationGrants {
   ///
   /// `policy` applies to a grant this call creates. An existing grant keeps the
   /// policy it was created with.
-  func begin(_ key: Key, policy: GrantPolicy = .standard) -> Grant {
+  ///
+  /// `peer` is the process the broker verified for this request. It is recorded
+  /// on the grant event, and kept on the grant so a later expiry can name the
+  /// last process to use it.
+  func begin(_ key: Key, policy: GrantPolicy = .standard, peer: RequestActor) -> Grant {
     // Check the clocks here as well as on the timer. A timer cannot fire while
     // a request is in flight, and none run while the machine is asleep, so an
     // approval can be past its deadline with its timer still pending.
     if let grant = grants[key], grant.inFlight == 0, hasExpired(grant) {
       log("approval for \(key) expired, prompting again")
-      AuditBridge.recordGrant(.expired, subject: key.subject, caller: key.caller)
+      AuditBridge.recordGrant(key, .expired, peer: grant.lastPeer)
       forget(key)
     }
 
     let existing = grants[key]
     let grant = existing ?? newGrant(for: key, policy: policy)
+    grant.lastPeer = peer
 
     if existing == nil {
-      AuditBridge.recordGrant(.created, subject: key.subject, caller: key.caller)
+      AuditBridge.recordGrant(key, .created, peer: peer)
     } else if existing?.approvedAt != nil {
       // A still-valid approval, reused without a prompt. The agent or pinentry
       // records the key use; this explains why no prompt appeared.
-      AuditBridge.recordGrant(.reused, subject: key.subject, caller: key.caller)
+      AuditBridge.recordGrant(key, .reused, peer: peer)
     }
 
     // Incremented before the context leaves this method: the broker retains it
@@ -264,7 +274,7 @@ final class AuthorizationGrants {
     // `end` re-arms, and `begin` re-checks the clocks.
     guard grant.inFlight == 0 else { return }
     log("approval for \(key) expired")
-    AuditBridge.recordGrant(.expired, subject: key.subject, caller: key.caller)
+    AuditBridge.recordGrant(key, .expired, peer: grant.lastPeer)
     forget(key)
   }
 
