@@ -110,15 +110,28 @@ final class GpgModel {
     return grips
   }
 
-  /// Save a passphrase for a key, after gpg has checked it. Returns nil on
-  /// success, or a message describing why gpg would not take it.
-  func savePassphrase(fingerprint: String, passphrase: String) async -> String? {
+  /// Save the passphrase for one keygrip, after gpg has checked it. Returns
+  /// nil on success, or a message describing why gpg would not take it.
+  func savePassphrase(keyId: String, keygrip: String, passphrase: String) async -> String? {
     do {
-      _ = try await core.saveGpgKeyPassword(fingerprint: fingerprint, password: passphrase)
+      try await core.saveGpgKeyPassword(keyId: keyId, keygrip: keygrip, password: passphrase)
       await reload()
       return nil
     } catch {
       return Self.message(for: error)
+    }
+  }
+
+  /// Delete one keygrip's saved passphrase.
+  @discardableResult
+  func forgetPassphrase(keygrip: String) async -> Bool {
+    do {
+      try await core.deletePassword(passwordType: .gpgKey, keyId: keygrip)
+      await reload()
+      return true
+    } catch {
+      loadError = Self.message(for: error)
+      return false
     }
   }
 
@@ -136,24 +149,6 @@ final class GpgModel {
     default:
       return String(describing: error)
     }
-  }
-
-  /// Delete every saved passphrase belonging to a key.
-  @discardableResult
-  func forgetPasswords(for key: GpgKeyEntry) async -> Bool {
-    var succeeded = true
-    for keygrip in keygrips(of: key) {
-      guard passwords.contains(where: { $0.passwordType == .gpgKey && $0.keyId == keygrip })
-      else { continue }
-      do {
-        try await core.deletePassword(passwordType: .gpgKey, keyId: keygrip)
-      } catch {
-        loadError = String(describing: error)
-        succeeded = false
-      }
-    }
-    await reload()
-    return succeeded
   }
 
   @discardableResult

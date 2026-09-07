@@ -146,6 +146,20 @@ extension GpgKeyEntry: Identifiable {
   var algorithmLabel: String { GpgFormat.algorithm(algorithm, keyLength: keyLength, curve: curve) }
 
   var isUsable: Bool { !isExpired && !isRevoked && !isDisabled }
+
+  /// One entry per keygrip on this key that needs a passphrase and has its
+  /// secret half on this machine, saying whether that passphrase is saved.
+  /// Each is saved on its own, so a key can be partly saved.
+  var passphraseSlots: [Bool] {
+    var slots: [Bool] = []
+    if secretState == .present && requiresPassphrase {
+      slots.append(hasSavedPassword)
+    }
+    for subkey in subkeys where subkey.secretState == .present && subkey.requiresPassphrase {
+      slots.append(subkey.hasSavedPassword)
+    }
+    return slots
+  }
 }
 
 extension GpgSubkeyEntry: Identifiable {
@@ -237,7 +251,7 @@ private struct GpgKeyRow: View {
           KeyBadge(text: "Revoked", tint: .red)
         } else if key.isExpired {
           KeyBadge(text: "Expired", tint: .orange)
-        } else if key.hasSavedPassword {
+        } else if key.passphraseSlots.contains(true) {
           KeyBadge(text: "Saved", tint: .green)
         }
       }

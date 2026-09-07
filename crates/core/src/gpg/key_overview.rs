@@ -140,10 +140,11 @@ pub struct GpgKeyOverview {
     pub is_revoked: bool,
     pub is_disabled: bool,
     pub secret_state: GpgSecretState,
-    /// Whether a passphrase for this key is saved in the keychain.
+    /// Whether a passphrase for the primary key's keygrip is saved in the
+    /// keychain. Subkeys carry their own.
     pub has_saved_password: bool,
-    /// Whether any of the key's local secret halves is encrypted, so there is
-    /// a passphrase to save.
+    /// Whether gpg-agent holds the primary key encrypted, so using it needs a
+    /// passphrase.
     pub requires_passphrase: bool,
     /// Directory holding the private key files, when a secret key is present.
     pub secret_key_dir: Option<String>,
@@ -187,10 +188,10 @@ pub fn list_gpg_keys() -> Result<Vec<GpgKeyOverview>, GpgError> {
             sub.has_saved_password = has_saved_password(sub.keygrip.as_deref());
             sub.requires_passphrase = is_protected(&protection, sub.keygrip.as_deref());
         }
-        key.has_saved_password = has_saved_password(key.keygrip.as_deref())
-            || key.subkeys.iter().any(|sub| sub.has_saved_password);
-        key.requires_passphrase = is_protected(&protection, key.keygrip.as_deref())
-            || key.subkeys.iter().any(|sub| sub.requires_passphrase);
+        // The primary key's own entry, not the key's as a whole: each keygrip
+        // is saved separately, and the subkey rows carry theirs.
+        key.has_saved_password = has_saved_password(key.keygrip.as_deref());
+        key.requires_passphrase = is_protected(&protection, key.keygrip.as_deref());
         if key.secret_state == GpgSecretState::Present {
             key.secret_key_dir = Some(display_path(&private_dir));
         }
@@ -209,86 +210,53 @@ fn has_saved_password(keygrip: Option<&str>) -> bool {
     PasswordEntry::gpg(keygrip).exists().unwrap_or(false)
 }
 
-/// Save a key's passphrase to the keychain, after checking it with gpg.
+/// Save one keygrip's passphrase to the keychain, after checking it with gpg.
 ///
-/// gpg-agent names a key by keygrip, so a key with subkeys has one keychain
-/// entry per keygrip whose secret half is on disk. They share a passphrase in
-/// practice, so the verified passphrase is written under each of them. Returns
-/// the keygrips written.
+/// gpg-agent names a key by keygrip, and each secret half is encrypted on its
+/// own, so a primary key and each of its subkeys are saved separately and may
+/// carry different passphrases. `key_id` names the key whose keygrip this is,
+/// which is what gpg needs to check the passphrase.
 pub fn save_passphrase(
-    fingerprint: &str,
+    key_id: &str,
+    keygrip: &str,
     passphrase: SecretString,
-) -> Result<Vec<String>, GpgError> {
-    let key = list_gpg_keys()?
-        .into_iter()
-        .find(|k| k.fingerprint == fingerprint)
-        .ok_or_else(|| GpgError::KeyNotFound(fingerprint.to_string()))?;
-
-    let keygrips = local_keygrips(&key);
-    if keygrips.is_empty() {
-        return Err(GpgError::NoSecretKey(fingerprint.to_string()));
-    }
-
+) -> Result<(), GpgError> {
     let Some(bin_dir) = find_bin_folder("gpg") else {
         return Err(GpgError::GpgNotFound);
     };
     // A key gpg stores unencrypted has no passphrase to save, and an entry for
     // one would never be read: gpg-agent never asks.
     let protection = keygrip_protection(&bin_dir);
-    let keygrips: Vec<String> = keygrips
-        .into_iter()
-        .filter(|keygrip| is_protected(&protection, Some(keygrip)))
-        .collect();
-    if keygrips.is_empty() {
-        return Err(GpgError::NoPassphrase(fingerprint.to_string()));
+    if !is_protected(&protection, Some(keygrip)) {
+        return Err(GpgError::NoPassphrase(key_id.to_string()));
     }
 
-    verify_passphrase(&bin_dir, &key.fingerprint, &keygrips, &passphrase)?;
+    verify_passphrase(&bin_dir, key_id, keygrip, &passphrase)?;
 
-    for keygrip in &keygrips {
-        let entry = PasswordEntry::gpg(keygrip);
-        // Replace rather than refuse, so a changed passphrase can be saved
-        // again without deleting the old entry first.
-        let _ = entry.delete();
-        entry
-            .save_password(passphrase.clone())
-            .map_err(|e| GpgError::SaveFailed(e.to_string()))?;
-    }
-    Ok(keygrips)
+    let entry = PasswordEntry::gpg(keygrip);
+    // Replace rather than refuse, so a changed passphrase can be saved again
+    // without deleting the old entry first.
+    let _ = entry.delete();
+    entry
+        .save_password(passphrase)
+        .map_err(|e| GpgError::SaveFailed(e.to_string()))
 }
 
-/// The keygrips whose secret key is on this machine. Smartcard and offline
-/// stubs have no local key material to unlock.
-fn local_keygrips(key: &GpgKeyOverview) -> Vec<String> {
-    let mut keygrips = Vec::new();
-    if key.secret_state == GpgSecretState::Present
-        && let Some(keygrip) = key.keygrip.clone()
-    {
-        keygrips.push(keygrip);
-    }
-    for sub in &key.subkeys {
-        if sub.secret_state == GpgSecretState::Present
-            && let Some(keygrip) = sub.keygrip.clone()
-        {
-            keygrips.push(keygrip);
-        }
-    }
-    keygrips
-}
-
-/// Check a passphrase by exporting the secret key, which makes gpg-agent
-/// decrypt every secret half the key has. The export goes to `/dev/null`: only
-/// the exit status matters.
+/// Check a passphrase by exporting one secret key, which makes gpg-agent
+/// decrypt it. The `!` suffix pins the export to exactly that key rather than
+/// the whole keyblock, so a subkey is checked on its own passphrase. The export
+/// goes to `/dev/null`: only the exit status matters.
 ///
 /// gpg-agent caches passphrases, and a cached one would let a wrong passphrase
-/// pass, so the cache is cleared for each keygrip first.
+/// pass, so the cache is cleared first.
 fn verify_passphrase(
     bin_dir: &Path,
-    fingerprint: &str,
-    keygrips: &[String],
+    key_id: &str,
+    keygrip: &str,
     passphrase: &SecretString,
 ) -> Result<(), GpgError> {
-    clear_agent_cache(bin_dir, keygrips);
+    let keygrips = [keygrip.to_string()];
+    clear_agent_cache(bin_dir, &keygrips);
 
     let mut child = Command::new(bin_dir.join("gpg"))
         .args([
@@ -304,7 +272,7 @@ fn verify_passphrase(
             "--output",
             "/dev/null",
             "--export-secret-keys",
-            fingerprint,
+            &format!("{key_id}!"),
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -320,7 +288,7 @@ fn verify_passphrase(
     let output = child.wait_with_output()?;
     // Clear the cache again: verifying leaves the passphrase cached, and a
     // wrong one that gpg rejected is no reason to change what the agent holds.
-    clear_agent_cache(bin_dir, keygrips);
+    clear_agent_cache(bin_dir, &keygrips);
 
     if output.status.success() {
         return Ok(());

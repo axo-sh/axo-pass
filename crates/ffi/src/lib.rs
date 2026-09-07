@@ -463,10 +463,11 @@ pub struct GpgKeyEntry {
     pub is_revoked: bool,
     pub is_disabled: bool,
     pub secret_state: GpgSecretState,
-    /// Whether a passphrase for this key is saved in the keychain.
+    /// Whether a passphrase for the primary key's keygrip is saved in the
+    /// keychain. Subkeys carry their own.
     pub has_saved_password: bool,
-    /// Whether any of the key's local secret halves is encrypted, so there is
-    /// a passphrase to save.
+    /// Whether gpg-agent holds the primary key encrypted, so using it needs a
+    /// passphrase.
     pub requires_passphrase: bool,
     /// Directory holding the private key files, when a secret key is present.
     pub secret_key_dir: Option<String>,
@@ -1359,18 +1360,20 @@ impl AxoPass {
         Ok(overviews.into_iter().map(GpgKeyEntry::from).collect())
     }
 
-    /// Save a GPG key's passphrase to the keychain, after checking it with
-    /// gpg. Writes one entry per keygrip whose secret half is on this machine,
-    /// since gpg-agent asks for a passphrase per keygrip. Returns the keygrips
-    /// written.
+    /// Save the passphrase for one GPG keygrip to the keychain, after checking
+    /// it with gpg. gpg-agent asks per keygrip, and each secret half carries
+    /// its own passphrase, so a primary key and each subkey are saved
+    /// separately. `key_id` names the key that keygrip belongs to.
     pub async fn save_gpg_key_password(
         &self,
-        fingerprint: String,
+        key_id: String,
+        keygrip: String,
         password: String,
-    ) -> Result<Vec<String>, FfiError> {
+    ) -> Result<(), FfiError> {
         tokio::task::spawn_blocking(move || {
             axo_pass_core::gpg::key_overview::save_passphrase(
-                &fingerprint,
+                &key_id,
+                &keygrip,
                 SecretString::from(password),
             )
         })
