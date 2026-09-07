@@ -5,21 +5,8 @@ env_file = ".env.local"
 release = "axo.release.toml"
 
 [tasks]
-dev = "tauri dev"
-build = """\
-  APP_BUILD_SHA=$(git rev-parse head) \
-  APP_BUILT_AT=$(date) \
-  cargo-tauri build -b app \
-"""
-icon = "tauri icon ./src-tauri/misc/app-icon.png"
-types = [
-  "typeshare ./src-tauri --lang=typescript --output-file=src/binding.ts",
-  "biome check --write src/binding.ts",
-]
-start = "./src-tauri/target/release/bundle/macos/Axo\\ Pass.app/Contents/MacOS/axo-pass"
-restart = [":build", ":start"]
-biome = "biome check --formatter-enabled=true --linter-enabled=true"
-biome-fix = "biome check --write"
+build = ":strudel:build"
+run = ":strudel:run"
 logs = "tail -F ~/Library/Logs/Axo\\ Pass/app.log"
 
 fmt = [
@@ -45,9 +32,6 @@ test = "cargo test --workspace"
 "strudel:build" = [":app:ffi", ":app:cli", "strudel build"]
 "strudel:run" = [":app:ffi", ":app:cli", "strudel run"]
 "strudel:release" = [":app:ffi:release", ":app:cli:release", "strudel release"]
-
-[packages]
-"nodejs/node" = "^25.0.0"
 
 [env]
 FRITTATA_DEBUG = "1"

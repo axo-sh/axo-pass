@@ -1,11 +1,4 @@
 [tasks]
-build = """\
-  APP_BUILD_SHA=$(git rev-parse head) \
-  APP_BUILT_AT=$(date) \
-  cargo-tauri build -b app \
-    --config src-tauri/tauri.conf.release.json \
-"""
-
 notary-history = """\
   xcrun notarytool history \
     --issuer=$APPLE_API_ISSUER \
@@ -38,10 +31,6 @@ strudel = {
 APPLE_TEAM_ID = "75J48AQ5LF"
 # cert "$type: $name ($team_id)"
 APPLE_SIGNING_IDENTITY = "Developer ID Application: Breakfast Labs, LLC (75J48AQ5LF)"
-# for tauri
-APPLE_CERTIFICATE = "axo://frittata/apple/apple_certificate"
-# for tauri
-APPLE_CERTIFICATE_PASSWORD = "axo://frittata/apple/apple_certificate_password"
 
 # for notarytool
 APPLE_API_ISSUER = "axo://frittata/apple/apple_api_issuer"
