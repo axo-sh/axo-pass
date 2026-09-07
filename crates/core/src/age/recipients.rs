@@ -4,19 +4,76 @@ use color_print::cprintln;
 use secrecy::ExposeSecret;
 
 use crate::age::errors::AgeError;
+use crate::age::key_overview::AgeKeyOverview;
+use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 
-pub async fn age_keygen(name: &str, show: &Option<bool>) {
-    let identity = age::x25519::Identity::generate();
-    let identity_str = identity.to_string();
-    let password_entry = PasswordEntry::age(name);
-    if let Err(e) = password_entry.save_password(identity_str.clone()) {
-        eprintln!("Error saving key to keychain: {e}");
-        std::process::exit(1);
+/// Record an age key lifecycle event. `recipient` is the public half, safe to
+/// log; the secret is never passed here.
+fn record_key_event(action: Action, name: &str, recipient: Option<&str>, error: Option<String>) {
+    let outcome = if error.is_some() {
+        Outcome::Failed
+    } else {
+        Outcome::Succeeded
+    };
+    let mut subject = Subject::new(SubjectKind::AgeIdentity, name);
+    if let Some(recipient) = recipient {
+        subject = subject.label(recipient);
     }
-    cprintln!("<green>Recipient</green>: {}", identity.to_public());
+    let mut event = AuditEvent::new(audit::process_source(), action, outcome).subject(subject);
+    if let Some(error) = error {
+        event = event.message(error);
+    }
+    audit::record(event);
+}
+
+/// Generate a new x25519 identity, save it to the keychain under `name`, and
+/// record an `age.key_create` audit event. Errors if a key of that name exists.
+pub fn generate_age_key(name: &str) -> Result<AgeKeyOverview, AgeError> {
+    let entry = PasswordEntry::age(name);
+    let exists = entry
+        .exists()
+        .map_err(|e| AgeError::FailedToRetrieveRecipient(name.to_owned(), e))?;
+    if exists {
+        let err = AgeError::KeyAlreadyExists(name.to_owned());
+        record_key_event(Action::AgeKeyCreate, name, None, Some(err.to_string()));
+        return Err(err);
+    }
+
+    let identity = age::x25519::Identity::generate();
+    let recipient = identity.to_public().to_string();
+    let identity_str = identity.to_string();
+
+    match entry.save_password(identity_str) {
+        Ok(()) => {
+            record_key_event(Action::AgeKeyCreate, name, Some(&recipient), None);
+            Ok(AgeKeyOverview {
+                name: name.to_owned(),
+                recipient,
+            })
+        },
+        Err(e) => {
+            let err = AgeError::FailedToSaveKey(name.to_owned(), e);
+            record_key_event(Action::AgeKeyCreate, name, None, Some(err.to_string()));
+            Err(err)
+        },
+    }
+}
+
+pub async fn age_keygen(name: &str, show: &Option<bool>) {
+    let overview = match generate_age_key(name) {
+        Ok(overview) => overview,
+        Err(e) => {
+            eprintln!("Error saving key to keychain: {e}");
+            std::process::exit(1);
+        },
+    };
+    cprintln!("<green>Recipient</green>: {}", overview.recipient);
     if show.unwrap_or(false) {
-        println!("<green>Secret</green>: {}", identity_str.expose_secret());
+        match PasswordEntry::age(name).get_password() {
+            Ok(Some(secret)) => println!("Secret: {}", secret.expose_secret()),
+            _ => eprintln!("Error reading back the generated secret"),
+        }
     }
 }
 
@@ -67,9 +124,12 @@ pub async fn list_recipients() {
 }
 
 pub fn delete_recipient(recipient: &str) -> Result<(), AgeError> {
-    PasswordEntry::age(recipient)
+    let result = PasswordEntry::age(recipient)
         .delete()
-        .map_err(|e| AgeError::FailedToDeleteRecipient(recipient.to_owned(), e))
+        .map_err(|e| AgeError::FailedToDeleteRecipient(recipient.to_owned(), e));
+    let error = result.as_ref().err().map(|e| e.to_string());
+    record_key_event(Action::AgeKeyDelete, recipient, None, error);
+    result
 }
 
 pub fn resolve_recipient(recipient: &str) -> Result<age::x25519::Recipient, AgeError> {

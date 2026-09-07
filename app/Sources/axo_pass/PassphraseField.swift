@@ -8,6 +8,12 @@ import SwiftUI
 /// Reveal and copy read the passphrase back from the keychain, which prompts
 /// for Touch ID.
 struct PassphraseField: View {
+  /// The row label. Defaults to "Passphrase"; age keys pass "Secret Key".
+  var label: String = "Passphrase"
+  /// Wrap the revealed value on any character, for a long unbroken token like
+  /// an age secret key. Adds a Hide button, since the wrapped box is selectable
+  /// rather than a tap target.
+  var charWraps: Bool = false
   let hasSaved: Bool
   /// Reads the passphrase from the keychain. Returns nil if it cannot.
   let reveal: () async -> String?
@@ -18,10 +24,15 @@ struct PassphraseField: View {
   @State private var isBusy = false
 
   var body: some View {
-    LabeledContent("Passphrase") {
+    LabeledContent(label) {
       HStack(spacing: 6) {
         valueBox
         if hasSaved {
+          if charWraps && revealed != nil {
+            Button("Hide") { revealed = nil }
+              .buttonStyle(.bordered)
+              .controlSize(.small)
+          }
           Button("Copy") { Task { await copy() } }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -51,7 +62,7 @@ struct PassphraseField: View {
       }
       .buttonStyle(RevealPlaceholderButtonStyle())
     } else {
-      SecretBox(revealed: revealed) {
+      SecretBox(revealed: revealed, charWraps: charWraps) {
         if revealed == nil {
           Task { await revealNow() }
         } else {

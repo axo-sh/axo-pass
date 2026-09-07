@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axo_pass_core::age::errors::AgeError;
+use axo_pass_core::age::key_overview::{AgeKeyOverview, list_age_keys};
+use axo_pass_core::age::recipients::{delete_recipient as delete_age_recipient, generate_age_key};
 use axo_pass_core::core::app_broker;
 use axo_pass_core::core::auth::{
     AuthContext, AuthMethod, ForeignContext, adopt_shared_context, external_auth_lock,
@@ -102,6 +105,16 @@ impl From<anyhow::Error> for FfiError {
 impl From<axo_pass_core::gpg::GpgError> for FfiError {
     fn from(e: axo_pass_core::gpg::GpgError) -> Self {
         FfiError::Internal(e.to_string())
+    }
+}
+
+impl From<AgeError> for FfiError {
+    fn from(e: AgeError) -> Self {
+        match e {
+            AgeError::KeyAlreadyExists(_) => FfiError::InvalidInput(e.to_string()),
+            AgeError::RecipientNotFound(_) => FfiError::NotFound(e.to_string()),
+            other => FfiError::Internal(other.to_string()),
+        }
     }
 }
 
@@ -585,6 +598,24 @@ impl From<ssh_agent_conf::Status> for SshAgentConfStatus {
             config_path: s.config_path.to_string_lossy().to_string(),
             expected_agent: s.expected_agent,
             current_agent: s.current_agent,
+        }
+    }
+}
+
+/// One age identity, for the Age pane.
+#[derive(uniffi::Record, Clone)]
+pub struct AgeKeyEntry {
+    /// The user-facing name, and the keychain entry's key.
+    pub name: String,
+    /// The `age1...` public recipient, derived from the secret.
+    pub recipient: String,
+}
+
+impl From<AgeKeyOverview> for AgeKeyEntry {
+    fn from(o: AgeKeyOverview) -> Self {
+        AgeKeyEntry {
+            name: o.name,
+            recipient: o.recipient,
         }
     }
 }
@@ -1500,11 +1531,46 @@ impl AxoPass {
             };
             match entry.get_password().map_err(FfiError::from)? {
                 Some(secret) => Ok(secret.expose_secret().to_string()),
-                None => Err(FfiError::NotFound("No saved passphrase for this key".to_string())),
+                None => Err(FfiError::NotFound(
+                    "No saved passphrase for this key".to_string(),
+                )),
             }
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------------
+    // Age pane
+    // -----------------------------------------------------------------------
+
+    /// List the age identities held in the keychain. Derives each recipient
+    /// from its secret, so this reads every entry on the shared auth context.
+    pub async fn list_age_keys(&self) -> Result<Vec<AgeKeyEntry>, FfiError> {
+        tokio::task::spawn_blocking(list_age_keys)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::from)
+            .map(|keys| keys.into_iter().map(AgeKeyEntry::from).collect())
+    }
+
+    /// Generate a new x25519 age identity, save it under `name`, and record an
+    /// `age.key_create` audit event.
+    pub async fn generate_age_key(&self, name: String) -> Result<AgeKeyEntry, FfiError> {
+        tokio::task::spawn_blocking(move || generate_age_key(&name))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::from)
+            .map(AgeKeyEntry::from)
+    }
+
+    /// Delete an age identity from the keychain, recording an `age.key_delete`
+    /// audit event.
+    pub async fn delete_age_key(&self, name: String) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(move || delete_age_recipient(&name))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::from)
     }
 
     // -----------------------------------------------------------------------

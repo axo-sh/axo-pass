@@ -18,6 +18,12 @@ pub enum AgeError {
     #[error("Recipient {0} not found in keychain")]
     RecipientNotFound(String),
 
+    #[error("An age key named {0} already exists")]
+    KeyAlreadyExists(String),
+
+    #[error("Failed to save age key {0} to keychain: {1}")]
+    FailedToSaveKey(String, #[source] KeychainError),
+
     #[error("Failed to retrieve recipient {0} from keychain: {1}")]
     FailedToRetrieveRecipient(String, #[source] KeychainError),
 

@@ -31,6 +31,8 @@ struct VaultsSidebar: View {
             .tag(SidebarDestination.ssh)
           Label("GPG", systemImage: "key.fill")
             .tag(SidebarDestination.gpg)
+          Label("Age", systemImage: "lock.rectangle.stack")
+            .tag(SidebarDestination.age)
         }
       } header: {
         SidebarSectionHeader("Tools", isExpanded: $toolsExpanded)

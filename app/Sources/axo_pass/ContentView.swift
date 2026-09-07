@@ -21,6 +21,7 @@ private struct MainView: View {
   // same selection and key list.
   @State private var sshModel = SshModel()
   @State private var gpgModel = GpgModel()
+  @State private var ageModel = AgeModel()
 
   var body: some View {
     NavigationSplitView {
@@ -38,6 +39,8 @@ private struct MainView: View {
       SshKeyDetailView(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
       GpgKeyDetailView(model: gpgModel)
+    } else if case .age = model.sidebarSelection {
+      AgeKeyDetailView(model: ageModel)
     } else {
       VaultDetailView()
     }
@@ -51,6 +54,8 @@ private struct MainView: View {
       SshPane(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
       GpgPane(model: gpgModel)
+    } else if case .age = model.sidebarSelection {
+      AgePane(model: ageModel)
     } else {
       ContentUnavailableView("Select a section", systemImage: "sidebar.left")
     }

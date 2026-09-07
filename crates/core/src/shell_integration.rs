@@ -218,7 +218,11 @@ mod tests {
             .env("HOME", "/home/tester")
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&out.stdout).trim(),
             "/home/tester/.local/bin:/usr/bin"

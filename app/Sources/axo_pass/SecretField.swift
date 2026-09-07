@@ -25,20 +25,33 @@ func secureCopy(_ secret: String) {
 struct SecretBox: View {
   /// The revealed value, or nil to show the masked placeholder.
   let revealed: String?
+  /// Wrap the revealed value on any character, for long unbroken tokens like an
+  /// age secret key. The masked placeholder is unaffected.
+  var charWraps: Bool = false
   let onToggle: () -> Void
 
   var body: some View {
-    Button(action: onToggle) {
-      Text(revealed ?? "••••••••")
-        .font(.system(.body, design: .monospaced))
-        .foregroundStyle(revealed == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
-        .lineSpacing(8)
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    Group {
+      if let revealed, charWraps {
+        CharWrappingText(text: revealed)
+          .padding(.vertical, 6)
+          .padding(.horizontal, 8)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+      } else {
+        Button(action: onToggle) {
+          Text(revealed ?? "••••••••")
+            .font(.system(.body, design: .monospaced))
+            .foregroundStyle(revealed == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+            .lineSpacing(8)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .textSelection(.enabled)
+        .buttonStyle(RevealPlaceholderButtonStyle())
+      }
     }
-    .textSelection(.enabled)
-    .buttonStyle(RevealPlaceholderButtonStyle())
   }
 }

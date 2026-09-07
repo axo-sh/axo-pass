@@ -87,6 +87,7 @@ enum AuditActionGroup: String, CaseIterable, Identifiable {
   case all
   case ssh
   case gpg
+  case age
   case secrets
   case vault
   case auth
@@ -98,6 +99,7 @@ enum AuditActionGroup: String, CaseIterable, Identifiable {
     case .all: return "All events"
     case .ssh: return "SSH"
     case .gpg: return "GPG"
+    case .age: return "Age"
     case .secrets: return "Secrets"
     case .vault: return "Vault"
     case .auth: return "Grants"
@@ -120,8 +122,10 @@ enum AuditActionGroup: String, CaseIterable, Identifiable {
         "gpg.passphrase", "gpg.confirm", "gpg.message", "gpg.passphrase_saved",
         "gpg.agent_conf_changed",
       ]
+    case .age:
+      return ["age.encrypt", "age.decrypt", "age.key_create", "age.key_delete"]
     case .secrets:
-      return ["secret.read", "secret.inject", "secret.exec", "age.decrypt", "age.encrypt"]
+      return ["secret.read", "secret.inject", "secret.exec"]
     case .vault:
       return [
         "vault.unlock", "vault.lock", "vault.autolock", "vault.items_listed", "vault.item_created",

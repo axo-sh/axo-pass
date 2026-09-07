@@ -224,6 +224,10 @@ pub enum Action {
     AgeDecrypt,
     #[serde(rename = "age.encrypt")]
     AgeEncrypt,
+    #[serde(rename = "age.key_create")]
+    AgeKeyCreate,
+    #[serde(rename = "age.key_delete")]
+    AgeKeyDelete,
 
     #[serde(rename = "vault.unlock")]
     VaultUnlock,
@@ -280,6 +284,8 @@ impl Action {
             Action::SecretExec => "secret.exec",
             Action::AgeDecrypt => "age.decrypt",
             Action::AgeEncrypt => "age.encrypt",
+            Action::AgeKeyCreate => "age.key_create",
+            Action::AgeKeyDelete => "age.key_delete",
             Action::VaultUnlock => "vault.unlock",
             Action::VaultLock => "vault.lock",
             Action::VaultAutolock => "vault.autolock",
