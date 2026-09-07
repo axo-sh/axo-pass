@@ -147,10 +147,34 @@ final class SshModel {
     return events.map(AuditLogRow.init)
   }
 
+  /// Read a key's saved passphrase back from the keychain. Prompts for Touch
+  /// ID. Returns nil and sets `loadError` on failure.
+  func revealPassword(fingerprint: String) async -> String? {
+    do {
+      return try await core.revealKeyPassword(passwordType: .sshKey, keyId: fingerprint)
+    } catch {
+      loadError = String(describing: error)
+      return nil
+    }
+  }
+
   @discardableResult
   func savePassword(fingerprint: String, password: String) async -> Bool {
     do {
       try await core.saveSshKeyPassword(fingerprint: fingerprint, password: password)
+      await reload()
+      return true
+    } catch {
+      loadError = String(describing: error)
+      return false
+    }
+  }
+
+  /// Delete a key's saved passphrase from the keychain.
+  @discardableResult
+  func forgetPassword(fingerprint: String) async -> Bool {
+    do {
+      try await core.deletePassword(passwordType: .sshKey, keyId: fingerprint)
       await reload()
       return true
     } catch {

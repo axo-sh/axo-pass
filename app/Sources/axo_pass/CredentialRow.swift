@@ -18,19 +18,16 @@ struct CredentialRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      LabeledContent {
-        actionButtons
-      } label: {
-        VStack(alignment: .leading, spacing: 2) {
-          if isEditing {
-            TextField("Title", text: $draftTitle)
-              .fontWeight(.semibold)
-          } else {
-            Text(cred.title).fontWeight(.semibold)
-          }
-          Text(cred.key).font(.caption).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        if isEditing {
+          TextField("Title", text: $draftTitle)
+            .fontWeight(.semibold)
+        } else {
+          Text(cred.title).fontWeight(.semibold)
         }
+        Text(cred.key).font(.caption).foregroundStyle(.secondary)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       .onChange(of: isEditing) { wasEditing, editing in
         if editing {
           draftTitle = cred.title
@@ -43,20 +40,9 @@ struct CredentialRow: View {
         Text(err).font(.caption).foregroundStyle(.red)
       }
 
-      if let secret {
-        // LabeledContent("Value") {
-        SecretValueView(secret: secret, onHide: onHide)
-        // }
-      } else {
-        Button(action: onReveal) {
-          Text("••••••••")
-            .font(.system(.body, design: .monospaced))
-            .foregroundStyle(.tertiary)
-            .padding(6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(RevealPlaceholderButtonStyle())
+      HStack(spacing: 6) {
+        valueBox
+        actionButtons
       }
     }
     .padding(.vertical, 2)
@@ -64,26 +50,33 @@ struct CredentialRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
+  private var valueBox: some View {
+    SecretBox(revealed: revealedText, onToggle: { secret == nil ? onReveal() : onHide() })
+  }
+
+  private var revealedText: String? {
+    guard let secret else { return nil }
+    return secret.withUnsafeBytes { String(bytes: $0, encoding: .utf8) ?? "(binary data)" }
+  }
+
   @ViewBuilder
   private var actionButtons: some View {
     if isRevealing {
       ProgressView().controlSize(.small)
     } else {
-      HStack(spacing: 4) {
-        if secret != nil {
-          Button("Copy", action: onCopy).buttonStyle(.bordered).controlSize(.small)
-        }
-        if isEditing {
-          Button("Delete", role: .destructive, action: onDelete)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
+      if secret != nil {
+        Button("Copy", action: onCopy).buttonStyle(.bordered).controlSize(.small)
+      }
+      if isEditing {
+        Button("Delete", role: .destructive, action: onDelete)
+          .buttonStyle(.bordered)
+          .controlSize(.small)
       }
     }
   }
 }
 
-private struct RevealPlaceholderButtonStyle: ButtonStyle {
+struct RevealPlaceholderButtonStyle: ButtonStyle {
   @State private var isHovered = false
 
   func makeBody(configuration: Configuration) -> some View {
@@ -99,23 +92,3 @@ private struct RevealPlaceholderButtonStyle: ButtonStyle {
   }
 }
 
-private struct SecretValueView: View {
-  let secret: SymmetricKey
-  let onHide: () -> Void
-
-  var body: some View {
-    let value = secret.withUnsafeBytes { ptr in
-      String(bytes: ptr, encoding: .utf8) ?? "(binary data)"
-    }
-    Button(action: onHide) {
-      Text(value)
-        .font(.system(.body, design: .monospaced))
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .lineSpacing(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-    }
-    .textSelection(.enabled)
-    .buttonStyle(RevealPlaceholderButtonStyle())
-  }
-}

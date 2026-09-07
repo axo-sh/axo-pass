@@ -122,6 +122,17 @@ final class GpgModel {
     }
   }
 
+  /// Read one keygrip's saved passphrase back from the keychain. Prompts for
+  /// Touch ID. Returns nil and sets `loadError` on failure.
+  func revealPassphrase(keygrip: String) async -> String? {
+    do {
+      return try await core.revealKeyPassword(passwordType: .gpgKey, keyId: keygrip)
+    } catch {
+      loadError = Self.message(for: error)
+      return nil
+    }
+  }
+
   /// Delete one keygrip's saved passphrase.
   @discardableResult
   func forgetPassphrase(keygrip: String) async -> Bool {

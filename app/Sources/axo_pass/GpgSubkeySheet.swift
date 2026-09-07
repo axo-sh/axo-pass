@@ -37,6 +37,20 @@ struct GpgSubkeySheet: View {
         }
       }
       .labeledContentStyle(.inspectorField)
+      // Each secret half is encrypted on its own, so a subkey's passphrase is
+      // saved here rather than with the primary key's.
+      if subkey.secretState == .present && subkey.requiresPassphrase {
+        Divider()
+        PassphraseField(
+          hasSaved: subkey.hasSavedPassword,
+          reveal: {
+            guard let keygrip = subkey.keygrip else { return nil }
+            return await model.revealPassphrase(keygrip: keygrip)
+          },
+          save: { showingSavePassphraseSheet = true },
+          remove: { showingForgetConfirmation = true }
+        )
+      }
       Divider()
       footer
     }
@@ -110,15 +124,6 @@ struct GpgSubkeySheet: View {
     HStack {
       Button("Copy Fingerprint") { copy(subkey.fingerprint ?? subkey.keyId) }
       Spacer()
-      // Each secret half is encrypted on its own, so a subkey's passphrase is
-      // saved here rather than with the primary key's.
-      if subkey.secretState == .present && subkey.requiresPassphrase {
-        if subkey.hasSavedPassword {
-          Button("Forget Passphrase", role: .destructive) { showingForgetConfirmation = true }
-        } else {
-          Button("Save Passphrase") { showingSavePassphraseSheet = true }
-        }
-      }
       Button("Done") { dismiss() }
         .keyboardShortcut(.defaultAction)
     }

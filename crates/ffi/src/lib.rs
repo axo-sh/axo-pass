@@ -1437,6 +1437,27 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
+    /// Read a saved key passphrase back from the keychain, prompting for Touch
+    /// ID. Errors with `NotFound` when no passphrase is saved for the key.
+    pub async fn reveal_key_password(
+        &self,
+        password_type: PasswordEntryType,
+        key_id: String,
+    ) -> Result<String, FfiError> {
+        tokio::task::spawn_blocking(move || {
+            let entry = PasswordEntry {
+                password_type: password_type.into(),
+                key_id,
+            };
+            match entry.get_password().map_err(FfiError::from)? {
+                Some(secret) => Ok(secret.expose_secret().to_string()),
+                None => Err(FfiError::NotFound("No saved passphrase for this key".to_string())),
+            }
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
     // -----------------------------------------------------------------------
     // Shell integration (Setup pane)
     // -----------------------------------------------------------------------

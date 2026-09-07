@@ -140,8 +140,7 @@ private struct CredentialList: View {
     guard let secret = secrets[cred.key] else { return }
     secret.withUnsafeBytes { ptr in
       guard let str = String(bytes: ptr, encoding: .utf8) else { return }
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(str, forType: .string)
+      secureCopy(str)
     }
   }
 

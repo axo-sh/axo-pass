@@ -39,7 +39,23 @@ private struct GpgKeyDetail: View {
         sectionTitle("Fingerprint")
         InsetGroupedSection { fingerprintBlock }
         sectionTitle("Details")
-        InsetGroupedSection { factList }
+        InsetGroupedSection {
+          VStack(spacing: 8) {
+            factList
+            if showsPassphrase {
+              Divider()
+              PassphraseField(
+                hasSaved: key.hasSavedPassword,
+                reveal: {
+                  guard let keygrip = key.keygrip else { return nil }
+                  return await model.revealPassphrase(keygrip: keygrip)
+                },
+                save: { showingSavePassphraseSheet = true },
+                remove: { showingForgetConfirmation = true }
+              )
+            }
+          }
+        }
         if key.userIds.count > 1 {
           sectionTitle("User IDs")
           InsetGroupedSection { userIdList }
@@ -114,17 +130,14 @@ private struct GpgKeyDetail: View {
         Task { await copyPublicKey() }
       }
       .disabled(isExporting)
-      // The primary key's own passphrase. A smartcard or offline stub has no
-      // local key material to unlock, and a key gpg stores unencrypted has no
-      // passphrase to save. Subkeys are saved from their own sheet.
-      if key.secretState == .present && key.requiresPassphrase {
-        if key.hasSavedPassword {
-          Button("Forget Passphrase", role: .destructive) { showingForgetConfirmation = true }
-        } else {
-          Button("Save Passphrase") { showingSavePassphraseSheet = true }
-        }
-      }
     }
+  }
+
+  /// The primary key's own passphrase. A smartcard or offline stub has no local
+  /// key material to unlock, and a key gpg stores unencrypted has no passphrase
+  /// to save. Subkeys are saved from their own sheet.
+  private var showsPassphrase: Bool {
+    key.secretState == .present && key.requiresPassphrase
   }
 
   private var badges: some View {

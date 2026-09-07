@@ -25,6 +25,7 @@ private struct SshKeyDetail: View {
   @State private var recentEvents: [AuditLogRow] = []
   @State private var showingSavePasswordSheet = false
   @State private var showingDeleteConfirmation = false
+  @State private var showingDeletePassphraseConfirmation = false
   @State private var copiedPublicKey = false
 
   private static let recentEventCount: UInt32 = 5
@@ -48,7 +49,7 @@ private struct SshKeyDetail: View {
           }
         }
         // Everything the pills already say is left to them.
-        if !detailItems.isEmpty || showsMissingPublicKey {
+        if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase {
           sectionTitle("Details")
           InsetGroupedSection {
             VStack(spacing: 8) {
@@ -63,6 +64,17 @@ private struct SshKeyDetail: View {
                   Divider()
                 }
                 missingPublicKeyRow
+              }
+              if showsPassphrase {
+                if !detailItems.isEmpty || showsMissingPublicKey {
+                  Divider()
+                }
+                PassphraseField(
+                  hasSaved: key.hasSavedPassword,
+                  reveal: { await model.revealPassword(fingerprint: key.fingerprintSha256) },
+                  save: { showingSavePasswordSheet = true },
+                  remove: { showingDeletePassphraseConfirmation = true }
+                )
               }
             }
           }
@@ -104,7 +116,22 @@ private struct SshKeyDetail: View {
     } message: {
       Text("The private key lives in the Secure Enclave and cannot be recovered.")
     }
+    .confirmationDialog(
+      "Remove saved passphrase for \(key.name)?",
+      isPresented: $showingDeletePassphraseConfirmation, titleVisibility: .visible
+    ) {
+      Button("Remove", role: .destructive) {
+        Task { await model.forgetPassword(fingerprint: key.fingerprintSha256) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("ssh will ask for the passphrase again the next time it needs this key.")
+    }
   }
+
+  /// A key file on disk can carry a passphrase worth saving. Secure Enclave
+  /// keys and agent-only identities have none.
+  private var showsPassphrase: Bool { key.location == .sshDir }
 
   // MARK: - Header
 
@@ -133,9 +160,6 @@ private struct SshKeyDetail: View {
     HStack(spacing: 8) {
       if publicKeyText != nil {
         Button(copiedPublicKey ? "Copied" : "Copy Public Key") { copyPublicKey() }
-      }
-      if !key.hasSavedPassword && key.location == .sshDir {
-        Button("Save Password") { showingSavePasswordSheet = true }
       }
       if key.isManaged {
         Button("Delete", role: .destructive) { showingDeleteConfirmation = true }
