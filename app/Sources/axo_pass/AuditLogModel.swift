@@ -112,6 +112,7 @@ enum AuditActionGroup: String, CaseIterable, Identifiable {
     case .ssh:
       return [
         "ssh.sign", "ssh.passphrase", "ssh.key_add", "ssh.key_remove",
+        "ssh.managed_key_create", "ssh.managed_key_delete",
         "ssh.session_bind", "ssh.agent_start", "ssh.agent_stop",
       ]
     case .gpg:

@@ -1208,23 +1208,72 @@ impl AxoPass {
 
     /// Create a new Secure Enclave-backed managed SSH key.
     pub async fn add_managed_ssh_key(&self) -> Result<SshKeyEntry, FfiError> {
-        let managed_key = ManagedSshKey::create().await.map_err(FfiError::from)?;
-        let overview: SshKeyOverview = managed_key.into();
+        let result = ManagedSshKey::create().await.map_err(FfiError::from);
+
+        let mut event = audit::AuditEvent::new(
+            audit::process_source(),
+            audit::Action::SshManagedKeyCreate,
+            match &result {
+                Ok(_) => audit::Outcome::Succeeded,
+                Err(_) => audit::Outcome::Failed,
+            },
+        );
+        match &result {
+            Ok(key) => {
+                event = event.subject(
+                    audit::Subject::new(
+                        audit::SubjectKind::SshKey,
+                        format!("SHA256:{}", key.fingerprint_sha256()),
+                    )
+                    .label(key.label())
+                    .fingerprint(format!("SHA256:{}", key.fingerprint_sha256())),
+                );
+            },
+            Err(e) => event = event.message(e.to_string()),
+        }
+        audit::record(event);
+
+        let overview: SshKeyOverview = result?.into();
         Ok(overview.into())
     }
 
     /// Delete a managed SSH key by its sha256 fingerprint.
     pub async fn delete_managed_ssh_key(&self, fingerprint_sha256: String) -> Result<(), FfiError> {
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let keys = ManagedSshKey::list().map_err(FfiError::from)?;
             let key = keys
                 .into_iter()
                 .find(|k| k.fingerprint_sha256() == fingerprint_sha256)
                 .ok_or_else(|| FfiError::NotFound(fingerprint_sha256.clone()))?;
-            key.delete().map_err(FfiError::from)
+            let label = key.label();
+            let fingerprint = format!("SHA256:{}", key.fingerprint_sha256());
+            key.delete().map_err(FfiError::from)?;
+            Ok::<_, FfiError>((label, fingerprint))
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
+
+        let mut event = audit::AuditEvent::new(
+            audit::process_source(),
+            audit::Action::SshManagedKeyDelete,
+            match &result {
+                Ok(_) => audit::Outcome::Succeeded,
+                Err(_) => audit::Outcome::Failed,
+            },
+        );
+        match &result {
+            Ok((label, fingerprint)) => {
+                event = event.subject(
+                    audit::Subject::new(audit::SubjectKind::SshKey, fingerprint.clone())
+                        .label(label.clone())
+                        .fingerprint(fingerprint.clone()),
+                );
+            },
+            Err(e) => event = event.message(e.to_string()),
+        }
+        audit::record(event);
+
+        result.map(|_| ())
     }
 
     /// Rewrite a managed SSH key's public key file from the Secure Enclave,
