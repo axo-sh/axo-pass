@@ -1244,11 +1244,11 @@ impl AxoPass {
         Ok(())
     }
 
-    /// Whether this launch or reopen came from the broker starting the app to
-    /// serve a request, rather than from a person opening it. Consumes the
-    /// marker, so a second call reports false.
-    pub fn take_broker_launch_request(&self) -> bool {
-        app_broker::take_launch_request()
+    /// Whether the broker started this app to serve a request, rather than a
+    /// person opening it. Reads the flag off this process's own arguments, so
+    /// it holds for the life of the process.
+    pub fn is_broker_launch(&self) -> bool {
+        std::env::args().any(|arg| arg == app_broker::LAUNCH_FLAG)
     }
 
     /// Read audit events, newest first. Not gated on an unlocked vault: the

@@ -182,10 +182,10 @@ final class VaultsModel {
     unlock()
   }
 
-  /// Whether this launch or reopen came from the broker rather than a person.
-  /// Consumes the marker, so a second call reports false.
-  func takeBrokerLaunchRequest() -> Bool {
-    core.takeBrokerLaunchRequest()
+  /// Whether the broker started this app to serve a request, rather than a
+  /// person opening it.
+  func isBrokerLaunch() -> Bool {
+    core.isBrokerLaunch()
   }
 
   /// Give up an auto-unlock in flight so a broker prompt can take the auth lock

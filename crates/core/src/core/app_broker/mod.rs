@@ -26,6 +26,9 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
+use objc2::rc::Retained;
+use objc2_app_kit::NSRunningApplication;
+use objc2_foundation::{NSBundle, NSString, NSURL};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
@@ -68,29 +71,9 @@ pub fn broker_socket_path() -> PathBuf {
     app_data_dir().join("app-broker.sock")
 }
 
-/// Marks an `open` issued by [`launch_app`].
-fn launch_request_path() -> PathBuf {
-    app_data_dir().join("app-broker.launch")
-}
-
-/// How long a launch marker stays meaningful: long enough to cover a cold
-/// launch, short enough that a stale one does not swallow a real reopen.
-const LAUNCH_REQUEST_TTL: Duration = Duration::from_secs(30);
-
-/// Consume the marker left by [`launch_app`]. True when this launch or reopen
-/// came from the broker, in which case the app must stay headless.
-pub fn take_launch_request() -> bool {
-    let path = launch_request_path();
-    let Ok(metadata) = fs::metadata(&path) else {
-        return false;
-    };
-    let _ = fs::remove_file(&path);
-    metadata
-        .modified()
-        .ok()
-        .and_then(|written| written.elapsed().ok())
-        .is_some_and(|age| age < LAUNCH_REQUEST_TTL)
-}
+/// Passed to the app by [`launch_app`] to say the launch is only to serve the
+/// broker, so the app stays headless: no window, no Dock icon, no focus taken.
+pub const LAUNCH_FLAG: &str = "--broker";
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
@@ -365,6 +348,53 @@ fn app_bundle_path() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Whether the app is already running.
+///
+/// Asks LaunchServices, which is the same authority `open` consults: if it
+/// reports an instance, `open` will reopen that one rather than launch a new
+/// one. `ap` itself is not a registered application, so it never counts.
+fn app_is_running(bundle: &Path) -> bool {
+    let Some(id) = bundle_identifier(bundle) else {
+        log::debug!("No bundle identifier for {}", bundle.display());
+        return false;
+    };
+    !NSRunningApplication::runningApplicationsWithBundleIdentifier(&id).is_empty()
+}
+
+/// The `CFBundleIdentifier` of the bundle at `path`.
+fn bundle_identifier(path: &Path) -> Option<Retained<NSString>> {
+    let url = NSURL::fileURLWithPath(&NSString::from_str(path.to_str()?));
+    NSBundle::bundleWithURL(&url)?.bundleIdentifier()
+}
+
+/// Serializes `launch_app` across processes, so two requests arriving together
+/// issue one `open` between them.
+fn launch_lock_path() -> PathBuf {
+    app_data_dir().join("app-broker.launch.lock")
+}
+
+/// Take the launch lock, waiting for whoever holds it.
+///
+/// Waits rather than giving up, so the second caller runs its checks only after
+/// the first has finished starting the app and LaunchServices knows about it.
+///
+/// The lock is an `flock` the kernel releases when the file closes or the
+/// process dies, so it cannot go stale and needs no timeout. Nothing reads the
+/// file's contents.
+fn lock_launch() -> Option<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(launch_lock_path())
+        .map_err(|e| log::debug!("Could not open the launch lock: {e}"))
+        .ok()?;
+    match unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } {
+        0 => Some(file),
+        _ => None,
+    }
+}
+
 /// Start the app in the background, so a signature request does not pull focus
 /// away from whatever asked for it.
 fn launch_app() -> Result<(), BrokerError> {
@@ -373,17 +403,26 @@ fn launch_app() -> Result<(), BrokerError> {
         return Err(BrokerError::Unavailable);
     };
 
-    log::debug!("Starting {} for the app broker", bundle.display());
-    // The marker tells the app this launch is only to serve the broker, so it
-    // stays headless: no main window, no Dock icon, no focus taken. A file is
-    // used because `open` drops `--args` when the app is already running and
-    // only delivers a reopen event.
-    if let Err(e) = fs::write(launch_request_path(), b"") {
-        log::debug!("Could not write the broker launch marker: {e}");
+    // Held until this function returns, so two requests arriving together issue
+    // one `open` between them: the second waits here, then finds the app
+    // running below. A second `open` would reach the app as a reopen, which
+    // puts a window on screen.
+    let _lock = lock_launch();
+
+    // `open` on a running app only delivers a reopen event, which puts a window
+    // on screen and takes focus, and drops `--args` on the way. So do not issue
+    // one: the app is up and binding the socket, and the caller waits for it.
+    if app_is_running(&bundle) {
+        log::debug!("The app is already running; waiting for it to serve");
+        return Ok(());
     }
+
+    log::debug!("Starting {} for the app broker", bundle.display());
     let status = std::process::Command::new("/usr/bin/open")
         .arg("-g")
         .arg(&bundle)
+        .arg("--args")
+        .arg(LAUNCH_FLAG)
         .status()
         .map_err(|e| BrokerError::Failed(format!("Failed to start the app: {e}")))?;
     if !status.success() {

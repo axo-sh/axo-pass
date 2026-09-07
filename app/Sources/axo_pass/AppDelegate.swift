@@ -4,7 +4,7 @@ import SwiftUI
 /// Owns the model and the broker, and asks the scenes in `App.swift` to open
 /// windows.
 ///
-/// The broker starts the app with `open -g`, leaving a marker to say the launch
+/// The broker starts the app with `open -g --args --broker` to say the launch
 /// is its own (see `crates/core/src/core/app_broker/mod.rs`). In that case no
 /// window is opened and the app runs as an accessory (no Dock icon): the prompt
 /// is an `NSPanel` that shows on its own. Opening the app from the Dock or
@@ -25,18 +25,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // window, and closing the window later must not stop serving prompts.
     Task { await model.startBroker() }
 
-    if model.takeBrokerLaunchRequest() {
+    if model.isBrokerLaunch() {
       NSApp.setActivationPolicy(.accessory)
     } else {
       windows.requestMain()
     }
   }
 
-  /// Reopen from the Dock or the Finder. `open` sends this to an app that is
-  /// already running, so it is also how a second broker request arrives, and
-  /// serving one must not put a window on screen or pull focus.
+  /// Reopen from the Dock or the Finder. The broker never sends one: it only
+  /// runs `open` when no app is running, so a reopen is always a person.
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-    if model.takeBrokerLaunchRequest() { return false }
     windows.requestMain()
     return true
   }
@@ -49,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Called from the main scene's content once its window exists.
   func adoptMainWindow(_ window: NSWindow) {
     mainWindow = window
+    // AppKit would otherwise reopen this window on the next launch, including a
+    // broker launch that must show no window at all. A launch by a person opens
+    // it through `WindowRequests` instead, so nothing is lost.
+    window.isRestorable = false
   }
 
   /// Closing the main window leaves the broker serving with nothing to show, so
