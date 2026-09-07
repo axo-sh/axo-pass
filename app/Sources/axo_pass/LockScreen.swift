@@ -5,26 +5,28 @@ struct LockScreen: View {
   @Environment(VaultsModel.self) private var model
 
   var body: some View {
-    VStack(spacing: 16) {
-      // LAAuthenticationView draws nothing unless an evaluation is running, so
-      // a static glyph stands in above the title when no prompt is up.
-      if !model.isPrompting {
-        Image(systemName: "lock.fill")
-          .font(.system(size: 40))
-          .foregroundStyle(.secondary)
-          .frame(width: 64, height: 64)
-      }
-
-      Text("Axo Pass")
-        .font(.title)
-        .fontWeight(.semibold)
-
+    VStack(spacing: 12) {
       // The icon is bound to the context it was built with, so a replacement
       // context needs a new view.
       if model.isPrompting {
         AuthenticationIcon(context: model.authContext)
           .id(ObjectIdentifier(model.authContext))
+          .frame(width: 320, height: 320)
+          .overlay(alignment: .center) {
+            AxoLogo()
+              .frame(width: 450, height: 450)
+              .opacity(0.04)
+              .allowsHitTesting(false)
+              .offset(y: -30)
+          }
+      } else {
+        Image(systemName: "lock.fill")
+          .font(.system(size: 40))
+          .foregroundStyle(.secondary)
           .frame(width: 64, height: 64)
+        Text("Axo Pass")
+          .font(.title)
+          .fontWeight(.semibold)
       }
 
       // Idle, the glyph and the button say everything; instructions only matter
@@ -59,10 +61,11 @@ struct LockScreen: View {
           .buttonStyle(.link)
       }
     }
-    .padding(.bottom, 48)  // account for invisible toolbar
+    // .padding(.bottom, 48)  // account for invisible toolbar
     .animation(.default, value: model.isPrompting)
     .animation(.default, value: model.unlockError)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
     // An empty toolbar and an empty title keep the window's title bar in place
     // while the lock screen hides it. Prevents flicker.
     .toolbar { Spacer() }

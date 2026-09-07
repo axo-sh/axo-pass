@@ -11,8 +11,8 @@ import SwiftUI
 struct AuthenticationIcon: NSViewRepresentable {
   private let make: () -> LAAuthenticationView
 
-  init(context: LAContext) {
-    make = { LAAuthenticationView(context: context) }
+  init(context: LAContext, controlSize: NSControl.ControlSize = .regular) {
+    make = { LAAuthenticationView(context: context, controlSize: controlSize) }
   }
 
   /// Adopt a view built ahead of time. The signing prompt creates its view
