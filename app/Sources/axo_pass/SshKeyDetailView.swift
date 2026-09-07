@@ -42,9 +42,7 @@ private struct SshKeyDetail: View {
         if let publicKeyText {
           sectionTitle("Public Key")
           InsetGroupedSection {
-            Text(publicKeyText)
-              .font(.system(.caption, design: .monospaced))
-              .textSelection(.enabled)
+            CharWrappingText(text: publicKeyText, dimsOuterFields: true)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
