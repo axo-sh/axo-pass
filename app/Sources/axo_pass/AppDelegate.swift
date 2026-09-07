@@ -1,4 +1,6 @@
 import AppKit
+import SunshineCore
+import SunshineUI
 import SwiftUI
 
 /// Owns the model and the broker, and asks the scenes in `App.swift` to open
@@ -14,6 +16,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   let model = VaultsModel()
   let windows = WindowRequests()
 
+  /// Auto-update against GitHub Releases. An update installs only if it is
+  /// signed by the same Developer ID Team as the running app.
+  private(set) lazy var updaterUI: SunshineUpdaterUIController =
+    AppDelegate.updaterUIFactory?() ?? AppDelegate.makeUpdaterUI()
+
+  /// Set by an untracked local build (`SunshineFakeUpdate.swift`, gitignored) to
+  /// drive the update UI from canned release data. Nil in a normal build.
+  static var updaterUIFactory: (() -> SunshineUpdaterUIController)?
+
+  private static func makeUpdaterUI() -> SunshineUpdaterUIController {
+    let controller = SunshineUpdaterUIController(
+      updater: SunshineUpdater(
+        configuration: SunshineConfiguration(
+          owner: "axo-sh",
+          repo: "axo-pass",
+          checkInterval: 3600
+        )
+      )
+    )
+    // Match `.sunshineUpdater(style:)` in `App.swift` up front, so a check that
+    // finishes before that modifier's `.task` runs still routes to the corner
+    // indicator rather than popping a sheet.
+    controller.updateUIStyle = .cornerIndicator
+    return controller
+  }
+
   /// The main scene's window, handed over by `WindowAccessor` once SwiftUI has
   /// built it. Held weakly: the scene owns its lifetime.
   private weak var mainWindow: NSWindow?
@@ -21,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     Preferences.registerDefaults()
     observeWindowClose()
+
+    // Confirms a pending relaunch from a previous update. Must run early.
+    SunshineUpdater.confirmSuccessfulRelaunchIfNeeded()
 
     // Start the broker off the window's lifetime: a headless launch has no
     // window, and closing the window later must not stop serving prompts.

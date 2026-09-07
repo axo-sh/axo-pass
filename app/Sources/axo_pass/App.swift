@@ -1,4 +1,5 @@
 import AppKit
+import SunshineUI
 import SwiftUI
 
 @main
@@ -13,6 +14,7 @@ struct AxoPassApp: App {
     Window("Axo Pass", id: Self.mainWindowID) {
       ContentView()
         .environment(appDelegate.model)
+        .sunshineUpdater(appDelegate.updaterUI, appName: "Axo Pass", style: .cornerIndicator)
         // warning: setting frame can cause the side nav to flicker when toggling.
         // .frame(minWidth: 400, minHeight: 400)
         .onAppear { appDelegate.model.reload() }
@@ -42,8 +44,10 @@ struct AxoPassApp: App {
     Settings {
       SettingsView()
         .environment(appDelegate.model)
+        .environmentObject(appDelegate.updaterUI)
     }
     .commands {
+      CheckForUpdatesCommand(appDelegate.updaterUI)
       CommandGroup(replacing: .appSettings) {
         SettingsMenuItem()
           .environment(appDelegate.model)

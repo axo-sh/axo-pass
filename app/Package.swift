@@ -9,6 +9,9 @@ import PackageDescription
 let package = Package(
     name: "Axo Pass",
     platforms: [.macOS(.v15)],
+    dependencies: [
+        .package(url: "git@github.com:octavore/sunshine.git", branch: "main"),
+    ],
     targets: [
         .systemLibrary(
             name: "axo_pass_ffiFFI",
@@ -26,7 +29,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "axo_pass",
-            dependencies: ["AxoPassFFI"],
+            dependencies: [
+                "AxoPassFFI",
+                .product(name: "Sunshine", package: "sunshine"),
+            ],
             path: "Sources/axo_pass",
             linkerSettings: [
                 // target/swift-lib is a symlink maintained by scripts/build-ffi.sh

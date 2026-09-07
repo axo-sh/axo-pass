@@ -1,5 +1,6 @@
 import AppKit
 import AxoPassFFI
+import SunshineUI
 import SwiftUI
 
 /// The content of the Settings scene in `App.swift`.
@@ -8,6 +9,7 @@ import SwiftUI
 /// window as well as disabling the menu item.
 struct SettingsView: View {
   @Environment(VaultsModel.self) private var model
+  @EnvironmentObject private var updaterUI: SunshineUpdaterUIController
   @State private var window: NSWindow?
 
   var body: some View {
@@ -22,9 +24,13 @@ struct SettingsView: View {
         .tabItem { Label("GPG", systemImage: "lock.doc") }
       ShellSettingsView()
         .tabItem { Label("Shell", systemImage: "terminal") }
+      SunshineUpdateSettingsView(controller: updaterUI)
+        .tabItem { Label("About", systemImage: "info.circle") }
     }
     .padding(20)
-    .frame(width: 440, height: 280, alignment: .top)
+    .frame(width: 440)
+    .frame(minHeight: 280, alignment: .top)
+    .fixedSize(horizontal: false, vertical: true)
     .navigationTitle("Axo Pass Settings")
     .background(
       WindowAccessor {
