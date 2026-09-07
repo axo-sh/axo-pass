@@ -6,7 +6,7 @@ use std::thread;
 
 use anyhow::anyhow;
 use lru::LruCache;
-use objc2::rc::Retained;
+use objc2::rc::{Retained, autoreleasepool};
 use objc2_foundation::NSString;
 use objc2_local_authentication::{
     LAAccessControlOperation, LAContext, LAPolicy,
@@ -118,8 +118,13 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
             let mut la_cache: LruCache<String, Retained<LAContext>> =
                 LruCache::new(NonZero::new(LA_CONTEXT_CACHE_SIZE).unwrap());
 
+            // One pool per message rather than one around the loop: a pool
+            // only frees what it holds when it drains, and this loop never
+            // ends. Nothing that outlives an iteration may be borrowed from
+            // the pool. `thread_la_context` and the cache entries are owned
+            // `Retained` values, so draining cannot free them.
             for msg in rx {
-                match msg {
+                autoreleasepool(|_| match msg {
                     AuthMessage::Invalidate(reply) => {
                         log::debug!("Invalidating all LAContext instances");
                         thread_la_context = init_shared_la_context();
@@ -160,7 +165,6 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 let _ = work
                                     .auth_reply
                                     .send(Err(KeychainError::AuthenticationExpired));
-                                continue;
                             },
                             Err(e) => {
                                 log::error!(
@@ -168,11 +172,10 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                     work.context
                                 );
                                 let _ = work.auth_reply.send(Err(e));
-                                continue;
                             },
                         }
                     },
-                }
+                });
             }
         })
         .expect("Failed to spawn shared-auth thread");
@@ -346,11 +349,15 @@ where
 {
     // alternative to running on shared thread with AuthContext::OneTime and
     // AuthMethod::None, on a context of its own rather than the shared one
-    unsafe {
+    //
+    // This runs on the caller's thread, which is often a tokio blocking thread
+    // with no autorelease pool of its own, so the pool is created here. Work on
+    // the shared auth thread is covered by that thread's per-message pool.
+    autoreleasepool(|_| unsafe {
         let la_context = LAContext::new();
         la_context.setInteractionNotAllowed(true);
         work_fn(la_context)
-    }
+    })
 }
 
 /// Run `probe_fn` against the shared context with interaction disallowed, so a

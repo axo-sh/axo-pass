@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 pub use managed_ssh_key::ManagedSshKey;
 use objc2::rc::Retained;
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType, Type,
+    CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType,
 };
 use objc2_local_authentication::LAContext;
 use objc2_security::{
@@ -111,7 +111,10 @@ impl ManagedKey {
                 return Err(KeychainError::KeyCreationFailed);
             };
 
-            let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.retain().into());
+            // SecKey::new_random_key follows the Create Rule and hands back an
+            // owned CFRetained, so this takes it as-is. Retaining again would
+            // leak the key, and with it the LAContext the key was created on.
+            let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.into());
             log::debug!("Created new managed key: {managed_key:?}");
             Ok(managed_key)
         }
