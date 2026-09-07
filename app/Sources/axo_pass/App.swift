@@ -13,14 +13,15 @@ struct AxoPassApp: App {
     Window("Axo Pass", id: Self.mainWindowID) {
       ContentView()
         .environment(appDelegate.model)
-        .frame(minWidth: 640, minHeight: 400)
+        // warning: setting frame can cause the side nav to flicker when toggling.
+        // .frame(minWidth: 400, minHeight: 400)
         .onAppear { appDelegate.model.reload() }
         .background(WindowAccessor { appDelegate.adoptMainWindow($0) })
     }
     // The app always opens locked, and the lock screen has no title bar. Set on
     // the scene rather than on the window later, so the bar is never drawn and
     // then taken away. `ContentView` restores it on unlock.
-    .windowStyle(.hiddenTitleBar)
+    .windowStyle(.titleBar)
     .defaultSize(width: 960, height: 560)
     .defaultLaunchBehavior(.suppressed)
     .onChange(of: appDelegate.windows.mainOpens, initial: true) { _, count in

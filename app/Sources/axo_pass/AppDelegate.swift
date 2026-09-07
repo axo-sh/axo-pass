@@ -100,126 +100,42 @@ extension View {
   /// buttons in place. The lock screen uses this so its window is a plain
   /// panel.
   func titleBarHidden(_ hidden: Bool) -> some View {
-    background(TitleBarStyle(hidden: hidden))
+    modifier(TitleBarStyle(hidden: hidden))
   }
 }
 
-/// Applies the title bar style to the enclosing window, and keeps applying it:
-/// SwiftUI attaches the toolbar and settles the title bar after the view update
-/// that asked for the style, so a single pass is undone a moment later.
+/// Applies the title bar style to the enclosing window.
 ///
-/// A window that holds, or has held, a `NavigationSplitView` keeps its
-/// `NSToolbar`, which draws the title bar background even when the bar itself is
-/// transparent. Hiding the toolbar is therefore part of the style rather than
-/// something SwiftUI is left to manage.
-private struct TitleBarStyle: NSViewRepresentable {
+/// The lock screen carries an empty toolbar and an empty navigation title of its
+/// own, so the window always has an `NSToolbar` and the bar being hidden holds
+/// nothing. Without that, SwiftUI installs the split view's toolbar a moment
+/// after the content swap and the bar flickers.
+private struct TitleBarStyle: ViewModifier {
   let hidden: Bool
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var window: NSWindow?
 
-  func makeCoordinator() -> Coordinator { Coordinator() }
-
-  func makeNSView(context: Context) -> NSView {
-    let view = NSView(frame: .zero)
-    // The view has no window until it joins the hierarchy, which happens after
-    // this returns.
-    context.coordinator.attach(to: view, hidden: hidden)
-    return view
-  }
-
-  func updateNSView(_ view: NSView, context: Context) {
-    context.coordinator.attach(to: view, hidden: hidden)
-  }
-
-  /// Reapplies the wanted style whenever the window updates.
-  @MainActor
-  final class Coordinator {
-    private var hidden = false
-    /// Latches once the title bar has been shown, and clears on the way back to
-    /// hidden. Without it, the wait for the toolbar below would re-hide the bar
-    /// every time SwiftUI swaps toolbars, which it does on each pane change.
-    private var isShown = false
-    private weak var window: NSWindow?
-    // `nonisolated(unsafe)` so `deinit` can unregister. Only ever touched on the
-    // main thread: SwiftUI creates, updates and releases the coordinator there.
-    private nonisolated(unsafe) var observer: (any NSObjectProtocol)?
-
-    /// `.fullSizeContentView` is deliberately not part of this. The scene's
-    /// `.hiddenTitleBar` style leaves it set for the window's whole life, which
-    /// is what a unified toolbar wants anyway. Removing it misplaces the split
-    /// view's toolbar items.
-    struct Style {
-      let titleVisibility: NSWindow.TitleVisibility
-      let titlebarAppearsTransparent: Bool
-
-      /// What `.windowStyle(.hiddenTitleBar)` gives the scene, which is how the
-      /// window is born.
-      static let hidden = Style(titleVisibility: .hidden, titlebarAppearsTransparent: true)
-
-      /// A title bar that draws its own background, over full size content.
-      static let shown = Style(titleVisibility: .visible, titlebarAppearsTransparent: false)
-    }
-
-    deinit {
-      if let observer { NotificationCenter.default.removeObserver(observer) }
-    }
-
-    func attach(to view: NSView, hidden: Bool) {
-      self.hidden = hidden
-      apply()
-      // The window is nil until the view joins the hierarchy, so observation
-      // starts on the next pass rather than here.
-      DispatchQueue.main.async { [weak self, weak view] in
-        MainActor.assumeIsolated {
-          guard let self, let window = view?.window else { return }
-          self.observe(window)
-          self.apply()
+  func body(content: Content) -> some View {
+    content
+      .background(
+        WindowAccessor { window in
+          if self.window !== window { self.window = window }
+          apply(to: window)
         }
+      )
+      .onChange(of: hidden) { apply(to: window) }
+      // AppKit settles the title bar again when the window returns to the
+      // front, so the wanted style is reapplied there too.
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active { apply(to: window) }
       }
-    }
+  }
 
-    /// `didUpdateNotification` fires whenever the window redraws, which covers
-    /// SwiftUI installing a toolbar or restoring the title bar behind our back.
-    /// `apply` is idempotent, so reapplying on every pass costs nothing.
-    private func observe(_ window: NSWindow) {
-      guard window !== self.window else { return }
-      if let observer { NotificationCenter.default.removeObserver(observer) }
-      self.window = window
-      observer = NotificationCenter.default.addObserver(
-        forName: NSWindow.didUpdateNotification,
-        object: window,
-        queue: .main
-      ) { [weak self] _ in
-        MainActor.assumeIsolated { self?.apply() }
-      }
-    }
-
-    private func apply() {
-      guard let window else { return }
-
-      // On unlock, SwiftUI builds the split view and installs its toolbar a
-      // moment after the content swap. Showing the title bar before then draws
-      // it empty for a frame and the toolbar flickers in after it, so the bar
-      // stays merged until the toolbar is there and both land together. The
-      // unlocked content always has one: `NavigationSplitView` contributes the
-      // sidebar toggle.
-      if hidden {
-        isShown = false
-      } else if window.toolbar != nil {
-        isShown = true
-      }
-
-      let wanted: Style = isShown ? .shown : .hidden
-
-      // Written only when it differs: this runs from the window's own update
-      // notification, and writing back would ask for another update.
-      if window.titleVisibility != wanted.titleVisibility {
-        window.titleVisibility = wanted.titleVisibility
-      }
-      if window.titlebarAppearsTransparent != wanted.titlebarAppearsTransparent {
-        window.titlebarAppearsTransparent = wanted.titlebarAppearsTransparent
-      }
-      if let toolbar = window.toolbar, toolbar.isVisible == hidden {
-        toolbar.isVisible = !hidden
-      }
-    }
+  /// Note: we don't use `.fullSizeContentView`. Setting causes the split view's toolbar items to
+  /// get out of place.
+  private func apply(to window: NSWindow?) {
+    guard let window else { return }
+    window.titleVisibility = hidden ? .hidden : .visible
+    window.titlebarAppearsTransparent = hidden
   }
 }

@@ -59,9 +59,14 @@ struct LockScreen: View {
           .buttonStyle(.link)
       }
     }
+    .padding(.bottom, 48)  // account for invisible toolbar
     .animation(.default, value: model.isPrompting)
     .animation(.default, value: model.unlockError)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // An empty toolbar and an empty title keep the window's title bar in place
+    // while the lock screen hides it. Prevents flicker.
+    .toolbar { Spacer() }
+    .navigationTitle("")
     .onAppear { model.unlockIfActive() }
     // A lock from the screen locking or the machine sleeping leaves the prompt
     // for whenever the user comes back to the app.
