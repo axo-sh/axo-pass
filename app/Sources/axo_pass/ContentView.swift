@@ -4,11 +4,14 @@ struct ContentView: View {
   @Environment(VaultsModel.self) private var model
 
   var body: some View {
-    if model.isAppUnlocked {
-      MainView()
-    } else {
-      LockScreen()
+    Group {
+      if model.isAppUnlocked {
+        MainView()
+      } else {
+        LockScreen()
+      }
     }
+    .titleBarHidden(!model.isAppUnlocked)
   }
 }
 
