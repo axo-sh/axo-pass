@@ -102,11 +102,6 @@ private struct SshKeyRow: View {
     VStack(alignment: .leading, spacing: 2) {
       HStack(spacing: 4) {
         Text(key.name).fontWeight(.semibold).lineLimit(1)
-        if key.isManaged {
-          Image(systemName: "lock.shield")
-            .foregroundStyle(.blue)
-            .help("Secure Enclave")
-        }
         Spacer(minLength: 6)
         if !key.agents.isEmpty {
           KeyBadge(text: "In agent", tint: .green)
@@ -141,7 +136,7 @@ private struct SshKeyRow: View {
 
   private var locationLabel: String {
     switch key.location {
-    case .vault: return "vault"
+    case .vault: return "secure enclave"
     case .sshDir: return "~/.ssh"
     case .transient: return "agent only"
     }

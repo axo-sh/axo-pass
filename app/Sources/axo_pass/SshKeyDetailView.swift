@@ -178,9 +178,6 @@ private struct SshKeyDetail: View {
     HStack(spacing: 8) {
       KeyBadge(text: keyTypeLabel, size: .regular)
       KeyBadge(text: locationLabel, size: .regular)
-      if key.isManaged {
-        KeyBadge(text: "Secure Enclave", tint: .blue, size: .regular)
-      }
       // Secure Enclave keys have no passphrase to save.
       if key.location == .sshDir {
         KeyBadge(
@@ -308,7 +305,7 @@ private struct SshKeyDetail: View {
 
   private var locationLabel: String {
     switch key.location {
-    case .vault: return "Vault"
+    case .vault: return "Secure Enclave"
     case .sshDir: return "~/.ssh"
     case .transient: return "Agent only"
     }
