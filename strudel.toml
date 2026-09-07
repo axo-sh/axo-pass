@@ -22,12 +22,14 @@ build_number = "1"
 
 [build]
 source_dir             = "app"
-entitlements_json_path = "src-tauri/misc/entitlements.json"
+entitlements_json_path = "app/misc/entitlements.json"
 target_name            = "axo_pass"
-provisioning_profile   = "src-tauri/misc/Frittata_Developer_ID_Application.provisionprofile"
+provisioning_profile   = "app/misc/Frittata_Developer_ID_Application.provisionprofile"
 
 [build.icon]
-path = "src-tauri/icons/icon.icns"
+src        = "app/misc/axo-pass.svg"
+scale      = 1.45
+background = "#1a1a1a"
 
 # `ap` CLI binary, staged by `axo app:cli` (see scripts/build-cli.sh) into
 # target/dist/ap; copied into Contents/MacOS/ap and signed so it passes
