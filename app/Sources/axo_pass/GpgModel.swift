@@ -14,8 +14,12 @@ final class GpgModel {
     case failure(String)
   }
 
+  var keys: [GpgKeyEntry] = []
+  /// Fingerprint of the key shown in the detail pane.
+  var selectedFingerprint: String? = nil
   var passwords: [PasswordEntryInfo] = []
   var loadError: String? = nil
+  var isLoading = false
   var isTesting = false
   var testResult: TestResult? = nil
 
@@ -24,15 +28,35 @@ final class GpgModel {
   var isConfiguring = false
   var configureError: String? = nil
 
+  var selectedKey: GpgKeyEntry? {
+    guard let selectedFingerprint else { return nil }
+    return keys.first { $0.fingerprint == selectedFingerprint }
+  }
+
+  var secretKeys: [GpgKeyEntry] { keys.filter { $0.secretState != .none } }
+  var publicOnlyKeys: [GpgKeyEntry] { keys.filter { $0.secretState == .none } }
+
+  /// Saved GPG passphrases whose keygrip belongs to no key in the keyring.
+  var orphanedPasswords: [PasswordEntryInfo] {
+    let knownKeygrips = Set(keys.flatMap(keygrips(of:)))
+    return passwords.filter { $0.passwordType == .gpgKey && !knownKeygrips.contains($0.keyId) }
+  }
+
   func reload() async {
+    isLoading = true
     refreshConfStatus()
     do {
-      passwords = try await core.listPasswords()
+      keys = try await core.listGpgKeys()
       loadError = nil
     } catch {
-      passwords = []
+      keys = []
       loadError = String(describing: error)
     }
+    passwords = (try? await core.listPasswords()) ?? []
+    if let selectedFingerprint, !keys.contains(where: { $0.fingerprint == selectedFingerprint }) {
+      self.selectedFingerprint = nil
+    }
+    isLoading = false
   }
 
   /// Pick up edits made in the terminal, cheap enough to run whenever the pane appears or the app
@@ -65,6 +89,73 @@ final class GpgModel {
     isTesting = false
   }
 
+  /// The key's public half in ASCII armor. Returns nil and sets `loadError`
+  /// when gpg cannot export it.
+  func exportPublicKey(fingerprint: String) async -> String? {
+    do {
+      return try await core.exportGpgPublicKey(fingerprint: fingerprint)
+    } catch {
+      loadError = String(describing: error)
+      return nil
+    }
+  }
+
+  /// The keygrips a key is known by: the primary key's and each subkey's.
+  /// gpg-agent names a key by keygrip, so keychain entries and audit events
+  /// use them rather than the fingerprint.
+  func keygrips(of key: GpgKeyEntry) -> [String] {
+    var grips: [String] = []
+    if let keygrip = key.keygrip { grips.append(keygrip) }
+    grips.append(contentsOf: key.subkeys.compactMap(\.keygrip))
+    return grips
+  }
+
+  /// Save a passphrase for a key, after gpg has checked it. Returns nil on
+  /// success, or a message describing why gpg would not take it.
+  func savePassphrase(fingerprint: String, passphrase: String) async -> String? {
+    do {
+      _ = try await core.saveGpgKeyPassword(fingerprint: fingerprint, password: passphrase)
+      await reload()
+      return nil
+    } catch {
+      return Self.message(for: error)
+    }
+  }
+
+  /// An error's text without the case name wrapped around it: this one is read
+  /// by the user, who typed the passphrase gpg just refused.
+  private static func message(for error: Error) -> String {
+    switch error {
+    case let error as FfiError:
+      switch error {
+      case .NotFound(let message), .InvalidInput(let message), .Internal(let message):
+        return message
+      default:
+        return error.localizedDescription
+      }
+    default:
+      return String(describing: error)
+    }
+  }
+
+  /// Delete every saved passphrase belonging to a key.
+  @discardableResult
+  func forgetPasswords(for key: GpgKeyEntry) async -> Bool {
+    var succeeded = true
+    for keygrip in keygrips(of: key) {
+      guard passwords.contains(where: { $0.passwordType == .gpgKey && $0.keyId == keygrip })
+      else { continue }
+      do {
+        try await core.deletePassword(passwordType: .gpgKey, keyId: keygrip)
+      } catch {
+        loadError = String(describing: error)
+        succeeded = false
+      }
+    }
+    await reload()
+    return succeeded
+  }
+
   @discardableResult
   func delete(_ entry: PasswordEntryInfo) async -> Bool {
     do {
@@ -75,5 +166,28 @@ final class GpgModel {
       loadError = String(describing: error)
       return false
     }
+  }
+
+  /// The most recent GPG audit events for one key, newest first. Events name
+  /// their key by keygrip, and the reader matches the query against the
+  /// subject id, so this runs one query per keygrip and merges the results.
+  func recentEvents(for key: GpgKeyEntry, limit: UInt32) async -> [AuditLogRow] {
+    var rows: [AuditLogRow] = []
+    for keygrip in keygrips(of: key) {
+      let filter = AuditFilterInput(
+        sinceRfc3339: nil,
+        untilRfc3339: nil,
+        actions: AuditActionGroup.gpg.actions,
+        sources: [],
+        outcomes: [],
+        query: keygrip,
+        limit: limit,
+        offset: 0
+      )
+      guard let events = try? await core.listAuditEvents(filter: filter) else { continue }
+      rows.append(contentsOf: events.map(AuditLogRow.init))
+    }
+    rows.sort { $0.record.at > $1.record.at }
+    return Array(rows.prefix(Int(limit)))
   }
 }

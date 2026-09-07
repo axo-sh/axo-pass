@@ -18,6 +18,8 @@ struct SettingsView: View {
         .tabItem { Label("Security", systemImage: "lock.shield") }
       SshSettingsView()
         .tabItem { Label("SSH", systemImage: "key.horizontal") }
+      GpgSettingsView()
+        .tabItem { Label("GPG", systemImage: "lock.doc") }
     }
     .padding(20)
     .frame(width: 440, height: 250, alignment: .top)
@@ -190,6 +192,86 @@ private struct SshSettingsView: View {
     case .configured: return .green
     case .notConfigured: return .secondary
     case .otherAgent: return .orange
+    }
+  }
+}
+
+/// The `pinentry-program` line in `gpg-agent.conf`, which decides whether
+/// gpg's passphrase prompts appear in this app. Mirrors the SSH tab.
+private struct GpgSettingsView: View {
+  @State private var model = GpgModel()
+  @State private var showingSetup = false
+
+  private var state: GpgPinentryState? { model.confStatus?.state }
+
+  var body: some View {
+    Form {
+      LabeledContent("Pinentry:") {
+        HStack(spacing: 6) {
+          if let state {
+            Label(GpgPinentryStyle.label(state), systemImage: GpgPinentryStyle.icon(state))
+              .foregroundStyle(GpgPinentryStyle.color(state))
+          }
+          if model.isConfiguring || model.isTesting {
+            ProgressView().controlSize(.small)
+          }
+        }
+      }
+      if let path = model.confStatus?.confPath {
+        Text(path)
+          .font(.callout.monospaced())
+          .textSelection(.enabled)
+          .settingsCaption()
+      }
+      LabeledContent("") {
+        HStack {
+          if state != .configured {
+            Button("Add to gpg-agent.conf") {
+              Task { await model.configureAgentConf() }
+            }
+            .disabled(model.isConfiguring || model.confStatus?.expectedLine == nil)
+          } else {
+            Button("Test Signing") {
+              Task { await model.testIntegration() }
+            }
+            .disabled(model.isTesting)
+          }
+          Button("Setup Assistant…") { showingSetup = true }
+        }
+      }
+      if let error = model.configureError {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      if let result = model.testResult {
+        switch result {
+        case .success:
+          Text("Signing works")
+            .foregroundStyle(.green)
+            .settingsCaption()
+        case .failure(let message):
+          Text(message)
+            .foregroundStyle(.red)
+            .lineLimit(2)
+            .settingsCaption()
+        }
+      }
+      Text("gpg-agent runs whatever `pinentry-program` names when it needs a passphrase.")
+        .settingsCaption()
+    }
+    // This pane's rows are denser than the other tabs', which are a control
+    // and a caption apiece, so they need the room.
+    .padding(.horizontal, 10)
+    .padding(.vertical, 12)
+    .task { model.refreshConfStatus() }
+    // The file may be edited outside the app, so re-read it on reactivation.
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      model.refreshConfStatus()
+    }
+    .sheet(isPresented: $showingSetup) {
+      GpgSetupSheet(model: model)
     }
   }
 }

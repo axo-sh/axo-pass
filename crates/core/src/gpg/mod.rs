@@ -1,4 +1,5 @@
 pub mod agent_conf;
+pub mod key_overview;
 pub mod pinentry;
 
 use std::process::Command;
@@ -17,6 +18,27 @@ pub enum GpgError {
 
     #[error("GPG signing failed: {0}")]
     SigningFailed(String),
+
+    #[error("Failed to list GPG keys: {0}")]
+    ListFailed(String),
+
+    #[error("No key found for {0}")]
+    KeyNotFound(String),
+
+    #[error("No secret key on this machine for {0}")]
+    NoSecretKey(String),
+
+    #[error("This key is not protected by a passphrase, so there is nothing to save")]
+    NoPassphrase(String),
+
+    #[error("gpg rejected the passphrase")]
+    BadPassphrase,
+
+    #[error("Could not check the passphrase: {0}")]
+    VerifyFailed(String),
+
+    #[error("Failed to save the passphrase: {0}")]
+    SaveFailed(String),
 
     #[error("Failed to run gpg: {0}")]
     Io(#[from] std::io::Error),

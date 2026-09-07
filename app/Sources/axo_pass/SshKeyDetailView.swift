@@ -153,21 +153,21 @@ private struct SshKeyDetail: View {
 
   private var badges: some View {
     HStack(spacing: 8) {
-      SshKeyBadge(text: keyTypeLabel, size: .regular)
-      SshKeyBadge(text: locationLabel, size: .regular)
+      KeyBadge(text: keyTypeLabel, size: .regular)
+      KeyBadge(text: locationLabel, size: .regular)
       if key.isManaged {
-        SshKeyBadge(text: "Secure Enclave", tint: .blue, size: .regular)
+        KeyBadge(text: "Secure Enclave", tint: .blue, size: .regular)
       }
       // Secure Enclave keys have no passphrase to save.
       if key.location == .sshDir {
-        SshKeyBadge(
+        KeyBadge(
           text: key.hasSavedPassword ? "Passphrase saved" : "No passphrase saved", size: .regular)
       }
       if key.agents.isEmpty {
-        SshKeyBadge(text: "Not in agent", size: .regular)
+        KeyBadge(text: "Not in agent", size: .regular)
       } else {
         ForEach(key.agents, id: \.self) { agent in
-          SshKeyBadge(text: agentLabel(agent), tint: .green, size: .regular)
+          KeyBadge(text: agentLabel(agent), tint: .green, size: .regular)
         }
       }
     }
@@ -322,7 +322,7 @@ private struct SshKeyDetail: View {
   }
 }
 
-struct SshKeyBadge: View {
+struct KeyBadge: View {
   enum Size {
     /// Fits a list row alongside the key's name.
     case compact

@@ -109,9 +109,9 @@ private struct SshKeyRow: View {
         }
         Spacer(minLength: 6)
         if !key.agents.isEmpty {
-          SshKeyBadge(text: "In agent", tint: .green)
+          KeyBadge(text: "In agent", tint: .green)
         } else if !key.hasSavedPassword && key.location == .sshDir {
-          SshKeyBadge(text: "No password")
+          KeyBadge(text: "No password")
         }
       }
       Text(subtitle)

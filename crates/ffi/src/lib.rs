@@ -7,6 +7,10 @@ use axo_pass_core::core::auth::{
     invalidate_auth, run_on_auth_thread,
 };
 use axo_pass_core::gpg::agent_conf::{self, State as CoreAgentConfState};
+use axo_pass_core::gpg::key_overview::{
+    GpgCapability as CoreGpgCapability, GpgKeyOverview, GpgSecretState as CoreGpgSecretState,
+    GpgSubkey as CoreGpgSubkey, GpgTrust as CoreGpgTrust, GpgUserId as CoreGpgUserId,
+};
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
@@ -286,6 +290,219 @@ pub struct ShellIntegrationStatus {
     pub configured: bool,
     /// Absolute path to the `.zshrc` file that was checked / written.
     pub zshrc_path: String,
+}
+
+/// What a GPG key or subkey may be used for.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GpgCapability {
+    Sign,
+    Certify,
+    Encrypt,
+    Authenticate,
+}
+
+impl From<CoreGpgCapability> for GpgCapability {
+    fn from(c: CoreGpgCapability) -> Self {
+        match c {
+            CoreGpgCapability::Sign => GpgCapability::Sign,
+            CoreGpgCapability::Certify => GpgCapability::Certify,
+            CoreGpgCapability::Encrypt => GpgCapability::Encrypt,
+            CoreGpgCapability::Authenticate => GpgCapability::Authenticate,
+        }
+    }
+}
+
+/// Owner trust in a GPG key.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GpgTrust {
+    Unknown,
+    Undefined,
+    Never,
+    Marginal,
+    Full,
+    Ultimate,
+    Expired,
+    Revoked,
+    Invalid,
+    Disabled,
+}
+
+impl From<CoreGpgTrust> for GpgTrust {
+    fn from(t: CoreGpgTrust) -> Self {
+        match t {
+            CoreGpgTrust::Unknown => GpgTrust::Unknown,
+            CoreGpgTrust::Undefined => GpgTrust::Undefined,
+            CoreGpgTrust::Never => GpgTrust::Never,
+            CoreGpgTrust::Marginal => GpgTrust::Marginal,
+            CoreGpgTrust::Full => GpgTrust::Full,
+            CoreGpgTrust::Ultimate => GpgTrust::Ultimate,
+            CoreGpgTrust::Expired => GpgTrust::Expired,
+            CoreGpgTrust::Revoked => GpgTrust::Revoked,
+            CoreGpgTrust::Invalid => GpgTrust::Invalid,
+            CoreGpgTrust::Disabled => GpgTrust::Disabled,
+        }
+    }
+}
+
+/// Whether the private key material is present, and in what form.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum GpgSecretState {
+    /// No private key in the keyring: this is a public-only key.
+    None,
+    /// The private key is in the GnuPG private key directory.
+    Present,
+    /// A stub pointing at a smartcard or token.
+    Card,
+    /// A stub for a key kept offline.
+    Offline,
+}
+
+impl From<CoreGpgSecretState> for GpgSecretState {
+    fn from(s: CoreGpgSecretState) -> Self {
+        match s {
+            CoreGpgSecretState::None => GpgSecretState::None,
+            CoreGpgSecretState::Present => GpgSecretState::Present,
+            CoreGpgSecretState::Card => GpgSecretState::Card,
+            CoreGpgSecretState::Offline => GpgSecretState::Offline,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct GpgUserId {
+    /// The full uid string, e.g. `Dana Reyes <dana@example.com>`.
+    pub uid: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub trust: GpgTrust,
+    pub is_revoked: bool,
+}
+
+impl From<CoreGpgUserId> for GpgUserId {
+    fn from(u: CoreGpgUserId) -> Self {
+        GpgUserId {
+            uid: u.uid,
+            name: u.name,
+            email: u.email,
+            trust: u.trust.into(),
+            is_revoked: u.is_revoked,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct GpgSubkeyEntry {
+    pub key_id: String,
+    pub fingerprint: Option<String>,
+    pub keygrip: Option<String>,
+    pub algorithm: String,
+    pub key_length: u32,
+    pub curve: Option<String>,
+    pub capabilities: Vec<GpgCapability>,
+    /// Unix seconds.
+    pub created_at: Option<i64>,
+    /// Unix seconds. `None` means the subkey does not expire.
+    pub expires_at: Option<i64>,
+    pub is_expired: bool,
+    pub is_revoked: bool,
+    pub secret_state: GpgSecretState,
+    /// Whether a passphrase for this subkey's keygrip is saved in the keychain.
+    pub has_saved_password: bool,
+    /// Whether gpg-agent holds this subkey encrypted, so using it needs a
+    /// passphrase.
+    pub requires_passphrase: bool,
+}
+
+impl From<CoreGpgSubkey> for GpgSubkeyEntry {
+    fn from(s: CoreGpgSubkey) -> Self {
+        GpgSubkeyEntry {
+            key_id: s.key_id,
+            fingerprint: s.fingerprint,
+            keygrip: s.keygrip,
+            algorithm: s.algorithm,
+            key_length: s.key_length,
+            curve: s.curve,
+            capabilities: s
+                .capabilities
+                .into_iter()
+                .map(GpgCapability::from)
+                .collect(),
+            created_at: s.created_at,
+            expires_at: s.expires_at,
+            is_expired: s.is_expired,
+            is_revoked: s.is_revoked,
+            secret_state: s.secret_state.into(),
+            has_saved_password: s.has_saved_password,
+            requires_passphrase: s.requires_passphrase,
+        }
+    }
+}
+
+/// A GPG key, merged from the public and secret keyring listings.
+#[derive(uniffi::Record, Clone)]
+pub struct GpgKeyEntry {
+    /// Long key id of the primary key.
+    pub key_id: String,
+    pub fingerprint: String,
+    pub keygrip: Option<String>,
+    /// First uid's name, falling back to the whole uid string.
+    pub name: String,
+    /// First uid's email, when it has one.
+    pub email: Option<String>,
+    pub user_ids: Vec<GpgUserId>,
+    pub algorithm: String,
+    pub key_length: u32,
+    pub curve: Option<String>,
+    pub capabilities: Vec<GpgCapability>,
+    pub trust: GpgTrust,
+    /// Unix seconds.
+    pub created_at: Option<i64>,
+    /// Unix seconds. `None` means the key does not expire.
+    pub expires_at: Option<i64>,
+    pub is_expired: bool,
+    pub is_revoked: bool,
+    pub is_disabled: bool,
+    pub secret_state: GpgSecretState,
+    /// Whether a passphrase for this key is saved in the keychain.
+    pub has_saved_password: bool,
+    /// Whether any of the key's local secret halves is encrypted, so there is
+    /// a passphrase to save.
+    pub requires_passphrase: bool,
+    /// Directory holding the private key files, when a secret key is present.
+    pub secret_key_dir: Option<String>,
+    pub subkeys: Vec<GpgSubkeyEntry>,
+}
+
+impl From<GpgKeyOverview> for GpgKeyEntry {
+    fn from(k: GpgKeyOverview) -> Self {
+        GpgKeyEntry {
+            key_id: k.key_id,
+            fingerprint: k.fingerprint,
+            keygrip: k.keygrip,
+            name: k.name,
+            email: k.email,
+            user_ids: k.user_ids.into_iter().map(GpgUserId::from).collect(),
+            algorithm: k.algorithm,
+            key_length: k.key_length,
+            curve: k.curve,
+            capabilities: k
+                .capabilities
+                .into_iter()
+                .map(GpgCapability::from)
+                .collect(),
+            trust: k.trust.into(),
+            created_at: k.created_at,
+            expires_at: k.expires_at,
+            is_expired: k.is_expired,
+            is_revoked: k.is_revoked,
+            is_disabled: k.is_disabled,
+            secret_state: k.secret_state.into(),
+            has_saved_password: k.has_saved_password,
+            requires_passphrase: k.requires_passphrase,
+            secret_key_dir: k.secret_key_dir,
+            subkeys: k.subkeys.into_iter().map(GpgSubkeyEntry::from).collect(),
+        }
+    }
 }
 
 /// Whether gpg-agent's `pinentry-program` points at this app's helper.
@@ -1129,6 +1346,48 @@ impl AxoPass {
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?
             .map_err(FfiError::from)
+    }
+
+    /// List the keys in the GPG public keyring, with secret key state merged
+    /// in from the secret keyring.
+    pub async fn list_gpg_keys(&self) -> Result<Vec<GpgKeyEntry>, FfiError> {
+        let overviews =
+            tokio::task::spawn_blocking(axo_pass_core::gpg::key_overview::list_gpg_keys)
+                .await
+                .map_err(|e| FfiError::Internal(e.to_string()))?
+                .map_err(FfiError::from)?;
+        Ok(overviews.into_iter().map(GpgKeyEntry::from).collect())
+    }
+
+    /// Save a GPG key's passphrase to the keychain, after checking it with
+    /// gpg. Writes one entry per keygrip whose secret half is on this machine,
+    /// since gpg-agent asks for a passphrase per keygrip. Returns the keygrips
+    /// written.
+    pub async fn save_gpg_key_password(
+        &self,
+        fingerprint: String,
+        password: String,
+    ) -> Result<Vec<String>, FfiError> {
+        tokio::task::spawn_blocking(move || {
+            axo_pass_core::gpg::key_overview::save_passphrase(
+                &fingerprint,
+                SecretString::from(password),
+            )
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(FfiError::from)
+    }
+
+    /// Export a key's public half in ASCII armor, for sharing or uploading to
+    /// a keyserver.
+    pub async fn export_gpg_public_key(&self, fingerprint: String) -> Result<String, FfiError> {
+        tokio::task::spawn_blocking(move || {
+            axo_pass_core::gpg::key_overview::export_public_key(&fingerprint)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(FfiError::from)
     }
 
     /// Report whether `gpg-agent.conf` points `pinentry-program` at this app's

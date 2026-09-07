@@ -17,9 +17,10 @@ struct ContentView: View {
 
 private struct MainView: View {
   @Environment(VaultsModel.self) private var model
-  // Held here rather than inside SshPane so the detail column can read the
+  // Held here rather than inside the panes so the detail column can read the
   // same selection and key list.
   @State private var sshModel = SshModel()
+  @State private var gpgModel = GpgModel()
 
   var body: some View {
     NavigationSplitView {
@@ -35,6 +36,8 @@ private struct MainView: View {
   private var detailPane: some View {
     if case .ssh = model.sidebarSelection {
       SshKeyDetailView(model: sshModel)
+    } else if case .gpg = model.sidebarSelection {
+      GpgKeyDetailView(model: gpgModel)
     } else {
       VaultDetailView()
     }
@@ -47,7 +50,7 @@ private struct MainView: View {
     } else if case .ssh = model.sidebarSelection {
       SshPane(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
-      GpgPane()
+      GpgPane(model: gpgModel)
     } else if case .shell = model.sidebarSelection {
       ShellIntegrationPane()
     } else {

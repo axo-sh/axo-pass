@@ -29,7 +29,7 @@ struct VaultsSidebar: View {
         if toolsExpanded {
           Label("SSH", systemImage: "asterisk")
             .tag(SidebarDestination.ssh)
-          Label("Keys", systemImage: "key.fill")
+          Label("GPG", systemImage: "key.fill")
             .tag(SidebarDestination.gpg)
           Label("Setup", systemImage: "terminal")
             .tag(SidebarDestination.shell)
