@@ -57,11 +57,8 @@ pub trait SignAuthorizer: Send + Sync + 'static {
     /// `peer` is the process the broker verified at accept time. The app
     /// attributes the grant it hands out to it, so the audit log names the
     /// process that asked and not only the caller it claimed.
-    async fn begin(
-        &self,
-        prompt: SignPrompt,
-        peer: audit::Actor,
-    ) -> Result<ForeignContext, String>;
+    async fn begin(&self, prompt: SignPrompt, peer: audit::Actor)
+    -> Result<ForeignContext, String>;
 
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
