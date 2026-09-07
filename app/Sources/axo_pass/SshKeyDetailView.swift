@@ -56,7 +56,7 @@ private struct SshKeyDetail: View {
                 if index > 0 {
                   Divider()
                 }
-                detailRow(item.label, value: item.value, monospaced: true)
+                InspectorRow(item.label, value: item.value, monospaced: true)
               }
               if showsMissingPublicKey {
                 if !detailItems.isEmpty {
@@ -70,9 +70,9 @@ private struct SshKeyDetail: View {
         sectionTitle("Fingerprints")
         InsetGroupedSection {
           VStack(spacing: 8) {
-            detailRow("SHA256", value: key.fingerprintSha256, monospaced: true)
+            InspectorRow("SHA256", value: key.fingerprintSha256, monospaced: true)
             Divider()
-            detailRow("MD5", value: key.fingerprintMd5, monospaced: true)
+            InspectorRow("MD5", value: key.fingerprintMd5, monospaced: true)
           }
         }
         if !recentEvents.isEmpty {
@@ -82,6 +82,7 @@ private struct SshKeyDetail: View {
       }
       .padding()
     }
+    .labeledContentStyle(.inspectorField)
     .navigationTitle(key.name)
     .task(id: key.fingerprintSha256) {
       recentEvents = await model.recentEvents(
@@ -245,18 +246,6 @@ private struct SshKeyDetail: View {
         Task { await model.writeManagedKeyPubkey(fingerprintSha256: key.fingerprintSha256) }
       }
       .controlSize(.small)
-    }
-  }
-
-  private func detailRow(_ label: String, value: String, monospaced: Bool = false) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(label)
-        .foregroundStyle(.secondary)
-        .frame(width: 100, alignment: .leading)
-      Text(value)
-        .font(monospaced ? .system(.body, design: .monospaced) : .body)
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 

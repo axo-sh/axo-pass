@@ -13,7 +13,8 @@ struct InsetGroupedSection<Content: View>: View {
   var body: some View {
     GroupBox {
       content
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
     }
     .padding(.top, 0)
     .padding(.bottom, 12)

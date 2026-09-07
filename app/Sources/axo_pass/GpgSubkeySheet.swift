@@ -5,11 +5,20 @@ import SwiftUI
 /// Everything about one subkey that the subkey table in the detail pane has no
 /// room for: its full fingerprint, keygrip, and secret key state.
 struct GpgSubkeySheet: View {
-  let subkey: GpgSubkeyEntry
+  @Bindable var model: GpgModel
+  /// The subkey the row was for. `subkey` re-reads it from the model, so
+  /// saving a passphrase updates this sheet rather than a stale copy.
+  let selected: GpgSubkeyEntry
   /// The primary key's name, so the sheet says which key this belongs to.
   let keyName: String
 
   @Environment(\.dismiss) private var dismiss
+  @State private var showingSavePassphraseSheet = false
+  @State private var showingForgetConfirmation = false
+
+  private var subkey: GpgSubkeyEntry {
+    model.selectedKey?.subkeys.first { $0.keyId == selected.keyId } ?? selected
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -22,14 +31,44 @@ struct GpgSubkeySheet: View {
       VStack(spacing: 8) {
         ForEach(Array(facts.enumerated()), id: \.element.label) { index, fact in
           if index > 0 { Divider() }
-          detailRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+          InspectorRow(
+            fact.label, value: fact.value, monospaced: fact.monospaced,
+            truncatesMiddle: true)
         }
       }
+      .labeledContentStyle(.inspectorField)
       Divider()
       footer
     }
     .padding(20)
     .frame(width: 460)
+    .sheet(isPresented: $showingSavePassphraseSheet) {
+      GpgSavePassphraseSheet(keyName: subkeyName) { passphrase in
+        guard let keygrip = subkey.keygrip else { return "This subkey has no keygrip" }
+        return await model.savePassphrase(
+          keyId: subkey.keyId, keygrip: keygrip, passphrase: passphrase)
+      }
+    }
+    .confirmationDialog(
+      "Forget saved passphrase for \(subkeyName)?",
+      isPresented: $showingForgetConfirmation, titleVisibility: .visible
+    ) {
+      Button("Forget", role: .destructive) {
+        guard let keygrip = subkey.keygrip else { return }
+        Task { await model.forgetPassphrase(keygrip: keygrip) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("gpg will ask for the passphrase again the next time it needs this subkey.")
+    }
+  }
+
+  /// How the subkey is named in prompts: its capabilities read better than the
+  /// key id alone.
+  private var subkeyName: String {
+    let capabilities = GpgFormat.capabilityList(subkey.capabilities)
+    return capabilities.isEmpty
+      ? GpgFormat.keyIdLabel(subkey.keyId) : "\(keyName) (\(capabilities.lowercased()))"
   }
 
   private var header: some View {
@@ -71,6 +110,15 @@ struct GpgSubkeySheet: View {
     HStack {
       Button("Copy Fingerprint") { copy(subkey.fingerprint ?? subkey.keyId) }
       Spacer()
+      // Each secret half is encrypted on its own, so a subkey's passphrase is
+      // saved here rather than with the primary key's.
+      if subkey.secretState == .present && subkey.requiresPassphrase {
+        if subkey.hasSavedPassword {
+          Button("Forget Passphrase", role: .destructive) { showingForgetConfirmation = true }
+        } else {
+          Button("Save Passphrase") { showingSavePassphraseSheet = true }
+        }
+      }
       Button("Done") { dismiss() }
         .keyboardShortcut(.defaultAction)
     }
@@ -86,20 +134,6 @@ struct GpgSubkeySheet: View {
         .font(.system(.callout, design: .monospaced))
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-  }
-
-  private func detailRow(_ label: String, value: String, monospaced: Bool) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(label)
-        .foregroundStyle(.secondary)
-        .frame(width: 100, alignment: .leading)
-      Text(value)
-        .font(monospaced ? .system(.body, design: .monospaced) : .body)
-        .textSelection(.enabled)
-        .lineLimit(1)
-        .truncationMode(.middle)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
   }

@@ -59,8 +59,8 @@ struct CredentialRow: View {
         .buttonStyle(RevealPlaceholderButtonStyle())
       }
     }
-    .padding(.vertical, 4)
-    .padding(.horizontal, 8)
+    .padding(.vertical, 2)
+    .padding(.horizontal, 6)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 

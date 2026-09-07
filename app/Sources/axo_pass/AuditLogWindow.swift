@@ -122,23 +122,6 @@ struct AuditLogWindow: View {
   }
 }
 
-/// A left-aligned label/value row with a fixed-width label column. Values wrap
-/// onto multiple lines and stay flush left, unlike the default centered
-/// `LabeledContent` layout in a narrow inspector.
-private struct AuditFieldStyle: LabeledContentStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      configuration.label
-        .foregroundStyle(.secondary)
-        .frame(width: 92, alignment: .leading)
-      configuration.content
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .multilineTextAlignment(.leading)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
 /// The detail pane: full provenance chain and the action-specific detail map
 /// for the selected row.
 private struct AuditEventInspector: View {
@@ -147,7 +130,7 @@ private struct AuditEventInspector: View {
   var body: some View {
     if let row {
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
           InsetGroupedSection {
             LabeledContent("Time", value: row.timeText)
             LabeledContent("Source", value: row.sourceText)
@@ -196,7 +179,7 @@ private struct AuditEventInspector: View {
             }
           }
         }
-        .labeledContentStyle(AuditFieldStyle())
+        .labeledContentStyle(.inspectorField(labelWidth: 92))
         .textSelection(.enabled)
         .padding()
       }

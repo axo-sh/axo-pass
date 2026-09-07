@@ -55,17 +55,20 @@ private struct GpgKeyDetail: View {
       }
       .padding()
     }
+    .labeledContentStyle(.inspectorField)
     .navigationTitle(key.name)
     .task(id: key.fingerprint) {
       recentEvents = await model.recentEvents(for: key, limit: Self.recentEventCount)
     }
     .onChange(of: key.fingerprint) { copiedPublicKey = false }
     .sheet(item: $selectedSubkey) { subkey in
-      GpgSubkeySheet(subkey: subkey, keyName: key.name)
+      GpgSubkeySheet(model: model, selected: subkey, keyName: key.name)
     }
     .sheet(isPresented: $showingSavePassphraseSheet) {
       GpgSavePassphraseSheet(keyName: key.name) { passphrase in
-        await model.savePassphrase(fingerprint: key.fingerprint, passphrase: passphrase)
+        guard let keygrip = key.keygrip else { return "This key has no keygrip" }
+        return await model.savePassphrase(
+          keyId: key.keyId, keygrip: keygrip, passphrase: passphrase)
       }
     }
     .confirmationDialog(
@@ -73,7 +76,8 @@ private struct GpgKeyDetail: View {
       isPresented: $showingForgetConfirmation, titleVisibility: .visible
     ) {
       Button("Forget", role: .destructive) {
-        Task { await model.forgetPasswords(for: key) }
+        guard let keygrip = key.keygrip else { return }
+        Task { await model.forgetPassphrase(keygrip: keygrip) }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
@@ -110,8 +114,9 @@ private struct GpgKeyDetail: View {
         Task { await copyPublicKey() }
       }
       .disabled(isExporting)
-      // A smartcard or offline stub has no local key material to unlock, and a
-      // key gpg stores unencrypted has no passphrase to save.
+      // The primary key's own passphrase. A smartcard or offline stub has no
+      // local key material to unlock, and a key gpg stores unencrypted has no
+      // passphrase to save. Subkeys are saved from their own sheet.
       if key.secretState == .present && key.requiresPassphrase {
         if key.hasSavedPassword {
           Button("Forget Passphrase", role: .destructive) { showingForgetConfirmation = true }
@@ -142,10 +147,19 @@ private struct GpgKeyDetail: View {
       } else if key.isDisabled {
         KeyBadge(text: "Disabled", tint: .orange, size: .regular)
       }
-      if key.hasSavedPassword {
-        KeyBadge(text: "Passphrase saved", tint: .green, size: .regular)
+      if let passphrases = passphraseBadgeText {
+        KeyBadge(text: passphrases, tint: .green, size: .regular)
       }
     }
+  }
+
+  /// How many of the key's passphrases are saved. A key whose subkeys are
+  /// saved separately can be partly done, which the count says plainly.
+  private var passphraseBadgeText: String? {
+    let slots = key.passphraseSlots
+    let saved = slots.filter { $0 }.count
+    if saved == 0 { return nil }
+    return saved == slots.count ? "Passphrase saved" : "\(saved) of \(slots.count) saved"
   }
 
   /// The trust levels worth a badge. `expired`, `revoked`, `invalid` and
@@ -183,7 +197,9 @@ private struct GpgKeyDetail: View {
     VStack(spacing: 8) {
       ForEach(Array(facts.enumerated()), id: \.element.label) { index, fact in
         if index > 0 { Divider() }
-        detailRow(fact.label, value: fact.value, monospaced: fact.monospaced)
+        InspectorRow(
+          fact.label, value: fact.value, monospaced: fact.monospaced,
+          truncatesMiddle: true)
       }
     }
   }
@@ -291,20 +307,6 @@ private struct GpgKeyDetail: View {
       .font(.caption2)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
-  }
-
-  private func detailRow(_ label: String, value: String, monospaced: Bool = false) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(label)
-        .foregroundStyle(.secondary)
-        .frame(width: 100, alignment: .leading)
-      Text(value)
-        .font(monospaced ? .system(.body, design: .monospaced) : .body)
-        .textSelection(.enabled)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
   }
 
   // MARK: - Values
