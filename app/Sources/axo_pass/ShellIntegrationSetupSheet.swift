@@ -43,16 +43,19 @@ struct ShellIntegrationSetupSheet: View {
 
   private var explanation: some View {
     Text(
-      "Appends a block to \(status?.zshrcPath ?? "~/.zshrc") that aliases `ap` to the bundled "
-        + "CLI and sources its shell environment. When running from the installed app, it also "
-        + "points ssh's SSH_ASKPASS at the bundled askpass helper, so ssh and ssh-add prompts "
-        + "route into Axo Pass instead of a terminal or GUI dialog."
+      "Symlinks `ap` into `~/.local/bin` so it resolves in scripts and non-zsh tools, then "
+        + "appends a block to \(status?.zshrcPath ?? "~/.zshrc") that puts `~/.local/bin` on your "
+        + "PATH and sources the bundled CLI's shell environment. When running from the installed "
+        + "app, it also points ssh's SSH_ASKPASS at the bundled askpass helper, so ssh and ssh-add "
+        + "prompts route into Axo Pass instead of a terminal or GUI dialog."
     )
     .fixedSize(horizontal: false, vertical: true)
   }
 
   private static let blockText = """
-    alias ap="/path/to/ap"
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+      export PATH="$HOME/.local/bin:$PATH"
+    fi
     source <(ap shellenv zsh)
     export SSH_ASKPASS="/path/to/ap-ssh-askpass"
     export SSH_ASKPASS_REQUIRE=force

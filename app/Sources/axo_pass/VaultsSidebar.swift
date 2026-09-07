@@ -31,8 +31,6 @@ struct VaultsSidebar: View {
             .tag(SidebarDestination.ssh)
           Label("GPG", systemImage: "key.fill")
             .tag(SidebarDestination.gpg)
-          Label("Setup", systemImage: "terminal")
-            .tag(SidebarDestination.shell)
         }
       } header: {
         SidebarSectionHeader("Tools", isExpanded: $toolsExpanded)

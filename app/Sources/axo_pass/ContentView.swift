@@ -51,8 +51,6 @@ private struct MainView: View {
       SshPane(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
       GpgPane(model: gpgModel)
-    } else if case .shell = model.sidebarSelection {
-      ShellIntegrationPane()
     } else {
       ContentUnavailableView("Select a section", systemImage: "sidebar.left")
     }

@@ -20,9 +20,11 @@ struct SettingsView: View {
         .tabItem { Label("SSH", systemImage: "key.horizontal") }
       GpgSettingsView()
         .tabItem { Label("GPG", systemImage: "lock.doc") }
+      ShellSettingsView()
+        .tabItem { Label("Shell", systemImage: "terminal") }
     }
     .padding(20)
-    .frame(width: 440, height: 250, alignment: .top)
+    .frame(width: 440, height: 280, alignment: .top)
     .navigationTitle("Axo Pass Settings")
     .background(
       WindowAccessor {
@@ -272,6 +274,72 @@ private struct GpgSettingsView: View {
     }
     .sheet(isPresented: $showingSetup) {
       GpgSetupSheet(model: model)
+    }
+  }
+}
+
+/// The `ap` integration: a `~/.local/bin/ap` symlink plus a `~/.zshrc` block
+/// that adds it to PATH and routes ssh askpass prompts into this app. Mirrors
+/// the SSH and GPG tabs.
+private struct ShellSettingsView: View {
+  @State private var model = ShellIntegrationModel()
+  @State private var showingSetup = false
+
+  var body: some View {
+    Form {
+      LabeledContent("`ap` integration:") {
+        HStack(spacing: 6) {
+          if let status = model.status {
+            Label(
+              status.configured ? "Configured" : "Not Configured",
+              systemImage: status.configured ? "checkmark.circle.fill" : "circle"
+            )
+            .foregroundStyle(status.configured ? .green : .secondary)
+          }
+          if model.isConfiguring {
+            ProgressView().controlSize(.small)
+          }
+        }
+      }
+      if let status = model.status {
+        Text(status.zshrcPath)
+          .font(.callout.monospaced())
+          .textSelection(.enabled)
+          .settingsCaption()
+      }
+      LabeledContent("") {
+        HStack {
+          if model.status?.configured != true {
+            Button("Set Up") {
+              Task { await model.configure() }
+            }
+            .disabled(model.isConfiguring)
+          }
+          Button("Setup Assistant…") { showingSetup = true }
+        }
+      }
+      if let error = model.configureError {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      Text(
+        "Links `ap` into `~/.local/bin` and appends a zsh block that puts it on PATH and routes ssh askpass prompts into Axo Pass."
+      )
+      .settingsCaption()
+    }
+    // This pane's rows are denser than the other tabs', which are a control
+    // and a caption apiece, so they need the room.
+    .padding(.horizontal, 10)
+    .padding(.vertical, 12)
+    .task { model.refreshStatus() }
+    // The file may be edited outside the app, so re-read it on reactivation.
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      model.refreshStatus()
+    }
+    .sheet(isPresented: $showingSetup) {
+      ShellIntegrationSetupSheet(model: model)
     }
   }
 }

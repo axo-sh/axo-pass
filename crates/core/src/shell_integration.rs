@@ -23,7 +23,7 @@ pub fn zshrc_path() -> PathBuf {
 pub fn ap_bin_path() -> Option<String> {
     // Inside the bundle `ap` sits next to the main executable in
     // Contents/MacOS/ (strudel.toml copies + signs it there). Standalone, this
-    // resolves to the running `ap` binary itself, which is fine for the alias.
+    // resolves to the running `ap` binary itself.
     std::env::current_exe()
         .inspect_err(|e| log::debug!("Failed to get exe path: {e}"))
         .ok()
@@ -31,6 +31,50 @@ pub fn ap_bin_path() -> Option<String> {
             p.parent()
                 .map(|dir| dir.join("ap").to_string_lossy().into_owned())
         })
+}
+
+/// The user-writable directory the `ap` symlink is installed into. No sudo and
+/// no sandbox prompt, unlike `/usr/local/bin`.
+pub fn local_bin_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".local").join("bin"))
+}
+
+/// Path to the `ap` symlink in `~/.local/bin`.
+pub fn ap_symlink_path() -> Option<PathBuf> {
+    local_bin_dir().map(|dir| dir.join("ap"))
+}
+
+/// Creates or refreshes `~/.local/bin/ap` so `ap` resolves for scripts and
+/// non-zsh tools, not just interactive zsh. A pre-existing regular file at that
+/// path is the user's own binary and is left untouched.
+fn install_symlink() -> Result<(), String> {
+    let target = ap_bin_path().ok_or("Could not determine ap binary path")?;
+    let dir = local_bin_dir().ok_or("Could not determine home directory")?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    let link = dir.join("ap");
+
+    match std::fs::symlink_metadata(&link) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if std::fs::read_link(&link).ok().as_deref() == Some(Path::new(&target)) {
+                return Ok(());
+            }
+            std::fs::remove_file(&link)
+                .map_err(|e| format!("Failed to replace {}: {e}", link.display()))?;
+        },
+        Ok(_) => {
+            return Err(format!(
+                "{} already exists and is not our symlink; remove it and retry",
+                link.display()
+            ));
+        },
+        Err(_) => {},
+    }
+
+    std::os::unix::fs::symlink(&target, &link)
+        .map_err(|e| format!("Failed to create {}: {e}", link.display()))?;
+    log::debug!("Linked {} -> {target}", link.display());
+    Ok(())
 }
 
 /// Returns `(configured, zshrc_path)`.
@@ -47,23 +91,14 @@ fn shell_quote(value: &str) -> String {
     shlex::try_quote(value).unwrap().into_owned()
 }
 
-/// Quotes a path for use as an alias body. Zsh re-parses the alias value when
-/// the alias runs, so the quoting has to survive one round of expansion. That
-/// means quoting the already-quoted path a second time.
-fn quote_alias_path(value: &str) -> String {
-    shell_quote(&shell_quote(value))
-}
-
 /// Builds the current shell integration block, sentinels included, with a
 /// trailing newline.
 fn build_block() -> Result<String, String> {
-    let ap_path = ap_bin_path().ok_or("Could not determine ap binary path")?;
-
-    let escaped_ap_path = quote_alias_path(&ap_path);
-
     let mut block = formatdoc! {r#"
         {SENTINEL_START}
-        alias ap={escaped_ap_path}
+        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+          export PATH="$HOME/.local/bin:$PATH"
+        fi
         source <(ap shellenv zsh)
     "#};
 
@@ -101,6 +136,7 @@ fn find_existing_block(content: &str) -> Option<std::ops::Range<usize>> {
 /// sentinel-delimited block if its content is out of date, or appending one
 /// if none is present yet. No-ops if an up-to-date block is already there.
 pub fn write_integration() -> Result<PathBuf, String> {
+    install_symlink()?;
     let path = zshrc_path();
     write_integration_to(&path)?;
     Ok(path)
@@ -153,59 +189,40 @@ mod tests {
     }
 
     #[test]
-    fn quote_alias_path_survives_one_reparse() {
-        // The alias value is re-tokenized when the alias runs. After one round
-        // of shell word splitting it must reduce to the literal path.
-        let path = "/Applications/Axo Pass.app/ap";
-        let quoted = quote_alias_path(path);
-        let once = shlex::split(&quoted).unwrap();
-        assert_eq!(once, vec![shell_quote(path)]);
-        let twice = shlex::split(&once[0]).unwrap();
-        assert_eq!(twice, vec![path]);
-    }
-
-    #[test]
-    fn alias_body_is_double_quoted() {
+    fn block_puts_local_bin_on_path_without_an_alias() {
         let block = build_block().unwrap();
-        assert!(block.contains("alias ap="));
-        let line = block.lines().find(|l| l.starts_with("alias ap=")).unwrap();
-        assert_eq!(shlex::split(&line["alias ap=".len()..]).unwrap().len(), 1);
+        assert!(!block.contains("alias ap="));
+        assert!(block.contains("$HOME/.local/bin"));
+        assert!(block.contains(SHELLENV_MARKER));
     }
 
     #[test]
-    fn alias_runs_a_spaced_path_in_zsh() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin_dir = dir.path().join("Axo Pass.app");
-        std::fs::create_dir(&bin_dir).unwrap();
-        let ap = bin_dir.join("ap");
-        std::fs::write(&ap, "#!/bin/sh\necho \"argc=$#\"\n").unwrap();
-        let mut perms = std::fs::metadata(&ap).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-        std::fs::set_permissions(&ap, perms).unwrap();
+    fn path_guard_is_valid_zsh_and_prepends_once() {
+        // The sentinel-to-source lines are the PATH guard.
+        let block = build_block().unwrap();
+        let guard: String = block
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.starts_with("source "))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        // Aliases are expanded during parsing, so the definition and the use
-        // must be in separate source units. A script file gives that; a single
-        // `zsh -c` string does not.
-        let script_path = dir.path().join("test.zsh");
-        std::fs::write(
-            &script_path,
-            format!(
-                "alias ap={}\nap one two\n",
-                quote_alias_path(&ap.to_string_lossy())
-            ),
-        )
-        .unwrap();
+        // Run the guard twice in one shell; the directory is prepended once.
+        let script = format!("PATH=/usr/bin\n{guard}\n{guard}\necho \"$PATH\"\n");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.zsh");
+        std::fs::write(&path, &script).unwrap();
         let out = std::process::Command::new("zsh")
             .arg("-f")
-            .arg(&script_path)
+            .arg(&path)
+            .env("HOME", "/home/tester")
             .output()
             .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "/home/tester/.local/bin:/usr/bin"
         );
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "argc=2");
     }
 
     #[test]
