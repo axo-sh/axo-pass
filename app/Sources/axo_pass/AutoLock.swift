@@ -6,6 +6,9 @@ import Foundation
 ///
 /// Only input delivered to this app counts as activity. Working in another app
 /// is not a reason to keep the vaults decrypted.
+///
+/// The idle timeout comes from Settings and can be turned off. Locking on sleep
+/// and on screen lock is not configurable.
 /// Why an automatic lock fired.
 enum AutoLockTrigger: String {
   case timer
@@ -15,9 +18,6 @@ enum AutoLockTrigger: String {
 
 @MainActor
 final class AutoLock {
-  /// Idle time before locking.
-  static let timeout: TimeInterval = 5 * 60
-
   private let onLock: (AutoLockTrigger) -> Void
   private var timer: Timer?
   private var eventMonitor: Any?
@@ -48,6 +48,15 @@ final class AutoLock {
       DistributedNotificationCenter.default(),
       Notification.Name("com.apple.screenIsLocked"), trigger: .screenLock)
 
+    // A new idle timeout applies to the stretch the user is in, not only to the
+    // one after the next keystroke.
+    let defaultsObserver = NotificationCenter.default.addObserver(
+      forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated { self?.restartTimer() }
+    }
+    observers.append((NotificationCenter.default, defaultsObserver))
+
     restartTimer()
   }
 
@@ -70,9 +79,13 @@ final class AutoLock {
     observers.append((center, observer))
   }
 
+  /// Restart the idle countdown, or leave none running when the user has turned
+  /// the idle lock off in Settings.
   private func restartTimer() {
     timer?.invalidate()
-    timer = Timer.scheduledTimer(withTimeInterval: Self.timeout, repeats: false) { [weak self] _ in
+    timer = nil
+    guard let timeout = Preferences.autoLockTimeout else { return }
+    timer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated { self?.fire(.timer) }
     }
   }

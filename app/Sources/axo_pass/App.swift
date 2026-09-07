@@ -34,11 +34,15 @@ struct AxoPassApp: App {
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
 
-    // Only here because `App` needs a scene to hang commands off; it renders
-    // nothing and its Settings menu item is removed.
-    Settings { EmptyView() }
-      .commands {
-        CommandGroup(replacing: .appSettings) {}
+    Settings {
+      SettingsView()
+        .environment(appDelegate.model)
+    }
+    .commands {
+        CommandGroup(replacing: .appSettings) {
+          SettingsMenuItem()
+            .environment(appDelegate.model)
+        }
         CommandGroup(after: .help) {
           AuditLogMenuItem(windows: appDelegate.windows)
             .environment(appDelegate.model)

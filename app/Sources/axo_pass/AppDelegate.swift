@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private weak var mainWindow: NSWindow?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    Preferences.registerDefaults()
     observeWindowClose()
 
     // Start the broker off the window's lifetime: a headless launch has no

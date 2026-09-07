@@ -22,12 +22,19 @@ enum GrantPolicy {
 
   #if DEBUG
     /// Short enough to exercise expiry by hand.
-    static let standard = GrantPolicy.cache(idle: 5, absolute: 15)
+    static let reuseWindow = (idle: TimeInterval(5), absolute: TimeInterval(15))
   #else
     /// 300s is `LATouchIDAuthenticationMaximumAllowableReuseDuration`, the
     /// system's own ceiling on reusing a biometric match.
-    static let standard = GrantPolicy.cache(idle: 60, absolute: 300)
+    static let reuseWindow = (idle: TimeInterval(60), absolute: TimeInterval(300))
   #endif
+
+  /// The policy for a request that permits reuse at all. Settings turns reuse
+  /// off, which makes every request prompt.
+  static var standard: GrantPolicy {
+    guard Preferences.reuseApprovals else { return .everyUse }
+    return .cache(idle: reuseWindow.idle, absolute: reuseWindow.absolute)
+  }
 }
 
 /// Identifies the key an approval is for, in the form the audit log records.
