@@ -39,19 +39,19 @@ struct AxoPassApp: App {
         .environment(appDelegate.model)
     }
     .commands {
-        CommandGroup(replacing: .appSettings) {
-          SettingsMenuItem()
-            .environment(appDelegate.model)
-        }
-        CommandGroup(after: .help) {
-          AuditLogMenuItem(windows: appDelegate.windows)
-            .environment(appDelegate.model)
-        }
-        // Declared rather than left to the default menu: the passphrase panel
-        // is shown from a launch that opens no window, and pasting a
-        // passphrase out of a password manager needs these key equivalents.
-        TextEditingCommands()
+      CommandGroup(replacing: .appSettings) {
+        SettingsMenuItem()
+          .environment(appDelegate.model)
       }
+      CommandGroup(after: .help) {
+        AuditLogMenuItem(windows: appDelegate.windows)
+          .environment(appDelegate.model)
+      }
+      // Declared rather than left to the default menu: the passphrase panel
+      // is shown from a launch that opens no window, and pasting a
+      // passphrase out of a password manager needs these key equivalents.
+      TextEditingCommands()
+    }
   }
 
   static let mainWindowID = "main"

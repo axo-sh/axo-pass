@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 use ssh_agent_lib::proto::Identity;
 
@@ -29,7 +31,12 @@ pub struct SshKeyOverview {
     pub name: String,
     pub location: SshKeyLocation,
     pub path: Option<String>,
+    /// Path to the `.pub` file, when the key has one on disk.
     pub public_key: Option<String>,
+    /// The public key in OpenSSH format, read from the `.pub` file when there
+    /// is one so it carries the comment the file carries, and derived from the
+    /// key itself otherwise.
+    pub public_key_openssh: Option<String>,
     pub comment: Option<String>,
     pub key_type: SshKeyType,
     pub fingerprint_sha256: String,
@@ -37,6 +44,13 @@ pub struct SshKeyOverview {
     pub has_saved_password: bool,
     pub is_managed: bool,
     pub agents: Vec<SshKeyAgentKind>,
+}
+
+/// Read a `.pub` file's single line, ignoring an unreadable or empty file.
+fn read_pubkey_file(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 impl From<SystemSshKey> for SshKeyOverview {
@@ -50,6 +64,11 @@ impl From<SystemSshKey> for SshKeyOverview {
                 .public_key_path
                 .as_ref()
                 .map(|p| format!("{}", p.display())),
+            public_key_openssh: system_key
+                .public_key_path
+                .as_deref()
+                .and_then(read_pubkey_file)
+                .or_else(|| system_key.public_key.to_openssh().ok()),
             comment: Some(system_key.comment),
             key_type: system_key.key_type,
             fingerprint_sha256: system_key.fingerprint_sha256,
@@ -63,16 +82,17 @@ impl From<SystemSshKey> for SshKeyOverview {
 
 impl From<ManagedSshKey> for SshKeyOverview {
     fn from(managed_key: ManagedSshKey) -> Self {
+        let pubkey_path = managed_key.pubkey_path().ok().filter(|p| p.exists());
         SshKeyOverview {
             name: managed_key.name(),
             location: SshKeyLocation::Vault,
             path: None,
             key_type: SshKeyType::Ecdsa, // Managed keys are always ECDSA
-            public_key: managed_key
-                .pubkey_path()
-                .ok()
-                .filter(|p| p.exists())
-                .map(|p| format!("{}", p.display())),
+            public_key: pubkey_path.as_ref().map(|p| format!("{}", p.display())),
+            public_key_openssh: pubkey_path
+                .as_deref()
+                .and_then(read_pubkey_file)
+                .or_else(|| managed_key.public_key_openssh().ok()),
             comment: None,
             fingerprint_sha256: managed_key.fingerprint_sha256(),
             fingerprint_md5: managed_key.fingerprint_md5(),
@@ -95,6 +115,12 @@ impl From<Identity> for SshKeyOverview {
             location: SshKeyLocation::Transient,
             path: Some(identity.comment.clone()),
             public_key: None,
+            public_key_openssh: ssh_key::PublicKey::new(
+                identity.pubkey.clone(),
+                identity.comment.clone(),
+            )
+            .to_openssh()
+            .ok(),
             comment: Some(identity.comment),
             key_type: identity.pubkey.algorithm().into(),
             fingerprint_sha256,

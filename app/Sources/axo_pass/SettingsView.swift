@@ -1,4 +1,5 @@
 import AppKit
+import AxoPassFFI
 import SwiftUI
 
 /// The content of the Settings scene in `App.swift`.
@@ -15,9 +16,11 @@ struct SettingsView: View {
         .tabItem { Label("General", systemImage: "gearshape") }
       SecuritySettingsView()
         .tabItem { Label("Security", systemImage: "lock.shield") }
+      SshSettingsView()
+        .tabItem { Label("SSH", systemImage: "key.horizontal") }
     }
     .padding(20)
-    .frame(width: 440, height: 200, alignment: .top)
+    .frame(width: 440, height: 250, alignment: .top)
     .navigationTitle("Axo Pass Settings")
     .background(
       WindowAccessor {
@@ -102,6 +105,92 @@ private struct SecuritySettingsView: View {
       return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
     return value == 1 ? "1 second" : "\(value) seconds"
+  }
+}
+
+/// The `IdentityAgent` line in `~/.ssh/config`, which decides whether ssh
+/// talks to this app's agent. The agents' own status lives in the SSH pane.
+private struct SshSettingsView: View {
+  @State private var model = SshModel()
+  @State private var showingSetup = false
+
+  private var state: SshIdentityAgentState? { model.confStatus?.state }
+
+  var body: some View {
+    Form {
+      LabeledContent("IdentityAgent:") {
+        HStack(spacing: 6) {
+          if let state {
+            Label(label(state), systemImage: icon(state))
+              .foregroundStyle(color(state))
+          }
+          if model.isConfiguring {
+            ProgressView().controlSize(.small)
+          }
+        }
+      }
+      if let path = model.confStatus?.configPath {
+        Text(path)
+          .font(.callout.monospaced())
+          .textSelection(.enabled)
+          .settingsCaption()
+      }
+      LabeledContent("") {
+        HStack {
+          if state != .configured {
+            Button("Add to ~/.ssh/config") {
+              Task { await model.configureAgentConf() }
+            }
+            .disabled(model.isConfiguring)
+          }
+          Button("Setup Assistant…") { showingSetup = true }
+        }
+      }
+      if let error = model.configureError {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      Text("ssh asks whatever `IdentityAgent` names for your keys and signatures.")
+        .settingsCaption()
+    }
+    // This pane's rows are denser than the other tabs', which are a control
+    // and a caption apiece, so they need the room.
+    .padding(.horizontal, 10)
+    .padding(.vertical, 12)
+    .task { model.refreshConfStatus() }
+    // The file may be edited outside the app, so re-read it on reactivation.
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      model.refreshConfStatus()
+    }
+    .sheet(isPresented: $showingSetup) {
+      SshSetupSheet(model: model)
+    }
+  }
+
+  private func label(_ state: SshIdentityAgentState) -> String {
+    switch state {
+    case .configured: return "Configured"
+    case .notConfigured: return "Not Configured"
+    case .otherAgent: return "Other Agent"
+    }
+  }
+
+  private func icon(_ state: SshIdentityAgentState) -> String {
+    switch state {
+    case .configured: return "checkmark.circle.fill"
+    case .notConfigured: return "circle"
+    case .otherAgent: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private func color(_ state: SshIdentityAgentState) -> Color {
+    switch state {
+    case .configured: return .green
+    case .notConfigured: return .secondary
+    case .otherAgent: return .orange
+    }
   }
 }
 

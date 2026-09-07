@@ -50,6 +50,30 @@ impl ManagedSshKey {
         &self.public_key
     }
 
+    /// The public key in OpenSSH format, commented with the key's id. Derived
+    /// from the key in the Secure Enclave, so it does not depend on the `.pub`
+    /// file existing.
+    pub fn public_key_openssh(&self) -> Result<String, anyhow::Error> {
+        ssh_key::PublicKey::new(self.public_key.clone(), self.name())
+            .to_openssh()
+            .map_err(|e| anyhow!("Failed to format OpenSSH key: {e}"))
+    }
+
+    /// Write the public key file from the key held in the Secure Enclave.
+    /// Signing does not need the file, so a key whose file was deleted still
+    /// works; ssh and this app read the public key from it.
+    pub fn write_pubkey_file(&self) -> Result<PathBuf, anyhow::Error> {
+        let pubkey_openssh = self.public_key_openssh()?;
+        let pubkey_path = self.pubkey_path()?;
+        fs::write(&pubkey_path, format!("{pubkey_openssh}\n"))
+            .context("Failed to write public key")?;
+        fs::set_permissions(&pubkey_path, Permissions::from_mode(0o644))
+            .context("Failed to set public key permissions")?;
+
+        log::debug!("Saved public key to {}", pubkey_path.display());
+        Ok(pubkey_path)
+    }
+
     pub fn fingerprint_sha256(&self) -> String {
         compute_sha256_fingerprint(&self.public_key)
     }
@@ -100,31 +124,15 @@ impl ManagedSshKey {
 
         let managed_key = ManagedKey::create(&label)?;
 
-        // get the pubkey in openssh format
         let pubkey = managed_key.public_key()?;
-        let pubkey_openssh = ssh_key::PublicKey::new(pubkey.clone(), key_id.to_string())
-            .to_openssh()
-            .map_err(|e| {
-                KeychainError::PublicKeyCreationFailed(anyhow!("Failed to format OpenSSH key: {e}"))
-            })?;
-
-        // save pubkey_openssh to pubkey_path
-        let pubkey_path = get_ssh_dir()?.join(format!("id_se_{key_id}.pub"));
-        fs::write(&pubkey_path, format!("{pubkey_openssh}\n")).map_err(|e| {
-            KeychainError::PublicKeyCreationFailed(anyhow!("Failed to write public key: {e}"))
-        })?;
-        fs::set_permissions(&pubkey_path, Permissions::from_mode(0o644)).map_err(|e| {
-            KeychainError::PublicKeyCreationFailed(anyhow!(
-                "Failed to set public key permissions: {e}"
-            ))
-        })?;
-
-        log::debug!("Saved public key to {}", pubkey_path.display());
-        Ok(ManagedSshKey {
+        let key = ManagedSshKey {
             id: key_uuid,
             public_key: pubkey,
             managed_key,
-        })
+        };
+        key.write_pubkey_file()
+            .map_err(KeychainError::PublicKeyCreationFailed)?;
+        Ok(key)
     }
 
     pub fn find(label: &str) -> Result<Option<ManagedSshKey>, KeychainError> {

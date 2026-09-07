@@ -169,7 +169,11 @@ pub struct SshKeyEntry {
     pub name: String,
     pub location: SshKeyLocation,
     pub path: Option<String>,
+    /// Path to the `.pub` file, when the key has one on disk.
     pub public_key: Option<String>,
+    /// The public key in OpenSSH format, available even when the `.pub` file
+    /// is missing.
+    pub public_key_openssh: Option<String>,
     pub comment: Option<String>,
     pub key_type: SshKeyType,
     pub fingerprint_sha256: String,
@@ -205,6 +209,7 @@ impl From<SshKeyOverview> for SshKeyEntry {
             location: overview.location.into(),
             path: overview.path,
             public_key: overview.public_key,
+            public_key_openssh: overview.public_key_openssh,
             comment: overview.comment,
             key_type: overview.key_type.into(),
             fingerprint_sha256: overview.fingerprint_sha256,
@@ -999,6 +1004,25 @@ impl AxoPass {
                 .find(|k| k.fingerprint_sha256() == fingerprint_sha256)
                 .ok_or_else(|| FfiError::NotFound(fingerprint_sha256.clone()))?;
             key.delete().map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Rewrite a managed SSH key's public key file from the Secure Enclave,
+    /// for a key whose `~/.ssh/id_se_*.pub` was deleted. Returns its path.
+    pub async fn write_managed_ssh_key_pubkey(
+        &self,
+        fingerprint_sha256: String,
+    ) -> Result<String, FfiError> {
+        tokio::task::spawn_blocking(move || {
+            let keys = ManagedSshKey::list().map_err(FfiError::from)?;
+            let key = keys
+                .into_iter()
+                .find(|k| k.fingerprint_sha256() == fingerprint_sha256)
+                .ok_or_else(|| FfiError::NotFound(fingerprint_sha256.clone()))?;
+            let path = key.write_pubkey_file().map_err(FfiError::from)?;
+            Ok(path.to_string_lossy().to_string())
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

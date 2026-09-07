@@ -10,6 +10,8 @@ final class SshModel {
   private let core = AxoPass()
 
   var keys: [SshKeyEntry] = []
+  /// SHA256 fingerprint of the key shown in the detail pane.
+  var selectedFingerprint: String? = nil
   var axoAgentStatus: SshAgentStatusResponse? = nil
   var systemAgentStatus: SshAgentStatusResponse? = nil
   var loadError: String? = nil
@@ -23,6 +25,11 @@ final class SshModel {
   var isTogglingAgent = false
   var agentError: String? = nil
 
+  var selectedKey: SshKeyEntry? {
+    guard let selectedFingerprint else { return nil }
+    return keys.first { $0.fingerprintSha256 == selectedFingerprint }
+  }
+
   func reload() async {
     isLoading = true
     loadError = nil
@@ -34,6 +41,10 @@ final class SshModel {
     } catch {
       keys = []
       loadError = String(describing: error)
+    }
+    if let selectedFingerprint, !keys.contains(where: { $0.fingerprintSha256 == selectedFingerprint })
+    {
+      self.selectedFingerprint = nil
     }
     isLoading = false
   }
@@ -82,8 +93,9 @@ final class SshModel {
   @discardableResult
   func addManagedKey() async -> Bool {
     do {
-      _ = try await core.addManagedSshKey()
+      let key = try await core.addManagedSshKey()
       await reload()
+      selectedFingerprint = key.fingerprintSha256
       return true
     } catch {
       loadError = String(describing: error)
@@ -101,6 +113,38 @@ final class SshModel {
       loadError = String(describing: error)
       return false
     }
+  }
+
+  /// Rewrite a managed key's public key file, for one whose file was deleted.
+  /// Returns the path written.
+  @discardableResult
+  func writeManagedKeyPubkey(fingerprintSha256: String) async -> String? {
+    do {
+      let path = try await core.writeManagedSshKeyPubkey(fingerprintSha256: fingerprintSha256)
+      await reload()
+      return path
+    } catch {
+      loadError = String(describing: error)
+      return nil
+    }
+  }
+
+  /// The most recent SSH audit events for one key, newest first. Events name
+  /// their key by SHA256 fingerprint, which the reader's query matches against
+  /// the subject id.
+  func recentEvents(fingerprintSha256: String, limit: UInt32) async -> [AuditLogRow] {
+    let filter = AuditFilterInput(
+      sinceRfc3339: nil,
+      untilRfc3339: nil,
+      actions: AuditActionGroup.ssh.actions,
+      sources: [],
+      outcomes: [],
+      query: fingerprintSha256,
+      limit: limit,
+      offset: 0
+    )
+    guard let events = try? await core.listAuditEvents(filter: filter) else { return [] }
+    return events.map(AuditLogRow.init)
   }
 
   @discardableResult
