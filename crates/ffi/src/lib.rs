@@ -1815,6 +1815,7 @@ impl From<app_broker::PromptOutcome> for PromptOutcome {
 pub trait SignPromptDelegate: Send + Sync {
     /// Return the address of a live `LAContext` to sign on. The app must keep
     /// its own reference to that context until `end_authorization`.
+    #[allow(clippy::too_many_arguments)]
     async fn begin_authorization(
         &self,
         key_label: String,

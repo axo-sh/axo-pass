@@ -21,7 +21,7 @@ const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
 enum VaultState {
     Locked { name: Option<String> },
-    Unlocked { vault: Vault },
+    Unlocked { vault: Box<Vault> },
 }
 
 // in-memory representation of a vault
@@ -54,7 +54,7 @@ impl VaultWrapper {
             key: vault_key.to_string(),
             path: vault_path,
             state: VaultState::Unlocked {
-                vault: vault_overview,
+                vault: Box::new(vault_overview),
             },
         };
         vault_wrapper.save()?;
@@ -103,7 +103,9 @@ impl VaultWrapper {
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)
             .inspect_err(|e| log::debug!("failed to build vault: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
-        self.state = VaultState::Unlocked { vault };
+        self.state = VaultState::Unlocked {
+            vault: Box::new(vault),
+        };
         Ok(())
     }
 
@@ -141,7 +143,7 @@ impl VaultWrapper {
         };
 
         let vault = self.get_unlocked_vault()?;
-        let encrypted_vault = vault.into_encrypted()?;
+        let encrypted_vault = vault.to_encrypted()?;
         let vault_data = serde_json::to_string_pretty(&encrypted_vault)
             .map_err(Error::VaultSerializationError)?;
 
@@ -271,7 +273,7 @@ impl VaultWrapper {
     pub fn export(&self, path: &Path, export_mode: ExportMode) -> Result<(), Error> {
         let vault = self.get_unlocked_vault()?;
         let vault_key = (self.key != DEFAULT_VAULT).then(|| self.key.clone());
-        let exported = vault.into_export(vault_key, export_mode)?;
+        let exported = vault.to_export(vault_key, export_mode)?;
         let json =
             serde_json::to_string_pretty(&exported).map_err(Error::VaultSerializationError)?;
         fs::write(path, json).map_err(Error::VaultWriteError)?;

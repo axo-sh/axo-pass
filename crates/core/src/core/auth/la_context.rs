@@ -8,6 +8,7 @@ use objc2_local_authentication::LAError;
 
 use crate::secrets::keychain::errors::KeychainError;
 
+#[allow(clippy::type_complexity)]
 pub fn create_la_auth_callback() -> (
     RcBlock<dyn Fn(Bool, *mut NSError)>,
     mpsc::Receiver<Result<(), KeychainError>>,

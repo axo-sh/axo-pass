@@ -39,7 +39,7 @@ pub struct Vault {
     secrets: BTreeMap<CredentialId, EncryptedBlob<String>>,
 
     // Cached encrypted metadata blobs (keyed by item or cred UUID, which are
-    // globally unique). Dropped when metadata changes so that into_encrypted()
+    // globally unique). Dropped when metadata changes so that to_encrypted()
     // only re-encrypts what is necessary.
     metadata_blobs: BTreeMap<Uuid, EncryptedBlob<VaultFieldMetadata>>,
 }
@@ -149,7 +149,7 @@ impl Vault {
         Ok(vault)
     }
 
-    pub fn into_encrypted(&self) -> Result<EncryptedVault, Error> {
+    pub fn to_encrypted(&self) -> Result<EncryptedVault, Error> {
         let mut vault = EncryptedVault {
             id: self.id,
             name: self.name.clone(),
@@ -179,12 +179,12 @@ impl Vault {
         Ok(vault)
     }
 
-    pub fn into_export(
+    pub fn to_export(
         &self,
         key: Option<String>,
         export_mode: ExportMode,
     ) -> Result<ExportedVault, Error> {
-        let encrypted_vault = self.into_encrypted()?;
+        let encrypted_vault = self.to_encrypted()?;
         let age_file_key = self.cipher.wrap_file_key_for_export(export_mode)?;
         Ok(ExportedVault {
             id: encrypted_vault.id,

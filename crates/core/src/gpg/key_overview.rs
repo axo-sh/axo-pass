@@ -387,7 +387,7 @@ pub fn export_public_key(fingerprint: &str) -> Result<String, GpgError> {
 }
 
 /// Render a path with the home directory abbreviated to `~`.
-fn display_path(path: &PathBuf) -> String {
+fn display_path(path: &Path) -> String {
     let text = path.to_string_lossy().to_string();
     let Some(home) = dirs::home_dir() else {
         return text;
@@ -668,7 +668,7 @@ fn algorithm_name(field: Option<&str>) -> String {
         "18" => "ECDH".to_string(),
         "19" => "ECDSA".to_string(),
         "22" => "EdDSA".to_string(),
-        other if other.is_empty() => "Unknown".to_string(),
+        "" => "Unknown".to_string(),
         other => format!("Algorithm {other}"),
     }
 }
