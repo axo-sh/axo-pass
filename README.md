@@ -56,9 +56,9 @@ ln -s "/Applications/Axo Pass.app/Contents/bin/ap" /usr/local/bin/ap
 Usage: ap vault list
        ap item list [--vault <vault>]
        ap item get [OPTIONS] <ITEM_REFERENCE>
-       ap item read [OPTIONS] <ITEM_REFERENCE>
+       ap item read [OPTIONS] <ITEM_REFERENCE>...
        ap item set [OPTIONS] <ITEM_REFERENCE> [SECRET_VALUE]
-       ap read <ITEM_REFERENCE>
+       ap read [--delimiter|-d <DELIMITER>] <ITEM_REFERENCE>...
        ap inject [--input|-i <PATH>] [--output|-o <PATH>]
        ap age encrypt --recipient|-r <RECIPIENT> [PATH]
        ap age decrypt --recipient|-r <RECIPIENT> [PATH]

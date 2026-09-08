@@ -130,8 +130,9 @@ final class VaultUnlockPromptModel {
     switch prompt.action {
     case .readSecret:
       what = "read a secret from vault \(prompt.vaultKey)"
-    case let .resolveSecrets(_, count):
-      what = "resolve \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
+    case let .resolveSecrets(purpose, count):
+      let verb = purpose == .read ? "read" : "resolve"
+      what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
     }
@@ -175,8 +176,9 @@ final class VaultUnlockPromptModel {
   private static func headline(for action: VaultAction) -> String {
     switch action {
     case .readSecret: return "read a secret"
-    case let .resolveSecrets(_, count):
-      return "resolve \(count) \(count == 1 ? "secret" : "secrets")"
+    case let .resolveSecrets(purpose, count):
+      let verb = purpose == .read ? "read" : "resolve"
+      return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
     }
   }

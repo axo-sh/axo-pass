@@ -35,9 +35,14 @@ pub enum AxoPassCommand {
     /// Commands for managing items and credentials
     Item(ItemCommand),
 
-    /// Get a item credential's secret
+    /// Get item credential secret(s)
     Read {
-        item_reference: ItemReference,
+        #[arg(required = true)]
+        item_reference: Vec<ItemReference>,
+
+        /// String to print between values (supports \n, \t, \r, \0, \xHH escapes)
+        #[arg(long, short = 'd', default_value = "\\n")]
+        delimiter: String,
     },
 
     /// Run a command with secrets interpolated into the environment
@@ -145,8 +150,11 @@ impl AxoPassCommand {
             AxoPassCommand::Keychain(keychain) => keychain.execute().await,
             AxoPassCommand::Vault(vault) => vault.execute().await,
             AxoPassCommand::Item(item) => item.execute().await,
-            AxoPassCommand::Read { item_reference } => {
-                if let Err(e) = ItemCommand::cmd_read(item_reference, None) {
+            AxoPassCommand::Read {
+                item_reference,
+                delimiter,
+            } => {
+                if let Err(e) = ItemCommand::cmd_read(item_reference, None, delimiter) {
                     log::error!("{e}");
                     std::process::exit(1);
                 }

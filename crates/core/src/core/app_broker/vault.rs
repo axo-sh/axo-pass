@@ -38,6 +38,8 @@ pub enum ResolvePurpose {
     Exec,
     /// `ap inject`.
     Inject,
+    /// `ap read` with more than one reference. One prompt covers the batch.
+    Read,
 }
 
 /// What the app is being asked to do with the vault. Grants are keyed on the
@@ -248,6 +250,7 @@ fn record_access(
             let action = match purpose {
                 ResolvePurpose::Exec => Action::SecretExec,
                 ResolvePurpose::Inject => Action::SecretInject,
+                ResolvePurpose::Read => Action::SecretRead,
             };
             (action, Subject::new(SubjectKind::Vault, vault_key.clone()))
         },

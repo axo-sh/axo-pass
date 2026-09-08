@@ -1,7 +1,7 @@
 use std::io::{IsTerminal, Read};
 use std::str::FromStr;
 
-use axo_pass_core::core::app_broker::{self, BrokerError};
+use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef};
 use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
@@ -10,6 +10,44 @@ use color_print::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
+
+/// Resolves backslash escapes in a user-supplied delimiter so shells that
+/// cannot type control characters literally can still pass one. Handles `\n`,
+/// `\t`, `\r`, `\0`, `\\`, and `\xHH` for an arbitrary byte (`\x1f` is the
+/// ASCII unit separator). An unrecognized escape is left as written.
+fn unescape_delimiter(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            result.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => result.push('\n'),
+            Some('t') => result.push('\t'),
+            Some('r') => result.push('\r'),
+            Some('0') => result.push('\0'),
+            Some('\\') => result.push('\\'),
+            Some('x') => {
+                let hex: String = chars.by_ref().take(2).collect();
+                match u8::from_str_radix(&hex, 16) {
+                    Ok(byte) => result.push(byte as char),
+                    Err(_) => {
+                        result.push_str("\\x");
+                        result.push_str(&hex);
+                    },
+                }
+            },
+            Some(other) => {
+                result.push('\\');
+                result.push(other);
+            },
+            None => result.push('\\'),
+        }
+    }
+    result
+}
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
@@ -61,8 +99,15 @@ enum ItemSubcommand {
     /// Get item by reference, item_key or {item_key}/{credential_key}
     Get { item_reference: ItemReference },
 
-    /// Read secret value by reference or {item_key}/{credential_key}
-    Read { item_reference: ItemReference },
+    /// Read secret value(s) by reference or {item_key}/{credential_key}
+    Read {
+        #[arg(required = true)]
+        item_reference: Vec<ItemReference>,
+
+        /// String to print between values (supports \n, \t, \r, \0, \xHH escapes)
+        #[arg(long, short = 'd', default_value = "\\n")]
+        delimiter: String,
+    },
 
     /// Set secret value by reference or {item_key}/{credential_key}
     Set {
@@ -75,7 +120,10 @@ impl ItemCommand {
     pub async fn execute(&self) {
         let result = match &self.subcommand {
             ItemSubcommand::Get { item_reference } => self.cmd_get_item(item_reference),
-            ItemSubcommand::Read { item_reference } => self.cmd_read_item(item_reference),
+            ItemSubcommand::Read {
+                item_reference,
+                delimiter,
+            } => self.cmd_read_item(item_reference, delimiter),
             ItemSubcommand::List => self.cmd_list_items(),
             ItemSubcommand::Set {
                 item_reference,
@@ -142,57 +190,91 @@ impl ItemCommand {
         Ok(())
     }
 
-    fn cmd_read_item(&self, item_reference: &ItemReference) -> Result<(), String> {
-        Self::cmd_read(item_reference, self.vault.clone())
+    fn cmd_read_item(
+        &self,
+        item_references: &[ItemReference],
+        delimiter: &str,
+    ) -> Result<(), String> {
+        Self::cmd_read(item_references, self.vault.clone(), delimiter)
     }
 
-    /// Read a secret through the app broker. `ap` holds no keychain
-    /// entitlements, so the app unlocks the vault and returns the value. A
-    /// build that is not staged in an app bundle has no broker to reach and
-    /// unlocks locally.
-    pub fn cmd_read(item_reference: &ItemReference, vault: Option<String>) -> Result<(), String> {
-        let item_reference = item_reference.clone();
-        let item_key = item_reference.item;
-        let Some(credential_key) = item_reference.credential else {
-            return Err("Credential key must be specified".to_string());
-        };
-        let vault_key = item_reference
-            .vault
-            .or(vault)
-            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+    /// Read one or more secrets through the app broker. `ap` holds no
+    /// keychain entitlements, so the app unlocks the vault and returns the
+    /// value. A build that is not staged in an app bundle has no broker to
+    /// reach and unlocks locally. Values are printed joined by `delimiter`.
+    ///
+    /// Every reference is resolved in one broker request, so a multi-reference
+    /// read raises a single prompt rather than one per reference.
+    pub fn cmd_read(
+        item_references: &[ItemReference],
+        vault: Option<String>,
+        delimiter: &str,
+    ) -> Result<(), String> {
+        let delimiter = unescape_delimiter(delimiter);
+
+        // (vault, item, credential) per reference, defaults applied.
+        let mut triples = Vec::with_capacity(item_references.len());
+        for item_reference in item_references {
+            let item_reference = item_reference.clone();
+            let Some(credential_key) = item_reference.credential else {
+                return Err("Credential key must be specified".to_string());
+            };
+            let vault_key = item_reference
+                .vault
+                .or_else(|| vault.clone())
+                .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+            triples.push((vault_key, item_reference.item, credential_key));
+        }
+
         let caller = Provenance::resolve_current_parent()
             .inspect(|provenance| log::debug!("read caller: {provenance:#?}"))
             .and_then(|provenance| provenance.caller());
 
-        let value = match app_broker::request_vault_secret(
-            &vault_key,
-            &item_key,
-            &credential_key,
+        let wire: Vec<VaultRef> = triples
+            .iter()
+            .map(|(v, i, c)| VaultRef {
+                vault_key: v.clone(),
+                item_key: i.clone(),
+                credential_key: c.clone(),
+            })
+            .collect();
+
+        let values = match app_broker::request_resolve_secrets(
+            &wire,
+            ResolvePurpose::Read,
             caller.as_deref(),
         ) {
-            Ok(value) => value,
-            Err(BrokerError::Unavailable) => {
-                return Self::read_locally(&vault_key, &item_key, &credential_key);
-            },
+            Ok(values) => values,
+            Err(BrokerError::Unavailable) => triples
+                .iter()
+                .map(|(v, i, c)| Self::read_locally(v, i, c).map(Some))
+                .collect::<Result<Vec<_>, _>>()?,
             Err(e) => return Err(format!("Failed to read secret: {e}")),
         };
 
-        let Some(value) = value else {
-            return Err(cformat!(
-                "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
-            ));
-        };
-        println!("{}", value.expose_secret());
+        let mut resolved = Vec::with_capacity(triples.len());
+        for ((vault_key, item_key, credential_key), value) in triples.iter().zip(values) {
+            let Some(value) = value else {
+                return Err(cformat!(
+                    "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
+                ));
+            };
+            resolved.push(value);
+        }
+
+        let rendered: Vec<&str> = resolved.iter().map(|v| v.expose_secret()).collect();
+        println!("{}", rendered.join(&delimiter));
         Ok(())
     }
 
-    fn read_locally(vault_key: &str, item_key: &str, credential_key: &str) -> Result<(), String> {
+    fn read_locally(
+        vault_key: &str,
+        item_key: &str,
+        credential_key: &str,
+    ) -> Result<SecretString, String> {
         let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
         match vw.get_secret(item_key, credential_key) {
-            Ok(Some(secret)) => {
-                println!("{}", secret.expose_secret());
-                Ok(())
-            },
+            Ok(Some(secret)) => Ok(SecretString::from(secret.expose_secret().to_owned())),
             Ok(None) => Err(cformat!(
                 "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
             )),
