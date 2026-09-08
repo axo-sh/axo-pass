@@ -117,11 +117,12 @@ final class VaultUnlockPromptModel {
     let content = VaultUnlockView(
       vaultKey: prompt.vaultKey,
       caller: prompt.caller,
+      callerChain: prompt.callerChain,
       headline: Self.headline(for: prompt.action),
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
     )
-    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
+    panel.show(content)
   }
 
   /// The localized reason `LocalAuthentication` shows in its own chrome.
@@ -187,6 +188,7 @@ final class VaultUnlockPromptModel {
 private struct VaultUnlockView: View {
   let vaultKey: String
   let caller: String?
+  let callerChain: [ProcessNode]
   let headline: String
   let icon: AuthenticationIcon
   let onCancel: () -> Void
@@ -205,6 +207,8 @@ private struct VaultUnlockView: View {
           .font(.subheadline)
           .foregroundStyle(.secondary)
       }
+
+      CallerChainView(chain: callerChain)
 
       Button("Cancel", action: onCancel)
         .keyboardShortcut(.cancelAction)

@@ -19,6 +19,7 @@ use crate::audit;
 use crate::core::auth::{
     AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,
 };
+use crate::core::provenance::ProcessNode;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::ManagedSshKey;
@@ -39,6 +40,10 @@ pub struct SignPrompt {
     /// Who asked, as the agent resolved it. See [`WireRequest::Sign`] for why
     /// this can be shown to the user.
     pub caller: Option<String>,
+
+    /// The full requesting process chain, resolved the same way as `caller`.
+    /// Shown when the user expands the prompt.
+    pub caller_chain: Vec<ProcessNode>,
 
     /// True for a managed Secure Enclave key, false for a key the agent holds
     /// directly (a confirm-on-use gate from `ssh-add -c`). The app words its
@@ -94,12 +99,14 @@ pub fn request_signature(
     comment: Option<&str>,
     data: &[u8],
     caller: Option<&str>,
+    caller_chain: &[ProcessNode],
 ) -> Result<Signature, BrokerError> {
     let request = WireRequest::Sign {
         key_label: key_label.to_string(),
         fingerprint: fingerprint.map(String::from),
         comment: comment.map(String::from),
         caller: caller.map(String::from),
+        caller_chain: caller_chain.to_vec(),
         data: b64.encode(data),
     };
     match send_request(&request)? {
@@ -135,11 +142,13 @@ pub fn request_authorize_key_use(
     fingerprint: Option<&str>,
     comment: Option<&str>,
     caller: Option<&str>,
+    caller_chain: &[ProcessNode],
 ) -> Result<(), BrokerError> {
     let request = WireRequest::AuthorizeKeyUse {
         fingerprint: fingerprint.map(String::from),
         comment: comment.map(String::from),
         caller: caller.map(String::from),
+        caller_chain: caller_chain.to_vec(),
     };
     match send_request(&request)? {
         WireResponse::Confirmed { ok: true } => Ok(()),
@@ -300,6 +309,7 @@ pub fn request_ssh_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString,
         key_id: prompt.key_id.clone(),
         prompt: prompt.prompt.clone().unwrap_or_default(),
         caller: prompt.caller.clone(),
+        caller_chain: prompt.caller_chain.clone(),
     };
     match send_request(&request)? {
         WireResponse::Passphrase { passphrase } => {

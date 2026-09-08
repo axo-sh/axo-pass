@@ -4,6 +4,7 @@ use std::fmt::Debug;
 
 use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use rsa::signature::Signer;
@@ -48,7 +49,11 @@ impl StoredCredential {
         self
     }
 
-    pub fn validate(&self, caller: Option<&str>) -> Result<(), CredentialError> {
+    pub fn validate(
+        &self,
+        caller: Option<&str>,
+        caller_chain: &[ProcessNode],
+    ) -> Result<(), CredentialError> {
         if let Some(expiry) = self.expires_at {
             let now = UtcDateTime::now();
             if now > expiry {
@@ -57,7 +62,7 @@ impl StoredCredential {
         }
 
         if self.requires_auth {
-            self.confirm_use(caller)?;
+            self.confirm_use(caller, caller_chain)?;
         }
         Ok(())
     }
@@ -66,7 +71,11 @@ impl StoredCredential {
     /// render the prompt and run authentication, so the user sees the same
     /// panel as for a managed key. Falls back to the system dialog when no
     /// app is listening or the prompt fails.
-    fn confirm_use(&self, caller: Option<&str>) -> Result<(), CredentialError> {
+    fn confirm_use(
+        &self,
+        caller: Option<&str>,
+        caller_chain: &[ProcessNode],
+    ) -> Result<(), CredentialError> {
         let fingerprint = self
             .public_key_data()
             .fingerprint(HashAlg::Sha256)
@@ -74,7 +83,12 @@ impl StoredCredential {
         let comment = self.comment();
 
         match call_broker(|| {
-            app_broker::request_authorize_key_use(Some(&fingerprint), comment.as_deref(), caller)
+            app_broker::request_authorize_key_use(
+                Some(&fingerprint),
+                comment.as_deref(),
+                caller,
+                caller_chain,
+            )
         }) {
             Ok(()) => Ok(()),
             Err(BrokerError::Cancelled) => {
@@ -129,8 +143,9 @@ impl Credential for StoredCredential {
         &self,
         req: proto::SignRequest,
         caller: Option<&str>,
+        caller_chain: &[ProcessNode],
     ) -> Result<ssh_key::Signature, CredentialError> {
-        self.validate(caller)?;
+        self.validate(caller, caller_chain)?;
         match &self.credential {
             proto::PrivateCredential::Key { privkey, .. } => {
                 let key_algorithm = privkey.algorithm().map_err(|e| {
@@ -206,7 +221,7 @@ impl Debug for StoredCredential {
                 format!(
                     "{} {cred_type} {} {comment}",
                     &key_data.algorithm(),
-                    compute_short_sha256_fingerprint(&key_data)
+                    compute_short_sha256_fingerprint(key_data)
                 )
             },
             Err(e) => e.to_string(),

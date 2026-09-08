@@ -56,8 +56,8 @@ final class SigningPromptModel {
   /// Prepare a context for the key and return its address for the broker. The
   /// context stays referenced here, so it outlives the signing attempt.
   func begin(
-    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool,
-    peer: RequestActor
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
+    callerChain: [ProcessNode], managed: Bool, peer: RequestActor
   ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
     let key = GrantKey(subject: subject, caller: caller)
@@ -73,7 +73,8 @@ final class SigningPromptModel {
     showTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
-      self?.showPanel(key: key, keyName: keyName, managed: managed, view: grant.view)
+      self?.showPanel(
+        key: key, keyName: keyName, managed: managed, callerChain: callerChain, view: grant.view)
     }
 
     return contextPointer(grant.context)
@@ -137,16 +138,18 @@ final class SigningPromptModel {
   // MARK: - Panel
 
   private func showPanel(
-    key: GrantKey, keyName: String, managed: Bool, view: LAAuthenticationView
+    key: GrantKey, keyName: String, managed: Bool, callerChain: [ProcessNode],
+    view: LAAuthenticationView
   ) {
     let content = SigningPromptView(
       caller: key.caller,
       keyName: keyName,
       managed: managed,
+      callerChain: callerChain,
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(key: key) }
     )
-    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
+    panel.show(content)
   }
 
   /// A short display name for a key. Prefers the shortened `ssh-key-<uuid>`
@@ -168,6 +171,7 @@ private struct SigningPromptView: View {
   let caller: String?
   let keyName: String
   let managed: Bool
+  let callerChain: [ProcessNode]
   let icon: AuthenticationIcon
   let onCancel: () -> Void
 
@@ -185,6 +189,8 @@ private struct SigningPromptView: View {
           .font(.subheadline)
           .foregroundStyle(.secondary)
       }
+
+      CallerChainView(chain: callerChain)
 
       Button("Cancel", action: onCancel)
         .keyboardShortcut(.cancelAction)
@@ -211,12 +217,12 @@ final class SigningPromptBridge: SignPromptDelegate {
   }
 
   func beginAuthorization(
-    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, managed: Bool,
-    peer: RequestActor
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
+    callerChain: [ProcessNode], managed: Bool, peer: RequestActor
   ) async throws -> UInt64 {
     await model.begin(
       keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
-      managed: managed, peer: peer)
+      callerChain: callerChain, managed: managed, peer: peer)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

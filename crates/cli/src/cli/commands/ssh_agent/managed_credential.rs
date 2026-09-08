@@ -1,4 +1,5 @@
 use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity};
+use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
 use ssh_key::PublicKey;
@@ -108,6 +109,7 @@ impl Credential for ManagedCredential {
         &self,
         req: proto::SignRequest,
         caller: Option<&str>,
+        caller_chain: &[ProcessNode],
     ) -> Result<ssh_key::Signature, CredentialError> {
         let fingerprint = self
             .public_key
@@ -121,6 +123,7 @@ impl Credential for ManagedCredential {
                 comment,
                 &req.data,
                 caller,
+                caller_chain,
             )
         });
 

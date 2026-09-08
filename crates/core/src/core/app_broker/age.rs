@@ -185,6 +185,7 @@ pub(super) async fn get_identity(
         prompt: None,
         error_message: None,
         caller,
+        caller_chain: peer.chain_detail.clone(),
     };
 
     let context = match authorizer.begin(prompt.clone(), peer).await {

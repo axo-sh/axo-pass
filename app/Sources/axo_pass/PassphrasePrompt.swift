@@ -113,7 +113,7 @@ final class PassphrasePromptModel {
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) }
     )
-    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
+    panel.show(content)
   }
 
   private func showEntryPanel(prompt: PassphrasePrompt) {
@@ -126,7 +126,7 @@ final class PassphrasePromptModel {
       },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
+    panel.show(content)
   }
 
   private func showMessagePanel(description: String?, cancellable: Bool) {
@@ -136,7 +136,7 @@ final class PassphrasePromptModel {
       onConfirm: { [weak self] in self?.answer(.confirmed) },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
-    panel.show(NSHostingView(rootView: content), width: PromptPanel.standardWidth)
+    panel.show(content)
   }
 
   /// Resume whatever the panel is waiting on. Guarded because a continuation
@@ -196,6 +196,8 @@ private struct PassphraseUnlockView: View {
 
       PinentryTranscript(prompt: prompt)
 
+      CallerChainView(chain: prompt.callerChain)
+
       Button("Cancel", action: onCancel)
         .keyboardShortcut(.cancelAction)
     }
@@ -239,6 +241,8 @@ private struct PassphraseEntryView: View {
 
       PinentryTranscript(prompt: prompt)
 
+      CallerChainView(chain: prompt.callerChain)
+
       VStack(alignment: .leading, spacing: 12) {
         SecureField(prompt.prompt ?? "Passphrase", text: $value)
           .textFieldStyle(.roundedBorder)
@@ -261,7 +265,7 @@ private struct PassphraseEntryView: View {
       }
     }
     .padding(24)
-    .frame(maxWidth: .infinity)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onAppear { fieldFocused = true }
   }
 }

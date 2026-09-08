@@ -36,7 +36,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::audit;
 use crate::core::dirs::app_data_dir;
-use crate::core::provenance::{PeerIdentity, PeerPolicy};
+use crate::core::provenance::{PeerIdentity, PeerPolicy, ProcessNode};
 
 pub mod age;
 pub mod gpg;
@@ -151,6 +151,13 @@ enum WireRequest {
         /// in `agent_policy` reports.
         caller: Option<String>,
 
+        /// The requesting process chain, resolved by the agent the same way and
+        /// with the same delegated trust as `caller`. Lets the prompt show the
+        /// full ancestry, which the broker cannot derive since its peer is the
+        /// agent.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
+
         /// Base64 of the bytes to sign.
         data: String,
     },
@@ -164,6 +171,9 @@ enum WireRequest {
         error_message: Option<String>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         caller: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
     },
 
     /// A passphrase for `SSH_ASKPASS`: either unlocked from the keychain
@@ -178,6 +188,9 @@ enum WireRequest {
         prompt: String,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         caller: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
     },
 
     /// A confirm-on-use prompt for a key held by the agent, added with
@@ -196,6 +209,10 @@ enum WireRequest {
         /// Who asked, delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
+
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
     },
 
     /// `ap item list`: unlock a vault and return its item overview, never a
@@ -287,6 +304,19 @@ impl WireRequest {
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
+        }
+    }
+
+    /// The delegated process chain, for the requests that carry one. Empty for
+    /// the rest, where the broker's own peer is the requester and its chain is
+    /// resolved from the peer instead.
+    fn caller_chain(&self) -> &[ProcessNode] {
+        match self {
+            WireRequest::Sign { caller_chain, .. }
+            | WireRequest::AuthorizeKeyUse { caller_chain, .. }
+            | WireRequest::GetPassphrase { caller_chain, .. }
+            | WireRequest::GetSshPassphrase { caller_chain, .. } => caller_chain,
+            _ => &[],
         }
     }
 }
@@ -634,6 +664,7 @@ fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
         bundle_id: peer.bundle_id(),
         team_id: peer.team_id(),
         chain: peer.provenance().chain_labels(),
+        chain_detail: peer.provenance().chain_nodes(),
     }
 }
 
@@ -645,10 +676,17 @@ fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
 /// peer's own chain leads to launchd rather than to whoever asked it: the
 /// agent knows `git` made the request, and we cannot see that from the socket.
 /// A peer that names nobody falls back to its own chain root.
-fn request_actor(peer: &PeerIdentity, delegated_caller: Option<&str>) -> audit::Actor {
+fn request_actor(
+    peer: &PeerIdentity,
+    delegated_caller: Option<&str>,
+    delegated_chain: &[ProcessNode],
+) -> audit::Actor {
     let mut actor = peer_actor(peer);
     if let Some(caller) = delegated_caller.filter(|c| !c.is_empty()) {
         actor.caller = Some(caller.to_string());
+    }
+    if !delegated_chain.is_empty() {
+        actor.chain_detail = delegated_chain.to_vec();
     }
     actor
 }
@@ -669,7 +707,8 @@ async fn handle_connection(
     // Resolved once per connection and handed to whichever authorizer serves
     // the request, so the grant the app hands out is attributed to the process
     // we verified rather than to a caller string alone.
-    let actor = request_actor(peer, request.caller());
+    let actor = request_actor(peer, request.caller(), request.caller_chain());
+    let caller_chain = actor.chain_detail.clone();
 
     let response = match request {
         WireRequest::ListIdentities => {
@@ -687,6 +726,7 @@ async fn handle_connection(
             fingerprint,
             comment,
             caller,
+            caller_chain: _,
             data,
         } => {
             let data = b64
@@ -697,6 +737,7 @@ async fn handle_connection(
                 fingerprint,
                 comment,
                 caller,
+                caller_chain: caller_chain.clone(),
                 managed: true,
             };
             log::debug!("App broker request: {prompt:?}");
@@ -706,12 +747,14 @@ async fn handle_connection(
             fingerprint,
             comment,
             caller,
+            caller_chain: _,
         } => {
             let prompt = SignPrompt {
                 key_label: String::new(),
                 fingerprint,
                 comment,
                 caller,
+                caller_chain: caller_chain.clone(),
                 managed: false,
             };
             log::debug!("App broker request: authorize key use {prompt:?}");
@@ -723,6 +766,7 @@ async fn handle_connection(
             prompt,
             error_message,
             caller,
+            caller_chain: _,
         } => {
             let prompt = PassphrasePrompt {
                 kind: PassphraseKind::Gpg,
@@ -731,6 +775,7 @@ async fn handle_connection(
                 prompt,
                 error_message,
                 caller,
+                caller_chain: caller_chain.clone(),
             };
             log::debug!("App broker request: {prompt:?}");
             gpg::get_passphrase(&*authorizers.passphrase, prompt, actor).await
@@ -739,6 +784,7 @@ async fn handle_connection(
             key_id,
             prompt,
             caller,
+            caller_chain: _,
         } => {
             let prompt = PassphrasePrompt {
                 kind: PassphraseKind::Ssh,
@@ -747,6 +793,7 @@ async fn handle_connection(
                 prompt: Some(prompt),
                 error_message: None,
                 caller,
+                caller_chain: caller_chain.clone(),
             };
             log::debug!("App broker request: {prompt:?}");
             ssh::get_passphrase(&*authorizers.passphrase, prompt, actor).await
@@ -755,6 +802,7 @@ async fn handle_connection(
             let prompt = vault::VaultAccessPrompt {
                 vault_key,
                 caller,
+                caller_chain: caller_chain.clone(),
                 action: vault::VaultAction::ListItems,
             };
             log::debug!("App broker request: {prompt:?}");
@@ -769,6 +817,7 @@ async fn handle_connection(
             let prompt = vault::VaultAccessPrompt {
                 vault_key,
                 caller,
+                caller_chain: caller_chain.clone(),
                 action: vault::VaultAction::ReadSecret {
                     item_key,
                     credential_key,
@@ -788,6 +837,7 @@ async fn handle_connection(
             let prompt = vault::VaultAccessPrompt {
                 vault_key: vault_keys.join(", "),
                 caller,
+                caller_chain: caller_chain.clone(),
                 action: vault::VaultAction::ResolveSecrets { purpose, refs },
             };
             log::debug!("App broker request: {prompt:?}");
@@ -1075,6 +1125,42 @@ mod tests {
         let peers = broker.authorizer.peers.lock().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].pid, Some(std::process::id()));
+    }
+
+    /// A delegated caller chain reaches the prompt verbatim, so the app can let
+    /// the user expand it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delegates_the_caller_chain_to_the_prompt() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        broker.request(
+            r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","caller_chain":[{"command":"git","executable":"/usr/bin/git","pid":123,"bundle_id":null,"team_id":null},{"command":"zsh","executable":"/bin/zsh","pid":42,"bundle_id":null,"team_id":null}],"data":"aGk="}"#,
+        );
+
+        let prompts = broker.authorizer.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let chain: Vec<&str> = prompts[0]
+            .caller_chain
+            .iter()
+            .map(|n| n.command.as_str())
+            .collect();
+        assert_eq!(chain, ["git", "zsh"]);
+    }
+
+    /// With no delegated chain, the prompt still gets one: the broker resolves
+    /// it from its own verified peer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn falls_back_to_the_peer_chain_for_the_prompt() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
+
+        let prompts = broker.authorizer.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(
+            !prompts[0].caller_chain.is_empty(),
+            "peer chain not resolved for the prompt"
+        );
     }
 
     /// A confirm-on-use request reaches the sign authorizer, worded for a key

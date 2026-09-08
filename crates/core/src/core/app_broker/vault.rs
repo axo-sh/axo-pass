@@ -76,6 +76,11 @@ pub struct VaultAccessPrompt {
     /// [`WireRequest::Sign`]'s caller.
     pub caller: Option<String>,
 
+    /// The full requesting process chain. For a vault access `ap` is the
+    /// broker's own peer, so this is the peer's resolved chain rather than a
+    /// delegated one. Shown when the user expands the prompt.
+    pub caller_chain: Vec<crate::core::provenance::ProcessNode>,
+
     pub action: VaultAction,
 }
 

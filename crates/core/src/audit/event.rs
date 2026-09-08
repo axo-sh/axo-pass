@@ -388,4 +388,9 @@ pub struct Actor {
     /// The user-visible process chain, innermost first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chain: Vec<String>,
+
+    /// The same chain with per-process detail. Carried in-process to the prompt
+    /// UI, never written to the audit log.
+    #[serde(skip)]
+    pub chain_detail: Vec<crate::core::provenance::ProcessNode>,
 }

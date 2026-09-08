@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use axo_pass_core::age::errors::AgeError;
 use axo_pass_core::age::key_overview::{AgeKeyOverview, list_age_keys};
 use axo_pass_core::age::recipients::{delete_recipient as delete_age_recipient, generate_age_key};
-use axo_pass_core::core::app_broker;
 use axo_pass_core::core::auth::{
     AuthContext, AuthMethod, ForeignContext, adopt_shared_context, external_auth_lock,
     invalidate_auth, run_on_auth_thread,
 };
+use axo_pass_core::core::{app_broker, provenance};
 use axo_pass_core::gpg::agent_conf::{self, State as CoreAgentConfState};
 use axo_pass_core::gpg::key_overview::{
     GpgCapability as CoreGpgCapability, GpgKeyOverview, GpgSecretState as CoreGpgSecretState,
@@ -1821,6 +1821,9 @@ pub trait SignPromptDelegate: Send + Sync {
         fingerprint: Option<String>,
         comment: Option<String>,
         caller: Option<String>,
+        // The full requesting process chain, innermost first. Shown when the
+        // user expands the prompt.
+        caller_chain: Vec<ProcessNode>,
         // True for a managed Secure Enclave key. False for a confirm-on-use
         // gate on a key the agent holds directly, which the app words
         // differently and never reuses across requests.
@@ -1852,6 +1855,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 prompt.fingerprint,
                 prompt.comment,
                 prompt.caller,
+                prompt.caller_chain.into_iter().map(Into::into).collect(),
                 prompt.managed,
                 peer.into(),
             )
@@ -1870,6 +1874,29 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
         self.delegate
             .end_authorization(prompt.key_label, outcome.into())
             .await;
+    }
+}
+
+/// One process in a caller chain, shown when the user expands a prompt. Mirrors
+/// [`provenance::ProcessNode`].
+#[derive(uniffi::Record, Clone)]
+pub struct ProcessNode {
+    pub command: String,
+    pub executable: Option<String>,
+    pub pid: u32,
+    pub bundle_id: Option<String>,
+    pub team_id: Option<String>,
+}
+
+impl From<provenance::ProcessNode> for ProcessNode {
+    fn from(node: provenance::ProcessNode) -> Self {
+        Self {
+            command: node.command,
+            executable: node.executable,
+            pid: node.pid,
+            bundle_id: node.bundle_id,
+            team_id: node.team_id,
+        }
     }
 }
 
@@ -1912,6 +1939,8 @@ impl From<RequestActor> for audit::Actor {
             bundle_id: actor.bundle_id,
             team_id: actor.team_id,
             chain: actor.chain,
+            // Detail is carried on the prompt itself, not through the actor.
+            chain_detail: Vec::new(),
         }
     }
 }
@@ -1952,6 +1981,9 @@ pub struct PassphrasePrompt {
     /// `None` for SSH.
     pub error_message: Option<String>,
     pub caller: Option<String>,
+    /// The full requesting process chain, innermost first. Shown when the user
+    /// expands the prompt.
+    pub caller_chain: Vec<ProcessNode>,
 }
 
 impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
@@ -1963,6 +1995,7 @@ impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
             prompt: prompt.prompt,
             error_message: prompt.error_message,
             caller: prompt.caller,
+            caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -2128,6 +2161,9 @@ impl From<app_broker::VaultAction> for VaultAction {
 pub struct VaultAccessPrompt {
     pub vault_key: String,
     pub caller: Option<String>,
+    /// The full requesting process chain, innermost first. Shown when the user
+    /// expands the prompt.
+    pub caller_chain: Vec<ProcessNode>,
     pub action: VaultAction,
 }
 
@@ -2136,6 +2172,7 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
         Self {
             vault_key: prompt.vault_key,
             caller: prompt.caller,
+            caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
             action: prompt.action.into(),
         }
     }

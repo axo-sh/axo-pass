@@ -213,6 +213,7 @@ mod tests {
                 bundle_id: Some("com.apple.ssh".into()),
                 team_id: Some("TEAMID".into()),
                 chain: vec!["ssh".into(), "git".into()],
+                ..Default::default()
             })
             .subject(
                 Subject::new(SubjectKind::SshKey, "work key")

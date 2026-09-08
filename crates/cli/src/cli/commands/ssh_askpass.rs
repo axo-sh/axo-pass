@@ -34,9 +34,10 @@ pub async fn run(prompt: String) {
     // Resolved once: this process asks a single question and exits, so the
     // chain does not change under us. See `BrokerPinentryHandler::new` for why
     // this is as far as the process tree goes.
-    let caller = Provenance::resolve_current_parent()
-        .inspect(|provenance| log::debug!("ssh-askpass caller: {provenance:#?}"))
-        .and_then(|provenance| provenance.caller());
+    let provenance = Provenance::resolve_current_parent()
+        .inspect(|provenance| log::debug!("ssh-askpass caller: {provenance:#?}"));
+    let caller = provenance.as_ref().and_then(|p| p.caller());
+    let caller_chain = provenance.map(|p| p.chain_nodes()).unwrap_or_default();
 
     let request = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
@@ -45,6 +46,7 @@ pub async fn run(prompt: String) {
         prompt: Some(prompt),
         error_message: None,
         caller: caller.clone(),
+        caller_chain,
     };
 
     let result = tokio::task::spawn_blocking(move || app_broker::request_ssh_passphrase(&request))

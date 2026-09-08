@@ -11,6 +11,7 @@ use secrecy::{ExposeSecret, SecretString};
 use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request};
 use crate::audit;
 use crate::core::auth::{AuthContext, ForeignContext};
+use crate::core::provenance::ProcessNode;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 
@@ -51,6 +52,10 @@ pub struct PassphrasePrompt {
     /// Who asked, as `ap pinentry` / `ap ssh-askpass` resolved it. Carries the
     /// same delegated trust as [`WireRequest::Sign`]'s caller.
     pub caller: Option<String>,
+
+    /// The full requesting process chain, resolved the same way as `caller`.
+    /// Shown when the user expands the prompt.
+    pub caller_chain: Vec<ProcessNode>,
 }
 
 /// A passphrase the user typed, and what they asked us to do with it.
@@ -100,6 +105,7 @@ pub fn request_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString, Bro
         prompt: prompt.prompt.clone(),
         error_message: prompt.error_message.clone(),
         caller: prompt.caller.clone(),
+        caller_chain: prompt.caller_chain.clone(),
     };
     match send_request(&request)? {
         WireResponse::Passphrase { passphrase } => {

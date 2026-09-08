@@ -6,6 +6,7 @@ mod signing_info;
 use std::fmt;
 
 use objc2_security::SecCode;
+use serde::{Deserialize, Serialize};
 
 use crate::audit::Actor;
 pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
@@ -13,6 +14,17 @@ use crate::core::provenance::proc_info::ProcInfo;
 
 pub struct Provenance {
     proc_info: Vec<ProcInfo>,
+}
+
+/// One process in a resolved caller chain, with the detail a prompt needs to
+/// let the user inspect an unexpected caller.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessNode {
+    pub command: String,
+    pub executable: Option<String>,
+    pub pid: u32,
+    pub bundle_id: Option<String>,
+    pub team_id: Option<String>,
 }
 
 impl Provenance {
@@ -89,6 +101,21 @@ impl Provenance {
             .collect()
     }
 
+    /// The user-visible process chain with per-process detail, innermost first.
+    pub fn chain_nodes(&self) -> Vec<ProcessNode> {
+        self.proc_info
+            .iter()
+            .filter(|p| p.is_user_visible())
+            .map(|p| ProcessNode {
+                command: p.command().to_string(),
+                executable: p.executable_path(),
+                pid: p.pid(),
+                bundle_id: p.bundle_id(),
+                team_id: p.team_id(),
+            })
+            .collect()
+    }
+
     fn head(&self) -> Option<&ProcInfo> {
         self.proc_info.iter().find(|p| p.is_user_visible())
     }
@@ -124,6 +151,7 @@ impl Actor {
             bundle_id: peer.bundle_id(),
             team_id: peer.team_id(),
             chain: peer.provenance().chain_labels(),
+            chain_detail: peer.provenance().chain_nodes(),
         }
     }
 
@@ -136,6 +164,7 @@ impl Actor {
             bundle_id: provenance.head_bundle_id(),
             team_id: provenance.head_team_id(),
             chain: provenance.chain_labels(),
+            chain_detail: provenance.chain_nodes(),
         }
     }
 }

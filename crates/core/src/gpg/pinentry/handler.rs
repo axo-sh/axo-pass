@@ -7,11 +7,12 @@ use secrecy::SecretString;
 
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Source, Subject, SubjectKind};
 use crate::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
-use crate::core::provenance::Provenance;
+use crate::core::provenance::{ProcessNode, Provenance};
 use crate::gpg::pinentry::server::PinentryServerHandler;
 
 pub struct BrokerPinentryHandler {
     caller: Option<String>,
+    caller_chain: Vec<ProcessNode>,
     actor: Option<Actor>,
 }
 
@@ -31,8 +32,16 @@ impl BrokerPinentryHandler {
         let provenance = Provenance::resolve_current_parent()
             .inspect(|provenance| log::debug!("pinentry caller: {provenance:#?}"));
         let caller = provenance.as_ref().and_then(|p| p.caller());
+        let caller_chain = provenance
+            .as_ref()
+            .map(|p| p.chain_nodes())
+            .unwrap_or_default();
         let actor = provenance.as_ref().map(Actor::from_provenance);
-        Self { caller, actor }
+        Self {
+            caller,
+            caller_chain,
+            actor,
+        }
     }
 
     /// Record a `gpg.*` event for a completed prompt.
@@ -65,6 +74,7 @@ impl BrokerPinentryHandler {
             prompt: prompt.map(String::from),
             error_message: error_message.map(String::from),
             caller: self.caller.clone(),
+            caller_chain: self.caller_chain.clone(),
         }
     }
 }

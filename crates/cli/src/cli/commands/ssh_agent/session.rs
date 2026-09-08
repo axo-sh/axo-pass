@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axo_pass_core::audit::{Action, Actor, Outcome};
+use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
@@ -44,6 +45,14 @@ impl SshAgentSession {
             session_bind_attempted: false,
             shutdown_sender,
         }
+    }
+
+    /// The requesting process chain, as resolved from the socket peer. Passed
+    /// to the broker so a signing prompt can show the full ancestry.
+    fn caller_chain(&self) -> &[ProcessNode] {
+        self.actor
+            .as_ref()
+            .map_or(&[], |a| a.chain_detail.as_slice())
     }
 
     pub async fn add_credential_to_state(
@@ -227,7 +236,7 @@ impl SshAgentSession {
 
         // passed all checks, perform signing
         stored_cred
-            .sign(req, self.caller.as_deref())
+            .sign(req, self.caller.as_deref(), self.caller_chain())
             .map_err(|e| AgentError::Other(e.into()))
     }
 }
@@ -275,7 +284,7 @@ impl Session for SshAgentSession {
 
     async fn remove_identity(&mut self, req: RemoveIdentity) -> Result<(), AgentError> {
         let pubkey_data = req.credential.key_data();
-        match self.remove_credential(&pubkey_data).await {
+        match self.remove_credential(pubkey_data).await {
             None => log::debug!("request: remove ssh identity - key not found"),
             Some(removed) => {
                 log::debug!("request: remove ssh identity");
@@ -283,7 +292,7 @@ impl Session for SshAgentSession {
                     Action::SshKeyRemove,
                     self.actor.as_ref(),
                     self.caller.as_deref(),
-                    &pubkey_data,
+                    pubkey_data,
                     removed.comment().as_deref(),
                     &[],
                 );
