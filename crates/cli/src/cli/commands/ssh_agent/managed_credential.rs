@@ -36,7 +36,7 @@ impl TryFrom<ManagedIdentity> for ManagedCredential {
 impl From<&ManagedCredential> for proto::Identity {
     fn from(credential: &ManagedCredential) -> Self {
         proto::Identity {
-            pubkey: credential.public_key.clone(),
+            credential: proto::PublicCredential::Key(credential.public_key_data()),
             comment: credential.comment.clone(),
         }
     }

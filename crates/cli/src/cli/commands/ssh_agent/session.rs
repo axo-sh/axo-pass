@@ -48,48 +48,42 @@ impl SshAgentSession {
 
     pub async fn add_credential_to_state(
         &mut self,
-        credential: proto::Credential,
+        credential: proto::PrivateCredential,
         constraints: Vec<proto::KeyConstraint>,
     ) {
         let credential = StoredCredential::from(credential).add_constraints(constraints);
+        let pubkey_data = credential.public_key_data();
 
         // if credential already exists, remove it first. Only stored
         // credentials matter here: a managed key cannot be added over the agent
         // protocol, and consulting the app about one would start it.
-        if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential)
-            && self
-                .find_stored_credential(&identity.pubkey)
-                .await
-                .is_some()
-        {
+        if self.find_stored_credential(&pubkey_data).await.is_some() {
             log::debug!("Credential already exists, will replace.");
-            self.remove_credential(&identity.pubkey).await;
+            self.remove_credential(&pubkey_data).await;
         }
 
         log::debug!("Adding {:?}", credential);
-        if let Ok(identity) = TryInto::<proto::Identity>::try_into(&credential) {
-            let mut detail: Vec<(&str, String)> = Vec::new();
-            if credential.expires_at.is_some() {
-                detail.push(("lifetime_constrained", "true".to_string()));
-            }
-            if credential.requires_auth {
-                detail.push(("confirm", "true".to_string()));
-            }
-            if !credential.dest_constraints.is_empty() {
-                detail.push((
-                    "destination_constraints",
-                    credential.dest_constraints.len().to_string(),
-                ));
-            }
-            audit::record_key_change(
-                Action::SshKeyAdd,
-                self.actor.as_ref(),
-                self.caller.as_deref(),
-                &identity.pubkey,
-                credential.comment().as_deref(),
-                &detail,
-            );
+        let mut detail: Vec<(&str, String)> = Vec::new();
+        if credential.expires_at.is_some() {
+            detail.push(("lifetime_constrained", "true".to_string()));
         }
+        if credential.requires_auth {
+            detail.push(("confirm", "true".to_string()));
+        }
+        if !credential.dest_constraints.is_empty() {
+            detail.push((
+                "destination_constraints",
+                credential.dest_constraints.len().to_string(),
+            ));
+        }
+        audit::record_key_change(
+            Action::SshKeyAdd,
+            self.actor.as_ref(),
+            self.caller.as_deref(),
+            &pubkey_data,
+            credential.comment().as_deref(),
+            &detail,
+        );
         self.state.lock().await.push(credential);
     }
 
@@ -98,7 +92,7 @@ impl SshAgentSession {
     pub async fn find_stored_credential(&self, pubkey: &KeyData) -> Option<StoredCredential> {
         for cred in self.state.lock().await.iter() {
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
-                && identity.pubkey == *pubkey
+                && *identity.credential.key_data() == *pubkey
             {
                 log::debug!("Found {:?}", cred);
                 return Some(cred.clone());
@@ -132,7 +126,7 @@ impl SshAgentSession {
         let mut state = self.state.lock().await;
         if let Some(pos) = state.iter().position(|cred| {
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred) {
-                identity.pubkey == *pubkey
+                *identity.credential.key_data() == *pubkey
             } else {
                 false
             }
@@ -141,91 +135,16 @@ impl SshAgentSession {
         }
         None
     }
-}
 
-#[ssh_agent_lib::async_trait]
-impl Session for SshAgentSession {
-    async fn request_identities(&mut self) -> Result<Vec<proto::Identity>, AgentError> {
-        log::debug!("request: list ssh identities");
-        let creds = self.state.lock().await;
-        let mut identities = vec![];
-
-        // only return permitted identities
-        for stored_cred in creds.iter() {
-            let boxed_cred: Box<dyn Credential> = Box::new(stored_cred.clone());
-            if let Err(e) = self.identity_permitted(&*boxed_cred, None) {
-                log::debug!("Skipping {stored_cred:?} due to destination constraints: {e}");
-            } else if let Ok(identity) = stored_cred.try_into().inspect_err(|e| {
-                log::error!("Failed to convert stored credential to identity: {stored_cred:?}: {e}")
-            }) {
-                identities.push(identity);
-            }
-        }
-
-        // get managed keys as well
-        identities.extend(list_managed_credentials().iter().map(Into::into));
-        Ok(identities)
-    }
-
-    async fn add_identity(&mut self, req: AddIdentity) -> Result<(), AgentError> {
-        log::debug!("request: add ssh identity");
-        self.add_credential_to_state(req.credential, Vec::new())
-            .await;
-        Ok(())
-    }
-
-    async fn add_identity_constrained(
-        &mut self,
-        req: AddIdentityConstrained,
-    ) -> Result<(), AgentError> {
-        log::debug!("request: add ssh identity with constraints");
-        self.add_credential_to_state(req.identity.credential, req.constraints)
-            .await;
-        Ok(())
-    }
-
-    async fn remove_identity(&mut self, req: RemoveIdentity) -> Result<(), AgentError> {
-        match self.remove_credential(&req.pubkey).await {
-            None => log::debug!("request: remove ssh identity - key not found"),
-            Some(removed) => {
-                log::debug!("request: remove ssh identity");
-                audit::record_key_change(
-                    Action::SshKeyRemove,
-                    self.actor.as_ref(),
-                    self.caller.as_deref(),
-                    &req.pubkey,
-                    removed.comment().as_deref(),
-                    &[],
-                );
-            },
-        }
-        Ok(())
-    }
-
-    async fn remove_all_identities(&mut self) -> Result<(), AgentError> {
-        self.state.lock().await.clear();
-        Ok(())
-    }
-
-    async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
-        let pubkey = req.pubkey.clone();
-        let request_data = req.data.clone();
-
-        // Looked up once here for the audit record. The signing path below does
-        // its own lookup, with the checks that gate the signature. The credential
-        // is not held past this block: it is not `Send`, and the block below
-        // awaits.
-        let (key_label, comment, managed) = {
-            let cred = self.find_credential(&pubkey).await;
-            let key_label = cred.as_ref().and_then(|c| c.key_label());
-            let comment = cred.as_ref().and_then(|c| c.comment());
-            (key_label.clone(), comment, key_label.is_some())
-        };
-
-        // One `ssh.sign` event is recorded on every exit path below.
-        let result: Result<Signature, AgentError> = async {
-        let fingerprint = compute_short_sha256_fingerprint(&req.pubkey);
-        let Some(stored_cred) = self.find_credential(&req.pubkey).await else {
+    /// Run the checks that gate a signature and, if they pass, produce it.
+    /// Callers record the `ssh.sign` audit event around this.
+    async fn signature_for(
+        &self,
+        req: SignRequest,
+        pubkey_data: &KeyData,
+    ) -> Result<Signature, AgentError> {
+        let fingerprint = compute_short_sha256_fingerprint(pubkey_data);
+        let Some(stored_cred) = self.find_credential(pubkey_data).await else {
             log::debug!("request: sign with identity {fingerprint} - key not found");
             return Err(AgentError::Other("Key not found".into()));
         };
@@ -310,13 +229,95 @@ impl Session for SshAgentSession {
         stored_cred
             .sign(req, self.caller.as_deref())
             .map_err(|e| AgentError::Other(e.into()))
+    }
+}
+
+#[ssh_agent_lib::async_trait]
+impl Session for SshAgentSession {
+    async fn request_identities(&mut self) -> Result<Vec<proto::Identity>, AgentError> {
+        log::debug!("request: list ssh identities");
+        let creds = self.state.lock().await;
+        let mut identities = vec![];
+
+        // only return permitted identities
+        for stored_cred in creds.iter() {
+            let boxed_cred: Box<dyn Credential> = Box::new(stored_cred.clone());
+            if let Err(e) = self.identity_permitted(&*boxed_cred, None) {
+                log::debug!("Skipping {stored_cred:?} due to destination constraints: {e}");
+            } else if let Ok(identity) = stored_cred.try_into().inspect_err(|e| {
+                log::error!("Failed to convert stored credential to identity: {stored_cred:?}: {e}")
+            }) {
+                identities.push(identity);
+            }
         }
-        .await;
+
+        // get managed keys as well
+        identities.extend(list_managed_credentials().iter().map(Into::into));
+        Ok(identities)
+    }
+
+    async fn add_identity(&mut self, req: AddIdentity) -> Result<(), AgentError> {
+        log::debug!("request: add ssh identity");
+        self.add_credential_to_state(req.credential, Vec::new())
+            .await;
+        Ok(())
+    }
+
+    async fn add_identity_constrained(
+        &mut self,
+        req: AddIdentityConstrained,
+    ) -> Result<(), AgentError> {
+        log::debug!("request: add ssh identity with constraints");
+        self.add_credential_to_state(req.identity.credential, req.constraints)
+            .await;
+        Ok(())
+    }
+
+    async fn remove_identity(&mut self, req: RemoveIdentity) -> Result<(), AgentError> {
+        let pubkey_data = req.credential.key_data();
+        match self.remove_credential(&pubkey_data).await {
+            None => log::debug!("request: remove ssh identity - key not found"),
+            Some(removed) => {
+                log::debug!("request: remove ssh identity");
+                audit::record_key_change(
+                    Action::SshKeyRemove,
+                    self.actor.as_ref(),
+                    self.caller.as_deref(),
+                    &pubkey_data,
+                    removed.comment().as_deref(),
+                    &[],
+                );
+            },
+        }
+        Ok(())
+    }
+
+    async fn remove_all_identities(&mut self) -> Result<(), AgentError> {
+        self.state.lock().await.clear();
+        Ok(())
+    }
+
+    async fn sign(&mut self, req: SignRequest) -> Result<Signature, AgentError> {
+        let pubkey_data = req.credential.key_data().clone();
+        let request_data = req.data.clone();
+
+        // Looked up here for the audit record. `signature_for` does its own
+        // lookup, with the checks that gate the signature. The credential is not
+        // held across an await: it is not `Send`.
+        let (key_label, comment, managed) = {
+            let cred = self.find_credential(&pubkey_data).await;
+            let key_label = cred.as_ref().and_then(|c| c.key_label());
+            let comment = cred.as_ref().and_then(|c| c.comment());
+            (key_label.clone(), comment, key_label.is_some())
+        };
+
+        // One `ssh.sign` event is recorded for the request, whatever the outcome.
+        let result = self.signature_for(req, &pubkey_data).await;
 
         audit::record_sign(
             self.actor.as_ref(),
             self.caller.as_deref(),
-            &pubkey,
+            &pubkey_data,
             &request_data,
             managed,
             comment.as_deref(),
@@ -414,7 +415,7 @@ mod tests {
         let public_key = private_key.public_key().clone();
 
         // Create credential
-        let credential = proto::Credential::Key {
+        let credential = proto::PrivateCredential::Key {
             privkey: private_key.key_data().clone(),
             comment: "test-key".to_string(),
         };
@@ -432,7 +433,7 @@ mod tests {
         // Create sign request
         let test_data = b"test data to sign";
         let sign_req = proto::SignRequest {
-            pubkey: public_key.key_data().clone(),
+            credential: proto::PublicCredential::Key(public_key.into()),
             data: test_data.to_vec(),
             flags: 0,
         };

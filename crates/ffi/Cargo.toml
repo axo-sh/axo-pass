@@ -21,4 +21,4 @@ log.workspace = true
 secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-uniffi = { version = "0.31", features = ["cli", "tokio"] }
+uniffi = { version = "0.32", features = ["cli", "tokio"] }

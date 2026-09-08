@@ -11,12 +11,12 @@ version = "0.2.0"
 edition = "2024"
 
 [workspace.dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.104"
 axo-pass-cli = {path = "crates/cli"}
 axo-pass-core = {path = "crates/core"}
-log = "0.4.29"
+log = "0.4.34"
 secrecy = "0.10.3"
 serde = {version = "1", features = ["derive"]}
 serde_json = "1"
-thiserror = "2.0.18"
-tokio = {version = "1.52.1", features = ["full"]}
+thiserror = "2.0.20"
+tokio = {version = "1.53.1", features = ["full"]}

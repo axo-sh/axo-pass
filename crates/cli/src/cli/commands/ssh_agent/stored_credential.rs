@@ -17,7 +17,7 @@ use crate::cli::commands::ssh_agent::managed_credential::call_broker;
 
 #[derive(Clone)]
 pub struct StoredCredential {
-    pub credential: proto::Credential,
+    pub credential: proto::PrivateCredential,
     pub expires_at: Option<UtcDateTime>,
     pub requires_auth: bool,
     pub dest_constraints: Vec<extension::DestinationConstraint>,
@@ -100,20 +100,19 @@ impl StoredCredential {
 impl Credential for StoredCredential {
     fn comment(&self) -> Option<String> {
         let comment = match &self.credential {
-            proto::Credential::Key { comment, .. } | proto::Credential::Cert { comment, .. } => {
-                comment.clone()
-            },
+            proto::PrivateCredential::Key { comment, .. }
+            | proto::PrivateCredential::Cert { comment, .. } => comment.clone(),
         };
         Some(comment).filter(|c| !c.is_empty())
     }
 
     fn key_type(&self) -> SshKeyType {
         match &self.credential {
-            proto::Credential::Key { privkey, .. } => privkey
+            proto::PrivateCredential::Key { privkey, .. } => privkey
                 .algorithm()
                 .map(|a| a.into())
                 .unwrap_or(SshKeyType::Unknown),
-            proto::Credential::Cert { certificate, .. } => {
+            proto::PrivateCredential::Cert { certificate, .. } => {
                 certificate.public_key().algorithm().into()
             },
         }
@@ -121,8 +120,8 @@ impl Credential for StoredCredential {
 
     fn public_key_data(&self) -> KeyData {
         match &self.credential {
-            proto::Credential::Key { privkey, .. } => privkey.try_into().clone().unwrap(),
-            proto::Credential::Cert { certificate, .. } => certificate.public_key().clone(),
+            proto::PrivateCredential::Key { privkey, .. } => privkey.try_into().clone().unwrap(),
+            proto::PrivateCredential::Cert { certificate, .. } => certificate.public_key().clone(),
         }
     }
 
@@ -133,7 +132,7 @@ impl Credential for StoredCredential {
     ) -> Result<ssh_key::Signature, CredentialError> {
         self.validate(caller)?;
         match &self.credential {
-            proto::Credential::Key { privkey, .. } => {
+            proto::PrivateCredential::Key { privkey, .. } => {
                 let key_algorithm = privkey.algorithm().map_err(|e| {
                     log::error!("Failed to get key algorithm: {e}");
                     CredentialError::SigningFailed
@@ -149,7 +148,7 @@ impl Credential for StoredCredential {
                     CredentialError::SigningFailed
                 })
             },
-            proto::Credential::Cert { .. } => {
+            proto::PrivateCredential::Cert { .. } => {
                 todo!("Certificate signing not yet implemented");
             },
         }
@@ -165,24 +164,24 @@ impl TryInto<proto::Identity> for &StoredCredential {
 
     fn try_into(self) -> Result<proto::Identity, Self::Error> {
         match &self.credential {
-            proto::Credential::Key { privkey, comment } => Ok(proto::Identity {
-                pubkey: privkey.try_into()?,
+            proto::PrivateCredential::Key { privkey, comment } => Ok(proto::Identity {
+                credential: proto::PublicCredential::Key(privkey.try_into()?),
                 comment: comment.clone(),
             }),
-            proto::Credential::Cert {
+            proto::PrivateCredential::Cert {
                 certificate,
                 comment,
                 ..
             } => Ok(proto::Identity {
-                pubkey: certificate.public_key().clone(),
+                credential: proto::PublicCredential::Cert(certificate.clone()),
                 comment: comment.clone(),
             }),
         }
     }
 }
 
-impl From<proto::Credential> for StoredCredential {
-    fn from(credential: proto::Credential) -> Self {
+impl From<proto::PrivateCredential> for StoredCredential {
+    fn from(credential: proto::PrivateCredential) -> Self {
         StoredCredential {
             credential,
             expires_at: None,
@@ -195,15 +194,19 @@ impl From<proto::Credential> for StoredCredential {
 impl Debug for StoredCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = match self.try_into() {
-            Ok(proto::Identity { pubkey, comment }) => {
+            Ok(proto::Identity {
+                credential,
+                comment,
+            }) => {
                 let cred_type = &match &self.credential {
-                    proto::Credential::Key { .. } => "key",
-                    proto::Credential::Cert { .. } => "cert",
+                    proto::PrivateCredential::Key { .. } => "key",
+                    proto::PrivateCredential::Cert { .. } => "cert",
                 };
+                let key_data = credential.key_data();
                 format!(
                     "{} {cred_type} {} {comment}",
-                    &pubkey.algorithm(),
-                    compute_short_sha256_fingerprint(&pubkey)
+                    &key_data.algorithm(),
+                    compute_short_sha256_fingerprint(&key_data)
                 )
             },
             Err(e) => e.to_string(),

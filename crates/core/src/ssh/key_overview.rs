@@ -105,8 +105,9 @@ impl From<ManagedSshKey> for SshKeyOverview {
 
 impl From<Identity> for SshKeyOverview {
     fn from(identity: Identity) -> Self {
-        let fingerprint_sha256 = compute_sha256_fingerprint(&identity.pubkey);
-        let fingerprint_md5 = compute_md5_fingerprint(&identity.pubkey);
+        let key_data = identity.credential.key_data();
+        let fingerprint_sha256 = compute_sha256_fingerprint(&key_data);
+        let fingerprint_md5 = compute_md5_fingerprint(&key_data);
         let has_saved_password = PasswordEntry::ssh(&fingerprint_sha256)
             .exists()
             .unwrap_or(false);
@@ -115,14 +116,11 @@ impl From<Identity> for SshKeyOverview {
             location: SshKeyLocation::Transient,
             path: Some(identity.comment.clone()),
             public_key: None,
-            public_key_openssh: ssh_key::PublicKey::new(
-                identity.pubkey.clone(),
-                identity.comment.clone(),
-            )
-            .to_openssh()
-            .ok(),
+            public_key_openssh: ssh_key::PublicKey::new(key_data.clone(), identity.comment.clone())
+                .to_openssh()
+                .ok(),
             comment: Some(identity.comment),
-            key_type: identity.pubkey.algorithm().into(),
+            key_type: key_data.algorithm().into(),
             fingerprint_sha256,
             fingerprint_md5,
             has_saved_password,
@@ -151,7 +149,7 @@ pub async fn list_all_ssh_keys() -> anyhow::Result<Vec<SshKeyOverview>> {
 
     if let Ok(system_identities) = list_system_agent_identities().await {
         for identity in system_identities {
-            let fingerprint_sha256 = compute_sha256_fingerprint(&identity.pubkey);
+            let fingerprint_sha256 = compute_sha256_fingerprint(&identity.credential.key_data());
             if let Some(key_entry) = keys_map.get_mut(&fingerprint_sha256) {
                 key_entry.agents.push(SshKeyAgentKind::SystemAgent);
             } else {
@@ -164,7 +162,7 @@ pub async fn list_all_ssh_keys() -> anyhow::Result<Vec<SshKeyOverview>> {
 
     if let Ok(axo_identities) = list_axo_agent_identities().await {
         for identity in axo_identities {
-            let fingerprint_sha256 = compute_sha256_fingerprint(&identity.pubkey);
+            let fingerprint_sha256 = compute_sha256_fingerprint(&identity.credential.key_data());
             if let Some(key_entry) = keys_map.get_mut(&fingerprint_sha256) {
                 key_entry.agents.push(SshKeyAgentKind::AxoPassAgent);
             } else {
