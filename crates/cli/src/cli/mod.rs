@@ -40,7 +40,8 @@ pub enum AxoPassCommand {
         #[arg(required = true)]
         item_reference: Vec<ItemReference>,
 
-        /// String to print between values (supports \n, \t, \r, \0, \xHH escapes)
+        /// String to print between values (supports \n, \t, \r, \0, \xHH
+        /// escapes)
         #[arg(long, short = 'd', default_value = "\\n")]
         delimiter: String,
     },

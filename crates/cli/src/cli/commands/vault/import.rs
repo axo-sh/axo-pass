@@ -4,7 +4,7 @@ use axo_pass_core::age::recipients::resolve_identity;
 use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::ImportIdentity;
 use clap::{Parser, ValueHint};
-use color_print::cprintln;
+use clml::cprintln;
 
 use crate::cli::commands::vault::utils::{prompt_passphrase, read_age_identity_file};
 

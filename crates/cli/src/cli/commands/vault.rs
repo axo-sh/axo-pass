@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use axo_pass_core::core::config::APP_CONFIG;
 use axo_pass_core::secrets::vaults::{VaultWrapper, VaultsManager};
 use clap::{Parser, Subcommand};
-use color_print::cprintln;
+use clml::cprintln;
 
 use crate::cli::commands::vault::export::VaultExportCommand;
 use crate::cli::commands::vault::import::VaultImportCommand;

@@ -6,7 +6,7 @@ use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
 use clap::{Parser, Subcommand};
-use color_print::{cformat, cprintln};
+use clml::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
@@ -104,7 +104,8 @@ enum ItemSubcommand {
         #[arg(required = true)]
         item_reference: Vec<ItemReference>,
 
-        /// String to print between values (supports \n, \t, \r, \0, \xHH escapes)
+        /// String to print between values (supports \n, \t, \r, \0, \xHH
+        /// escapes)
         #[arg(long, short = 'd', default_value = "\\n")]
         delimiter: String,
     },

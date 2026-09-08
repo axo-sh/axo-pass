@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use color_print::cprintln;
+use clml::cprintln;
 use secrecy::ExposeSecret;
 
 use crate::age::errors::AgeError;

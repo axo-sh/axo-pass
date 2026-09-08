@@ -1,5 +1,5 @@
 use axo_pass_core::secrets::keychain::generic_password::PasswordEntry;
-use color_print::cprintln;
+use clml::cprintln;
 
 pub async fn cmd_list_generic_passwords() {
     let passwords = PasswordEntry::list().unwrap();

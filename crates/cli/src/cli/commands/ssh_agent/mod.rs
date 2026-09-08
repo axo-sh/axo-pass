@@ -17,7 +17,7 @@ pub use axo_pass_core::ssh::agent_client::{
     list_system_agent_identities,
 };
 use clap::{Parser, Subcommand};
-use color_print::cprintln;
+use clml::cprintln;
 use server::SshAgentServer;
 
 pub use crate::cli::commands::ssh_agent::client::{

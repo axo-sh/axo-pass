@@ -6,7 +6,7 @@ use axo_pass_core::age::errors::AgeError;
 use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::provenance::Provenance;
 use clap::{Parser, Subcommand};
-use color_print::cprintln;
+use clml::cprintln;
 use secrecy::ExposeSecret;
 
 #[derive(Parser, Debug)]

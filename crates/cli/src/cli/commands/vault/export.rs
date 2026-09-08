@@ -5,7 +5,7 @@ use axo_pass_core::age::recipients::resolve_recipient;
 use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::ExportMode;
 use clap::{Parser, ValueHint};
-use color_print::cprintln;
+use clml::cprintln;
 use inquire::Select;
 
 use crate::cli::commands::vault::utils::prompt_passphrase;
