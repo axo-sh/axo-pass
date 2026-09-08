@@ -1,4 +1,4 @@
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::str::FromStr;
 
 use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef};
@@ -264,7 +264,29 @@ impl ItemCommand {
         }
 
         let rendered: Vec<&str> = resolved.iter().map(|v| v.expose_secret()).collect();
-        println!("{}", rendered.join(&delimiter));
+
+        // With multiple secrets the delimiter separates values on output. A
+        // secret that contains the delimiter would make the output ambiguous,
+        // so refuse rather than emit something the caller cannot split.
+        if rendered.len() > 1 && !delimiter.is_empty() {
+            for ((vault_key, item_key, credential_key), value) in triples.iter().zip(&rendered) {
+                if value.contains(&delimiter) {
+                    return Err(cformat!(
+                        "<blue>{item_key}/{credential_key}</blue> in vault <blue>{vault_key}</blue> contains the delimiter; choose a different delimiter",
+                    ));
+                }
+            }
+        }
+
+        let output = rendered.join(&delimiter);
+        if std::io::stdout().is_terminal() {
+            println!("{output}");
+        } else {
+            print!("{output}");
+            std::io::stdout()
+                .flush()
+                .map_err(|e| format!("Failed to write to stdout: {e}"))?;
+        }
         Ok(())
     }
 
