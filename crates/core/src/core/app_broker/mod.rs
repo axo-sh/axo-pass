@@ -38,10 +38,15 @@ use crate::audit;
 use crate::core::dirs::app_data_dir;
 use crate::core::provenance::{PeerIdentity, PeerPolicy};
 
+pub mod age;
 pub mod gpg;
 pub mod ssh;
 pub mod vault;
 
+pub use age::{
+    BrokerAgeKey, request_age_identity, request_age_keys, request_create_age_key,
+    request_delete_age_key,
+};
 pub use gpg::{
     CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
     request_message, request_passphrase,
@@ -222,6 +227,35 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap age recipients` / resolving an age recipient: list the saved age
+    /// keys, public halves only. Raises no prompt.
+    ListAgeKeys {
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap age encrypt -r <name>` / `ap age decrypt -r <name>`: unlock one age
+    /// key's secret identity, behind a biometric prompt.
+    GetAgeIdentity {
+        key_id: String,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap age keygen`: create a new age key. Raises no prompt.
+    CreateAgeKey {
+        key_id: String,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap age delete`: remove an age key. Raises no prompt.
+    DeleteAgeKey {
+        key_id: String,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
@@ -245,7 +279,11 @@ impl WireRequest {
             | WireRequest::GetSshPassphrase { caller, .. }
             | WireRequest::ListVaultItems { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
-            | WireRequest::ResolveSecrets { caller, .. } => caller.as_deref(),
+            | WireRequest::ResolveSecrets { caller, .. }
+            | WireRequest::ListAgeKeys { caller, .. }
+            | WireRequest::GetAgeIdentity { caller, .. }
+            | WireRequest::CreateAgeKey { caller, .. }
+            | WireRequest::DeleteAgeKey { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
@@ -283,6 +321,19 @@ enum WireResponse {
     /// does not resolve.
     ResolvedSecrets {
         values: Vec<Option<String>>,
+    },
+    /// Saved age keys, public halves only.
+    AgeKeys {
+        keys: Vec<age::BrokerAgeKey>,
+    },
+    /// Base64 of an age identity string, as [`WireResponse::Passphrase`].
+    AgeIdentity {
+        identity: String,
+    },
+    /// The age key just created.
+    AgeKey {
+        name: String,
+        recipient: String,
     },
     Acknowledged,
     Cancelled,
@@ -742,6 +793,22 @@ async fn handle_connection(
             log::debug!("App broker request: {prompt:?}");
             vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
         },
+        WireRequest::ListAgeKeys { .. } => {
+            log::debug!("App broker request: list age keys");
+            age::list_keys().await
+        },
+        WireRequest::GetAgeIdentity { key_id, caller } => {
+            log::debug!("App broker request: get age identity {key_id}");
+            age::get_identity(&*authorizers.passphrase, key_id, caller, actor).await
+        },
+        WireRequest::CreateAgeKey { key_id, .. } => {
+            log::debug!("App broker request: create age key {key_id}");
+            age::create_key(key_id, actor).await
+        },
+        WireRequest::DeleteAgeKey { key_id, .. } => {
+            log::debug!("App broker request: delete age key {key_id}");
+            age::delete_key(key_id, actor).await
+        },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");
             WireResponse::Confirmed {
@@ -1097,6 +1164,38 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].caller.as_deref(), Some("git"));
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// An age identity request for a name not in the keychain is answered with
+    /// `Failed`. Reaching that answer means the peer was accepted and the
+    /// request framed, parsed and routed. The stub's `begin` is not asserted:
+    /// `get_identity` checks the entry first, so a synthetic key never reaches
+    /// the authorizer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn answers_an_age_identity_request_for_an_unknown_key() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response =
+            broker.request(r#"{"request":"get_age_identity","key_id":"nosuchkey","caller":"git"}"#);
+
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message.contains("nosuchkey")),
+            "unexpected response to an unknown age key",
+        );
+        assert!(broker.authorizer.peers.lock().unwrap().is_empty());
+    }
+
+    /// A rejected peer cannot ask for an age identity.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hangs_up_on_a_rejected_peer_asking_for_an_age_identity() {
+        let broker = TestBroker::start(rejecting_policy()).await;
+
+        let response =
+            broker.request(r#"{"request":"get_age_identity","key_id":"demo","caller":"evil"}"#);
+
+        assert!(response.is_empty(), "broker answered a rejected peer");
+        assert!(broker.authorizer.peers.lock().unwrap().is_empty());
     }
 
     /// A rejected peer cannot ask for a passphrase either.

@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod crypto;
 pub mod errors;
 pub mod key_overview;

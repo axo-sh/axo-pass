@@ -21,6 +21,7 @@ use crate::secrets::keychain::generic_password::PasswordEntry;
 pub enum PassphraseKind {
     Gpg,
     Ssh,
+    Age,
 }
 
 /// What the app needs to describe a passphrase prompt, from either gpg-agent

@@ -47,6 +47,7 @@ struct GrantSubject: Hashable, Sendable {
     case ssh
     case gpg
     case vault
+    case age
   }
 
   let kind: Kind
@@ -70,6 +71,7 @@ struct GrantSubject: Hashable, Sendable {
       case .ssh: .sshKey
       case .gpg: .gpgKey
       case .vault: .vault
+      case .age: .ageIdentity
       }
     return GrantSubjectInput(kind: ffiKind, id: id, label: label)
   }

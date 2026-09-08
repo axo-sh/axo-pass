@@ -151,7 +151,12 @@ final class PassphrasePromptModel {
   /// One grant per key and requesting process. A prompt with no key grip never
   /// reaches `begin`, since there is nothing in the keychain to unlock.
   private static func grantKey(_ prompt: PassphrasePrompt) -> GrantKey {
-    let kind: GrantSubject.Kind = prompt.kind == .ssh ? .ssh : .gpg
+    let kind: GrantSubject.Kind =
+      switch prompt.kind {
+      case .ssh: .ssh
+      case .gpg: .gpg
+      case .age: .age
+      }
     let id = prompt.keyId ?? ""
     let subject = GrantSubject(kind: kind, id: id, label: nil)
     return GrantKey(subject: subject, caller: prompt.caller)
@@ -164,12 +169,20 @@ private struct PassphraseUnlockView: View {
   let icon: AuthenticationIcon
   let onCancel: () -> Void
 
+  static func unlockTitle(_ kind: PassphraseKind) -> String {
+    switch kind {
+    case .ssh: "Unlock your SSH key"
+    case .gpg: "Unlock your OpenPGP key"
+    case .age: "Unlock your age key"
+    }
+  }
+
   var body: some View {
     VStack(spacing: 16) {
       icon
 
       VStack(spacing: 4) {
-        Text(prompt.kind == .ssh ? "Unlock your SSH key" : "Unlock your OpenPGP key")
+        Text(Self.unlockTitle(prompt.kind))
           .font(.headline)
           .multilineTextAlignment(.center)
 
@@ -283,6 +296,8 @@ private struct PinentryTranscript: View {
       case .ssh:
         line(
           label: "#", text: "SSH_ASKPASS — request", labelColor: .secondary, textColor: .secondary)
+      case .age:
+        line(label: "#", text: "age — unlock key", labelColor: .secondary, textColor: .secondary)
       }
 
       if let keyId = prompt.keyId, !keyId.isEmpty {

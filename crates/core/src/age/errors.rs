@@ -30,6 +30,15 @@ pub enum AgeError {
     #[error("Failed to delete recipient {0} from keychain: {1}")]
     FailedToDeleteRecipient(String, #[source] anyhow::Error),
 
+    #[error("Cancelled")]
+    Cancelled,
+
+    #[error("App broker failed: {0}")]
+    Broker(String),
+
+    #[error("The app is not running. Start Axo Pass and try again.")]
+    BrokerUnavailable,
+
     #[error("Age encryption error: {0}")]
     AgeEncryptError(#[from] age::EncryptError),
 

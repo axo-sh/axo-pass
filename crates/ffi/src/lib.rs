@@ -831,6 +831,7 @@ pub enum GrantSubjectKind {
     SshKey,
     GpgKey,
     Vault,
+    AgeIdentity,
 }
 
 /// Identifies the key a grant event is about. `id` is the canonical
@@ -1557,7 +1558,7 @@ impl AxoPass {
     /// Generate a new x25519 age identity, save it under `name`, and record an
     /// `age.key_create` audit event.
     pub async fn generate_age_key(&self, name: String) -> Result<AgeKeyEntry, FfiError> {
-        tokio::task::spawn_blocking(move || generate_age_key(&name))
+        tokio::task::spawn_blocking(move || generate_age_key(&name, None))
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?
             .map_err(FfiError::from)
@@ -1567,7 +1568,7 @@ impl AxoPass {
     /// Delete an age identity from the keychain, recording an `age.key_delete`
     /// audit event.
     pub async fn delete_age_key(&self, name: String) -> Result<(), FfiError> {
-        tokio::task::spawn_blocking(move || delete_age_recipient(&name))
+        tokio::task::spawn_blocking(move || delete_age_recipient(&name, None))
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?
             .map_err(FfiError::from)
@@ -1729,6 +1730,7 @@ impl AxoPass {
             GrantSubjectKind::SshKey => audit::SubjectKind::SshKey,
             GrantSubjectKind::GpgKey => audit::SubjectKind::GpgKey,
             GrantSubjectKind::Vault => audit::SubjectKind::Vault,
+            GrantSubjectKind::AgeIdentity => audit::SubjectKind::AgeIdentity,
         };
         // An SSH fingerprint arrives with or without the `SHA256:` prefix
         // depending on the path that produced it. Normalize to the canonical
@@ -1920,6 +1922,7 @@ impl From<RequestActor> for audit::Actor {
 pub enum PassphraseKind {
     Gpg,
     Ssh,
+    Age,
 }
 
 impl From<app_broker::PassphraseKind> for PassphraseKind {
@@ -1927,6 +1930,7 @@ impl From<app_broker::PassphraseKind> for PassphraseKind {
         match kind {
             app_broker::PassphraseKind::Gpg => Self::Gpg,
             app_broker::PassphraseKind::Ssh => Self::Ssh,
+            app_broker::PassphraseKind::Age => Self::Age,
         }
     }
 }
