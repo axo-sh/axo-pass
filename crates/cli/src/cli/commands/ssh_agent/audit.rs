@@ -33,6 +33,7 @@ pub fn sign_outcome(result: &Result<Signature, AgentError>) -> (Outcome, Option<
 }
 
 /// Record one `ssh.sign` event for a completed request.
+#[allow(clippy::too_many_arguments)]
 pub fn record_sign(
     actor: Option<&Actor>,
     caller: Option<&str>,

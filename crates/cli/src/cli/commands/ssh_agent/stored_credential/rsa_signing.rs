@@ -21,7 +21,6 @@ use ssh_key::{Algorithm, HashAlg, Signature};
 use crate::cli::commands::ssh_agent::credential::CredentialError;
 
 /// Sign data with an RSA key using the hash algorithm specified by flags.
-
 pub fn sign_rsa(
     privkey: &KeypairData,
     data: &[u8],

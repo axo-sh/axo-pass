@@ -424,7 +424,7 @@ mod tests {
                     destination: dest_key,
                     final_hop: false,
                 },
-                &vec![DestinationConstraint {
+                &[DestinationConstraint {
                     from: host_tuple("server1.example.com", origin_key),
                     to: HostTuple {
                         username: "".to_string(), // empty username matches any
@@ -646,7 +646,7 @@ mod tests {
                 },
                 true, // forwarding
                 None,
-                &vec![DestinationConstraint {
+                &[DestinationConstraint {
                     from: host_tuple("server1.example.com", origin_key),
                     to: host_tuple("server2.example.com", wrong_dest_key), // wrong key
                 }],
