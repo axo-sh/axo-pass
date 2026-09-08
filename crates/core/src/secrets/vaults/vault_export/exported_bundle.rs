@@ -5,7 +5,7 @@ use serde_with::base64::Base64;
 use serde_with::serde_as;
 use time::OffsetDateTime;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVaultItem;
@@ -16,7 +16,7 @@ pub const BUNDLE_VERSION: u32 = 1;
 /// A vault file key in raw (unwrapped) form. Serializes as base64 so it can be
 /// stored as the plaintext of an `EncryptedBlob`.
 #[serde_as]
-#[derive(Serialize, Deserialize, Zeroize)]
+#[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct RawFileKey(#[serde_as(as = "Base64")] pub Vec<u8>);
 
 /// Bundle export format. A single age operation protects a random bundle key;

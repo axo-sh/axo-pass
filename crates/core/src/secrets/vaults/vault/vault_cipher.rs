@@ -133,6 +133,10 @@ impl VaultCipher {
     }
 
     /// Encrypt this vault's raw file key with the bundle cipher for export.
+    ///
+    /// `RawFileKey` zeroizes on drop, but `EncryptedBlob::encrypt` serializes
+    /// it through a `String` first, leaving a base64 copy of the key on the
+    /// heap unzeroized.
     pub fn wrap_raw_key(
         &self,
         bundle_cipher: &Aes256Gcm,
