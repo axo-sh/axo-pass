@@ -27,10 +27,10 @@ enum VaultSubcommand {
     /// Add an external vault by path
     Add { vault_path: String },
 
-    /// Export a vault to a portable file
+    /// Export one or more vaults to a portable bundle file
     Export(VaultExportCommand),
 
-    /// Import a vault from an export file
+    /// Import vaults from an export bundle
     Import(VaultImportCommand),
 }
 

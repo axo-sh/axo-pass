@@ -1,85 +1,232 @@
 mod export_mode;
-mod exported_vault;
+pub mod exported_bundle;
 mod import_identity;
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use aes_gcm::{Aes256Gcm, KeyInit};
+use secrecy::{ExposeSecret, SecretBox};
+use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::encrypted_vault::{EncryptedVault, VaultFileKey};
+use crate::secrets::vaults::vault::encrypted_vault::{
+    EncryptedVault, EncryptedVaultItem, VaultFileKey,
+};
 pub use crate::secrets::vaults::vault_export::export_mode::ExportMode;
-pub use crate::secrets::vaults::vault_export::exported_vault::ExportedVault;
+pub use crate::secrets::vaults::vault_export::exported_bundle::{
+    BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
+};
 pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
 use crate::secrets::vaults::vault_wrapper::{
     VaultWrapper, get_vault_encryption_key, normalized_key,
 };
 
-/// Import a vault from an export file. Decrypts the age-wrapped file key,
-/// re-wraps it with the local Secure Enclave key, and saves it in the usual
-/// vault directory as a normal vault.
-pub fn import_vault<P: AsRef<Path>, Q: AsRef<Path>>(
-    import_path: P,
-    identity: ImportIdentity,
-    vault_dir: Q,
-    vault_key: Option<String>,
-) -> Result<VaultWrapper, Error> {
-    let import_path = import_path.as_ref();
-    let vault_dir = vault_dir.as_ref();
+const FILE_KEY_LEN: usize = 32;
 
-    // read and parse the exported vault
-    let data = fs::read_to_string(import_path).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            Error::VaultNotFound(import_path.display().to_string())
-        } else {
-            Error::VaultReadError(e)
-        }
-    })?;
+/// Metadata about one vault inside an opened bundle, for the caller to build an
+/// import selection.
+pub struct BundleVaultInfo {
+    pub id: Uuid,
+    pub name: Option<String>,
+    pub default_key: Option<String>,
+}
 
-    let exported: ExportedVault =
-        serde_json::from_str(&data).map_err(Error::VaultDeserializationError)?;
+struct PreparedVault {
+    id: Uuid,
+    name: Option<String>,
+    default_key: Option<String>,
+    raw_file_key: SecretBox<Vec<u8>>,
+    items: BTreeMap<Uuid, EncryptedVaultItem>,
+}
 
-    // resolve vault key from provided key or default
-    let vault_key = vault_key
-        .or_else(|| exported.default_key.clone())
-        .ok_or_else(|| {
-            Error::InvalidVaultKey(
-                "No vault key provided and export file has no default key".to_string(),
-            )
+/// A decrypted bundle ready to import. The bundle key has been unwrapped and
+/// every vault's file key decrypted. Nothing is written until [`import`] runs.
+///
+/// [`import`]: ImportableBundle::import
+pub struct ImportableBundle {
+    vaults: Vec<PreparedVault>,
+}
+
+impl ImportableBundle {
+    /// Read a bundle file and decrypt every file key with `identity`.
+    pub fn open(import_path: &Path, identity: ImportIdentity) -> Result<Self, Error> {
+        let data = fs::read_to_string(import_path).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                Error::VaultNotFound(import_path.display().to_string())
+            } else {
+                Error::VaultReadError(e)
+            }
         })?;
 
-    // normalize and validate the key
-    let vault_key = normalized_key(&vault_key).ok_or_else(|| Error::InvalidVaultKey(vault_key))?;
+        let bundle: ExportedBundle =
+            serde_json::from_str(&data).map_err(Error::VaultDeserializationError)?;
 
-    // decrypt the age-wrapped file key
-    let raw_key = identity.unwrap_file_key(&exported.age_file_key)?;
+        if bundle.version > BUNDLE_VERSION {
+            return Err(Error::VaultImportError(format!(
+                "Bundle format version {} is newer than the supported version {BUNDLE_VERSION}",
+                bundle.version
+            )));
+        }
 
-    // re-wrap with the local Secure Enclave key
-    let managed_key = get_vault_encryption_key()?;
-    let enc_file_key = VaultFileKey::Personal(
-        managed_key
-            .encrypt(&raw_key)
-            .ok_or(Error::VaultFileKeyEncryptionError)?
-            .into_bytes(),
-    );
+        let bundle_key = identity.decrypt(&bundle.age_bundle_key)?;
+        if bundle_key.len() != FILE_KEY_LEN {
+            return Err(Error::VaultImportError(format!(
+                "Invalid bundle key length: expected {FILE_KEY_LEN} bytes, got {}",
+                bundle_key.len()
+            )));
+        }
+        let bundle_cipher = Aes256Gcm::new_from_slice(&bundle_key)
+            .map_err(|_| Error::VaultImportError("Invalid bundle key".to_string()))?;
 
-    // build a normal EncryptedVault and save it
-    let encrypted_vault = EncryptedVault {
-        id: exported.id,
-        name: exported.name,
-        file_key: enc_file_key,
-        items: exported.items,
-    };
+        let mut vaults = Vec::with_capacity(bundle.vaults.len());
+        for v in bundle.vaults {
+            let raw = v.wrapped_file_key.decrypt(
+                &bundle_cipher,
+                ExportedBundle::file_key_aad(bundle.id, v.id),
+            )?;
+            let raw_bytes = raw.expose_secret().0.clone();
+            if raw_bytes.len() != FILE_KEY_LEN {
+                return Err(Error::VaultImportError(format!(
+                    "Invalid file key length for vault {}: expected {FILE_KEY_LEN} bytes, got {}",
+                    v.id,
+                    raw_bytes.len()
+                )));
+            }
+            vaults.push(PreparedVault {
+                id: v.id,
+                name: v.name,
+                default_key: v.default_key,
+                raw_file_key: SecretBox::new(Box::new(raw_bytes)),
+                items: v.items,
+            });
+        }
 
-    let vault_path = vault_dir.join(format!("{vault_key}.json"));
-    let json =
-        serde_json::to_string_pretty(&encrypted_vault).map_err(Error::VaultSerializationError)?;
+        Ok(Self { vaults })
+    }
 
-    fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
-    fs::write(&vault_path, json).map_err(Error::VaultWriteError)?;
+    /// Metadata for every vault in the bundle, in file order.
+    pub fn vaults(&self) -> Vec<BundleVaultInfo> {
+        self.vaults
+            .iter()
+            .map(|v| BundleVaultInfo {
+                id: v.id,
+                name: v.name.clone(),
+                default_key: v.default_key.clone(),
+            })
+            .collect()
+    }
 
-    VaultWrapper::load_from_path(Some(vault_key), &vault_path)
+    /// Import the selected vaults. `selection` maps a bundle vault id to the
+    /// key it should be imported as. Every target key must be valid, unique
+    /// among the selection, and absent on disk. Vaults are staged and
+    /// written to temporary files, then renamed into place, so a mid-run
+    /// failure leaves the vault directory unchanged.
+    pub fn import(
+        self,
+        selection: &BTreeMap<Uuid, String>,
+        vault_dir: &Path,
+    ) -> Result<Vec<VaultWrapper>, Error> {
+        if selection.is_empty() {
+            return Err(Error::VaultImportError(
+                "No vaults selected for import".to_string(),
+            ));
+        }
+
+        let mut by_id: BTreeMap<Uuid, PreparedVault> =
+            self.vaults.into_iter().map(|v| (v.id, v)).collect();
+
+        // resolve and validate every target key and path up front
+        struct Planned {
+            prepared: PreparedVault,
+            key: String,
+            path: PathBuf,
+        }
+        let mut planned: Vec<Planned> = Vec::with_capacity(selection.len());
+        let mut seen_keys: BTreeMap<String, Uuid> = BTreeMap::new();
+        for (id, requested_key) in selection {
+            let prepared = by_id
+                .remove(id)
+                .ok_or_else(|| Error::VaultImportError(format!("Bundle has no vault {id}")))?;
+
+            let key = normalized_key(requested_key)
+                .ok_or_else(|| Error::InvalidVaultKey(requested_key.clone()))?;
+
+            if let Some(other) = seen_keys.insert(key.clone(), *id) {
+                return Err(Error::InvalidVaultKey(format!(
+                    "Key '{key}' requested for two vaults ({other} and {id})"
+                )));
+            }
+
+            let path = vault_dir.join(format!("{key}.json"));
+            if path.exists() {
+                return Err(Error::InvalidVaultKey(format!(
+                    "A vault file already exists for key '{key}'"
+                )));
+            }
+            planned.push(Planned {
+                prepared,
+                key,
+                path,
+            });
+        }
+
+        // re-wrap each file key with the local Secure Enclave key and serialize
+        let managed_key = get_vault_encryption_key()?;
+        let mut staged: Vec<(String, PathBuf, String)> = Vec::with_capacity(planned.len());
+        for p in planned {
+            let enc_file_key = VaultFileKey::Personal(
+                managed_key
+                    .encrypt(p.prepared.raw_file_key.expose_secret())
+                    .ok_or(Error::VaultFileKeyEncryptionError)?
+                    .into_bytes(),
+            );
+            let encrypted_vault = EncryptedVault {
+                id: p.prepared.id,
+                name: p.prepared.name,
+                file_key: enc_file_key,
+                items: p.prepared.items,
+            };
+            let json = serde_json::to_string_pretty(&encrypted_vault)
+                .map_err(Error::VaultSerializationError)?;
+            staged.push((p.key, p.path, json));
+        }
+
+        fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
+
+        // write to temp files, then rename them all into place
+        let mut temps: Vec<PathBuf> = Vec::with_capacity(staged.len());
+        for (key, _, json) in &staged {
+            let tmp = vault_dir.join(format!(".{key}.json.tmp"));
+            if let Err(e) = fs::write(&tmp, json) {
+                for t in &temps {
+                    let _ = fs::remove_file(t);
+                }
+                let _ = fs::remove_file(&tmp);
+                return Err(Error::VaultWriteError(e));
+            }
+            temps.push(tmp);
+        }
+        for (i, (_, path, _)) in staged.iter().enumerate() {
+            if let Err(e) = fs::rename(&temps[i], path) {
+                for done in staged.iter().take(i) {
+                    let _ = fs::remove_file(&done.1);
+                }
+                for t in temps.iter().skip(i) {
+                    let _ = fs::remove_file(t);
+                }
+                return Err(Error::VaultWriteError(e));
+            }
+        }
+
+        staged
+            .into_iter()
+            .map(|(key, path, _)| VaultWrapper::load_from_path(Some(key), &path))
+            .collect()
+    }
 }

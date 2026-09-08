@@ -2,8 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{fs, io};
 
+use aes_gcm::aead::OsRng;
+use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{SecretBox, SecretString};
+use time::OffsetDateTime;
 use url::Url;
+use uuid::Uuid;
 
 use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
 use crate::core::provenance::Provenance;
@@ -14,6 +18,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{Vault, VaultItemCredentialOverview, VaultItemOverview};
 use crate::secrets::vaults::vault_export::ExportMode;
+use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -269,16 +274,45 @@ impl VaultWrapper {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item_credential(item_key, cred_key)
     }
+}
 
-    pub fn export(&self, path: &Path, export_mode: ExportMode) -> Result<(), Error> {
-        let vault = self.get_unlocked_vault()?;
-        let vault_key = (self.key != DEFAULT_VAULT).then(|| self.key.clone());
-        let exported = vault.to_export(vault_key, export_mode)?;
-        let json =
-            serde_json::to_string_pretty(&exported).map_err(Error::VaultSerializationError)?;
-        fs::write(path, json).map_err(Error::VaultWriteError)?;
-        Ok(())
+/// Export one or more unlocked vaults into a single bundle file. A random
+/// bundle key is generated, each vault's file key is wrapped with it, and the
+/// bundle key itself is protected once with `export_mode`. Every vault must be
+/// unlocked.
+pub fn export_bundle(
+    vaults: &[&VaultWrapper],
+    path: &Path,
+    export_mode: ExportMode,
+) -> Result<(), Error> {
+    if vaults.is_empty() {
+        return Err(Error::VaultExportError("No vaults to export".to_string()));
     }
+
+    let bundle_id = Uuid::new_v4();
+    let bundle_key = Aes256Gcm::generate_key(OsRng);
+    let bundle_cipher = Aes256Gcm::new(&bundle_key);
+
+    let mut bundled_vaults = Vec::with_capacity(vaults.len());
+    for vw in vaults {
+        let vault = vw.get_unlocked_vault()?;
+        let key = (vw.key != DEFAULT_VAULT).then(|| vw.key.clone());
+        bundled_vaults.push(vault.to_bundled_vault(key, bundle_id, &bundle_cipher)?);
+    }
+
+    let age_bundle_key = export_mode.encrypt(bundle_key.as_slice())?;
+
+    let bundle = ExportedBundle {
+        version: BUNDLE_VERSION,
+        id: bundle_id,
+        exported_at: OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
+        age_bundle_key,
+        vaults: bundled_vaults,
+    };
+
+    let json = serde_json::to_string_pretty(&bundle).map_err(Error::VaultSerializationError)?;
+    fs::write(path, json).map_err(Error::VaultWriteError)?;
+    Ok(())
 }
 
 static WHITESPACE_REGEX: LazyLock<regex::Regex> =

@@ -18,6 +18,8 @@ struct SettingsView: View {
         .tabItem { Label("General", systemImage: "gearshape") }
       SecuritySettingsView()
         .tabItem { Label("Security", systemImage: "lock.shield") }
+      VaultsSettingsView()
+        .tabItem { Label("Vaults", systemImage: "archivebox") }
       SshSettingsView()
         .tabItem { Label("SSH", systemImage: "key.horizontal") }
       GpgSettingsView()
@@ -115,6 +117,37 @@ private struct SecuritySettingsView: View {
       return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
     return value == 1 ? "1 second" : "\(value) seconds"
+  }
+}
+
+/// Export vaults to an encrypted bundle file, or import them from one.
+private struct VaultsSettingsView: View {
+  @Environment(VaultsModel.self) private var model
+  @State private var showingExport = false
+  @State private var showingImport = false
+
+  var body: some View {
+    Form {
+      LabeledContent("Transfer:") {
+        HStack {
+          Button("Export…") { showingExport = true }
+            .disabled(model.vaults.isEmpty)
+          Button("Import…") { showingImport = true }
+        }
+      }
+      Text(
+        "Export bundles the selected vaults into one passphrase-encrypted file. Import creates new vaults from such a file; it never overwrites an existing vault."
+      )
+      .settingsCaption()
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 12)
+    .sheet(isPresented: $showingExport) {
+      VaultExportSheet(model: model)
+    }
+    .sheet(isPresented: $showingImport) {
+      VaultImportSheet(model: model)
+    }
   }
 }
 

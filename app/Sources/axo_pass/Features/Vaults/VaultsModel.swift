@@ -470,6 +470,50 @@ final class VaultsModel {
     }
   }
 
+  // MARK: - Bundle export / import
+
+  /// Export the given vaults to a passphrase-encrypted bundle file. Returns an
+  /// error message on failure, nil on success.
+  func exportBundle(vaultKeys: [String], destination: URL, passphrase: String) async -> String? {
+    do {
+      try await core.exportVaultBundle(
+        vaultKeys: vaultKeys, destPath: destination.path, passphrase: passphrase)
+      return nil
+    } catch {
+      return String(describing: error)
+    }
+  }
+
+  /// List the vaults in a bundle file without importing anything. Returns nil
+  /// and sets `message` on failure.
+  func inspectBundle(source: URL, passphrase: String) async -> (
+    vaults: [BundleVaultInfo]?, message: String?
+  ) {
+    do {
+      let vaults = try await core.inspectVaultBundle(srcPath: source.path, passphrase: passphrase)
+      return (vaults, nil)
+    } catch {
+      return (nil, String(describing: error))
+    }
+  }
+
+  /// Import the selected vaults from a bundle file. On success the vault list
+  /// reloads and the sidebar selects the first imported vault. Returns the
+  /// imported keys, or nil and a message on failure.
+  func importBundle(
+    source: URL, passphrase: String, selection: [BundleImportSelection]
+  ) async -> (keys: [String]?, message: String?) {
+    do {
+      let keys = try await core.importVaultBundle(
+        srcPath: source.path, passphrase: passphrase, selection: selection)
+      reload()
+      if let first = keys.first { sidebarSelection = .vault(first) }
+      return (keys, nil)
+    } catch {
+      return (nil, String(describing: error))
+    }
+  }
+
   // MARK: - Item CRUD
 
   @discardableResult

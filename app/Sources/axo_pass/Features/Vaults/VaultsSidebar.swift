@@ -5,6 +5,7 @@ struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
   @State private var showingNewVaultSheet = false
   @State private var renamingVaultKey: String? = nil
+  @State private var exportingVaultKey: String? = nil
   @AppStorage("sidebar.secretsExpanded") private var secretsExpanded = true
   @AppStorage("sidebar.toolsExpanded") private var toolsExpanded = true
 
@@ -75,6 +76,9 @@ struct VaultsSidebar: View {
         await model.renameVault(vaultKey: vaultKey, newName: name)
       }
     }
+    .sheet(item: $exportingVaultKey) { vaultKey in
+      VaultExportSheet(model: model, only: vaultKey)
+    }
   }
 
   @ViewBuilder
@@ -105,6 +109,7 @@ struct VaultsSidebar: View {
         .tag(SidebarDestination.vault(vault.key))
         .contextMenu {
           Button("Rename…") { renamingVaultKey = vault.key }
+          Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("Delete", role: .destructive) {
             Task { await model.deleteVault(vault.key) }
           }

@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use secrecy::ExposeSecret;
+use uuid::Uuid;
 
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault_export::{ImportIdentity, import_vault};
+use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, ImportableBundle};
 use crate::secrets::vaults::vault_wrapper::{
-    VaultWrapper, check_vault_auth_still_valid, get_vault_encryption_key,
+    VaultWrapper, check_vault_auth_still_valid, export_bundle, get_vault_encryption_key,
 };
 
 #[derive(Default)]
@@ -106,23 +107,62 @@ impl VaultsManager {
             .collect::<BTreeMap<_, _>>()
     }
 
-    pub fn import_vault<P: AsRef<Path>>(
+    /// Export the given vaults into a single bundle file at `path`. Each vault
+    /// is unlocked first.
+    pub fn export_bundle<P: AsRef<Path>>(
         &mut self,
+        vault_keys: &[String],
+        path: P,
+        export_mode: ExportMode,
+    ) -> Result<(), Error> {
+        for key in vault_keys {
+            let vw = self
+                .vaults
+                .get_mut(key.as_str())
+                .ok_or_else(|| Error::VaultNotFound(key.clone()))?;
+            vw.unlock()?;
+        }
+        let selected: Vec<&VaultWrapper> = vault_keys
+            .iter()
+            .map(|k| self.vaults.get(k.as_str()).expect("unlocked above"))
+            .collect();
+        export_bundle(&selected, path.as_ref(), export_mode)
+    }
+
+    /// Open and decrypt a bundle file so the caller can inspect its vaults and
+    /// build an import selection.
+    pub fn open_bundle<P: AsRef<Path>>(
+        &self,
         import_path: P,
         identity: ImportIdentity,
-        vault_key: Option<String>,
-    ) -> Result<&VaultWrapper, Error> {
-        let vw = import_vault(import_path, identity, &self.vaults_dir, vault_key)?;
+    ) -> Result<ImportableBundle, Error> {
+        ImportableBundle::open(import_path.as_ref(), identity)
+    }
 
-        let vault_key = vw.key.clone();
-        if self.vaults.contains_key(&vault_key) {
-            return Err(Error::InvalidVaultKey(format!(
-                "A vault with key '{vault_key}' already exists"
-            )));
+    /// Import the selected vaults from an opened bundle. `selection` maps a
+    /// bundle vault id to the key it should be imported as. Returns the keys of
+    /// the newly imported vaults.
+    pub fn import_bundle(
+        &mut self,
+        bundle: ImportableBundle,
+        selection: &BTreeMap<Uuid, String>,
+    ) -> Result<Vec<String>, Error> {
+        for key in selection.values() {
+            if self.vaults.contains_key(key.as_str()) {
+                return Err(Error::InvalidVaultKey(format!(
+                    "A vault with key '{key}' already exists"
+                )));
+            }
         }
 
-        self.vaults.insert(vault_key.clone(), vw);
-        Ok(self.vaults.get(&vault_key).unwrap())
+        let wrappers = bundle.import(selection, &self.vaults_dir)?;
+        let mut keys = Vec::with_capacity(wrappers.len());
+        for vw in wrappers {
+            let key = vw.key.clone();
+            self.vaults.insert(key.clone(), vw);
+            keys.push(key);
+        }
+        Ok(keys)
     }
 
     pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {

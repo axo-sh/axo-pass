@@ -6,7 +6,7 @@ use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::ExportMode;
 use clap::{Parser, ValueHint};
 use clml::cprintln;
-use inquire::Select;
+use inquire::MultiSelect;
 
 use crate::cli::commands::vault::utils::prompt_passphrase;
 
@@ -14,13 +14,13 @@ const VAULT_EXTENSION: &str = "axovault";
 
 #[derive(Parser, Debug)]
 pub struct VaultExportCommand {
-    /// Vault key of vault to export (will prompt if not given)
-    #[arg(long)]
-    vault: Option<String>,
+    /// Vault key to export. Repeatable. Prompts to choose if not given.
+    #[arg(long = "vault")]
+    vault: Vec<String>,
 
-    /// Path to write the export file to (default: <vault_key>.axovault)
+    /// Path to write the export file to (default: <vault_key>.axovault for one
+    /// vault, vaults.axovault for more)
     #[arg(long, value_hint = ValueHint::FilePath)]
-    #[arg(value_hint = ValueHint::FilePath)]
     export_path: Option<PathBuf>,
 
     #[command(flatten)]
@@ -30,36 +30,38 @@ pub struct VaultExportCommand {
 impl VaultExportCommand {
     pub fn execute(&self) -> Result<(), String> {
         let mut vm = VaultsManager::new();
-        let vault_key = match self.vault {
-            Some(ref k) => k.to_string(),
-            None => select_vault(vm.vault_labels())?,
+
+        let vault_keys = if self.vault.is_empty() {
+            select_vaults(vm.vault_labels())?
+        } else {
+            self.vault.clone()
         };
+        if vault_keys.is_empty() {
+            return Err("No vaults selected".to_string());
+        }
 
-        let vw = vm
-            .get_vault_mut(&vault_key)
-            .ok_or_else(|| format!("Vault not found: {vault_key}"))?;
+        let export_path = self.export_path.clone().unwrap_or_else(|| {
+            if vault_keys.len() == 1 {
+                PathBuf::from(format!("{}.{VAULT_EXTENSION}", vault_keys[0]))
+            } else {
+                PathBuf::from(format!("vaults.{VAULT_EXTENSION}"))
+            }
+        });
 
-        vw.unlock()
-            .map_err(|e| format!("Failed to unlock vault: {e}"))?;
-
-        let export_path = self
-            .export_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(format!("{vault_key}.{VAULT_EXTENSION}")));
-
-        let output_path = PathBuf::from(&export_path);
-        if output_path.exists() {
+        if export_path.exists() {
             return Err(format!(
                 "File already exists: {}. Choose a different path or remove it first.",
                 export_path.display()
             ));
         }
+
         let export_mode = (&self.export_encryption).try_into()?;
-        vw.export(&output_path, export_mode)
-            .map_err(|e| format!("Failed to export vault: {e}"))?;
+        vm.export_bundle(&vault_keys, &export_path, export_mode)
+            .map_err(|e| format!("Failed to export vaults: {e}"))?;
 
         cprintln!(
-            "Exported vault <blue>{vault_key}</blue> to <blue>{}</blue>",
+            "Exported {} vault(s) to <blue>{}</blue>",
+            vault_keys.len(),
             export_path.display()
         );
         Ok(())
@@ -98,24 +100,23 @@ impl TryInto<ExportMode> for &ExportModeFlags {
         if let Some(pass) = &self.passphrase {
             return Ok(ExportMode::Passphrase(pass.clone().into()));
         }
-        let passphrase = prompt_passphrase("Enter passphrase to encrypt the exported vault:")
+        let passphrase = prompt_passphrase("Enter passphrase to encrypt the exported vaults:")
             .map_err(|e| format!("Failed to read passphrase: {e}"))?;
         Ok(ExportMode::Passphrase(passphrase))
     }
 }
 
-fn select_vault(vault_labels: BTreeMap<String, String>) -> Result<String, String> {
+fn select_vaults(vault_labels: BTreeMap<String, String>) -> Result<Vec<String>, String> {
     if vault_labels.is_empty() {
         return Err("No vaults found".to_string());
     }
     let labels = vault_labels.keys().cloned().collect::<Vec<_>>();
-    let selected = Select::new("Select a vault:", labels)
+    let selected = MultiSelect::new("Select vaults to export:", labels)
         .prompt()
-        .map_err(|e| format!("Vault selection cancelled: {e}"))?
-        .to_string();
+        .map_err(|e| format!("Vault selection cancelled: {e}"))?;
 
-    vault_labels
-        .get(&selected)
-        .cloned()
-        .ok_or_else(|| "Failed to resolve selected vault".to_string())
+    Ok(selected
+        .into_iter()
+        .filter_map(|label| vault_labels.get(&label).cloned())
+        .collect())
 }

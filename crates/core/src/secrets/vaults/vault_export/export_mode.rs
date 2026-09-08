@@ -22,7 +22,9 @@ pub enum ExportMode {
 }
 
 impl ExportMode {
-    pub fn wrap_file_key(&self, raw_key: &[u8]) -> Result<String, Error> {
+    /// Encrypt arbitrary bytes to an age recipient (passphrase or x25519) and
+    /// return the ASCII-armored ciphertext.
+    pub fn encrypt(&self, raw_key: &[u8]) -> Result<String, Error> {
         let recipient: Box<dyn age::Recipient> = match self {
             ExportMode::Passphrase(passphrase) => {
                 let mut r = age::scrypt::Recipient::new(passphrase.clone());

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::VaultFieldMetadata;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault_export::ExportMode;
+use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
 pub struct VaultCipher {
     cipher: Aes256Gcm,
@@ -132,7 +132,13 @@ impl VaultCipher {
         )
     }
 
-    pub fn wrap_file_key_for_export(&self, export_mode: ExportMode) -> Result<String, Error> {
-        export_mode.wrap_file_key(self.cipher_bytes.expose_secret())
+    /// Encrypt this vault's raw file key with the bundle cipher for export.
+    pub fn wrap_raw_key(
+        &self,
+        bundle_cipher: &Aes256Gcm,
+        aad: Vec<String>,
+    ) -> Result<EncryptedBlob<RawFileKey>, Error> {
+        let raw = RawFileKey(self.cipher_bytes.expose_secret().clone());
+        EncryptedBlob::encrypt(&raw, bundle_cipher, aad)
     }
 }

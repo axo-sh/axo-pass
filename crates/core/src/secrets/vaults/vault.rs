@@ -8,7 +8,6 @@ use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -17,7 +16,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{EncryptedVault, VaultFileKey};
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
-use crate::secrets::vaults::vault_export::{ExportMode, ExportedVault};
+use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
 use crate::secrets::vaults::vault_wrapper::normalized_key;
 
 type ItemId = Uuid;
@@ -179,19 +178,27 @@ impl Vault {
         Ok(vault)
     }
 
-    pub fn to_export(
+    /// Build a [`BundledVault`] for export. `key` is the preferred import key,
+    /// `bundle_cipher` wraps the raw file key.
+    ///
+    /// The exported vault carries this vault's own file key. An imported copy
+    /// shares that key with the source; export does not re-key.
+    pub fn to_bundled_vault(
         &self,
         key: Option<String>,
-        export_mode: ExportMode,
-    ) -> Result<ExportedVault, Error> {
+        bundle_id: Uuid,
+        bundle_cipher: &Aes256Gcm,
+    ) -> Result<BundledVault, Error> {
         let encrypted_vault = self.to_encrypted()?;
-        let age_file_key = self.cipher.wrap_file_key_for_export(export_mode)?;
-        Ok(ExportedVault {
+        let wrapped_file_key = self.cipher.wrap_raw_key(
+            bundle_cipher,
+            ExportedBundle::file_key_aad(bundle_id, self.id),
+        )?;
+        Ok(BundledVault {
             id: encrypted_vault.id,
-            exported_at: OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc()),
             name: encrypted_vault.name,
             default_key: key,
-            age_file_key,
+            wrapped_file_key,
             items: encrypted_vault.items,
         })
     }

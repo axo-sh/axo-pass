@@ -14,7 +14,10 @@ pub enum ImportIdentity {
 }
 
 impl ImportIdentity {
-    pub fn unwrap_file_key(&self, age_ciphertext: &str) -> Result<Vec<u8>, Error> {
+    /// Decrypt an ASCII-armored age ciphertext produced by
+    /// [`ExportMode::encrypt`]. The caller validates the length of the
+    /// returned bytes.
+    pub fn decrypt(&self, age_ciphertext: &str) -> Result<Vec<u8>, Error> {
         let identity: Box<dyn age::Identity> = match self {
             ImportIdentity::Passphrase(passphrase) => {
                 let mut identity = age::scrypt::Identity::new(passphrase.clone());
@@ -35,12 +38,6 @@ impl ImportIdentity {
         reader
             .read_to_end(&mut raw_key)
             .map_err(|e| Error::VaultImportError(format!("Failed to read decrypted key: {e}")))?;
-        if raw_key.len() != 32 {
-            return Err(Error::VaultImportError(format!(
-                "Invalid file key length: expected 32 bytes, got {}",
-                raw_key.len()
-            )));
-        }
         Ok(raw_key)
     }
 }
