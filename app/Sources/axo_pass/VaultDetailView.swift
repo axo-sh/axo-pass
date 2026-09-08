@@ -55,11 +55,19 @@ private struct CredentialList: View {
                   onReveal: { Task { await reveal(cred) } },
                   onHide: { hide(cred) },
                   onCopy: { copy(cred) },
-                  onSave: { newTitle in Task { await saveTitle(cred, newTitle: newTitle) } },
+                  onSave: { newKey, newTitle, newValue in
+                    Task { await save(cred, newKey: newKey, newTitle: newTitle, newValue: newValue) }
+                  },
                   onDelete: { Task { await delete(cred) } }
                 )
               }
-            }.padding(0)
+            }
+          }
+        }
+        .overlay {
+          if isEditing {
+            RoundedRectangle(cornerRadius: 6)
+              .strokeBorder(.tint, lineWidth: 2)
           }
         }
         .padding()
@@ -68,18 +76,31 @@ private struct CredentialList: View {
     .navigationTitle(item.title)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
-        Button(allRevealed ? "Hide All" : "Reveal All") {
-          if allRevealed {
+        if !isEditing {
+          Button(allRevealed ? "Hide All" : "Reveal All") {
+            if allRevealed {
+              hideAll()
+            } else {
+              Task { await revealAll() }
+            }
+          }
+          .disabled(!revealing.isEmpty)
+        }
+
+        Button(isEditing ? "Done" : "Edit") {
+          if isEditing {
+            isEditing = false
             hideAll()
           } else {
-            Task { await revealAll() }
+            // Editing resubmits each credential's value along with its title,
+            // so reveal everything before the edit forms appear.
+            Task {
+              await revealAll()
+              isEditing = true
+            }
           }
         }
         .disabled(!revealing.isEmpty)
-
-        Button(isEditing ? "Done" : "Edit") {
-          isEditing.toggle()
-        }
 
         Button {
           showingNewCredentialSheet = true
@@ -144,19 +165,28 @@ private struct CredentialList: View {
     }
   }
 
-  /// Renaming a credential requires resubmitting its value too (the FFI
-  /// takes title+value together), so reveal it first if it isn't already.
-  private func saveTitle(_ cred: CredentialInfo, newTitle: String) async {
-    if secrets[cred.key] == nil {
-      await reveal(cred)
+  /// Persist an edited credential. A changed id means adding the credential
+  /// under the new key and deleting the old one, since the FFI has no rename.
+  private func save(
+    _ cred: CredentialInfo, newKey: String, newTitle: String, newValue: String
+  ) async {
+    let ok: Bool
+    if newKey == cred.key {
+      ok = await model.addOrUpdateCredential(
+        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key,
+        title: newTitle, value: newValue
+      )
+    } else {
+      ok = await model.renameCredentialKey(
+        vaultKey: vaultKey, itemKey: item.key, oldKey: cred.key, newKey: newKey,
+        title: newTitle, value: newValue
+      )
+      if ok {
+        secrets[newKey] = secrets.removeValue(forKey: cred.key)
+        errors.removeValue(forKey: cred.key)
+        if revealing.remove(cred.key) != nil { revealing.insert(newKey) }
+      }
     }
-    guard let secret = secrets[cred.key] else { return }
-    let value = secret.withUnsafeBytes { ptr in
-      String(bytes: ptr, encoding: .utf8) ?? ""
-    }
-    let ok = await model.addOrUpdateCredential(
-      vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: newTitle, value: value
-    )
     if !ok, let err = model.actionError {
       errors[cred.key] = err
     }

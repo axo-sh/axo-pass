@@ -519,6 +519,28 @@ final class VaultsModel {
     }
   }
 
+  /// Change a credential's key. The FFI has no rename, so this writes the
+  /// credential under `newKey` and deletes `oldKey`. If the delete fails the
+  /// credential is left under both keys and the error is surfaced.
+  @discardableResult
+  func renameCredentialKey(
+    vaultKey: String, itemKey: String, oldKey: String, newKey: String, title: String, value: String
+  ) async -> Bool {
+    actionError = nil
+    do {
+      try await core.addOrUpdateCredential(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: newKey, title: title, value: value
+      )
+      try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: oldKey)
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      await loadItems(for: vaultKey)
+      return false
+    }
+  }
+
   @discardableResult
   func deleteCredential(vaultKey: String, itemKey: String, credKey: String) async -> Bool {
     actionError = nil
