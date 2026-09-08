@@ -4,13 +4,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, PrivateKey, PublicKey};
-use typeshare::typeshare;
 
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, ssh_dir_path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[typeshare]
 #[serde(rename_all = "snake_case")]
 pub enum SshKeyType {
     Rsa,
