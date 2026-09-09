@@ -5,8 +5,16 @@ env_file = ".env.local"
 release = "axo.release.toml"
 
 [tasks]
-build = ":strudel:build"
-run = ":strudel:run"
+build = [":app:ffi", ":app:cli", "strudel build"]
+run = [":app:ffi", ":app:cli", "strudel run"]
+reload = [
+  "ap ssh-agent stop || true",
+  "pkill -f \"app/.build/dist/Axo Pass.app\" || true",
+  ":run",
+  "ap ssh-agent start",
+]
+release = [":app:ffi:release", ":app:cli:release", "strudel release"]
+
 logs = "tail -F ~/Library/Logs/Axo\\ Pass/app.log"
 
 fmt = [
@@ -19,19 +27,16 @@ test = "cargo test --workspace"
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
 
-# create the new app
+# app:ffi is the pre-build codegen step: uniffi-bindgen must run before Swift compiles.
 "app:ffi" = "./scripts/build-ffi.sh"
 "app:ffi:release" = "PROFILE=release ./scripts/build-ffi.sh"
+
+# app:cli stages the `ap` binary at target/dist/ap so strudel can embed it as a resource.
 "app:cli" = "./scripts/build-cli.sh"
 "app:cli:release" = "PROFILE=release ./scripts/build-cli.sh"
 
-# strudel builds, signs (using entitlements + provisioning profile from
-# strudel.toml), and runs the app bundle. app:ffi is the pre-build codegen
-# step: uniffi-bindgen must run before Swift compiles. app:cli stages the
-# `ap` binary at target/dist/ap so strudel can embed it as a resource.
-"strudel:build" = [":app:ffi", ":app:cli", "strudel build"]
-"strudel:run" = [":app:ffi", ":app:cli", "strudel run"]
-"strudel:release" = [":app:ffi:release", ":app:cli:release", "strudel release"]
-
 [env]
 FRITTATA_DEBUG = "1"
+
+[global_packages]
+"nodejs/node" = "^26.2.0"
