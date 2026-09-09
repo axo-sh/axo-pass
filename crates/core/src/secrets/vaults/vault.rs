@@ -733,6 +733,56 @@ mod tests {
     }
 
     #[test]
+    fn updating_a_credential_kind_persists_through_a_save() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        assert_eq!(
+            vault.get_item_credential("item", "alpha").unwrap().kind,
+            FieldKind::default()
+        );
+
+        // Populate the metadata cache the way a load/save cycle would, so the
+        // update has to invalidate it to take effect.
+        let encrypted = vault.to_encrypted().unwrap();
+        let item_id = *vault.get_item_id("item").unwrap();
+        for (cred_id, cred) in &encrypted.items.get(&item_id).unwrap().credentials {
+            vault.metadata_blobs.insert(*cred_id, cred.metadata.clone());
+        }
+
+        let new_kind = FieldKind::Text(TextField {
+            multiline: Some(true),
+        });
+        vault
+            .add_or_update_item_credential(
+                "item",
+                "alpha",
+                "alpha",
+                new_kind.clone(),
+                SecretString::from("secret"),
+            )
+            .unwrap();
+        assert_eq!(
+            vault.get_item_credential("item", "alpha").unwrap().kind,
+            new_kind
+        );
+
+        // The re-encrypted metadata carries the new kind.
+        let encrypted = vault.to_encrypted().unwrap();
+        let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        let enc_cred = encrypted
+            .items
+            .get(&item_id)
+            .unwrap()
+            .credentials
+            .get(&cred_id)
+            .unwrap();
+        let meta = vault
+            .cipher
+            .decrypt_cred_metadata(item_id, cred_id, &enc_cred.metadata)
+            .unwrap();
+        assert_eq!(meta.expose_secret().kind, new_kind);
+    }
+
+    #[test]
     fn default_kind_is_omitted_from_json() {
         let meta =
             VaultFieldMetadata::try_new("Password", "password", FieldKind::default()).unwrap();
