@@ -111,7 +111,7 @@ private struct SshKeyRow: View {
         }
       }
       Text(subtitle)
-        .font(.caption)
+        .font(.subheadline)
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

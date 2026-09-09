@@ -87,7 +87,7 @@ private struct ItemRow: View {
     VStack(alignment: .leading, spacing: 2) {
       Text(item.title)
       Text("\(item.credentials.count) credential\(item.credentials.count == 1 ? "" : "s")")
-        .font(.caption)
+        .font(.subheadline)
         .foregroundStyle(.secondary)
     }
   }

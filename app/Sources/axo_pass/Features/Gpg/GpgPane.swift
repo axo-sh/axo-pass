@@ -258,13 +258,13 @@ private struct GpgKeyRow: View {
       }
       if let email = key.email {
         Text(email)
-          .font(.caption)
+          .font(.subheadline)
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
       }
       Text(subtitle)
-        .font(.system(.caption, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)

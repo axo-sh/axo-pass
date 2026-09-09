@@ -148,7 +148,7 @@ private struct AgeKeyRow: View {
     VStack(alignment: .leading, spacing: 2) {
       Text(key.name).fontWeight(.semibold).lineLimit(1)
       Text(key.recipient)
-        .font(.system(.caption, design: .monospaced))
+        .font(.system(.subheadline, design: .monospaced))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.middle)
