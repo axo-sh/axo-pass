@@ -4,7 +4,7 @@ use std::str::FromStr;
 use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef};
 use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
+use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, FieldKind, VaultWrapper};
 use clap::{Parser, Subcommand};
 use clml::{cformat, cprintln};
 use inquire::Password;
@@ -404,8 +404,14 @@ impl ItemCommand {
             },
         };
 
-        vw.add_secret(&item_key, &credential_key, &credential_key, secret)
-            .expect("Failed to add secret");
+        vw.add_secret(
+            &item_key,
+            &credential_key,
+            &credential_key,
+            FieldKind::default(),
+            secret,
+        )
+        .expect("Failed to add secret");
 
         vw.save().expect("Failed to save vault");
 

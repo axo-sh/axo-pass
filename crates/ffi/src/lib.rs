@@ -24,7 +24,7 @@ use axo_pass_core::secrets::vaults::vault_export::{
     WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{
-    Error as VaultError, ExportProgress as CoreExportProgress, VaultsManager,
+    Error as VaultError, ExportProgress as CoreExportProgress, FieldKind, VaultsManager,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -1294,8 +1294,14 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.add_secret(&item_key, &cred_key, &title, SecretString::from(value))
-                    .map_err(FfiError::from)
+                vw.add_secret(
+                    &item_key,
+                    &cred_key,
+                    &title,
+                    FieldKind::default(),
+                    SecretString::from(value),
+                )
+                .map_err(FfiError::from)
             })
         })
         .await

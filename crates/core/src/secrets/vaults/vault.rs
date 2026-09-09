@@ -13,6 +13,7 @@ use zeroize::Zeroize;
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{EncryptedVault, VaultFileKey};
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
@@ -112,12 +113,16 @@ impl Vault {
             };
 
             for (cred_id, encrypted_cred) in encrypted_item.credentials {
-                let (cred_title, cred_key) = vault
+                let (cred_title, cred_key, cred_kind) = vault
                     .cipher
                     .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
                     .map(|m| {
                         let metadata = m.expose_secret();
-                        (metadata.title.clone(), metadata.key.clone())
+                        (
+                            metadata.title.clone(),
+                            metadata.key.clone(),
+                            metadata.kind.clone(),
+                        )
                     })?;
 
                 vault
@@ -130,6 +135,7 @@ impl Vault {
                         id: cred_id,
                         title: cred_title,
                         key: cred_key.clone(),
+                        kind: cred_kind,
                     },
                 );
 
@@ -291,16 +297,18 @@ impl Vault {
         item_key: &str,
         cred_key: &str,
         cred_title: &str,
+        cred_kind: FieldKind,
         cred_value: SecretString,
     ) -> Result<&VaultItemCredentialOverview, Error> {
         // get existing cred by key or create new one
         let cred_overview = match self.get_item_credential(item_key, cred_key) {
             Ok(existing) => VaultItemCredentialOverview {
                 title: cred_title.to_string(),
+                kind: cred_kind,
                 ..existing.clone()
             },
             Err(Error::InvalidCredentialKey(_)) => {
-                VaultItemCredentialOverview::try_new(cred_title, cred_key)?
+                VaultItemCredentialOverview::try_new(cred_title, cred_key, cred_kind)?
             },
             Err(e) => return Err(e),
         };
@@ -413,16 +421,18 @@ pub struct VaultItemCredentialOverview {
     pub id: Uuid,
     pub title: String,
     pub key: String,
+    pub kind: FieldKind,
 }
 
 impl VaultItemCredentialOverview {
-    pub fn try_new(title: &str, key: &str) -> Result<Self, Error> {
+    pub fn try_new(title: &str, key: &str, kind: FieldKind) -> Result<Self, Error> {
         let cred_key =
             normalized_key(key).ok_or_else(|| Error::InvalidCredentialKey(key.to_string()))?;
         Ok(Self {
             id: Uuid::new_v4(),
             title: title.to_string(),
             key: cred_key,
+            kind,
         })
     }
 }
@@ -431,14 +441,54 @@ impl VaultItemCredentialOverview {
 pub struct VaultFieldMetadata {
     pub title: String,
     pub key: String,
+    #[serde(default, skip_serializing_if = "FieldKind::is_default")]
+    pub kind: FieldKind,
 }
 
 impl VaultFieldMetadata {
-    pub fn try_new(title: &str, key: &str) -> Result<Self, Error> {
+    pub fn try_new(title: &str, key: &str, kind: FieldKind) -> Result<Self, Error> {
         let cred_key = normalized_key(key).ok_or_else(|| Error::InvalidItemKey(key.to_string()))?;
         Ok(Self {
             title: title.to_string(),
             key: cred_key,
+            kind,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrets::vaults::fields::TextSubtype;
+
+    #[test]
+    fn default_kind_is_omitted_from_json() {
+        let meta =
+            VaultFieldMetadata::try_new("Password", "password", FieldKind::default()).unwrap();
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(json.get("kind").is_none());
+    }
+
+    #[test]
+    fn legacy_metadata_without_kind_loads_as_default() {
+        let meta: VaultFieldMetadata =
+            serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
+        assert_eq!(meta.kind, FieldKind::default());
+    }
+
+    #[test]
+    fn non_default_kind_roundtrips_through_metadata() {
+        let meta = VaultFieldMetadata::try_new(
+            "Notes",
+            "notes",
+            FieldKind::Text {
+                subtype: TextSubtype::Multiline,
+                concealed: Some(true),
+            },
+        )
+        .unwrap();
+        let json = serde_json::to_value(&meta).unwrap();
+        let back: VaultFieldMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(back.kind, meta.kind);
     }
 }

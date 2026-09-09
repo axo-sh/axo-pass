@@ -16,6 +16,7 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{Vault, VaultItemCredentialOverview, VaultItemOverview};
 use crate::secrets::vaults::vault_export::ExportMode;
@@ -242,10 +243,12 @@ impl VaultWrapper {
         item_key: &str,
         cred_key: &str,
         cred_title: &str,
+        cred_kind: FieldKind,
         cred_value: SecretString,
     ) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
-        vault.add_or_update_item_credential(item_key, cred_key, cred_title, cred_value)?;
+        vault
+            .add_or_update_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value)?;
         Ok(())
     }
 

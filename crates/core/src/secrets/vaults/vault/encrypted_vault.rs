@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{
@@ -74,7 +75,8 @@ impl EncryptedVault {
             metadata: match metadata {
                 Some(existing) => existing.clone(),
                 None => {
-                    let metadata = VaultFieldMetadata::try_new(&item.title, &item.key)?;
+                    let metadata =
+                        VaultFieldMetadata::try_new(&item.title, &item.key, FieldKind::default())?;
                     vault_cipher.encrypt_item_metadata(item.id, &metadata)?
                 },
             },
@@ -103,7 +105,8 @@ impl EncryptedVault {
             metadata: match metadata {
                 Some(existing) => existing.clone(),
                 None => {
-                    let metadata = VaultFieldMetadata::try_new(&cred.title, &cred.key)?;
+                    let metadata =
+                        VaultFieldMetadata::try_new(&cred.title, &cred.key, cred.kind.clone())?;
                     vault_cipher.encrypt_cred_metadata(item_id, cred.id, &metadata)?
                 },
             },
@@ -198,7 +201,9 @@ mod tests {
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
         vault.add_item(&cipher, None, &item).unwrap();
 
-        let cred = VaultItemCredentialOverview::try_new("Password", "password").unwrap();
+        let cred =
+            VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default())
+                .unwrap();
         let secret = cipher
             .encrypt_cred_value(item.id, cred.id, "secret123")
             .unwrap();
@@ -233,7 +238,8 @@ mod tests {
     fn test_add_credential_to_nonexistent_item_returns_error() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
-        let cred = VaultItemCredentialOverview::try_new("Token", "token").unwrap();
+        let cred =
+            VaultItemCredentialOverview::try_new("Token", "token", FieldKind::default()).unwrap();
         let secret = cipher
             .encrypt_cred_value(Uuid::new_v4(), Uuid::new_v4(), "tok")
             .unwrap();
