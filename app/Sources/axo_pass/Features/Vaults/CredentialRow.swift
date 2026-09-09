@@ -213,7 +213,7 @@ struct CredentialRow: View {
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
     .overlay(
       RoundedRectangle(cornerRadius: 6)
-        .strokeBorder(.separator, lineWidth: 1)
+        .strokeBorder(.tint, lineWidth: 2)
     )
   }
 
