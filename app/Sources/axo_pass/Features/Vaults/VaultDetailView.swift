@@ -46,20 +46,7 @@ private struct CredentialList: View {
                 if index > 0 {
                   Divider()
                 }
-                CredentialRow(
-                  cred: cred,
-                  secret: secrets[cred.key],
-                  error: errors[cred.key],
-                  isRevealing: revealing.contains(cred.key),
-                  isEditing: isEditing,
-                  onReveal: { Task { await reveal(cred) } },
-                  onHide: { hide(cred) },
-                  onCopy: { copy(cred) },
-                  onSave: { newKey, newTitle, newValue in
-                    Task { await save(cred, newKey: newKey, newTitle: newTitle, newValue: newValue) }
-                  },
-                  onDelete: { Task { await delete(cred) } }
-                )
+                row(for: cred)
               }
             }
           }
@@ -76,7 +63,7 @@ private struct CredentialList: View {
     .navigationTitle(item.title)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
-        if !isEditing {
+        if !isEditing, hasConcealed {
           Button(allRevealed ? "Hide All" : "Reveal All") {
             if allRevealed {
               hideAll()
@@ -116,16 +103,49 @@ private struct CredentialList: View {
       isEditing = false
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
-      NewCredentialSheet { key, title, value in
+      NewCredentialSheet { key, title, value, kind in
         await model.addOrUpdateCredential(
-          vaultKey: vaultKey, itemKey: item.key, credKey: key, title: title, value: value
+          vaultKey: vaultKey, itemKey: item.key, credKey: key, title: title, value: value,
+          kind: kind
         )
       }
     }
   }
 
+  @ViewBuilder
+  private func row(for cred: CredentialInfo) -> some View {
+    CredentialRow(
+      cred: cred,
+      secret: secrets[cred.key],
+      error: errors[cred.key],
+      isRevealing: revealing.contains(cred.key),
+      isEditing: isEditing,
+      onReveal: { Task { await reveal(cred) } },
+      onHide: { hide(cred) },
+      onCopy: { await copy(cred) },
+      onSave: { newKey, newTitle, newValue, newKind in
+        Task {
+          await save(
+            cred, newKey: newKey, newTitle: newTitle, newValue: newValue, newKind: newKind
+          )
+        }
+      },
+      onDelete: { Task { await delete(cred) } }
+    )
+  }
+
+  private var concealedCredentials: [CredentialInfo] {
+    item.credentials.filter(\.kind.concealed)
+  }
+
+  private var hasConcealed: Bool {
+    !concealedCredentials.isEmpty
+  }
+
+  /// "All revealed" tracks only the concealed credentials; plain-text ones are
+  /// always shown and are not toggled by Reveal/Hide All.
   private var allRevealed: Bool {
-    !item.credentials.isEmpty && item.credentials.allSatisfy { secrets[$0.key] != nil }
+    hasConcealed && concealedCredentials.allSatisfy { secrets[$0.key] != nil }
   }
 
   private func revealAll() async {
@@ -137,7 +157,9 @@ private struct CredentialList: View {
   }
 
   private func hideAll() {
-    secrets = [:]
+    for cred in concealedCredentials {
+      secrets.removeValue(forKey: cred.key)
+    }
   }
 
   private func reveal(_ cred: CredentialInfo) async {
@@ -157,29 +179,51 @@ private struct CredentialList: View {
     secrets.removeValue(forKey: cred.key)
   }
 
-  private func copy(_ cred: CredentialInfo) {
-    guard let secret = secrets[cred.key] else { return }
+  /// Copy without revealing: if the secret is not already on screen, fetch a
+  /// throwaway copy for the clipboard and do not store it in `secrets`. Returns
+  /// whether the value reached the pasteboard.
+  private func copy(_ cred: CredentialInfo) async -> Bool {
+    if let secret = secrets[cred.key] {
+      return copyToPasteboard(secret)
+    }
+    revealing.insert(cred.key)
+    errors.removeValue(forKey: cred.key)
+    defer { revealing.remove(cred.key) }
+    do {
+      let secret = try await model.credentialSecret(
+        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key
+      )
+      return copyToPasteboard(secret)
+    } catch {
+      errors[cred.key] = String(describing: error)
+      return false
+    }
+  }
+
+  private func copyToPasteboard(_ secret: SymmetricKey) -> Bool {
     secret.withUnsafeBytes { ptr in
-      guard let str = String(bytes: ptr, encoding: .utf8) else { return }
+      guard let str = String(bytes: ptr, encoding: .utf8) else { return false }
       secureCopy(str)
+      return true
     }
   }
 
   /// Persist an edited credential. A changed id means adding the credential
   /// under the new key and deleting the old one, since the FFI has no rename.
   private func save(
-    _ cred: CredentialInfo, newKey: String, newTitle: String, newValue: String
+    _ cred: CredentialInfo, newKey: String, newTitle: String, newValue: String,
+    newKind: FieldKindInfo?
   ) async {
     let ok: Bool
     if newKey == cred.key {
       ok = await model.addOrUpdateCredential(
         vaultKey: vaultKey, itemKey: item.key, credKey: cred.key,
-        title: newTitle, value: newValue
+        title: newTitle, value: newValue, kind: newKind
       )
     } else {
       ok = await model.renameCredentialKey(
         vaultKey: vaultKey, itemKey: item.key, oldKey: cred.key, newKey: newKey,
-        title: newTitle, value: newValue
+        title: newTitle, value: newValue, kind: newKind
       )
       if ok {
         secrets[newKey] = secrets.removeValue(forKey: cred.key)
@@ -204,12 +248,14 @@ private struct CredentialList: View {
 }
 
 private struct NewCredentialSheet: View {
-  let onSubmit: (_ key: String, _ title: String, _ value: String) async -> Bool
+  let onSubmit: (_ key: String, _ title: String, _ value: String, _ kind: FieldKindInfo) async -> Bool
 
   @Environment(\.dismiss) private var dismiss
   @State private var title: String = ""
   @State private var key: String = ""
   @State private var value: String = ""
+  @State private var concealed: Bool = true
+  @State private var multiline: Bool = false
   @State private var isSubmitting = false
 
   var body: some View {
@@ -217,7 +263,18 @@ private struct NewCredentialSheet: View {
       Text("New Credential").font(.headline)
       TextField("Title", text: $title)
       TextField("Key (a-z, 0-9, -, _)", text: $key)
-      SecureField("Value", text: $value)
+      if concealed && !multiline {
+        SecureField("Value", text: $value)
+      } else {
+        TextField("Value", text: $value, axis: .vertical)
+          .lineLimit(multiline ? 3...12 : 1...1)
+      }
+
+      HStack(spacing: 16) {
+        Toggle("Concealed", isOn: $concealed)
+        Toggle("Multiline", isOn: $multiline)
+      }
+      .toggleStyle(.checkbox)
 
       HStack {
         Spacer()
@@ -225,7 +282,8 @@ private struct NewCredentialSheet: View {
         Button("Create") {
           Task {
             isSubmitting = true
-            if await onSubmit(key, title, value) { dismiss() }
+            let kind = FieldKindInfo(kind: "text", concealed: concealed, multiline: multiline)
+            if await onSubmit(key, title, value, kind) { dismiss() }
             isSubmitting = false
           }
         }

@@ -24,7 +24,7 @@ use axo_pass_core::secrets::vaults::vault_export::{
     WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{
-    Error as VaultError, ExportProgress as CoreExportProgress, FieldKind, VaultsManager,
+    Error as VaultError, ExportProgress as CoreExportProgress, FieldKind, TextField, VaultsManager,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -144,6 +144,70 @@ pub struct VaultInfo {
 pub struct CredentialInfo {
     pub key: String,
     pub title: String,
+    pub kind: FieldKindInfo,
+}
+
+/// Flattened view of `FieldKind` for the UI. `kind` is the discriminator:
+/// "text", "email", "url", "phone", "date", "totp", or "unknown". `concealed`
+/// and `multiline` apply only to "text"; they are false for every other kind.
+///
+/// The write path (`add_or_update_credential`) accepts every discriminator
+/// except "unknown", which cannot be reconstructed. When the caller wants to
+/// leave an existing credential's kind untouched it passes `None` instead.
+#[derive(uniffi::Record, Clone)]
+pub struct FieldKindInfo {
+    pub kind: String,
+    pub concealed: bool,
+    pub multiline: bool,
+}
+
+impl From<&FieldKind> for FieldKindInfo {
+    fn from(k: &FieldKind) -> Self {
+        let (kind, concealed, multiline) = match k {
+            FieldKind::Text(t) => ("text", false, t.multiline.unwrap_or(false)),
+            FieldKind::Confidential(t) => ("text", true, t.multiline.unwrap_or(false)),
+            FieldKind::Email => ("email", false, false),
+            FieldKind::Url => ("url", false, false),
+            FieldKind::Phone => ("phone", false, false),
+            FieldKind::Date => ("date", false, false),
+            FieldKind::Totp => ("totp", false, false),
+            FieldKind::Unknown(_) => ("unknown", false, false),
+        };
+        Self {
+            kind: kind.to_string(),
+            concealed,
+            multiline,
+        }
+    }
+}
+
+impl TryFrom<FieldKindInfo> for FieldKind {
+    type Error = FfiError;
+
+    fn try_from(i: FieldKindInfo) -> Result<Self, Self::Error> {
+        Ok(match i.kind.as_str() {
+            "text" => {
+                let field = TextField {
+                    multiline: Some(i.multiline),
+                };
+                if i.concealed {
+                    FieldKind::Confidential(field)
+                } else {
+                    FieldKind::Text(field)
+                }
+            },
+            "email" => FieldKind::Email,
+            "url" => FieldKind::Url,
+            "phone" => FieldKind::Phone,
+            "date" => FieldKind::Date,
+            "totp" => FieldKind::Totp,
+            other => {
+                return Err(FfiError::InvalidInput(format!(
+                    "cannot set field kind {other:?}"
+                )));
+            },
+        })
+    }
 }
 
 #[derive(uniffi::Record)]
@@ -1101,6 +1165,7 @@ impl AxoPass {
                         .map(|c| CredentialInfo {
                             key: c.key.clone(),
                             title: c.title.clone(),
+                            kind: FieldKindInfo::from(&c.kind),
                         })
                         .collect();
                     credentials.sort_by(|a, b| a.title.cmp(&b.title));
@@ -1289,19 +1354,26 @@ impl AxoPass {
         cred_key: String,
         title: String,
         value: String,
+        kind: Option<FieldKindInfo>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.add_secret(
-                    &item_key,
-                    &cred_key,
-                    &title,
-                    FieldKind::default(),
-                    SecretString::from(value),
-                )
-                .map_err(FfiError::from)
+                // `None` keeps an existing credential's kind, so an edit that
+                // only touches the title or value does not reset it. A new
+                // credential with no kind given falls back to the default.
+                let kind = match kind {
+                    Some(info) => FieldKind::try_from(info)?,
+                    None => vw
+                        .get_secret_overview(&item_key, &cred_key)
+                        .ok()
+                        .flatten()
+                        .map(|o| o.kind.clone())
+                        .unwrap_or_default(),
+                };
+                vw.add_secret(&item_key, &cred_key, &title, kind, SecretString::from(value))
+                    .map_err(FfiError::from)
             })
         })
         .await

@@ -557,12 +557,14 @@ final class VaultsModel {
 
   @discardableResult
   func addOrUpdateCredential(
-    vaultKey: String, itemKey: String, credKey: String, title: String, value: String
+    vaultKey: String, itemKey: String, credKey: String, title: String, value: String,
+    kind: FieldKindInfo? = nil
   ) async -> Bool {
     actionError = nil
     do {
       try await core.addOrUpdateCredential(
-        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, title: title, value: value
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, title: title, value: value,
+        kind: kind
       )
       await loadItems(for: vaultKey)
       return true
@@ -577,12 +579,14 @@ final class VaultsModel {
   /// credential is left under both keys and the error is surfaced.
   @discardableResult
   func renameCredentialKey(
-    vaultKey: String, itemKey: String, oldKey: String, newKey: String, title: String, value: String
+    vaultKey: String, itemKey: String, oldKey: String, newKey: String, title: String, value: String,
+    kind: FieldKindInfo? = nil
   ) async -> Bool {
     actionError = nil
     do {
       try await core.addOrUpdateCredential(
-        vaultKey: vaultKey, itemKey: itemKey, credKey: newKey, title: title, value: value
+        vaultKey: vaultKey, itemKey: itemKey, credKey: newKey, title: title, value: value,
+        kind: kind
       )
       try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: oldKey)
       await loadItems(for: vaultKey)
