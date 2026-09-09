@@ -416,11 +416,11 @@ impl Vault {
                 .item_credential_index
                 .get(&composite_key)
                 .copied()
-                .ok_or_else(|| {
-                    Error::InvalidCredentialKey(format!("{item_key}/{cred_key}"))
-                })?;
+                .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
             if found_item_id != item_id {
-                return Err(Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")));
+                return Err(Error::InvalidCredentialKey(format!(
+                    "{item_key}/{cred_key}"
+                )));
             }
             ordered_ids.push(cred_id);
         }

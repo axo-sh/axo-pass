@@ -177,7 +177,12 @@ impl ItemCommand {
                     .into_iter()
                     .map(|c| (c.key, c.title))
                     .collect();
-                Self::print_item(&vault_key, &item_key, credential_key.as_deref(), &credentials)
+                Self::print_item(
+                    &vault_key,
+                    &item_key,
+                    credential_key.as_deref(),
+                    &credentials,
+                )
             },
             Err(BrokerError::Unavailable) => {
                 self.get_item_locally(&vault_key, &item_key, credential_key.as_deref())
@@ -229,8 +234,7 @@ impl ItemCommand {
                 }
             },
             Some(credential_key) => {
-                let Some((_, title)) =
-                    credentials.iter().find(|(key, _)| key == credential_key)
+                let Some((_, title)) = credentials.iter().find(|(key, _)| key == credential_key)
                 else {
                     return Err(cformat!(
                         "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
@@ -504,7 +508,8 @@ impl ItemCommand {
             secret,
         )
         .map_err(|e| format!("Failed to add secret: {e}"))?;
-        vw.save().map_err(|e| format!("Failed to save vault: {e}"))?;
+        vw.save()
+            .map_err(|e| format!("Failed to save vault: {e}"))?;
         Ok(())
     }
 }
