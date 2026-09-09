@@ -57,8 +57,9 @@ pub use ssh::{
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
-    VaultAuthorizer, VaultRef, request_resolve_secrets, request_vault_items, request_vault_secret,
-    request_write_vault_secret,
+    VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, request_add_external_vault,
+    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
+    request_vault_secret, request_write_vault_secret,
 };
 
 /// How long the agent waits for the user to answer the app's prompt before
@@ -258,6 +259,35 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap vault export`: unlock every named vault and write an encrypted
+    /// bundle to `dest_path`.
+    ExportVaults {
+        vault_keys: Vec<String>,
+        dest_path: String,
+        mode: vault::WireExportMode,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap vault import`: import the selected vaults from a bundle, re-wrapping
+    /// each file key with the local encryption key.
+    ImportVaults {
+        import_path: String,
+        identity: vault::WireImportIdentity,
+        /// `(bundle vault id, target key)` pairs.
+        selection: Vec<(String, String)>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap vault add`: unlock the vault at `path` to validate it, then register
+    /// it as an external vault in the app config.
+    AddExternalVault {
+        path: String,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// `ap age recipients` / resolving an age recipient: list the saved age
     /// keys, public halves only. Raises no prompt.
     ListAgeKeys {
@@ -312,6 +342,9 @@ impl WireRequest {
             | WireRequest::ReadVaultSecret { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
             | WireRequest::WriteVaultSecret { caller, .. }
+            | WireRequest::ExportVaults { caller, .. }
+            | WireRequest::ImportVaults { caller, .. }
+            | WireRequest::AddExternalVault { caller, .. }
             | WireRequest::ListAgeKeys { caller, .. }
             | WireRequest::GetAgeIdentity { caller, .. }
             | WireRequest::CreateAgeKey { caller, .. }
@@ -370,6 +403,19 @@ enum WireResponse {
     /// `true` when the write created the item rather than updating it.
     VaultWritten {
         created: bool,
+    },
+    /// Number of vaults written into the export bundle.
+    VaultsExported {
+        count: u32,
+    },
+    /// Keys of the vaults imported from the bundle.
+    VaultsImported {
+        keys: Vec<String>,
+    },
+    /// The external vault that was registered.
+    VaultLinked {
+        vault_key: String,
+        name: Option<String>,
     },
     /// Saved age keys, public halves only.
     AgeKeys {
@@ -884,7 +930,80 @@ async fn handle_connection(
                 value: secrecy::SecretString::from(value),
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, Some(payload)).await
+            vault::authorize_and_serve(
+                &*authorizers.vault,
+                prompt,
+                actor,
+                Some(vault::VaultPayload::Write(payload)),
+            )
+            .await
+        },
+        WireRequest::ExportVaults {
+            vault_keys,
+            dest_path,
+            mode,
+            caller,
+        } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key: vault_keys.join(", "),
+                caller,
+                caller_chain: caller_chain.clone(),
+                action: vault::VaultAction::ExportVaults {
+                    vault_keys: vault_keys.clone(),
+                },
+            };
+            let payload = vault::ExportPayload {
+                dest_path: std::path::PathBuf::from(dest_path),
+                mode: mode.into(),
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(
+                &*authorizers.vault,
+                prompt,
+                actor,
+                Some(vault::VaultPayload::Export(payload)),
+            )
+            .await
+        },
+        WireRequest::ImportVaults {
+            import_path,
+            identity,
+            selection,
+            caller,
+        } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key: std::path::Path::new(&import_path)
+                    .file_name()
+                    .map_or_else(|| import_path.clone(), |n| n.to_string_lossy().into_owned()),
+                caller,
+                caller_chain: caller_chain.clone(),
+                action: vault::VaultAction::ImportVaults {
+                    count: selection.len(),
+                },
+            };
+            let payload = vault::ImportPayload {
+                import_path: std::path::PathBuf::from(import_path),
+                identity,
+                selection,
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(
+                &*authorizers.vault,
+                prompt,
+                actor,
+                Some(vault::VaultPayload::Import(payload)),
+            )
+            .await
+        },
+        WireRequest::AddExternalVault { path, caller } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key: path.clone(),
+                caller,
+                caller_chain: caller_chain.clone(),
+                action: vault::VaultAction::AddVault { path },
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
         },
         WireRequest::ListAgeKeys { .. } => {
             log::debug!("App broker request: list age keys");
@@ -1293,6 +1412,28 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].caller.as_deref(), Some("git"));
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// Export, import and add each reach the vault authorizer with the
+    /// delegated caller. The stub declines the context, so the request is
+    /// answered rather than served.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn routes_vault_management_to_the_vault_authorizer() {
+        for line in [
+            r#"{"request":"export_vaults","vault_keys":["v1"],"dest_path":"/tmp/x.axovault","mode":{"kind":"passphrase","passphrase":"pw","work_factor":18},"caller":"zsh"}"#,
+            r#"{"request":"import_vaults","import_path":"/tmp/x.axovault","identity":{"kind":"passphrase","passphrase":"pw"},"selection":[["00000000-0000-0000-0000-000000000000","v2"]],"caller":"zsh"}"#,
+            r#"{"request":"add_external_vault","path":"/tmp/v.json","caller":"zsh"}"#,
+        ] {
+            let broker = TestBroker::start(accepting_policy()).await;
+            let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
+                "unexpected response to {line}"
+            );
+            let peers = broker.authorizer.peers.lock().unwrap();
+            assert_eq!(peers.len(), 1);
+            assert_eq!(peers[0].caller.as_deref(), Some("zsh"));
+        }
     }
 
     /// An age identity request for a name not in the keychain is answered with

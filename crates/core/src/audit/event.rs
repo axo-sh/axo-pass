@@ -245,6 +245,8 @@ pub enum Action {
     VaultItemDeleted,
     #[serde(rename = "vault.created")]
     VaultCreated,
+    #[serde(rename = "vault.linked")]
+    VaultLinked,
     #[serde(rename = "vault.exported")]
     VaultExported,
     #[serde(rename = "vault.imported")]
@@ -294,6 +296,7 @@ impl Action {
             Action::VaultItemUpdated => "vault.item_updated",
             Action::VaultItemDeleted => "vault.item_deleted",
             Action::VaultCreated => "vault.created",
+            Action::VaultLinked => "vault.linked",
             Action::VaultExported => "vault.exported",
             Action::VaultImported => "vault.imported",
             Action::AuthGrantCreated => "auth.grant_created",

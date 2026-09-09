@@ -6,6 +6,7 @@ use std::process::Command;
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
+use crate::core::auth::AuthContext;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
@@ -117,12 +118,34 @@ impl VaultsManager {
         export_mode: ExportMode,
         progress: impl FnMut(ExportProgress),
     ) -> Result<(), Error> {
+        self.export_bundle_on(
+            vault_keys,
+            path,
+            export_mode,
+            AuthContext::SharedThreadLocal,
+            progress,
+        )
+    }
+
+    /// [`export_bundle`] on a specific [`AuthContext`]. The app broker passes
+    /// [`AuthContext::Foreign`] so each vault is unlocked on the context the
+    /// app authenticated.
+    ///
+    /// [`export_bundle`]: Self::export_bundle
+    pub fn export_bundle_on<P: AsRef<Path>>(
+        &mut self,
+        vault_keys: &[String],
+        path: P,
+        export_mode: ExportMode,
+        auth_context: AuthContext,
+        progress: impl FnMut(ExportProgress),
+    ) -> Result<(), Error> {
         for key in vault_keys {
             let vw = self
                 .vaults
                 .get_mut(key.as_str())
                 .ok_or_else(|| Error::VaultNotFound(key.clone()))?;
-            vw.unlock()?;
+            vw.unlock_on(auth_context.clone())?;
         }
         let selected: Vec<&VaultWrapper> = vault_keys
             .iter()
@@ -149,6 +172,21 @@ impl VaultsManager {
         bundle: ImportableBundle,
         selection: &BTreeMap<Uuid, String>,
     ) -> Result<Vec<String>, Error> {
+        self.import_bundle_on(bundle, selection, AuthContext::SharedThreadLocal)
+    }
+
+    /// [`import_bundle`] on a specific [`AuthContext`]. The app broker passes
+    /// [`AuthContext::Foreign`] so re-wrapping each vault's file key with the
+    /// local encryption key, and creating that key if it does not exist yet,
+    /// run on the context the app authenticated.
+    ///
+    /// [`import_bundle`]: Self::import_bundle
+    pub fn import_bundle_on(
+        &mut self,
+        bundle: ImportableBundle,
+        selection: &BTreeMap<Uuid, String>,
+        auth_context: AuthContext,
+    ) -> Result<Vec<String>, Error> {
         // normalize before the collision check: `import` normalizes too, and a
         // raw key that only collides after normalization would otherwise slip
         // past and evict an existing vault from `self.vaults`
@@ -164,7 +202,7 @@ impl VaultsManager {
             targets.insert(*id, key);
         }
 
-        let wrappers = bundle.import(&targets, &self.vaults_dir)?;
+        let wrappers = bundle.import(&targets, &self.vaults_dir, auth_context)?;
         let mut keys = Vec::with_capacity(wrappers.len());
         for vw in wrappers {
             let key = vw.key.clone();

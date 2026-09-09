@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axo_pass_core::age::recipients::resolve_recipient;
+use axo_pass_core::core::app_broker::{self, BrokerError, WireExportMode};
+use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::vault_export::{ExportMode, WorkFactor};
 use axo_pass_core::secrets::vaults::{ExportProgress, VaultsManager};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;
+use secrecy::ExposeSecret;
 
 use crate::cli::commands::vault::utils::prompt_passphrase;
 
@@ -71,7 +74,42 @@ impl VaultExportCommand {
             let hint = work_factor.cost_hint();
             cprintln!("<dim>Key derivation cost: {hint}</dim>");
         }
-        vm.export_bundle(&vault_keys, &export_path, export_mode, |p| match p {
+
+        let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
+        // The app serves the request from its own working directory, so the
+        // path it writes to must be absolute.
+        let export_path_str = std::path::absolute(&export_path)
+            .unwrap_or_else(|_| export_path.clone())
+            .to_string_lossy()
+            .to_string();
+
+        match app_broker::request_export_vaults(
+            &vault_keys,
+            &export_path_str,
+            wire_export_mode(&export_mode),
+            caller.as_deref(),
+        ) {
+            Ok(_) => {},
+            Err(BrokerError::Unavailable) => {
+                Self::export_locally(&mut vm, &vault_keys, &export_path, export_mode)?
+            },
+            Err(e) => return Err(format!("Failed to export vaults: {e}")),
+        }
+
+        let count = vault_keys.len();
+        let noun = if count == 1 { "vault" } else { "vaults" };
+        let path = export_path.display();
+        cprintln!("Exported <blue>{count}</blue> {noun} to <blue>{path}</blue>");
+        Ok(())
+    }
+
+    fn export_locally(
+        vm: &mut VaultsManager,
+        vault_keys: &[String],
+        export_path: &Path,
+        export_mode: ExportMode,
+    ) -> Result<(), String> {
+        vm.export_bundle(vault_keys, export_path, export_mode, |p| match p {
             ExportProgress::Vault { index, total } => {
                 cprintln!("<dim>Collecting vault {index}/{total}</dim>");
             },
@@ -82,13 +120,43 @@ impl VaultExportCommand {
                 cprintln!("<dim>Writing bundle</dim>");
             },
         })
-        .map_err(|e| format!("Failed to export vaults: {e}"))?;
+        .map_err(|e| format!("Failed to export vaults: {e}"))
+    }
+}
 
-        let count = vault_keys.len();
-        let noun = if count == 1 { "vault" } else { "vaults" };
-        let path = export_path.display();
-        cprintln!("Exported <blue>{count}</blue> {noun} to <blue>{path}</blue>");
-        Ok(())
+/// Resolve a managed age recipient by name to its `age1...` public string.
+/// `ap` holds no keychain entitlements, so the recipient list comes from the
+/// app; this raises no prompt, as only the public half is read. A build with no
+/// broker to reach resolves from the keychain directly.
+fn resolve_managed_recipient(name: &str) -> Result<String, String> {
+    let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
+    match app_broker::request_age_keys(caller.as_deref()) {
+        Ok(keys) => keys
+            .into_iter()
+            .find(|k| k.name == name)
+            .map(|k| k.recipient)
+            .ok_or_else(|| format!("No age key named {name}")),
+        Err(BrokerError::Unavailable) => resolve_recipient(name)
+            .map(|r| r.to_string())
+            .map_err(|e| format!("Failed to resolve recipient '{name}': {e}")),
+        Err(e) => Err(format!("Failed to resolve recipient '{name}': {e}")),
+    }
+}
+
+/// Split a resolved [`ExportMode`] into the form that crosses the broker
+/// socket. The passphrase work factor travels as its resolved scrypt `log_n`.
+fn wire_export_mode(mode: &ExportMode) -> WireExportMode {
+    match mode {
+        ExportMode::Passphrase {
+            passphrase,
+            work_factor,
+        } => WireExportMode::Passphrase {
+            passphrase: passphrase.expose_secret().to_string(),
+            work_factor: work_factor.log_n(),
+        },
+        ExportMode::Recipient(recipient) => WireExportMode::Recipient {
+            recipient: recipient.clone(),
+        },
     }
 }
 
@@ -99,7 +167,7 @@ struct ExportModeFlags {
     #[arg(long)]
     passphrase: Option<String>,
 
-    /// Encrypt to a managed age recipient stored in the keychain (by name)
+    /// Encrypt to a managed age recipient stored by Axo Pass (by name)
     #[arg(long)]
     recipient: Option<String>,
 
@@ -111,10 +179,9 @@ struct ExportModeFlags {
 impl ExportModeFlags {
     fn resolve(&self, work_factor: WorkFactor) -> Result<ExportMode, String> {
         if let Some(recipient_name) = &self.recipient {
-            // Resolve a managed age recipient from the keychain by name
-            let age_recipient = resolve_recipient(recipient_name)
-                .map_err(|e| format!("Failed to resolve recipient '{recipient_name}': {e}"))?;
-            return Ok(ExportMode::Recipient(age_recipient.to_string()));
+            return Ok(ExportMode::Recipient(resolve_managed_recipient(
+                recipient_name,
+            )?));
         }
         if let Some(pubkey) = &self.recipient_key {
             return Ok(ExportMode::Recipient(pubkey.to_string()));

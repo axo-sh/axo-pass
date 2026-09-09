@@ -92,6 +92,7 @@ impl WorkFactor {
     }
 }
 
+#[derive(Clone)]
 pub enum ExportMode {
     /// Encrypt the file key with a passphrase (age scrypt).
     Passphrase {

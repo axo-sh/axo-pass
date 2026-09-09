@@ -138,6 +138,12 @@ final class VaultUnlockPromptModel {
       what = "list items in vault \(prompt.vaultKey)"
     case let .writeSecret(itemKey, credentialKey):
       what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
+    case let .exportVaults(count):
+      what = "export \(count) \(count == 1 ? "vault" : "vaults") to \(prompt.vaultKey)"
+    case let .importVaults(count):
+      what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
+    case let .addVault(path):
+      what = "add the vault at \(path)"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -149,7 +155,8 @@ final class VaultUnlockPromptModel {
   /// every request. A listing does not.
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
-    case .readSecret, .resolveSecrets, .writeSecret: return true
+    case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault:
+      return true
     case .listItems: return false
     }
   }
@@ -168,6 +175,9 @@ final class VaultUnlockPromptModel {
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
     case .writeSecret: return "write"
+    case .exportVaults: return "export"
+    case .importVaults: return "import"
+    case .addVault: return "add"
     }
   }
 
@@ -185,6 +195,11 @@ final class VaultUnlockPromptModel {
       return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
     case .writeSecret: return "write a secret"
+    case let .exportVaults(count):
+      return "export \(count) \(count == 1 ? "vault" : "vaults")"
+    case let .importVaults(count):
+      return "import \(count) \(count == 1 ? "vault" : "vaults")"
+    case .addVault: return "add a vault"
     }
   }
 }

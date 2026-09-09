@@ -1,15 +1,22 @@
-//! `ap item list` and `ap read`'s side of the broker: reading a vault's item
-//! overview, or one secret value, through the app.
+//! The vault side of the broker: every `ap` command that needs the vault
+//! encryption key runs through here. Reads (`ap item list`, `ap item get`, `ap
+//! read`, `ap exec`, `ap inject`), the single write (`ap item set`), and vault
+//! management (`ap vault export`, `ap vault import`, `ap vault add`).
 //!
 //! `ap` holds no keychain entitlements, so it cannot read or create the vault
 //! encryption key itself. It hands the request to the app, which unlocks the
-//! vault on a context it owns and returns the result. A read prompts every
-//! time; a listing may reuse a recent approval.
+//! vault on a context it owns and returns the result. A read or a write prompts
+//! every time; a listing may reuse a recent approval.
 //!
-//! The app verifies the peer before it serves either request, so it holds the
-//! full provenance for the process that asked. It is therefore the process that
-//! records the `secret.read` and `vault.items_listed` events, the same way the
-//! SSH agent records `ssh.sign`.
+//! The app verifies the peer before it serves a request, so it holds the full
+//! provenance for the process that asked. It is therefore the process that
+//! records the `secret.read`, `vault.items_listed`, `vault.exported`,
+//! `vault.imported` and `vault.linked` events, the same way the SSH agent
+//! records `ssh.sign`. Export and import also emit the per-vault events that
+//! the core records internally, sourced to the app.
+
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
@@ -18,8 +25,10 @@ use serde::{Deserialize, Serialize};
 use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
+use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
-use crate::secrets::vaults::{FieldKind, VaultWrapper};
+use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
+use crate::secrets::vaults::{FieldKind, VaultWrapper, VaultsManager};
 
 /// One `axo://` reference to resolve, as it crosses the socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +80,20 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+
+    /// `ap vault export`: unlock every named vault and write an encrypted
+    /// bundle. Reads all secrets, so it prompts every time. The destination
+    /// path and the export passphrase travel in [`ExportPayload`].
+    ExportVaults { vault_keys: Vec<String> },
+
+    /// `ap vault import`: re-wrap the selected vaults from a bundle with the
+    /// local encryption key and write them to the vaults directory. The bundle
+    /// path, decryption identity and selection travel in [`ImportPayload`].
+    ImportVaults { count: usize },
+
+    /// `ap vault add`: unlock the vault at `path` to validate it, then register
+    /// it as an external vault in the app config.
+    AddVault { path: String },
 }
 
 /// The secret an [`VaultAction::WriteSecret`] writes, kept out of
@@ -79,6 +102,86 @@ pub enum VaultAction {
 pub struct WriteSecretPayload {
     pub title: String,
     pub value: SecretString,
+}
+
+/// Where an [`VaultAction::ExportVaults`] writes and how the bundle key is
+/// protected. Kept out of [`VaultAccessPrompt`], like [`WriteSecretPayload`].
+#[derive(Clone)]
+pub struct ExportPayload {
+    pub dest_path: PathBuf,
+    pub mode: ExportMode,
+}
+
+/// The bundle an [`VaultAction::ImportVaults`] reads, its decryption identity
+/// and the id-to-key selection. Kept out of [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct ImportPayload {
+    pub import_path: PathBuf,
+    pub identity: WireImportIdentity,
+    /// `(bundle vault id, target key)` pairs.
+    pub selection: Vec<(String, String)>,
+}
+
+/// A payload that does not belong in [`VaultAccessPrompt`] because it carries a
+/// secret or would clutter the prompt.
+#[derive(Clone)]
+pub(super) enum VaultPayload {
+    Write(WriteSecretPayload),
+    Export(ExportPayload),
+    Import(ImportPayload),
+}
+
+/// How the export bundle key is protected, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireExportMode {
+    /// A passphrase and the resolved scrypt `log_n`.
+    Passphrase { passphrase: String, work_factor: u8 },
+    /// An age recipient (`age1...`).
+    Recipient { recipient: String },
+}
+
+impl From<WireExportMode> for ExportMode {
+    fn from(mode: WireExportMode) -> Self {
+        match mode {
+            WireExportMode::Passphrase {
+                passphrase,
+                work_factor,
+            } => ExportMode::Passphrase {
+                passphrase: passphrase.into(),
+                work_factor: WorkFactor::Custom(work_factor),
+            },
+            WireExportMode::Recipient { recipient } => ExportMode::Recipient(recipient),
+        }
+    }
+}
+
+/// How the import bundle is decrypted, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireImportIdentity {
+    Passphrase {
+        passphrase: String,
+    },
+    /// An age secret key (`AGE-SECRET-KEY-1...`).
+    Identity {
+        identity: String,
+    },
+}
+
+impl TryFrom<WireImportIdentity> for ImportIdentity {
+    type Error = String;
+
+    fn try_from(identity: WireImportIdentity) -> Result<Self, Self::Error> {
+        match identity {
+            WireImportIdentity::Passphrase { passphrase } => {
+                Ok(ImportIdentity::Passphrase(passphrase.into()))
+            },
+            WireImportIdentity::Identity { identity } => age::x25519::Identity::from_str(&identity)
+                .map(ImportIdentity::Identity)
+                .map_err(|e| format!("Invalid age identity: {e}")),
+        }
+    }
 }
 
 /// What the app needs to describe the prompt for a vault access.
@@ -231,11 +334,82 @@ pub fn request_write_vault_secret(
     }
 }
 
+/// Ask the app to unlock every named vault and write an encrypted bundle to
+/// `dest_path`. Blocking, same as [`request_vault_items`].
+pub fn request_export_vaults(
+    vault_keys: &[String],
+    dest_path: &str,
+    mode: WireExportMode,
+    caller: Option<&str>,
+) -> Result<u32, BrokerError> {
+    let request = WireRequest::ExportVaults {
+        vault_keys: vault_keys.to_vec(),
+        dest_path: dest_path.to_string(),
+        mode,
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::VaultsExported { count } => Ok(count),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to vault export".to_string(),
+        )),
+    }
+}
+
+/// Ask the app to import the selected vaults from a bundle, re-wrapping each
+/// file key with the local encryption key. `selection` is `(bundle vault id,
+/// target key)` pairs. Returns the keys of the imported vaults. Blocking, same
+/// as [`request_vault_items`].
+pub fn request_import_vaults(
+    import_path: &str,
+    identity: WireImportIdentity,
+    selection: &[(String, String)],
+    caller: Option<&str>,
+) -> Result<Vec<String>, BrokerError> {
+    let request = WireRequest::ImportVaults {
+        import_path: import_path.to_string(),
+        identity,
+        selection: selection.to_vec(),
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::VaultsImported { keys } => Ok(keys),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to vault import".to_string(),
+        )),
+    }
+}
+
+/// Ask the app to unlock the vault at `path` to validate it, then register it
+/// as an external vault. Returns the vault key and name. Blocking, same as
+/// [`request_vault_items`].
+pub fn request_add_external_vault(
+    path: &str,
+    caller: Option<&str>,
+) -> Result<(String, Option<String>), BrokerError> {
+    let request = WireRequest::AddExternalVault {
+        path: path.to_string(),
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::VaultLinked { vault_key, name } => Ok((vault_key, name)),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to vault add".to_string(),
+        )),
+    }
+}
+
 pub(super) async fn authorize_and_serve(
     authorizer: &dyn VaultAuthorizer,
     prompt: VaultAccessPrompt,
     actor: Actor,
-    write: Option<WriteSecretPayload>,
+    payload: Option<VaultPayload>,
 ) -> WireResponse {
     let context = match authorizer.begin(prompt.clone(), actor.clone()).await {
         Ok(context) => context,
@@ -250,7 +424,7 @@ pub(super) async fn authorize_and_serve(
     };
 
     let job = prompt.clone();
-    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, write))
+    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, payload))
         .await
         .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
@@ -316,15 +490,26 @@ fn record_access(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
+        VaultAction::ExportVaults { .. } => (
+            Action::VaultExported,
+            Subject::new(SubjectKind::Vault, vault_key.clone()),
+        ),
+        VaultAction::ImportVaults { .. } => (
+            Action::VaultImported,
+            Subject::new(SubjectKind::Vault, vault_key.clone()),
+        ),
+        VaultAction::AddVault { path } => (
+            Action::VaultLinked,
+            Subject::new(SubjectKind::Vault, path.clone()),
+        ),
     };
 
     // A write that created the item records `vault.item_created` instead. The
     // serve step reports which through the response.
     let action = match (&prompt.action, response) {
-        (
-            VaultAction::WriteSecret { .. },
-            Some(WireResponse::VaultWritten { created: true }),
-        ) => Action::VaultItemCreated,
+        (VaultAction::WriteSecret { .. }, Some(WireResponse::VaultWritten { created: true })) => {
+            Action::VaultItemCreated
+        },
         _ => action,
     };
 
@@ -350,6 +535,12 @@ fn record_access(
         Some(WireResponse::VaultWritten { created }) => {
             event = event.detail("created", created.to_string());
         },
+        Some(WireResponse::VaultsExported { count }) => {
+            event = event.detail("vault_count", count.to_string());
+        },
+        Some(WireResponse::VaultsImported { keys }) => {
+            event = event.detail("vault_count", keys.len().to_string());
+        },
         _ => {},
     }
     if let Some(message) = message {
@@ -367,11 +558,31 @@ fn record_access(
 fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
-    write: Option<WriteSecretPayload>,
+    payload: Option<VaultPayload>,
 ) -> Result<WireResponse, String> {
-    if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
-        return resolve_secrets(refs, context);
+    match &prompt.action {
+        VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
+        VaultAction::ExportVaults { vault_keys } => {
+            let Some(VaultPayload::Export(export)) = payload else {
+                return Err("Missing export payload".to_string());
+            };
+            return export_vaults(vault_keys, export, context);
+        },
+        VaultAction::ImportVaults { .. } => {
+            let Some(VaultPayload::Import(import)) = payload else {
+                return Err("Missing import payload".to_string());
+            };
+            return import_vaults(import, context);
+        },
+        VaultAction::AddVault { path } => return add_external_vault(path, context),
+        _ => {},
     }
+
+    let write = match payload {
+        Some(VaultPayload::Write(write)) => Some(write),
+        None => None,
+        Some(_) => return Err("Wrong payload for this vault action".to_string()),
+    };
 
     let mut vw = VaultWrapper::load(&vaults_dir(), Some(prompt.vault_key.clone()))
         .map_err(|e| format!("Failed to load vault: {e}"))?;
@@ -403,22 +614,96 @@ fn serve_on_context(
                 .get_secret_overview(&item_key, &credential_key)
                 .ok()
                 .flatten();
-            let created = existing.is_none()
-                && vw
-                    .get_item_overview(&item_key)
-                    .ok()
-                    .flatten()
-                    .is_none();
+            let created =
+                existing.is_none() && vw.get_item_overview(&item_key).ok().flatten().is_none();
             let kind = existing
                 .map(|o| o.kind.clone())
                 .unwrap_or_else(FieldKind::default);
-            vw.add_secret(&item_key, &credential_key, &payload.title, kind, payload.value)
-                .map_err(|e| format!("Failed to add secret: {e}"))?;
-            vw.save().map_err(|e| format!("Failed to save vault: {e}"))?;
+            vw.add_secret(
+                &item_key,
+                &credential_key,
+                &payload.title,
+                kind,
+                payload.value,
+            )
+            .map_err(|e| format!("Failed to add secret: {e}"))?;
+            vw.save()
+                .map_err(|e| format!("Failed to save vault: {e}"))?;
             Ok(WireResponse::VaultWritten { created })
         },
-        VaultAction::ResolveSecrets { .. } => unreachable!("handled above"),
+        VaultAction::ResolveSecrets { .. }
+        | VaultAction::ExportVaults { .. }
+        | VaultAction::ImportVaults { .. }
+        | VaultAction::AddVault { .. } => unreachable!("handled above"),
     }
+}
+
+/// Unlock every named vault on the app's context and write the export bundle.
+fn export_vaults(
+    vault_keys: &[String],
+    export: ExportPayload,
+    context: ForeignContext,
+) -> Result<WireResponse, String> {
+    let mut vm = VaultsManager::new();
+    vm.export_bundle_on(
+        vault_keys,
+        &export.dest_path,
+        export.mode,
+        AuthContext::Foreign(context),
+        |_| {},
+    )
+    .map_err(|e| format!("Failed to export vaults: {e}"))?;
+    Ok(WireResponse::VaultsExported {
+        count: vault_keys.len() as u32,
+    })
+}
+
+/// Re-open the bundle and import the selected vaults, re-wrapping each file key
+/// with the local encryption key on the app's context.
+fn import_vaults(import: ImportPayload, context: ForeignContext) -> Result<WireResponse, String> {
+    let identity =
+        ImportIdentity::try_from(import.identity).map_err(|e| format!("Invalid identity: {e}"))?;
+
+    let mut selection: std::collections::BTreeMap<uuid::Uuid, String> =
+        std::collections::BTreeMap::new();
+    for (id, key) in import.selection {
+        let id = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid vault id {id}: {e}"))?;
+        selection.insert(id, key);
+    }
+
+    let mut vm = VaultsManager::new();
+    let bundle = vm
+        .open_bundle(&import.import_path, identity)
+        .map_err(|e| format!("Failed to open bundle: {e}"))?;
+    let keys = vm
+        .import_bundle_on(bundle, &selection, AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to import bundle: {e}"))?;
+    Ok(WireResponse::VaultsImported { keys })
+}
+
+/// Unlock the vault at `path` to validate it, then register it as an external
+/// vault in the app config.
+fn add_external_vault(path: &str, context: ForeignContext) -> Result<WireResponse, String> {
+    let path = Path::new(path)
+        .canonicalize()
+        .map_err(|e| format!("Could not resolve path {path}: {e}"))?;
+
+    let mut vw = VaultWrapper::load_from_path(None, &path)
+        .map_err(|e| format!("Not a valid vault file: {e}"))?;
+    vw.unlock_on(AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to unlock vault: {e}"))?;
+
+    let name = vw.vault_name().map(str::to_string);
+    APP_CONFIG
+        .lock()
+        .map_err(|e| format!("Failed to lock config: {e}"))?
+        .add_external_vault(&vw.key, path)
+        .map_err(|e| format!("Failed to add vault: {e}"))?;
+
+    Ok(WireResponse::VaultLinked {
+        vault_key: vw.key.clone(),
+        name,
+    })
 }
 
 /// Resolve every reference, unlocking each distinct vault once on the app's

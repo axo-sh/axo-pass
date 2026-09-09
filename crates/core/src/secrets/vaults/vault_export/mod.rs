@@ -15,6 +15,7 @@ use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
+use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
@@ -27,7 +28,7 @@ pub use crate::secrets::vaults::vault_export::exported_bundle::{
 };
 pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
 use crate::secrets::vaults::vault_wrapper::{
-    VaultWrapper, get_vault_encryption_key, normalized_key,
+    VaultWrapper, get_vault_encryption_key_on, normalized_key,
 };
 
 const FILE_KEY_LEN: usize = 32;
@@ -150,6 +151,7 @@ impl ImportableBundle {
         self,
         selection: &BTreeMap<Uuid, String>,
         vault_dir: &Path,
+        auth_context: AuthContext,
     ) -> Result<Vec<VaultWrapper>, Error> {
         if selection.is_empty() {
             return Err(Error::VaultImportError(
@@ -196,7 +198,7 @@ impl ImportableBundle {
         }
 
         // re-wrap each file key with the local Secure Enclave key and serialize
-        let managed_key = get_vault_encryption_key()?;
+        let managed_key = get_vault_encryption_key_on(auth_context)?;
         let mut staged: Vec<(String, PathBuf, String)> = Vec::with_capacity(planned.len());
         let mut audit_rows: Vec<(String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {

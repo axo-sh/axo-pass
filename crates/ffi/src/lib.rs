@@ -1381,8 +1381,14 @@ impl AxoPass {
                         .map(|o| o.kind.clone())
                         .unwrap_or_default(),
                 };
-                vw.add_secret(&item_key, &cred_key, &title, kind, SecretString::from(value))
-                    .map_err(FfiError::from)
+                vw.add_secret(
+                    &item_key,
+                    &cred_key,
+                    &title,
+                    kind,
+                    SecretString::from(value),
+                )
+                .map_err(FfiError::from)
             })
         })
         .await
@@ -2426,6 +2432,18 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+    /// `ap vault export`: unlock `count` vaults and write an encrypted bundle.
+    ExportVaults {
+        count: u32,
+    },
+    /// `ap vault import`: import `count` vaults from a bundle.
+    ImportVaults {
+        count: u32,
+    },
+    /// `ap vault add`: validate and register the vault at `path`.
+    AddVault {
+        path: String,
+    },
 }
 
 /// Mirrors [`app_broker::ResolvePurpose`].
@@ -2468,6 +2486,13 @@ impl From<app_broker::VaultAction> for VaultAction {
                 item_key,
                 credential_key,
             },
+            app_broker::VaultAction::ExportVaults { vault_keys } => Self::ExportVaults {
+                count: vault_keys.len() as u32,
+            },
+            app_broker::VaultAction::ImportVaults { count } => Self::ImportVaults {
+                count: count as u32,
+            },
+            app_broker::VaultAction::AddVault { path } => Self::AddVault { path },
         }
     }
 }

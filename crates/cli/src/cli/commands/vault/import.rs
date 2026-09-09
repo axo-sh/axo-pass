@@ -2,11 +2,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use axo_pass_core::age::recipients::resolve_identity;
+use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
+use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::{BundleVaultInfo, ImportIdentity};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;
+use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::cli::commands::vault::utils::{prompt_passphrase, read_age_identity_file};
@@ -37,7 +40,10 @@ pub struct VaultImportCommand {
 
 impl VaultImportCommand {
     pub fn execute(&self) -> Result<(), String> {
-        let import_identity = (&self.import_encryption).try_into()?;
+        // Built once: sent over the broker socket, and converted locally to
+        // open the bundle for the interactive selection.
+        let wire_identity = self.import_encryption.wire_identity()?;
+        let import_identity = ImportIdentity::try_from(wire_identity.clone())?;
 
         let mut vm = VaultsManager::new();
         let bundle = vm
@@ -84,9 +90,33 @@ impl VaultImportCommand {
             selection.insert(info.id, key);
         }
 
-        let keys = vm
-            .import_bundle(bundle, &selection)
-            .map_err(|e| format!("Failed to import bundle: {e}"))?;
+        let wire_selection: Vec<(String, String)> = selection
+            .iter()
+            .map(|(id, key)| (id.to_string(), key.clone()))
+            .collect();
+
+        let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
+        // The app serves the request from its own working directory, so it
+        // needs an absolute path to the bundle.
+        let import_path_str = self
+            .import_path
+            .canonicalize()
+            .unwrap_or_else(|_| self.import_path.clone())
+            .to_string_lossy()
+            .to_string();
+
+        let keys = match app_broker::request_import_vaults(
+            &import_path_str,
+            wire_identity,
+            &wire_selection,
+            caller.as_deref(),
+        ) {
+            Ok(keys) => keys,
+            Err(BrokerError::Unavailable) => vm
+                .import_bundle(bundle, &selection)
+                .map_err(|e| format!("Failed to import bundle: {e}"))?,
+            Err(e) => return Err(format!("Failed to import bundle: {e}")),
+        };
 
         for key in keys {
             cprintln!("Imported vault as <blue>{key}</blue>");
@@ -205,7 +235,7 @@ struct ImportIdentityFlags {
     #[arg(long)]
     passphrase: Option<String>,
 
-    /// Decrypt with an age identity from the keychain
+    /// Decrypt with an age identity stored by Axo Pass (by name)
     #[arg(long)]
     identity: Option<String>,
 
@@ -215,23 +245,48 @@ struct ImportIdentityFlags {
     identity_file: Option<String>,
 }
 
-impl TryInto<ImportIdentity> for &ImportIdentityFlags {
-    type Error = String;
-
-    fn try_into(self) -> Result<ImportIdentity, Self::Error> {
-        if let Some(recipient_name) = &self.identity {
-            let age_identity = resolve_identity(recipient_name)
-                .map_err(|e| format!("Failed to resolve identity '{recipient_name}': {e}"))?;
-            return Ok(ImportIdentity::Identity(age_identity));
+impl ImportIdentityFlags {
+    /// Resolve the flags into the identity form that crosses the broker socket.
+    /// An age secret key travels as its `AGE-SECRET-KEY-1...` string, a
+    /// passphrase as plain text.
+    fn wire_identity(&self) -> Result<WireImportIdentity, String> {
+        if let Some(name) = &self.identity {
+            return Ok(WireImportIdentity::Identity {
+                identity: resolve_managed_identity(name)?,
+            });
         }
         if let Some(age_identity_file_path) = &self.identity_file {
             let age_identity = read_age_identity_file(age_identity_file_path)?;
-            return Ok(ImportIdentity::Identity(age_identity));
+            return Ok(WireImportIdentity::Identity {
+                identity: age_identity.to_string().expose_secret().to_string(),
+            });
         }
         if let Some(pass) = &self.passphrase {
-            return Ok(ImportIdentity::Passphrase(pass.clone().into()));
+            return Ok(WireImportIdentity::Passphrase {
+                passphrase: pass.clone(),
+            });
         }
         let passphrase = prompt_passphrase("Enter import passphrase:")?;
-        Ok(ImportIdentity::Passphrase(passphrase))
+        Ok(WireImportIdentity::Passphrase {
+            passphrase: passphrase.expose_secret().to_string(),
+        })
+    }
+}
+
+/// Unlock a managed age identity by name, returning its `AGE-SECRET-KEY-1...`
+/// string. `ap` holds no keychain entitlements, so the app unlocks it behind a
+/// biometric prompt. A build with no broker to reach unlocks from the keychain
+/// directly.
+fn resolve_managed_identity(name: &str) -> Result<String, String> {
+    let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
+    match app_broker::request_age_identity(name, caller.as_deref()) {
+        Ok(secret) => Ok(secret.expose_secret().to_string()),
+        Err(BrokerError::Failed(m)) if m.starts_with("No age key named") => {
+            Err(format!("No age key named {name}"))
+        },
+        Err(BrokerError::Unavailable) => resolve_identity(name)
+            .map(|id| id.to_string().expose_secret().to_string())
+            .map_err(|e| format!("Failed to resolve identity '{name}': {e}")),
+        Err(e) => Err(format!("Failed to resolve identity '{name}': {e}")),
     }
 }

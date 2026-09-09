@@ -2,9 +2,11 @@ mod export;
 mod import;
 mod utils;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::config::APP_CONFIG;
+use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::{VaultWrapper, VaultsManager};
 use clap::{Parser, Subcommand};
 use clml::cprintln;
@@ -73,31 +75,41 @@ impl VaultCommand {
         std::process::exit(0);
     }
 
+    /// Register an external vault through the app broker. `ap` holds no
+    /// keychain entitlements, so the app unlocks the vault to validate it
+    /// and writes the config entry. A build that is not staged in an app
+    /// bundle has no broker to reach and validates locally.
     fn cmd_add_vault(&self, vault_path: &str) -> Result<(), String> {
         let path = PathBuf::from(vault_path)
             .canonicalize()
             .map_err(|e| format!("Could not resolve path {vault_path}: {e}"))?;
+        let path_str = path.to_string_lossy().to_string();
 
-        // Validate the vault file before adding it to the config: must be a valid vault
-        // file and must be unlockable.
-        let vw = match VaultWrapper::load_from_path(None, &path) {
-            Ok(mut vw) => {
-                vw.unlock()
-                    .map_err(|e| format!("Failed to unlock vault: {e}"))?;
-                vw
-            },
-            Err(e) => Err(format!("Not a valid vault file: {e}"))?,
-        };
+        let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
 
-        let mut app_config = APP_CONFIG
-            .lock()
-            .map_err(|e| format!("Failed to unlock config: {e}"))?;
-
-        app_config
-            .add_external_vault(&vw.key, path.clone())
-            .map_err(|e| format!("Failed to add vault: {e}"))?;
+        match app_broker::request_add_external_vault(&path_str, caller.as_deref()) {
+            Ok(_) => {},
+            Err(BrokerError::Unavailable) => self.add_vault_locally(&path)?,
+            Err(e) => return Err(format!("Failed to add vault: {e}")),
+        }
 
         cprintln!("Added vault: <blue>{}</blue>", path.display());
+        Ok(())
+    }
+
+    fn add_vault_locally(&self, path: &Path) -> Result<(), String> {
+        // Validate the vault file before adding it to the config: must be a
+        // valid vault file and must be unlockable.
+        let mut vw = VaultWrapper::load_from_path(None, path)
+            .map_err(|e| format!("Not a valid vault file: {e}"))?;
+        vw.unlock()
+            .map_err(|e| format!("Failed to unlock vault: {e}"))?;
+
+        APP_CONFIG
+            .lock()
+            .map_err(|e| format!("Failed to unlock config: {e}"))?
+            .add_external_vault(&vw.key, path.to_path_buf())
+            .map_err(|e| format!("Failed to add vault: {e}"))?;
         Ok(())
     }
 }
