@@ -40,7 +40,13 @@ final class VaultsModel {
   private let core = AxoPass()
 
   // Sidebar navigation
-  var sidebarSelection: SidebarDestination? = nil
+  private(set) var sidebarSelection: SidebarDestination? = nil
+
+  // Where the sidebar is headed while that destination's items load. The panes
+  // keep showing the current selection until the load lands, so switching to a
+  // vault that has to be decrypted does not blank them first.
+  private(set) var pendingSelection: SidebarDestination? = nil
+  private var selectionTask: Task<Void, Never>? = nil
 
   // Vault list
   var vaults: [VaultInfo] = []
@@ -101,7 +107,7 @@ final class VaultsModel {
       vaults = try core.listVaults()
       loadError = nil
       if sidebarSelection == nil, let key = vaults.first?.key {
-        sidebarSelection = .vault(key)
+        selectSidebarDestination(.vault(key))
       }
     } catch {
       vaults = []
@@ -354,6 +360,10 @@ final class VaultsModel {
     authContext.invalidate()
     resetAuthContext()
     isAppUnlocked = false
+    // A vault switch waiting on a load has nothing to land on now.
+    selectionTask?.cancel()
+    selectionTask = nil
+    pendingSelection = nil
     itemCache = [:]
     selectedItemRef = nil
     unlockError = nil
@@ -362,26 +372,63 @@ final class VaultsModel {
 
   // MARK: - Navigation
 
+  /// What the sidebar highlights: the destination being loaded when there is
+  /// one, so a click registers immediately even though the panes have not
+  /// switched yet.
+  var sidebarHighlight: SidebarDestination? { pendingSelection ?? sidebarSelection }
+
+  /// True while `dest`'s items are loading and the panes still show the
+  /// previous selection.
+  func isPendingSelection(_ dest: SidebarDestination) -> Bool {
+    pendingSelection == dest
+  }
+
   func selectSidebarDestination(_ dest: SidebarDestination?) {
-    guard dest != sidebarSelection else { return }
+    guard dest != sidebarHighlight else { return }
+    selectionTask?.cancel()
+    selectionTask = nil
+    pendingSelection = nil
+
+    // Only a vault whose items are not cached has anything to wait for.
+    let missing = vaultKeys(for: dest).filter { itemCache[$0] == nil }
+    guard isAppUnlocked, !missing.isEmpty else {
+      commitSelection(dest)
+      return
+    }
+
+    pendingSelection = dest
+    selectionTask = Task { [self] in
+      for vaultKey in missing {
+        await loadItems(for: vaultKey)
+        if Task.isCancelled { return }
+      }
+      commitSelection(dest)
+    }
+  }
+
+  /// Switch the panes to `dest`, settling on a row in one main-actor tick so no
+  /// frame renders the new vault with nothing selected.
+  private func commitSelection(_ dest: SidebarDestination?) {
+    pendingSelection = nil
     let prevVaultKey = selectedVaultKey
     sidebarSelection = dest
-    if selectedVaultKey != prevVaultKey {
-      // Settle on a cached row synchronously so the detail pane does not flash
-      // its "select an item" placeholder before the async load fixes it up.
-      selectedItemRef = displayItems.first?.id
-      if isAppUnlocked { Task { await loadItemsForSelection() } }
-    }
+    guard selectedVaultKey != prevVaultKey else { return }
+    selectedItemRef = displayItems.first?.id
+    // A vault added or imported since the last load still needs its items.
+    if isAppUnlocked { Task { await loadItemsForSelection() } }
   }
 
   // MARK: - Items
 
-  /// Which vault keys the current selection covers: every vault for "All
-  /// Secrets", otherwise the one selected vault.
-  private var selectedVaultKeys: [String] {
-    guard let key = selectedVaultKey else { return [] }
-    return isAllSecrets ? vaults.map { $0.key } : [key]
+  /// Which vault keys a destination covers: every vault for "All Secrets", the
+  /// one vault otherwise, and none for the tool sections.
+  private func vaultKeys(for dest: SidebarDestination?) -> [String] {
+    guard case .vault(let key) = dest else { return [] }
+    return key == allSecretsKey ? vaults.map { $0.key } : [key]
   }
+
+  /// Which vault keys the current selection covers.
+  private var selectedVaultKeys: [String] { vaultKeys(for: sidebarSelection) }
 
   /// Load the items every pane needs for the current selection, then settle
   /// `selectedItemRef` on a row that still exists.
@@ -434,7 +481,7 @@ final class VaultsModel {
     do {
       _ = try await core.addVault(name: name, vaultKey: key)
       reload()
-      sidebarSelection = .vault(key)
+      selectSidebarDestination(.vault(key))
       return true
     } catch {
       actionError = String(describing: error)
@@ -461,7 +508,7 @@ final class VaultsModel {
     do {
       try await core.deleteVault(vaultKey: vaultKey)
       itemCache.removeValue(forKey: vaultKey)
-      if selectedVaultKey == vaultKey { sidebarSelection = nil }
+      if selectedVaultKey == vaultKey { selectSidebarDestination(nil) }
       reload()
       return true
     } catch {
@@ -516,7 +563,7 @@ final class VaultsModel {
       let keys = try await core.importVaultBundle(
         srcPath: source.path, passphrase: passphrase, selection: selection)
       reload()
-      if let first = keys.first { sidebarSelection = .vault(first) }
+      if let first = keys.first { selectSidebarDestination(.vault(first)) }
       return (keys, nil)
     } catch {
       return (nil, String(describing: error))
