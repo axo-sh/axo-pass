@@ -5,7 +5,7 @@ mod import_identity;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{self};
 use std::path::{Path, PathBuf};
@@ -14,11 +14,14 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
+use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
 };
-pub use crate::secrets::vaults::vault_export::export_mode::ExportMode;
+pub use crate::secrets::vaults::vault_export::export_mode::{
+    ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
+};
 pub use crate::secrets::vaults::vault_export::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
@@ -67,10 +70,16 @@ impl ImportableBundle {
         let bundle: ExportedBundle =
             serde_json::from_str(&data).map_err(Error::VaultDeserializationError)?;
 
+        if bundle.version == 0 {
+            return Err(Error::VaultImportError(
+                "Bundle format version 0 is not valid".to_string(),
+            ));
+        }
         if bundle.version > BUNDLE_VERSION {
+            let version = bundle.version;
             return Err(Error::VaultImportError(format!(
-                "Bundle format version {} is newer than the supported version {BUNDLE_VERSION}",
-                bundle.version
+                "Bundle format version {version} is newer than the supported version \
+                 {BUNDLE_VERSION}"
             )));
         }
 
@@ -84,8 +93,17 @@ impl ImportableBundle {
         let bundle_cipher = Aes256Gcm::new_from_slice(&bundle_key)
             .map_err(|_| Error::VaultImportError("Invalid bundle key".to_string()))?;
 
+        // vault ids key the import selection, so a bundle that repeats one is
+        // malformed and would silently lose vaults
+        let mut seen_ids = HashSet::with_capacity(bundle.vaults.len());
         let mut vaults = Vec::with_capacity(bundle.vaults.len());
         for v in bundle.vaults {
+            if !seen_ids.insert(v.id) {
+                let id = v.id;
+                return Err(Error::VaultImportError(format!(
+                    "Bundle contains more than one vault with id {id}"
+                )));
+            }
             let raw = v.wrapped_file_key.decrypt(
                 &bundle_cipher,
                 ExportedBundle::file_key_aad(bundle.id, v.id),
@@ -124,9 +142,10 @@ impl ImportableBundle {
 
     /// Import the selected vaults. `selection` maps a bundle vault id to the
     /// key it should be imported as. Every target key must be valid, unique
-    /// among the selection, and absent on disk. Vaults are staged and
-    /// written to temporary files, then renamed into place, so a mid-run
-    /// failure leaves the vault directory unchanged.
+    /// among the selection, and absent on disk. Vaults are staged and written
+    /// to temporary files, then renamed into place. A mid-run failure rolls
+    /// back on a best-effort basis: cleanup errors are ignored, so files may
+    /// be left behind.
     pub fn import(
         self,
         selection: &BTreeMap<Uuid, String>,
@@ -179,7 +198,9 @@ impl ImportableBundle {
         // re-wrap each file key with the local Secure Enclave key and serialize
         let managed_key = get_vault_encryption_key()?;
         let mut staged: Vec<(String, PathBuf, String)> = Vec::with_capacity(planned.len());
+        let mut audit_rows: Vec<(String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
+            audit_rows.push((p.key.clone(), p.prepared.name.clone()));
             let enc_file_key = VaultFileKey::Personal(
                 managed_key
                     .encrypt(p.prepared.raw_file_key.expose_secret())
@@ -222,6 +243,19 @@ impl ImportableBundle {
                 }
                 return Err(Error::VaultWriteError(e));
             }
+        }
+
+        let count = audit_rows.len();
+        for (key, name) in audit_rows {
+            audit::record(
+                AuditEvent::new(
+                    audit::process_source(),
+                    Action::VaultImported,
+                    Outcome::Succeeded,
+                )
+                .subject(Subject::new(SubjectKind::Vault, key).maybe_label(name))
+                .detail("vault_count", count.to_string()),
+            );
         }
 
         staged

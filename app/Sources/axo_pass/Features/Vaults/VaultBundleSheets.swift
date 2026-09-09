@@ -22,6 +22,28 @@ func bundleFileName(for keys: [String]) -> String {
   return "\(base)\(dateSuffix()).\(bundleExtension)"
 }
 
+/// Bridges the FFI export-progress callback, which fires on a background
+/// thread, to a main-actor closure.
+final class ExportProgressForwarder: VaultExportProgressDelegate, @unchecked Sendable {
+  private let handler: @MainActor (VaultExportStage, UInt32, UInt32) -> Void
+
+  init(_ handler: @escaping @MainActor (VaultExportStage, UInt32, UInt32) -> Void) {
+    self.handler = handler
+  }
+
+  func onStage(stage: VaultExportStage, index: UInt32, total: UInt32) {
+    Task { @MainActor in handler(stage, index, total) }
+  }
+}
+
+/// The work-factor presets offered in the export sheet, in ascending cost.
+private let workFactorChoices: [(label: String, value: ExportWorkFactor)] = [
+  ("Fast", .fast),
+  ("Balanced", .balanced),
+  ("Secure (recommended)", .secure),
+  ("Paranoid", .paranoid),
+]
+
 /// Export one or more vaults to a passphrase-encrypted bundle file. Pick the
 /// vaults, set a passphrase, then choose a destination with the save panel.
 /// Passing `only` locks the export to that one vault and hides the picker.
@@ -36,6 +58,8 @@ struct VaultExportSheet: View {
   @State private var isExporting = false
   @State private var error: String?
   @State private var done = false
+  @State private var workFactor: ExportWorkFactor = .secure
+  @State private var progressText: String?
 
   init(model: VaultsModel, only: String? = nil) {
     self.model = model
@@ -60,15 +84,17 @@ struct VaultExportSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Export Vaults").font(.headline)
-        Text("Writes the selected vaults to a single encrypted file you can import on another Mac.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
 
       if let lockedKey {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Export Vault").font(.headline)
+          Text(
+            "Backs up the selected vault to a single encrypted file. For exporting multiple vaults at once, see settings."
+          )
+          .font(.body)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
         let vault = model.vaults.first { $0.key == lockedKey }
         GroupBox {
           VStack(alignment: .leading, spacing: 1) {
@@ -81,6 +107,13 @@ struct VaultExportSheet: View {
           .padding(6)
         }
       } else {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Export Vaults").font(.headline)
+          Text("Backs up the selected vaults to a single encrypted file.")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         GroupBox {
           if pickableVaults.isEmpty {
             Text("No vaults to export.")
@@ -113,7 +146,16 @@ struct VaultExportSheet: View {
       Form {
         SecureField("Vault passphrase", text: $passphrase)
         SecureField("Confirm passphrase", text: $confirmPassphrase)
+        Picker("Encryption strength", selection: $workFactor) {
+          ForEach(workFactorChoices, id: \.label) { choice in
+            Text(choice.label).tag(choice.value)
+          }
+        }.padding(.top, 4)
+        Text(exportWorkFactorCostHint(factor: workFactor))
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
+      .disabled(isExporting)
 
       if passphraseMismatch {
         Label("Passphrases do not match.", systemImage: "exclamationmark.triangle.fill")
@@ -131,7 +173,7 @@ struct VaultExportSheet: View {
       HStack {
         if isExporting {
           ProgressView().controlSize(.small)
-          Text("Exporting…").font(.caption).foregroundStyle(.secondary)
+          Text(progressText ?? "Exporting…").font(.caption).foregroundStyle(.secondary)
         }
         Spacer()
         Button("Cancel") { dismiss() }
@@ -158,9 +200,22 @@ struct VaultExportSheet: View {
     let keys = model.vaults.map(\.key).filter(selectedKeys.contains)
     Task {
       isExporting = true
+      progressText = "Preparing…"
       error = await model.exportBundle(
-        vaultKeys: keys, destination: destination, passphrase: passphrase)
+        vaultKeys: keys, destination: destination, passphrase: passphrase,
+        workFactor: workFactor,
+        onStage: { stage, index, total in
+          switch stage {
+          case .collectingVault:
+            progressText = "Collecting vault \(index)/\(total)…"
+          case .derivingKey:
+            progressText = "Deriving key…"
+          case .writing:
+            progressText = "Writing file…"
+          }
+        })
       isExporting = false
+      progressText = nil
       if error == nil { dismiss() }
     }
   }
@@ -230,8 +285,10 @@ struct VaultImportSheet: View {
       }
 
       if !opened {
-        SecureField("Passphrase", text: $passphrase)
-          .onSubmit { open() }
+        Form {
+          SecureField("Passphrase", text: $passphrase)
+            .onSubmit { open() }
+        }
       } else {
         GroupBox {
           ScrollView {

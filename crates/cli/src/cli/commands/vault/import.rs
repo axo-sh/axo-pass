@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use axo_pass_core::age::recipients::resolve_identity;
@@ -49,19 +49,26 @@ impl VaultImportCommand {
             return Err("Bundle contains no vaults".to_string());
         }
 
-        let selected: Vec<&BundleVaultInfo> = if !self.select.is_empty() {
+        let mut selected: Vec<&BundleVaultInfo> = if !self.select.is_empty() {
             self.select
                 .iter()
-                .map(|sel| {
-                    match_vault(&infos, sel)
-                        .ok_or_else(|| format!("No vault in bundle matches '{sel}'"))
-                })
+                .map(|sel| match_vault(&infos, sel))
                 .collect::<Result<_, _>>()?
         } else if infos.len() == 1 {
             vec![&infos[0]]
         } else {
             select_vaults(&infos)?
         };
+
+        // a selector repeated on the command line resolves to the same vault
+        let mut seen_ids = HashSet::new();
+        selected.retain(|info| seen_ids.insert(info.id));
+
+        for (old, _) in &self.key_overrides {
+            if !selected.iter().any(|info| vault_matches(info, old)) {
+                return Err(format!("--key '{old}=...' matches no vault being imported"));
+            }
+        }
 
         if self.vault_key.is_some() && selected.len() != 1 {
             return Err(
@@ -110,8 +117,23 @@ fn vault_matches(info: &BundleVaultInfo, selector: &str) -> bool {
         || info.id.simple().to_string() == selector
 }
 
-fn match_vault<'a>(infos: &'a [BundleVaultInfo], selector: &str) -> Option<&'a BundleVaultInfo> {
-    infos.iter().find(|info| vault_matches(info, selector))
+/// Resolve a selector to exactly one vault. Names and default keys are not
+/// unique within a bundle, so an ambiguous selector is an error rather than a
+/// silent pick of the first match.
+fn match_vault<'a>(
+    infos: &'a [BundleVaultInfo],
+    selector: &str,
+) -> Result<&'a BundleVaultInfo, String> {
+    let mut matches = infos.iter().filter(|info| vault_matches(info, selector));
+    let first = matches
+        .next()
+        .ok_or_else(|| format!("No vault in bundle matches '{selector}'"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "'{selector}' matches more than one vault in the bundle; select it by id"
+        ));
+    }
+    Ok(first)
 }
 
 fn bundle_label(info: &BundleVaultInfo) -> String {
@@ -123,8 +145,30 @@ fn bundle_label(info: &BundleVaultInfo) -> String {
     }
 }
 
+/// Labels for the picker. A bundle can hold two vaults with the same name and
+/// key, so duplicates get their id appended. Without that, picking one would
+/// match both.
+fn unique_labels(infos: &[BundleVaultInfo]) -> Vec<String> {
+    let base: Vec<String> = infos.iter().map(bundle_label).collect();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for label in &base {
+        *counts.entry(label.as_str()).or_default() += 1;
+    }
+    base.iter()
+        .zip(infos)
+        .map(|(label, info)| {
+            if counts[label.as_str()] > 1 {
+                let id = info.id.simple();
+                format!("{label} [{id}]")
+            } else {
+                label.clone()
+            }
+        })
+        .collect()
+}
+
 fn select_vaults(infos: &[BundleVaultInfo]) -> Result<Vec<&BundleVaultInfo>, String> {
-    let labels: Vec<String> = infos.iter().map(bundle_label).collect();
+    let labels = unique_labels(infos);
     let chosen: HashSet<String> = MultiSelect::new("Select vaults to import:", labels.clone())
         .prompt()
         .map_err(|e| format!("Selection cancelled: {e}"))?

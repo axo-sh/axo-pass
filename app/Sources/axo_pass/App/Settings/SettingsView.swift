@@ -128,17 +128,22 @@ private struct VaultsSettingsView: View {
 
   var body: some View {
     Form {
-      LabeledContent("Transfer:") {
-        HStack {
+      LabeledContent("Backups:") {
+        VStack(alignment: .leading) {
           Button("Export…") { showingExport = true }
             .disabled(model.vaults.isEmpty)
+          Text(
+            "Export the selected vaults into one passphrase-encrypted file."
+          )
+          .captionStyle()
+
           Button("Import…") { showingImport = true }
+          Text(
+            "Import vaults from a backup file; new vaults are created and existing vaults are not overwritten."
+          )
+          .captionStyle()
         }
       }
-      Text(
-        "Export bundles the selected vaults into one passphrase-encrypted file. Import creates new vaults from such a file; it never overwrites an existing vault."
-      )
-      .settingsCaption()
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 12)
@@ -384,13 +389,18 @@ private struct ShellSettingsView: View {
 }
 
 extension View {
+  /// The look of explanatory text under a control: smaller and secondary.
+  fileprivate func captionStyle() -> some View {
+    self
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
   /// Explanatory text under a control, in the column the controls occupy.
   fileprivate func settingsCaption() -> some View {
     LabeledContent("") {
-      self
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      self.captionStyle()
     }
   }
 }

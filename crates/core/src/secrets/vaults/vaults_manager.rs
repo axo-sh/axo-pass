@@ -11,7 +11,8 @@ use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, ImportableBundle};
 use crate::secrets::vaults::vault_wrapper::{
-    VaultWrapper, check_vault_auth_still_valid, export_bundle, get_vault_encryption_key,
+    ExportProgress, VaultWrapper, check_vault_auth_still_valid, export_bundle,
+    get_vault_encryption_key, normalized_key,
 };
 
 #[derive(Default)]
@@ -114,6 +115,7 @@ impl VaultsManager {
         vault_keys: &[String],
         path: P,
         export_mode: ExportMode,
+        progress: impl FnMut(ExportProgress),
     ) -> Result<(), Error> {
         for key in vault_keys {
             let vw = self
@@ -126,7 +128,7 @@ impl VaultsManager {
             .iter()
             .map(|k| self.vaults.get(k.as_str()).expect("unlocked above"))
             .collect();
-        export_bundle(&selected, path.as_ref(), export_mode)
+        export_bundle(&selected, path.as_ref(), export_mode, progress)
     }
 
     /// Open and decrypt a bundle file so the caller can inspect its vaults and
@@ -147,15 +149,22 @@ impl VaultsManager {
         bundle: ImportableBundle,
         selection: &BTreeMap<Uuid, String>,
     ) -> Result<Vec<String>, Error> {
-        for key in selection.values() {
+        // normalize before the collision check: `import` normalizes too, and a
+        // raw key that only collides after normalization would otherwise slip
+        // past and evict an existing vault from `self.vaults`
+        let mut targets: BTreeMap<Uuid, String> = BTreeMap::new();
+        for (id, requested_key) in selection {
+            let key = normalized_key(requested_key)
+                .ok_or_else(|| Error::InvalidVaultKey(requested_key.clone()))?;
             if self.vaults.contains_key(key.as_str()) {
                 return Err(Error::InvalidVaultKey(format!(
                     "A vault with key '{key}' already exists"
                 )));
             }
+            targets.insert(*id, key);
         }
 
-        let wrappers = bundle.import(selection, &self.vaults_dir)?;
+        let wrappers = bundle.import(&targets, &self.vaults_dir)?;
         let mut keys = Vec::with_capacity(wrappers.len());
         for vw in wrappers {
             let key = vw.key.clone();

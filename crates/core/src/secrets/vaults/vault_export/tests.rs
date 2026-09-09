@@ -5,7 +5,9 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault_export::export_mode::ExportMode;
+use crate::secrets::vaults::vault_export::export_mode::{
+    ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
+};
 use crate::secrets::vaults::vault_export::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
@@ -14,7 +16,7 @@ use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
 #[test]
 fn test_passphrase_round_trip() {
     let raw_key: Vec<u8> = (0..32).collect();
-    let export_mode = ExportMode::Passphrase("test-password-123".into());
+    let export_mode = ExportMode::passphrase("test-password-123");
     let wrapped = export_mode.encrypt(&raw_key).unwrap();
     assert!(wrapped.contains("BEGIN AGE ENCRYPTED FILE"));
 
@@ -26,7 +28,7 @@ fn test_passphrase_round_trip() {
 #[test]
 fn test_passphrase_wrong_password() {
     let raw_key: Vec<u8> = (0..32).collect();
-    let export_mode = ExportMode::Passphrase("correct-password".into());
+    let export_mode = ExportMode::passphrase("correct-password");
     let wrapped = export_mode.encrypt(&raw_key).unwrap();
 
     let identity = ImportIdentity::Passphrase("wrong-password".into());
@@ -48,6 +50,29 @@ fn test_recipient_round_trip() {
     assert_eq!(raw_key, unwrapped);
 }
 
+#[test]
+fn test_work_factor_parse() {
+    assert_eq!(WorkFactor::parse("fast").unwrap(), WorkFactor::Fast);
+    assert_eq!(WorkFactor::parse("PARANOID").unwrap(), WorkFactor::Paranoid);
+    assert_eq!(WorkFactor::parse("18").unwrap(), WorkFactor::Custom(18));
+    assert!(WorkFactor::parse("nope").is_err());
+    assert!(WorkFactor::parse(&(MIN_WORK_FACTOR - 1).to_string()).is_err());
+    assert!(WorkFactor::parse(&(MAX_WORK_FACTOR + 1).to_string()).is_err());
+}
+
+#[test]
+fn test_custom_work_factor_round_trip() {
+    let raw_key: Vec<u8> = (0..32).collect();
+    let export_mode = ExportMode::Passphrase {
+        passphrase: "pw".into(),
+        work_factor: WorkFactor::Custom(MAX_WORK_FACTOR),
+    };
+    let wrapped = export_mode.encrypt(&raw_key).unwrap();
+
+    let identity = ImportIdentity::Passphrase("pw".into());
+    assert_eq!(identity.decrypt(&wrapped).unwrap(), raw_key);
+}
+
 /// Build a bundle with `count` vaults, each carrying a distinct 32-byte file
 /// key, and serialize it to JSON.
 fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
@@ -58,16 +83,17 @@ fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
     let mut file_keys = Vec::new();
     let mut vaults = Vec::new();
     for i in 0..count {
+        let vault_id = Uuid::new_v4();
         let file_key: Vec<u8> = (0..32).map(|b| b ^ i as u8).collect();
         file_keys.push(file_key.clone());
         let wrapped_file_key = EncryptedBlob::encrypt(
             &RawFileKey(file_key),
             &bundle_cipher,
-            ExportedBundle::file_key_aad(bundle_id, Uuid::nil()),
+            ExportedBundle::file_key_aad(bundle_id, vault_id),
         )
         .unwrap();
         vaults.push(BundledVault {
-            id: Uuid::nil(),
+            id: vault_id,
             name: Some(format!("vault {i}")),
             default_key: (i > 0).then(|| format!("vault-{i}")),
             wrapped_file_key,
@@ -75,7 +101,7 @@ fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
         });
     }
 
-    let age_bundle_key = ExportMode::Passphrase("pw".into())
+    let age_bundle_key = ExportMode::passphrase("pw")
         .encrypt(bundle_key.as_slice())
         .unwrap();
 

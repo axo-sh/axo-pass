@@ -4,7 +4,7 @@ use std::iter::once;
 use secrecy::SecretString;
 
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault_export::export_mode::SCRYPT_WORK_FACTOR;
+use crate::secrets::vaults::vault_export::export_mode::MAX_IMPORT_WORK_FACTOR;
 
 pub enum ImportIdentity {
     Passphrase(SecretString),
@@ -21,7 +21,7 @@ impl ImportIdentity {
         let identity: Box<dyn age::Identity> = match self {
             ImportIdentity::Passphrase(passphrase) => {
                 let mut identity = age::scrypt::Identity::new(passphrase.clone());
-                identity.set_max_work_factor(SCRYPT_WORK_FACTOR + 1);
+                identity.set_max_work_factor(MAX_IMPORT_WORK_FACTOR);
                 Box::new(identity)
             },
             ImportIdentity::Identity(identity) => Box::new(identity.clone()),

@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 use url::Url;
 use uuid::Uuid;
 
+use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
@@ -21,6 +22,20 @@ use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 
 pub const DEFAULT_VAULT: &str = "default";
+
+/// Progress events emitted during [`export_bundle`]. The key derivation step is
+/// a single opaque scrypt call with no sub-progress, so it is reported as one
+/// event before it starts.
+#[derive(Clone, Copy, Debug)]
+pub enum ExportProgress {
+    /// Collecting and wrapping vault `index` of `total` (1-based).
+    Vault { index: usize, total: usize },
+    /// Deriving the passphrase key. This is the slow step for a passphrase
+    /// export.
+    DerivingKey,
+    /// Writing the bundle file.
+    Writing,
+}
 
 const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
@@ -284,6 +299,7 @@ pub fn export_bundle(
     vaults: &[&VaultWrapper],
     path: &Path,
     export_mode: ExportMode,
+    mut progress: impl FnMut(ExportProgress),
 ) -> Result<(), Error> {
     if vaults.is_empty() {
         return Err(Error::VaultExportError("No vaults to export".to_string()));
@@ -293,14 +309,22 @@ pub fn export_bundle(
     let bundle_key = Aes256Gcm::generate_key(OsRng);
     let bundle_cipher = Aes256Gcm::new(&bundle_key);
 
-    let mut bundled_vaults = Vec::with_capacity(vaults.len());
-    for vw in vaults {
+    let total = vaults.len();
+    let mut bundled_vaults = Vec::with_capacity(total);
+    for (i, vw) in vaults.iter().enumerate() {
+        progress(ExportProgress::Vault {
+            index: i + 1,
+            total,
+        });
         let vault = vw.get_unlocked_vault()?;
         let key = (vw.key != DEFAULT_VAULT).then(|| vw.key.clone());
         bundled_vaults.push(vault.to_bundled_vault(key, bundle_id, &bundle_cipher)?);
     }
 
+    progress(ExportProgress::DerivingKey);
     let age_bundle_key = export_mode.encrypt(bundle_key.as_slice())?;
+
+    progress(ExportProgress::Writing);
 
     let bundle = ExportedBundle {
         version: BUNDLE_VERSION,
@@ -312,6 +336,23 @@ pub fn export_bundle(
 
     let json = serde_json::to_string_pretty(&bundle).map_err(Error::VaultSerializationError)?;
     fs::write(path, json).map_err(Error::VaultWriteError)?;
+
+    let bundle_id = bundle_id.to_string();
+    for vw in vaults {
+        audit::record(
+            AuditEvent::new(
+                audit::process_source(),
+                Action::VaultExported,
+                Outcome::Succeeded,
+            )
+            .subject(
+                Subject::new(SubjectKind::Vault, vw.key.clone())
+                    .maybe_label(vw.vault_name().map(str::to_string)),
+            )
+            .detail("bundle", bundle_id.clone())
+            .detail("vault_count", total.to_string()),
+        );
+    }
     Ok(())
 }
 

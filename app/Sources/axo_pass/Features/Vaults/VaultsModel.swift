@@ -473,11 +473,20 @@ final class VaultsModel {
   // MARK: - Bundle export / import
 
   /// Export the given vaults to a passphrase-encrypted bundle file. Returns an
-  /// error message on failure, nil on success.
-  func exportBundle(vaultKeys: [String], destination: URL, passphrase: String) async -> String? {
+  /// error message on failure, nil on success. `onStage` is called on the main
+  /// actor as the export progresses.
+  func exportBundle(
+    vaultKeys: [String],
+    destination: URL,
+    passphrase: String,
+    workFactor: ExportWorkFactor,
+    onStage: @escaping @MainActor (VaultExportStage, UInt32, UInt32) -> Void
+  ) async -> String? {
+    let delegate = ExportProgressForwarder(onStage)
     do {
       try await core.exportVaultBundle(
-        vaultKeys: vaultKeys, destPath: destination.path, passphrase: passphrase)
+        vaultKeys: vaultKeys, destPath: destination.path, passphrase: passphrase,
+        workFactor: workFactor, progress: delegate)
       return nil
     } catch {
       return String(describing: error)

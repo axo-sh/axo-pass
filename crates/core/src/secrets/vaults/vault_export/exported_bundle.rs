@@ -21,6 +21,12 @@ pub struct RawFileKey(#[serde_as(as = "Base64")] pub Vec<u8>);
 
 /// Bundle export format. A single age operation protects a random bundle key;
 /// each vault's file key is wrapped with that bundle key via AES-256-GCM.
+///
+/// Only the file keys and the items are encrypted. `version`, `id`,
+/// `exported_at`, and each vault's `name` and `default_key` are stored in
+/// plaintext and are not covered by any AAD, so one bundle file discloses the
+/// name and key of every vault in it, and anyone with write access to the file
+/// can rename or reorder entries undetected.
 #[derive(Serialize, Deserialize)]
 pub struct ExportedBundle {
     pub version: u32,
