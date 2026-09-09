@@ -459,7 +459,7 @@ impl VaultFieldMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::vaults::fields::TextSubtype;
+    use crate::secrets::vaults::fields::TextField;
 
     #[test]
     fn default_kind_is_omitted_from_json() {
@@ -481,10 +481,9 @@ mod tests {
         let meta = VaultFieldMetadata::try_new(
             "Notes",
             "notes",
-            FieldKind::Text {
-                subtype: TextSubtype::Multiline,
-                concealed: Some(true),
-            },
+            FieldKind::Text(TextField {
+                multiline: Some(true),
+            }),
         )
         .unwrap();
         let json = serde_json::to_value(&meta).unwrap();
