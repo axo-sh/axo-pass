@@ -42,10 +42,7 @@ struct CredentialList: View {
                   bottom: credentialRowInset, trailing: credentialRowInset
                 )
               )
-              // The separator otherwise runs to the list's edge, past the row's
-              // trailing inset, so it looks wider than the row content.
-              .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-              .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
+              .listRowSeparator(.hidden)
           }
           endDropZone
             .listRowSeparator(.hidden)
@@ -142,7 +139,6 @@ struct CredentialList: View {
           .foregroundStyle(.secondary)
           .textSelection(.enabled)
       }
-      Spacer(minLength: 12)
     }
   }
 
