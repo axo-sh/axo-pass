@@ -26,6 +26,8 @@ struct CredentialRow: View {
   @State private var draftMultiline: Bool = false
   @State private var hoveringValue: Bool = false
   @State private var justCopied: Bool = false
+  @State private var hoveringReference: Bool = false
+  @State private var justCopiedReference: Bool = false
   // The value at the moment editing began. Nil when the secret could not be
   // revealed, in which case the value cannot be resubmitted and no edit saves.
   @State private var originalValue: String? = nil
@@ -94,12 +96,7 @@ struct CredentialRow: View {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 2) {
           Text(cred.title).fontWeight(.semibold)
-          Text(reference)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .lineLimit(1)
-            .truncationMode(.middle)
+          referenceLabel
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -123,6 +120,47 @@ struct CredentialRow: View {
           .animation(.easeInOut(duration: 0.12), value: justCopied)
       }
     }
+  }
+
+  /// The credential's `axo://` reference. Clicking it copies it. The trailing
+  /// spacer keeps the button's hit area on the text rather than the whole row.
+  private var referenceLabel: some View {
+    HStack(spacing: 0) {
+      referenceButton
+      Spacer(minLength: 0)
+    }
+  }
+
+  private var referenceButton: some View {
+    Button {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(reference, forType: .string)
+      justCopiedReference = true
+      Task {
+        try? await Task.sleep(for: .seconds(1.2))
+        justCopiedReference = false
+      }
+    } label: {
+      Text(reference)
+        .font(.caption)
+        .foregroundStyle(referenceColor)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .pointerStyle(.link)
+    .help("Copy reference")
+    .onHover { hoveringReference = $0 }
+    .animation(.easeInOut(duration: 0.12), value: hoveringReference)
+    // Slower than the hover fade so the confirmation eases in and back out
+    // rather than snapping.
+    .animation(.easeInOut(duration: 0.35), value: justCopiedReference)
+  }
+
+  private var referenceColor: Color {
+    if justCopiedReference { return Color.green.opacity(0.7) }
+    return hoveringReference ? .primary : .secondary
   }
 
   @ViewBuilder
