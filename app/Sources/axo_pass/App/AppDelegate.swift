@@ -64,6 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  /// The app always starts from a locked state, so a relaunch shows only the
+  /// lock screen. Here we globally decline restoration.
+  func application(_ app: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
+    false
+  }
+
+  func application(_ app: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
+    false
+  }
+
   /// Reopen from the Dock or the Finder. The broker never sends one: it only
   /// runs `open` when no app is running, so a reopen is always a person.
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
