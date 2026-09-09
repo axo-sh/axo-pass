@@ -147,9 +147,13 @@ struct CredentialRow: View {
         Text(isRevealing ? "Revealing…" : "Value unavailable")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
-      } else if cred.kind.concealed && !cred.kind.multiline {
-        PlainSecureField(placeholder: "Value", text: $quickDraft)
-          .frame(height: 18)
+      } else if cred.kind.concealed {
+        SecureTextField(
+          text: $quickDraft,
+          placeholder: "Value",
+          multiline: cred.kind.multiline,
+          minLines: 3,
+          maxLines: 12)
       } else {
         TextField("Value", text: $quickDraft, axis: .vertical)
           .textFieldStyle(.plain)
@@ -228,6 +232,13 @@ struct CredentialRow: View {
           Text(isRevealing ? "Revealing…" : "Value unavailable")
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else if draftConcealed {
+          SecureTextField(
+            text: $draftValue,
+            placeholder: "Value",
+            multiline: draftMultiline,
+            minLines: 3,
+            maxLines: 12)
         } else {
           TextField("Value", text: $draftValue, axis: .vertical)
             .textFieldStyle(.plain)
@@ -240,7 +251,8 @@ struct CredentialRow: View {
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
       .overlay(
         RoundedRectangle(cornerRadius: 6)
-          .strokeBorder(hoveredField == .value ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
+          .strokeBorder(
+            hoveredField == .value ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
             lineWidth: 1)
       )
       .padding(.top, 6)
@@ -326,7 +338,9 @@ struct CredentialRow: View {
     let kindChanged =
       supportsTextOptions
       && (draftConcealed != cred.kind.concealed || draftMultiline != cred.kind.multiline)
-    guard newTitle != cred.title || newKey != cred.key || valueChanged || kindChanged else { return }
+    guard newTitle != cred.title || newKey != cred.key || valueChanged || kindChanged else {
+      return
+    }
 
     // The FFI resubmits title and value together, so a save needs the value.
     guard let value = valueChanged ? draftValue : originalValue else { return }

@@ -1,3 +1,4 @@
+import AppKit
 import AxoPassFFI
 import SwiftUI
 
@@ -19,8 +20,14 @@ struct NewCredentialSheet: View {
       Form {
         TextField("Title", text: $title)
         TextField("Key (a-z, 0-9, -, _)", text: $key)
-        if concealed && !multiline {
-          SecureField("Value", text: $value)
+        if concealed {
+          LabeledContent("Value") {
+            SecureTextField(
+              text: $value,
+              multiline: multiline,
+              bordered: true,
+              font: .systemFont(ofSize: NSFont.systemFontSize))
+          }
         } else {
           TextField("Value", text: $value, axis: .vertical)
             .lineLimit(multiline ? 3...12 : 1...1)
