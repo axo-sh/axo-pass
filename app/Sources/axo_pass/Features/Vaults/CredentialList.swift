@@ -156,6 +156,8 @@ struct CredentialList: View {
   func credentialRowBody(_ cred: CredentialInfo) -> some View {
     CredentialRow(
       cred: cred,
+      vaultKey: vaultKey,
+      itemKey: item.key,
       secret: secrets[cred.key],
       error: errors[cred.key],
       isRevealing: revealing.contains(cred.key),

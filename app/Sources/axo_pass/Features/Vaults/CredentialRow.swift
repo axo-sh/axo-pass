@@ -4,6 +4,9 @@ import SwiftUI
 
 struct CredentialRow: View {
   let cred: CredentialInfo
+  /// Vault and item this credential belongs to, for its `axo://` reference.
+  let vaultKey: String
+  let itemKey: String
   let secret: SymmetricKey?
   let error: String?
   let isRevealing: Bool
@@ -91,7 +94,12 @@ struct CredentialRow: View {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 2) {
           Text(cred.title).fontWeight(.semibold)
-          Text(cred.key).font(.caption).foregroundStyle(.secondary)
+          Text(reference)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -274,6 +282,11 @@ struct CredentialRow: View {
   }
 
   // MARK: - Helpers
+
+  /// The reference `ap exec` and `ap inject` resolve for this credential.
+  private var reference: String {
+    "axo://\(vaultKey)/\(itemKey)/\(cred.key)"
+  }
 
   /// Concealed and multiline apply only to freeform text credentials. Other
   /// kinds (email, totp, unknown, ...) hide the toggles.
