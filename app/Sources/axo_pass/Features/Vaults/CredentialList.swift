@@ -24,15 +24,25 @@ struct CredentialList: View {
 
   var body: some View {
     List {
+      // The header shares the credentials' section so no section gap opens
+      // between them.
       Section {
         header
           .listRowSeparator(.hidden)
           .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 16, trailing: 4))
-      }
-      Section {
+
         if item.credentials.isEmpty {
+          // Aligned with a credential row's text, which sits at the row inset
+          // plus CredentialRow's own horizontal padding.
           Text("No credentials")
             .foregroundStyle(.secondary)
+            .listRowSeparator(.hidden)
+            .listRowInsets(
+              EdgeInsets(
+                top: credentialRowInset, leading: credentialRowInset + 6,
+                bottom: credentialRowInset, trailing: credentialRowInset + 6
+              )
+            )
         } else {
           ForEach(displayCredentials, id: \.key) { cred in
             reorderableRow(cred)
