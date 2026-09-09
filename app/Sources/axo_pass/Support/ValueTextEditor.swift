@@ -28,6 +28,12 @@ struct ValueTextEditor: View {
   /// matches it so both wrap at the same width.
   private static let textInset: CGFloat = 5
 
+  /// The inset the text ends up with. A chromeless editor cancels TextEditor's
+  /// own inset so its text sits where the read view's text sat, rather than
+  /// shifting right when the row enters editing. A bordered editor keeps the
+  /// inset to stand off its own border.
+  private var inset: CGFloat { bordered ? Self.textInset : 0 }
+
   @State private var contentHeight: CGFloat = 0
 
   var body: some View {
@@ -35,12 +41,13 @@ struct ValueTextEditor: View {
       if text.isEmpty, !placeholder.isEmpty {
         Text(placeholder)
           .foregroundStyle(.tertiary)
-          .padding(.horizontal, Self.textInset)
+          .padding(.horizontal, inset)
           .allowsHitTesting(false)
       }
       TextEditor(text: $text)
         .textEditorStyle(.plain)
         .scrollContentBackground(.hidden)
+        .padding(.horizontal, inset - Self.textInset)
     }
     .font(Font(font))
     .lineSpacing(lineSpacing)
@@ -66,7 +73,7 @@ struct ValueTextEditor: View {
     Text(text.isEmpty ? " " : text)
       .font(Font(font))
       .lineSpacing(lineSpacing)
-      .padding(.horizontal, Self.textInset)
+      .padding(.horizontal, inset)
       .frame(maxWidth: .infinity, alignment: .leading)
       .fixedSize(horizontal: false, vertical: true)
       .hidden()
