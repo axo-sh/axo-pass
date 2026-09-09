@@ -147,42 +147,97 @@ impl ItemCommand {
         Ok(vw)
     }
 
+    /// Show one item's overview through the app broker, never a secret value.
+    /// `ap` holds no keychain entitlements, so the app unlocks the vault and
+    /// returns the listing, which is filtered here to the one item. A build
+    /// that is not staged in an app bundle has no broker to reach and unlocks
+    /// locally.
     fn cmd_get_item(&self, item_reference: &ItemReference) -> Result<(), String> {
         let item_reference = item_reference.clone();
-        let vw = Self::unlock_vault(item_reference.vault.or_else(|| self.vault.clone()))?;
-        let vault_key = vw.key.clone();
+        let vault_key = item_reference
+            .vault
+            .or_else(|| self.vault.clone())
+            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
         let item_key = item_reference.item;
+        let credential_key = item_reference.credential;
+
+        let caller = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("item get caller: {provenance:#?}"))
+            .and_then(|provenance| provenance.caller());
+
+        match app_broker::request_vault_items(&vault_key, caller.as_deref()) {
+            Ok(items) => {
+                let Some(item) = items.into_iter().find(|item| item.key == item_key) else {
+                    return Err(cformat!(
+                        "<blue>{item_key}</blue> not found in vault <blue>{vault_key}</blue>",
+                    ));
+                };
+                let credentials: Vec<(String, String)> = item
+                    .credentials
+                    .into_iter()
+                    .map(|c| (c.key, c.title))
+                    .collect();
+                Self::print_item(&vault_key, &item_key, credential_key.as_deref(), &credentials)
+            },
+            Err(BrokerError::Unavailable) => {
+                self.get_item_locally(&vault_key, &item_key, credential_key.as_deref())
+            },
+            Err(e) => Err(format!("Failed to get item: {e}")),
+        }
+    }
+
+    fn get_item_locally(
+        &self,
+        vault_key: &str,
+        item_key: &str,
+        credential_key: Option<&str>,
+    ) -> Result<(), String> {
+        let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
         let Some(item) = vw
-            .get_item_overview(&item_key)
+            .get_item_overview(item_key)
             .map_err(|e| format!("Failed to get item: {e}"))?
         else {
             return Err(cformat!(
                 "<blue>{item_key}</blue> not found in vault <blue>{vault_key}</blue>",
             ));
         };
-        match item_reference.credential {
+        let credentials: Vec<(String, String)> = item
+            .credentials
+            .values()
+            .map(|cred| (cred.key.clone(), cred.title.clone()))
+            .collect();
+        Self::print_item(vault_key, item_key, credential_key, &credentials)
+    }
+
+    /// Render an item overview: every credential, or the detail for one named
+    /// credential. `credentials` is `(key, title)` pairs.
+    fn print_item(
+        vault_key: &str,
+        item_key: &str,
+        credential_key: Option<&str>,
+        credentials: &[(String, String)],
+    ) -> Result<(), String> {
+        match credential_key {
             None => {
-                if item.credentials.is_empty() {
+                if credentials.is_empty() {
                     cprintln!("<dim><<no credentials>></dim>");
                 }
-                for (cred_key, cred) in &item.credentials {
+                for (cred_key, title) in credentials {
                     cprintln!(
-                        "{} {cred_key} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>",
-                        cred.title,
+                        "{title} {cred_key} <dim>axo://{vault_key}/{item_key}/{cred_key}</dim>",
                     );
                 }
             },
             Some(credential_key) => {
-                let Some(credential) = vw
-                    .get_secret_overview(&item_key, &credential_key)
-                    .map_err(|e| format!("Failed to get credential: {e}"))?
+                let Some((_, title)) =
+                    credentials.iter().find(|(key, _)| key == credential_key)
                 else {
                     return Err(cformat!(
                         "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
                     ));
                 };
-                cprintln!("<green>Credential</green>: {}", credential_key);
-                cprintln!("<green>Title</green>: {}", credential.title);
+                cprintln!("<green>Credential</green>: {credential_key}");
+                cprintln!("<green>Title</green>: {title}");
                 cprintln!(
                     "<green>Reference</green>: axo://{vault_key}/{item_key}/{credential_key}"
                 );
@@ -374,13 +429,20 @@ impl ItemCommand {
         Ok(())
     }
 
+    /// Write one credential's secret value through the app broker. `ap` holds
+    /// no keychain entitlements, so the app unlocks the vault, writes the
+    /// value and saves. A build that is not staged in an app bundle has no
+    /// broker to reach and writes locally.
     fn cmd_set_item(
         &self,
         item_reference: &ItemReference,
         secret_value: Option<SecretString>,
     ) -> Result<(), String> {
         let item_reference = item_reference.clone();
-        let mut vw = Self::unlock_vault(item_reference.vault.or_else(|| self.vault.clone()))?;
+        let vault_key = item_reference
+            .vault
+            .or_else(|| self.vault.clone())
+            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
 
         let item_key = item_reference.item;
         let Some(credential_key) = item_reference.credential else {
@@ -404,22 +466,45 @@ impl ItemCommand {
             },
         };
 
-        vw.add_secret(
+        let caller = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("item set caller: {provenance:#?}"))
+            .and_then(|provenance| provenance.caller());
+
+        match app_broker::request_write_vault_secret(
+            &vault_key,
             &item_key,
             &credential_key,
             &credential_key,
+            &secret,
+            caller.as_deref(),
+        ) {
+            Ok(_) => {},
+            Err(BrokerError::Unavailable) => {
+                Self::set_item_locally(&vault_key, &item_key, &credential_key, secret)?
+            },
+            Err(e) => return Err(format!("Failed to set secret: {e}")),
+        }
+
+        println!("Added item: axo://{vault_key}/{item_key}/{credential_key}");
+        Ok(())
+    }
+
+    fn set_item_locally(
+        vault_key: &str,
+        item_key: &str,
+        credential_key: &str,
+        secret: SecretString,
+    ) -> Result<(), String> {
+        let mut vw = Self::unlock_vault(Some(vault_key.to_string()))?;
+        vw.add_secret(
+            item_key,
+            credential_key,
+            credential_key,
             FieldKind::default(),
             secret,
         )
-        .expect("Failed to add secret");
-
-        vw.save().expect("Failed to save vault");
-
-        println!(
-            "Added item: axo://{}/{}/{}",
-            vw.key, item_key, credential_key
-        );
-
+        .map_err(|e| format!("Failed to add secret: {e}"))?;
+        vw.save().map_err(|e| format!("Failed to save vault: {e}"))?;
         Ok(())
     }
 }

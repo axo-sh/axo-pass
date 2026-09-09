@@ -4,8 +4,8 @@ import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 import SwiftUI
 
-/// Draws the authorization prompt for `ap item list` and `ap read`, which the
-/// core's broker delegates here.
+/// Draws the authorization prompt for `ap item list`, `ap item get`, `ap read`
+/// and `ap item set`, which the core's broker delegates here.
 ///
 /// `ap` holds no keychain entitlements, so it cannot read or create the vault
 /// encryption key itself. It hands the request to the broker, which calls in
@@ -136,6 +136,8 @@ final class VaultUnlockPromptModel {
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
+    case let .writeSecret(itemKey, credentialKey):
+      what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -143,11 +145,11 @@ final class VaultUnlockPromptModel {
     return what
   }
 
-  /// True for the accesses that expose secret values and so prompt on every
-  /// request. A listing does not.
+  /// True for the accesses that expose or change secret values and so prompt on
+  /// every request. A listing does not.
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
-    case .readSecret, .resolveSecrets: return true
+    case .readSecret, .resolveSecrets, .writeSecret: return true
     case .listItems: return false
     }
   }
@@ -165,6 +167,7 @@ final class VaultUnlockPromptModel {
     case .readSecret: return "read"
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
+    case .writeSecret: return "write"
     }
   }
 
@@ -181,6 +184,7 @@ final class VaultUnlockPromptModel {
       let verb = purpose == .read ? "read" : "resolve"
       return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
+    case .writeSecret: return "write a secret"
     }
   }
 }

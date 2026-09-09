@@ -58,6 +58,7 @@ pub use ssh::{
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
     VaultAuthorizer, VaultRef, request_resolve_secrets, request_vault_items, request_vault_secret,
+    request_write_vault_secret,
 };
 
 /// How long the agent waits for the user to answer the app's prompt before
@@ -244,6 +245,19 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap item set`: unlock a vault and write one credential's secret value,
+    /// creating the item or credential if it does not exist.
+    WriteVaultSecret {
+        vault_key: String,
+        item_key: String,
+        credential_key: String,
+        title: String,
+        value: String,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// `ap age recipients` / resolving an age recipient: list the saved age
     /// keys, public halves only. Raises no prompt.
     ListAgeKeys {
@@ -297,6 +311,7 @@ impl WireRequest {
             | WireRequest::ListVaultItems { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
+            | WireRequest::WriteVaultSecret { caller, .. }
             | WireRequest::ListAgeKeys { caller, .. }
             | WireRequest::GetAgeIdentity { caller, .. }
             | WireRequest::CreateAgeKey { caller, .. }
@@ -351,6 +366,10 @@ enum WireResponse {
     /// does not resolve.
     ResolvedSecrets {
         values: Vec<Option<String>>,
+    },
+    /// `true` when the write created the item rather than updating it.
+    VaultWritten {
+        created: bool,
     },
     /// Saved age keys, public halves only.
     AgeKeys {
@@ -806,7 +825,7 @@ async fn handle_connection(
                 action: vault::VaultAction::ListItems,
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
         },
         WireRequest::ReadVaultSecret {
             vault_key,
@@ -824,7 +843,7 @@ async fn handle_connection(
                 },
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
         },
         WireRequest::ResolveSecrets {
             refs,
@@ -841,7 +860,31 @@ async fn handle_connection(
                 action: vault::VaultAction::ResolveSecrets { purpose, refs },
             };
             log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor).await
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
+        },
+        WireRequest::WriteVaultSecret {
+            vault_key,
+            item_key,
+            credential_key,
+            title,
+            value,
+            caller,
+        } => {
+            let prompt = vault::VaultAccessPrompt {
+                vault_key,
+                caller,
+                caller_chain: caller_chain.clone(),
+                action: vault::VaultAction::WriteSecret {
+                    item_key,
+                    credential_key,
+                },
+            };
+            let payload = vault::WriteSecretPayload {
+                title,
+                value: secrecy::SecretString::from(value),
+            };
+            log::debug!("App broker request: {prompt:?}");
+            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, Some(payload)).await
         },
         WireRequest::ListAgeKeys { .. } => {
             log::debug!("App broker request: list age keys");

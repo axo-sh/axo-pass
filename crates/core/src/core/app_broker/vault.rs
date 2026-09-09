@@ -19,7 +19,7 @@ use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request}
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::dirs::vaults_dir;
-use crate::secrets::vaults::VaultWrapper;
+use crate::secrets::vaults::{FieldKind, VaultWrapper};
 
 /// One `axo://` reference to resolve, as it crosses the socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +62,23 @@ pub enum VaultAction {
         purpose: ResolvePurpose,
         refs: Vec<VaultRef>,
     },
+
+    /// `ap item set`: write one credential's secret value, creating the item
+    /// or credential if it does not exist. The value itself is not carried
+    /// here; it travels in [`WriteSecretPayload`] so it never reaches the
+    /// app's prompt delegate.
+    WriteSecret {
+        item_key: String,
+        credential_key: String,
+    },
+}
+
+/// The secret an [`VaultAction::WriteSecret`] writes, kept out of
+/// [`VaultAccessPrompt`] so it is not handed to the app for the prompt.
+#[derive(Clone)]
+pub struct WriteSecretPayload {
+    pub title: String,
+    pub value: SecretString,
 }
 
 /// What the app needs to describe the prompt for a vault access.
@@ -185,10 +202,40 @@ pub fn request_resolve_secrets(
     }
 }
 
+/// Ask the app to unlock a vault and write one credential's secret value,
+/// creating the item or credential if needed. Returns whether the item was
+/// newly created. Blocking, same as [`request_vault_items`].
+pub fn request_write_vault_secret(
+    vault_key: &str,
+    item_key: &str,
+    credential_key: &str,
+    title: &str,
+    value: &SecretString,
+    caller: Option<&str>,
+) -> Result<bool, BrokerError> {
+    let request = WireRequest::WriteVaultSecret {
+        vault_key: vault_key.to_string(),
+        item_key: item_key.to_string(),
+        credential_key: credential_key.to_string(),
+        title: title.to_string(),
+        value: value.expose_secret().to_string(),
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::VaultWritten { created } => Ok(created),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to vault secret write".to_string(),
+        )),
+    }
+}
+
 pub(super) async fn authorize_and_serve(
     authorizer: &dyn VaultAuthorizer,
     prompt: VaultAccessPrompt,
     actor: Actor,
+    write: Option<WriteSecretPayload>,
 ) -> WireResponse {
     let context = match authorizer.begin(prompt.clone(), actor.clone()).await {
         Ok(context) => context,
@@ -203,7 +250,7 @@ pub(super) async fn authorize_and_serve(
     };
 
     let job = prompt.clone();
-    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context))
+    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, write))
         .await
         .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
@@ -259,6 +306,26 @@ fn record_access(
             };
             (action, Subject::new(SubjectKind::Vault, vault_key.clone()))
         },
+        VaultAction::WriteSecret {
+            item_key,
+            credential_key,
+        } => (
+            Action::VaultItemUpdated,
+            Subject::new(
+                SubjectKind::Credential,
+                format!("{vault_key}/{item_key}/{credential_key}"),
+            ),
+        ),
+    };
+
+    // A write that created the item records `vault.item_created` instead. The
+    // serve step reports which through the response.
+    let action = match (&prompt.action, response) {
+        (
+            VaultAction::WriteSecret { .. },
+            Some(WireResponse::VaultWritten { created: true }),
+        ) => Action::VaultItemCreated,
+        _ => action,
     };
 
     let mut event = AuditEvent::new(audit::process_source(), action, outcome)
@@ -280,6 +347,9 @@ fn record_access(
             let resolved = values.iter().filter(|v| v.is_some()).count();
             event = event.detail("resolved_count", resolved.to_string());
         },
+        Some(WireResponse::VaultWritten { created }) => {
+            event = event.detail("created", created.to_string());
+        },
         _ => {},
     }
     if let Some(message) = message {
@@ -289,10 +359,15 @@ fn record_access(
 }
 
 /// Load the vault from disk and serve the request on the app's context.
-/// Read-only, so it does not touch the app's in-memory vault state.
+///
+/// The vault is loaded fresh from disk and, for a write, saved straight back,
+/// so this does not touch the app's in-memory vault state. The app's own CRUD
+/// re-reads the file before every mutation (`with_unlocked_vault` calls
+/// `unlock` each time), so a later UI edit does not clobber a write made here.
 fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
+    write: Option<WriteSecretPayload>,
 ) -> Result<WireResponse, String> {
     if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
         return resolve_secrets(refs, context);
@@ -316,6 +391,31 @@ fn serve_on_context(
                 .map_err(|e| format!("Failed to get secret: {e}"))?
                 .map(|secret| secret.expose_secret().to_string());
             Ok(WireResponse::VaultSecret { value })
+        },
+        VaultAction::WriteSecret {
+            item_key,
+            credential_key,
+        } => {
+            let payload = write.ok_or("Missing write payload")?;
+            // Keep an existing credential's kind so a value-only update does
+            // not reset it; a new credential falls back to the default.
+            let existing = vw
+                .get_secret_overview(&item_key, &credential_key)
+                .ok()
+                .flatten();
+            let created = existing.is_none()
+                && vw
+                    .get_item_overview(&item_key)
+                    .ok()
+                    .flatten()
+                    .is_none();
+            let kind = existing
+                .map(|o| o.kind.clone())
+                .unwrap_or_else(FieldKind::default);
+            vw.add_secret(&item_key, &credential_key, &payload.title, kind, payload.value)
+                .map_err(|e| format!("Failed to add secret: {e}"))?;
+            vw.save().map_err(|e| format!("Failed to save vault: {e}"))?;
+            Ok(WireResponse::VaultWritten { created })
         },
         VaultAction::ResolveSecrets { .. } => unreachable!("handled above"),
     }

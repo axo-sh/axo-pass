@@ -2391,6 +2391,12 @@ pub enum VaultAction {
         purpose: ResolvePurpose,
         count: u32,
     },
+    /// `ap item set`: write one credential's secret value. The value is not
+    /// carried to the app.
+    WriteSecret {
+        item_key: String,
+        credential_key: String,
+    },
 }
 
 /// Mirrors [`app_broker::ResolvePurpose`].
@@ -2425,6 +2431,13 @@ impl From<app_broker::VaultAction> for VaultAction {
             app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
                 purpose: purpose.into(),
                 count: refs.len() as u32,
+            },
+            app_broker::VaultAction::WriteSecret {
+                item_key,
+                credential_key,
+            } => Self::WriteSecret {
+                item_key,
+                credential_key,
             },
         }
     }
