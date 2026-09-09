@@ -6,7 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 use secrecy::SecretBox;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::secrets::vaults::errors::Error;
 
@@ -65,10 +65,13 @@ impl<T> Clone for EncryptedBlob<T> {
 impl<T: Serialize + for<'de2> Deserialize<'de2> + Zeroize> EncryptedBlob<T> {
     pub fn encrypt(value: &T, cipher: &Aes256Gcm, aad: Vec<String>) -> Result<Self, Error> {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        // Zeroizing so the plaintext JSON (which may itself be a secret, e.g.
+        // a credential value or raw file key) doesn't linger unzeroized on the heap.
+        let serialized = Zeroizing::new(
+            serde_json::to_string(&value).map_err(|_| Error::VaultSecretEncryptionError)?,
+        );
         let payload = Payload {
-            msg: &serde_json::to_string(&value)
-                .map_err(|_| Error::VaultSecretEncryptionError)?
-                .into_bytes(),
+            msg: serialized.as_bytes(),
             aad: &aad.join(":").into_bytes(),
         };
 

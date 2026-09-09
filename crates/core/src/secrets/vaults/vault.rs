@@ -9,7 +9,7 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
@@ -47,7 +47,7 @@ pub struct Vault {
 impl Vault {
     pub fn new(name: Option<String>, user_encryption_key: ManagedKey) -> Result<Self, Error> {
         let vault_id = Uuid::new_v4();
-        let actual_file_key = Aes256Gcm::generate_key(OsRng);
+        let actual_file_key = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
 
         // use actual key to create personal vault file key
         let enc_file_key = VaultFileKey::Personal(

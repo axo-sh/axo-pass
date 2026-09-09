@@ -25,6 +25,7 @@ use objc2_security::{
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
 use ssh_key::public::KeyData;
+use zeroize::Zeroizing;
 
 use crate::secrets::keychain::access_control::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
@@ -221,7 +222,7 @@ impl ManagedKey {
         }
     }
 
-    pub fn decrypt(&self, b64_ciphertext: &[u8]) -> Option<Vec<u8>> {
+    pub fn decrypt(&self, b64_ciphertext: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         unsafe {
             let ciphertext = b64.decode(b64_ciphertext).ok()?;
             let ciphertext = &CFData::from_bytes(&ciphertext);
@@ -229,7 +230,7 @@ impl ManagedKey {
             let res = self
                 .sec_key
                 .decrypted_data(alg(), ciphertext, &mut cf_error_ptr)
-                .map(|data| data.as_bytes_unchecked().to_vec());
+                .map(|data| Zeroizing::new(data.as_bytes_unchecked().to_vec()));
             if cf_error_ptr.is_null() {
                 res
             } else {
