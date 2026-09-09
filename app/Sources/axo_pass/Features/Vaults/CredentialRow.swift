@@ -55,11 +55,16 @@ struct CredentialRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 2)
     .padding(.horizontal, 6)
+    // Seeds the drafts both when the pane enters edit mode and when a row is
+    // built while it is already editing. List creates rows lazily, so a row that
+    // did not exist at the moment Edit was pressed never sees that transition.
+    .task(id: isEditing) {
+      guard isEditing else { return }
+      resetDrafts()
+      cancelQuickEdit()
+    }
     .onChange(of: isEditing) { wasEditing, editing in
-      if editing {
-        resetDrafts()
-        cancelQuickEdit()
-      } else if wasEditing {
+      if !editing, wasEditing {
         commitIfChanged()
       }
     }
@@ -147,17 +152,13 @@ struct CredentialRow: View {
         Text(isRevealing ? "Revealing…" : "Value unavailable")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
-      } else if cred.kind.concealed {
-        SecureTextField(
+      } else {
+        ValueTextEditor(
           text: $quickDraft,
           placeholder: "Value",
           multiline: cred.kind.multiline,
           minLines: 3,
           maxLines: 12)
-      } else {
-        TextField("Value", text: $quickDraft, axis: .vertical)
-          .textFieldStyle(.plain)
-          .lineLimit(cred.kind.multiline ? 3...12 : 1...1)
       }
     }
     .font(.system(.body, design: .monospaced))
@@ -232,17 +233,13 @@ struct CredentialRow: View {
           Text(isRevealing ? "Revealing…" : "Value unavailable")
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if draftConcealed {
-          SecureTextField(
+        } else {
+          ValueTextEditor(
             text: $draftValue,
             placeholder: "Value",
             multiline: draftMultiline,
             minLines: 3,
             maxLines: 12)
-        } else {
-          TextField("Value", text: $draftValue, axis: .vertical)
-            .textFieldStyle(.plain)
-            .lineLimit(draftMultiline ? 3...12 : 1...1)
         }
       }
       .font(.system(.body, design: .monospaced))
