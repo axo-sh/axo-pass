@@ -105,8 +105,9 @@ impl EncryptedVault {
             metadata: match metadata {
                 Some(existing) => existing.clone(),
                 None => {
-                    let metadata =
+                    let mut metadata =
                         VaultFieldMetadata::try_new(&cred.title, &cred.key, cred.kind.clone())?;
+                    metadata.position = cred.position;
                     vault_cipher.encrypt_cred_metadata(item_id, cred.id, &metadata)?
                 },
             },
@@ -232,6 +233,37 @@ mod tests {
             .decrypt_cred_value(item.id, cred.id, &enc_cred.value)
             .unwrap();
         assert_eq!(secret_value.expose_secret(), "secret123");
+    }
+
+    #[test]
+    fn credential_position_is_persisted_in_metadata() {
+        let mut vault = make_vault();
+        let cipher = VaultCipher::new(vault.id);
+        let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
+        vault.add_item(&cipher, None, &item).unwrap();
+
+        let mut cred =
+            VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default())
+                .unwrap();
+        cred.position = Some(3);
+        let secret = cipher
+            .encrypt_cred_value(item.id, cred.id, "secret123")
+            .unwrap();
+        vault
+            .add_credential(&cipher, None, item.id, &cred, secret)
+            .unwrap();
+
+        let enc_cred = vault
+            .items
+            .get(&item.id)
+            .unwrap()
+            .credentials
+            .get(&cred.id)
+            .unwrap();
+        let meta = cipher
+            .decrypt_cred_metadata(item.id, cred.id, &enc_cred.metadata)
+            .unwrap();
+        assert_eq!(meta.expose_secret().position, Some(3));
     }
 
     #[test]

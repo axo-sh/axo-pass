@@ -145,6 +145,9 @@ pub struct CredentialInfo {
     pub key: String,
     pub title: String,
     pub kind: FieldKindInfo,
+    /// User-defined order within the item. `None` for credentials that have
+    /// never been reordered; the list is already returned in display order.
+    pub position: Option<u32>,
 }
 
 /// Flattened view of `FieldKind` for the UI. `kind` is the discriminator:
@@ -1166,9 +1169,15 @@ impl AxoPass {
                             key: c.key.clone(),
                             title: c.title.clone(),
                             kind: FieldKindInfo::from(&c.kind),
+                            position: c.position,
                         })
                         .collect();
-                    credentials.sort_by(|a, b| a.title.cmp(&b.title));
+                    // Reordered credentials lead, in their set order; the rest
+                    // keep the title sort.
+                    credentials.sort_by(|a, b| {
+                        (a.position.unwrap_or(u32::MAX), &a.title)
+                            .cmp(&(b.position.unwrap_or(u32::MAX), &b.title))
+                    });
                     ItemInfo {
                         key: item.key.clone(),
                         title: item.title.clone(),
@@ -1392,6 +1401,26 @@ impl AxoPass {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
                 vw.delete_item_credential(&item_key, &cred_key)
+                    .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Set the display order of an item's credentials. `ordered_cred_keys` must
+    /// list exactly the item's credential keys, once each.
+    pub async fn reorder_credentials(
+        &self,
+        vault_key: String,
+        item_key: String,
+        ordered_cred_keys: Vec<String>,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.reorder_credentials(&item_key, &ordered_cred_keys)
                     .map_err(FfiError::from)
             })
         })

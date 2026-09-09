@@ -292,6 +292,15 @@ impl VaultWrapper {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item_credential(item_key, cred_key)
     }
+
+    pub fn reorder_credentials(
+        &mut self,
+        item_key: &str,
+        ordered_cred_keys: &[String],
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.reorder_item_credentials(item_key, ordered_cred_keys)
+    }
 }
 
 /// Export one or more unlocked vaults into a single bundle file. A random

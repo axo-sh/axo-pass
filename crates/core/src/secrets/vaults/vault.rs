@@ -113,7 +113,7 @@ impl Vault {
             };
 
             for (cred_id, encrypted_cred) in encrypted_item.credentials {
-                let (cred_title, cred_key, cred_kind) = vault
+                let (cred_title, cred_key, cred_kind, cred_position) = vault
                     .cipher
                     .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
                     .map(|m| {
@@ -122,6 +122,7 @@ impl Vault {
                             metadata.title.clone(),
                             metadata.key.clone(),
                             metadata.kind.clone(),
+                            metadata.position,
                         )
                     })?;
 
@@ -136,6 +137,7 @@ impl Vault {
                         title: cred_title,
                         key: cred_key.clone(),
                         kind: cred_kind,
+                        position: cred_position,
                     },
                 );
 
@@ -394,6 +396,66 @@ impl Vault {
             .decrypt_cred_value(item_id, cred_id, encrypted_secret)?;
         Ok(Some(plaintext))
     }
+
+    /// Set the display order of an item's credentials. `ordered_cred_keys` must
+    /// list exactly the item's credential keys, once each. Each credential's
+    /// `position` is set to its index and its metadata blob is invalidated so
+    /// the next save re-encrypts it.
+    pub fn reorder_item_credentials(
+        &mut self,
+        item_key: &str,
+        ordered_cred_keys: &[String],
+    ) -> Result<(), Error> {
+        let item_id = *self.get_item_id(item_key)?;
+
+        // Resolve every requested key to a credential id in this item.
+        let mut ordered_ids = Vec::with_capacity(ordered_cred_keys.len());
+        for cred_key in ordered_cred_keys {
+            let composite_key = (item_key.to_string(), cred_key.clone());
+            let (found_item_id, cred_id) = self
+                .item_credential_index
+                .get(&composite_key)
+                .copied()
+                .ok_or_else(|| {
+                    Error::InvalidCredentialKey(format!("{item_key}/{cred_key}"))
+                })?;
+            if found_item_id != item_id {
+                return Err(Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")));
+            }
+            ordered_ids.push(cred_id);
+        }
+
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+
+        // Require a full permutation of the item's credentials.
+        let mut unique: Vec<Uuid> = ordered_ids.clone();
+        unique.sort();
+        unique.dedup();
+        if unique.len() != ordered_ids.len() || ordered_ids.len() != item.credentials.len() {
+            return Err(Error::InvalidCredentialOrder(item_key.to_string()));
+        }
+
+        for (idx, cred_id) in ordered_ids.iter().enumerate() {
+            // Every id resolved through the index above, so a miss here means
+            // the index and the item's credentials have diverged.
+            let cred = item
+                .credentials
+                .get_mut(cred_id)
+                .ok_or_else(|| Error::InvalidCredentialOrder(item_key.to_string()))?;
+            cred.position = Some(idx as u32);
+        }
+
+        // Invalidate the cached metadata blobs so the next save re-encrypts
+        // them with the new positions.
+        for cred_id in &ordered_ids {
+            self.metadata_blobs.remove(cred_id);
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -422,6 +484,8 @@ pub struct VaultItemCredentialOverview {
     pub title: String,
     pub key: String,
     pub kind: FieldKind,
+    /// User-defined order within the item. `None` until the item is reordered.
+    pub position: Option<u32>,
 }
 
 impl VaultItemCredentialOverview {
@@ -433,6 +497,7 @@ impl VaultItemCredentialOverview {
             title: title.to_string(),
             key: cred_key,
             kind,
+            position: None,
         })
     }
 }
@@ -443,6 +508,11 @@ pub struct VaultFieldMetadata {
     pub key: String,
     #[serde(default, skip_serializing_if = "FieldKind::is_default")]
     pub kind: FieldKind,
+    /// User-defined order of a credential within its item. Absent on legacy
+    /// vaults and until the first reorder; unset credentials sort after set
+    /// ones, by title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
 }
 
 impl VaultFieldMetadata {
@@ -452,6 +522,7 @@ impl VaultFieldMetadata {
             title: title.to_string(),
             key: cred_key,
             kind,
+            position: None,
         })
     }
 }
@@ -460,6 +531,206 @@ impl VaultFieldMetadata {
 mod tests {
     use super::*;
     use crate::secrets::vaults::fields::TextField;
+
+    fn test_vault() -> Vault {
+        let id = Uuid::new_v4();
+        Vault {
+            id,
+            name: Some("test vault".to_string()),
+            file_key: VaultFileKey::Personal(vec![0u8; 32]),
+            cipher: VaultCipher::new(id),
+            items: BTreeMap::new(),
+            item_index: BTreeMap::new(),
+            item_credential_index: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            metadata_blobs: BTreeMap::new(),
+        }
+    }
+
+    /// A vault with one item holding the given credential keys, plus a second
+    /// item with a single credential to test cross-item rejection.
+    fn vault_with_credentials(item_key: &str, cred_keys: &[&str]) -> Vault {
+        let mut vault = test_vault();
+        vault.add_or_update_item(item_key, "Item").unwrap();
+        for cred_key in cred_keys {
+            vault
+                .add_or_update_item_credential(
+                    item_key,
+                    cred_key,
+                    cred_key,
+                    FieldKind::default(),
+                    SecretString::from("secret"),
+                )
+                .unwrap();
+        }
+
+        vault.add_or_update_item("other-item", "Other").unwrap();
+        vault
+            .add_or_update_item_credential(
+                "other-item",
+                "elsewhere",
+                "Elsewhere",
+                FieldKind::default(),
+                SecretString::from("secret"),
+            )
+            .unwrap();
+        vault
+    }
+
+    fn positions(vault: &Vault, item_key: &str, cred_keys: &[&str]) -> Vec<Option<u32>> {
+        cred_keys
+            .iter()
+            .map(|k| vault.get_item_credential(item_key, k).unwrap().position)
+            .collect()
+    }
+
+    #[test]
+    fn reorder_assigns_positions_in_the_given_order() {
+        let keys = ["alpha", "beta", "gamma"];
+        let mut vault = vault_with_credentials("item", &keys);
+        assert_eq!(positions(&vault, "item", &keys), vec![None, None, None]);
+
+        vault
+            .reorder_item_credentials(
+                "item",
+                &["gamma".to_string(), "alpha".to_string(), "beta".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(
+            positions(&vault, "item", &keys),
+            vec![Some(1), Some(2), Some(0)]
+        );
+    }
+
+    #[test]
+    fn reorder_invalidates_cached_metadata_so_positions_are_persisted() {
+        let keys = ["alpha", "beta"];
+        let mut vault = vault_with_credentials("item", &keys);
+
+        // Populate the metadata cache the way a load/save cycle would.
+        let encrypted = vault.to_encrypted().unwrap();
+        let item_id = *vault.get_item_id("item").unwrap();
+        for (cred_id, cred) in &encrypted.items.get(&item_id).unwrap().credentials {
+            vault.metadata_blobs.insert(*cred_id, cred.metadata.clone());
+        }
+
+        vault
+            .reorder_item_credentials("item", &["beta".to_string(), "alpha".to_string()])
+            .unwrap();
+
+        let encrypted = vault.to_encrypted().unwrap();
+        let mut persisted: Vec<(String, Option<u32>)> = encrypted
+            .items
+            .get(&item_id)
+            .unwrap()
+            .credentials
+            .iter()
+            .map(|(cred_id, cred)| {
+                let meta = vault
+                    .cipher
+                    .decrypt_cred_metadata(item_id, *cred_id, &cred.metadata)
+                    .unwrap();
+                let meta = meta.expose_secret();
+                (meta.key.clone(), meta.position)
+            })
+            .collect();
+        persisted.sort();
+        assert_eq!(
+            persisted,
+            vec![
+                ("alpha".to_string(), Some(1)),
+                ("beta".to_string(), Some(0))
+            ]
+        );
+    }
+
+    #[test]
+    fn reorder_rejects_a_partial_list() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta", "gamma"]);
+        let err = vault
+            .reorder_item_credentials("item", &["beta".to_string(), "alpha".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCredentialOrder(_)));
+        assert_eq!(
+            positions(&vault, "item", &["alpha", "beta", "gamma"]),
+            vec![None, None, None]
+        );
+    }
+
+    #[test]
+    fn reorder_rejects_a_duplicated_key() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let err = vault
+            .reorder_item_credentials("item", &["alpha".to_string(), "alpha".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCredentialOrder(_)));
+    }
+
+    #[test]
+    fn reorder_rejects_an_unknown_key() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let err = vault
+            .reorder_item_credentials("item", &["alpha".to_string(), "nope".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCredentialKey(_)));
+    }
+
+    #[test]
+    fn reorder_rejects_a_key_from_another_item() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let err = vault
+            .reorder_item_credentials("item", &["alpha".to_string(), "elsewhere".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCredentialKey(_)));
+    }
+
+    #[test]
+    fn reorder_rejects_an_unknown_item() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        let err = vault
+            .reorder_item_credentials("nope", &["alpha".to_string()])
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidItemKey(_)));
+    }
+
+    #[test]
+    fn reordered_positions_survive_a_save_and_load() {
+        let keys = ["alpha", "beta", "gamma"];
+        let mut vault = vault_with_credentials("item", &keys);
+        vault
+            .reorder_item_credentials(
+                "item",
+                &["gamma".to_string(), "beta".to_string(), "alpha".to_string()],
+            )
+            .unwrap();
+
+        let encrypted = vault.to_encrypted().unwrap();
+        let item_id = *vault.get_item_id("item").unwrap();
+
+        // Decrypt the persisted metadata with the vault's own cipher, since
+        // from_encrypted needs a keychain-backed key.
+        let mut loaded: Vec<(String, Option<u32>)> = encrypted
+            .items
+            .get(&item_id)
+            .unwrap()
+            .credentials
+            .iter()
+            .map(|(cred_id, cred)| {
+                let meta = vault
+                    .cipher
+                    .decrypt_cred_metadata(item_id, *cred_id, &cred.metadata)
+                    .unwrap();
+                let meta = meta.expose_secret();
+                (meta.key.clone(), meta.position)
+            })
+            .collect();
+        loaded.sort_by_key(|(_, position)| *position);
+        assert_eq!(
+            loaded.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            vec!["gamma", "beta", "alpha"]
+        );
+    }
 
     #[test]
     fn default_kind_is_omitted_from_json() {
@@ -474,6 +745,28 @@ mod tests {
         let meta: VaultFieldMetadata =
             serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
         assert_eq!(meta.kind, FieldKind::default());
+    }
+
+    #[test]
+    fn position_is_omitted_when_unset_and_roundtrips_when_set() {
+        let meta =
+            VaultFieldMetadata::try_new("Password", "password", FieldKind::default()).unwrap();
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(json.get("position").is_none());
+
+        let mut meta = meta;
+        meta.position = Some(2);
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(json.get("position").and_then(|v| v.as_u64()), Some(2));
+        let back: VaultFieldMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(back.position, Some(2));
+    }
+
+    #[test]
+    fn legacy_metadata_without_position_loads_as_none() {
+        let meta: VaultFieldMetadata =
+            serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
+        assert_eq!(meta.position, None);
     }
 
     #[test]

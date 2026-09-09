@@ -598,6 +598,24 @@ final class VaultsModel {
     }
   }
 
+  /// Persist a new display order for an item's credentials. `orderedKeys` must
+  /// list every credential key of the item, once each.
+  @discardableResult
+  func reorderCredentials(vaultKey: String, itemKey: String, orderedKeys: [String]) async -> Bool {
+    actionError = nil
+    do {
+      try await core.reorderCredentials(
+        vaultKey: vaultKey, itemKey: itemKey, orderedCredKeys: orderedKeys
+      )
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      await loadItems(for: vaultKey)
+      return false
+    }
+  }
+
   @discardableResult
   func deleteCredential(vaultKey: String, itemKey: String, credKey: String) async -> Bool {
     actionError = nil

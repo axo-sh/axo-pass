@@ -12,6 +12,8 @@ struct CredentialRow: View {
   let onHide: () -> Void
   let onCopy: () async -> Bool
   let onSave: (_ key: String, _ title: String, _ value: String, _ kind: FieldKindInfo?) -> Void
+  /// Save a new value for this credential, keeping its title, key and kind.
+  let onQuickSaveValue: (_ value: String) -> Void
   let onDelete: () -> Void
 
   @State private var draftTitle: String = ""
@@ -24,6 +26,20 @@ struct CredentialRow: View {
   // The value at the moment editing began. Nil when the secret could not be
   // revealed, in which case the value cannot be resubmitted and no edit saves.
   @State private var originalValue: String? = nil
+
+  // Value-only inline edit, available outside the pane's Edit mode.
+  @State private var quickEditing: Bool = false
+  @State private var quickDraft: String = ""
+  // The value the quick editor opened with, used to disable Save until it
+  // actually changes. Nil until the secret is revealed.
+  @State private var quickOriginal: String? = nil
+
+  // Which edit-mode field the pointer is over, for the hover background.
+  @State private var hoveredField: EditField? = nil
+
+  private enum EditField {
+    case title, key, value
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -42,6 +58,7 @@ struct CredentialRow: View {
     .onChange(of: isEditing) { wasEditing, editing in
       if editing {
         resetDrafts()
+        cancelQuickEdit()
       } else if wasEditing {
         commitIfChanged()
       }
@@ -51,6 +68,14 @@ struct CredentialRow: View {
         originalValue = revealedText
         draftValue = revealedText ?? ""
       }
+      // A quick edit opened before the reveal landed records the original as
+      // soon as it arrives, whether or not the user has started typing.
+      if quickEditing, quickOriginal == nil, let revealed = revealedText {
+        quickOriginal = revealed
+        if quickDraft.isEmpty {
+          quickDraft = revealed
+        }
+      }
     }
   }
 
@@ -58,24 +83,43 @@ struct CredentialRow: View {
 
   private var readView: some View {
     VStack(alignment: .leading, spacing: 8) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(cred.title).fontWeight(.semibold)
-        Text(cred.key).font(.caption).foregroundStyle(.secondary)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(cred.title).fontWeight(.semibold)
+          Text(cred.key).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
 
-      valueBox
-        .overlay(alignment: .topTrailing) { copyOverlay }
-        .onHover { hoveringValue = $0 }
-        .animation(.easeInOut(duration: 0.12), value: hoveringValue)
-        .animation(.easeInOut(duration: 0.12), value: justCopied)
+        if quickEditing {
+          Button("Cancel") { cancelQuickEdit() }
+            .controlSize(.small)
+          Button("Save") { commitQuickEdit() }
+            .controlSize(.small)
+            .keyboardShortcut(.defaultAction)
+            .disabled(quickDraft.isEmpty || quickDraft == quickOriginal)
+        }
+      }
+
+      if quickEditing {
+        quickEditor
+      } else {
+        valueBox
+          .overlay(alignment: .topTrailing) { valueOverlay }
+          .onHover { hoveringValue = $0 }
+          .animation(.easeInOut(duration: 0.12), value: hoveringValue)
+          .animation(.easeInOut(duration: 0.12), value: justCopied)
+      }
     }
   }
 
   @ViewBuilder
   private var valueBox: some View {
     if cred.kind.concealed {
-      SecretBox(revealed: revealedText, onToggle: { secret == nil ? onReveal() : onHide() })
+      SecretBox(
+        revealed: revealedText,
+        lineLimit: valueLineLimit,
+        onToggle: { secret == nil ? onReveal() : onHide() }
+      )
     } else {
       // A plain-text field shows its value directly. The secret is still
       // fetched lazily, so request it the first time the row appears.
@@ -84,6 +128,8 @@ struct CredentialRow: View {
         .foregroundStyle(revealedText == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
         .textSelection(.enabled)
         .lineSpacing(8)
+        .lineLimit(valueLineLimit)
+        .truncationMode(.tail)
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,7 +141,33 @@ struct CredentialRow: View {
   }
 
   @ViewBuilder
-  private var copyOverlay: some View {
+  private var quickEditor: some View {
+    Group {
+      if revealedText == nil {
+        Text(isRevealing ? "Revealing…" : "Value unavailable")
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else if cred.kind.concealed && !cred.kind.multiline {
+        PlainSecureField(placeholder: "Value", text: $quickDraft)
+          .frame(height: 18)
+      } else {
+        TextField("Value", text: $quickDraft, axis: .vertical)
+          .textFieldStyle(.plain)
+          .lineLimit(cred.kind.multiline ? 3...12 : 1...1)
+      }
+    }
+    .font(.system(.body, design: .monospaced))
+    .padding(.vertical, 6)
+    .padding(.horizontal, 8)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    .overlay(
+      RoundedRectangle(cornerRadius: 6)
+        .strokeBorder(.separator, lineWidth: 1)
+    )
+  }
+
+  @ViewBuilder
+  private var valueOverlay: some View {
     if justCopied {
       Label("Copied", systemImage: "checkmark")
         .labelStyle(.iconOnly)
@@ -106,13 +178,23 @@ struct CredentialRow: View {
     } else if isRevealing {
       ProgressView().controlSize(.small).padding(6)
     } else if hoveringValue {
-      // Copy works before the value is revealed; the handler fetches it first.
-      Button("Copy") {
-        Task {
-          if await onCopy() {
-            justCopied = true
-            try? await Task.sleep(for: .seconds(1.2))
-            justCopied = false
+      HStack(spacing: 4) {
+        Button {
+          beginQuickEdit()
+        } label: {
+          Label("Edit Value", systemImage: "pencil")
+            .labelStyle(.iconOnly)
+        }
+        .help("Edit value")
+
+        // Copy works before the value is revealed; the handler fetches it first.
+        Button("Copy") {
+          Task {
+            if await onCopy() {
+              justCopied = true
+              try? await Task.sleep(for: .seconds(1.2))
+              justCopied = false
+            }
           }
         }
       }
@@ -131,11 +213,15 @@ struct CredentialRow: View {
         .textFieldStyle(.plain)
         .font(.body)
         .fontWeight(.semibold)
+        .editableFieldBackground(active: hoveredField == .title)
+        .onHover { hoveredField = $0 ? .title : (hoveredField == .title ? nil : hoveredField) }
 
       TextField("ID", text: $draftKey)
         .textFieldStyle(.plain)
         .font(.body)
         .foregroundStyle(.secondary)
+        .editableFieldBackground(active: hoveredField == .key)
+        .onHover { hoveredField = $0 ? .key : (hoveredField == .key ? nil : hoveredField) }
 
       Group {
         if originalValue == nil {
@@ -154,9 +240,11 @@ struct CredentialRow: View {
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
       .overlay(
         RoundedRectangle(cornerRadius: 6)
-          .strokeBorder(.separator, lineWidth: 1)
+          .strokeBorder(hoveredField == .value ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
+            lineWidth: 1)
       )
       .padding(.top, 6)
+      .onHover { hoveredField = $0 ? .value : (hoveredField == .value ? nil : hoveredField) }
 
       if supportsTextOptions {
         HStack(spacing: 16) {
@@ -173,6 +261,7 @@ struct CredentialRow: View {
         .controlSize(.small)
         .padding(.top, 8)
     }
+    .animation(.easeInOut(duration: 0.12), value: hoveredField)
   }
 
   // MARK: - Helpers
@@ -183,9 +272,40 @@ struct CredentialRow: View {
     cred.kind.kind == "text"
   }
 
+  /// Lines the value gets in the read view. A multiline credential grows to fit
+  /// its content; a single-line one stays on one line and truncates.
+  private var valueLineLimit: Int? {
+    cred.kind.multiline ? nil : 1
+  }
+
   private var revealedText: String? {
     guard let secret else { return nil }
     return secret.withUnsafeBytes { String(bytes: $0, encoding: .utf8) ?? "(binary data)" }
+  }
+
+  private func beginQuickEdit() {
+    quickOriginal = revealedText
+    quickDraft = revealedText ?? ""
+    if revealedText == nil {
+      onReveal()
+    }
+    quickEditing = true
+  }
+
+  private func cancelQuickEdit() {
+    quickEditing = false
+    quickDraft = ""
+    quickOriginal = nil
+  }
+
+  private func commitQuickEdit() {
+    let value = quickDraft
+    guard !value.isEmpty, value != quickOriginal else {
+      cancelQuickEdit()
+      return
+    }
+    onQuickSaveValue(value)
+    cancelQuickEdit()
   }
 
   private func resetDrafts() {
@@ -215,6 +335,29 @@ struct CredentialRow: View {
       ? FieldKindInfo(kind: "text", concealed: draftConcealed, multiline: draftMultiline)
       : nil
     onSave(newKey, newTitle, value, kind)
+  }
+}
+
+/// A subtle rounded fill behind an edit-mode text field, shown while the pointer
+/// is over it.
+private struct EditableFieldBackground: ViewModifier {
+  let active: Bool
+
+  func body(content: Content) -> some View {
+    content
+      .padding(.vertical, 3)
+      .padding(.horizontal, 4)
+      .background(
+        RoundedRectangle(cornerRadius: 4)
+          .fill(.quaternary.opacity(active ? 1 : 0))
+      )
+      .animation(.easeInOut(duration: 0.12), value: active)
+  }
+}
+
+extension View {
+  fileprivate func editableFieldBackground(active: Bool) -> some View {
+    modifier(EditableFieldBackground(active: active))
   }
 }
 
