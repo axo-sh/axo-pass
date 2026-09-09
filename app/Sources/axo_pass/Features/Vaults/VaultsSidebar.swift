@@ -6,37 +6,35 @@ struct VaultsSidebar: View {
   @State private var showingNewVaultSheet = false
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
-  @AppStorage("sidebar.secretsExpanded") private var secretsExpanded = true
-  @AppStorage("sidebar.toolsExpanded") private var toolsExpanded = true
+  @State private var secretsExpanded = true
+  @State private var toolsExpanded = true
 
   private var selectionBinding: Binding<SidebarDestination?> {
     Binding(
-      get: { model.sidebarSelection },
+      // Highlight the row being loaded, so a click registers before the panes
+      // switch to it.
+      get: { model.sidebarHighlight },
       set: { model.selectSidebarDestination($0) }
     )
   }
 
   var body: some View {
     List(selection: selectionBinding) {
-      Section {
-        if secretsExpanded {
-          vaultItems
-        }
+      Section(isExpanded: $secretsExpanded) {
+        vaultItems
       } header: {
-        SidebarSectionHeader("Secrets", isExpanded: $secretsExpanded)
+        SidebarSectionHeader("Secrets") { withAnimation { secretsExpanded.toggle() } }
       }
 
-      Section {
-        if toolsExpanded {
-          Label("SSH", systemImage: "asterisk")
-            .tag(SidebarDestination.ssh)
-          Label("GPG", systemImage: "key.fill")
-            .tag(SidebarDestination.gpg)
-          Label("Age", systemImage: "lock.rectangle.stack")
-            .tag(SidebarDestination.age)
-        }
+      Section(isExpanded: $toolsExpanded) {
+        Label("SSH", systemImage: "asterisk")
+          .tag(SidebarDestination.ssh)
+        Label("GPG", systemImage: "key.fill")
+          .tag(SidebarDestination.gpg)
+        Label("Age", systemImage: "lock.rectangle.stack")
+          .tag(SidebarDestination.age)
       } header: {
-        SidebarSectionHeader("Tools", isExpanded: $toolsExpanded)
+        SidebarSectionHeader("Tools") { withAnimation { toolsExpanded.toggle() } }
       }
     }
     .listStyle(.sidebar)
@@ -101,10 +99,16 @@ struct VaultsSidebar: View {
       .tag(SidebarDestination.vault("all"))
 
       ForEach(model.vaults, id: \.key) { vault in
-        Label {
-          Text(vault.name ?? vault.key)
-        } icon: {
-          Image(systemName: "circle.fill").hidden()
+        HStack(spacing: 4) {
+          Label {
+            Text(vault.name ?? vault.key)
+          } icon: {
+            Image(systemName: "circle.fill").hidden()
+          }
+          Spacer(minLength: 0)
+          if model.isPendingSelection(.vault(vault.key)) {
+            DelayedProgressView(size: .mini, expands: false)
+          }
         }
         .tag(SidebarDestination.vault(vault.key))
         .contextMenu {
@@ -131,33 +135,26 @@ struct VaultsSidebar: View {
 
 private struct SidebarSectionHeader: View {
   let title: String
-  @Binding var isExpanded: Bool
+  let onTap: () -> Void
 
-  init(_ title: String, isExpanded: Binding<Bool>) {
+  init(_ title: String, onTap: @escaping () -> Void = {}) {
     self.title = title
-    self._isExpanded = isExpanded
+    self.onTap = onTap
   }
 
   var body: some View {
-    Button {
-      withAnimation(.snappy(duration: 0.2)) { isExpanded.toggle() }
-    } label: {
-      HStack(spacing: 4) {
-        Image(systemName: "chevron.right")
-          .font(.system(size: 9, weight: .bold))
-          .rotationEffect(.degrees(isExpanded ? 90 : 0))
-        Text(title)
-          .font(.caption2)
-          .fontWeight(.semibold)
-          .textCase(.uppercase)
-          .kerning(0.6)
-        Spacer(minLength: 0)
-      }
-      .foregroundStyle(.tertiary)
-      .contentShape(.rect)
+    HStack(spacing: 4) {
+      Text(title)
+        .font(.caption2)
+        .fontWeight(.semibold)
+        .textCase(.uppercase)
+        .kerning(0.6)
+      Spacer(minLength: 0)
     }
-    .buttonStyle(.plain)
+    .foregroundStyle(.tertiary)
+    .contentShape(.rect)
     .padding(.top, 6)
+    .onTapGesture(perform: onTap)
   }
 }
 
