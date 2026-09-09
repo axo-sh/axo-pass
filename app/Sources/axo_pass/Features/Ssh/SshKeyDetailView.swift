@@ -13,8 +13,7 @@ struct SshKeyDetailView: View {
         ContentUnavailableView("Select a key", systemImage: "key.horizontal")
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(.windowBackground)
+    .paneBackground()
   }
 }
 

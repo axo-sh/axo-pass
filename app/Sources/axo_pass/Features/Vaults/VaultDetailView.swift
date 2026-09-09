@@ -13,7 +13,6 @@ struct VaultDetailView: View {
         ContentUnavailableView("Select an item", systemImage: "list.bullet.rectangle")
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(.windowBackground)
+    .paneBackground()
   }
 }

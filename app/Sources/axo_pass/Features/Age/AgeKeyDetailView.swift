@@ -13,8 +13,7 @@ struct AgeKeyDetailView: View {
         ContentUnavailableView("Select a key", systemImage: "lock.rectangle.stack")
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(.windowBackground)
+    .paneBackground()
   }
 }
 

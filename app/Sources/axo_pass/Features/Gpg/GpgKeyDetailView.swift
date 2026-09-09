@@ -13,8 +13,7 @@ struct GpgKeyDetailView: View {
         ContentUnavailableView("Select a key", systemImage: "lock.doc")
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(.windowBackground)
+    .paneBackground()
   }
 }
 

@@ -27,9 +27,10 @@ struct SshPane: View {
         }
       }
     }
+    .safeAreaInset(edge: .bottom) { agentSummaryBar }
+    .paneBackground()
     .navigationTitle("SSH")
     .navigationSplitViewColumnWidth(min: 200, ideal: 260)
-    .safeAreaInset(edge: .bottom) { agentSummaryBar }
     .toolbar {
       ToolbarItem {
         Button {

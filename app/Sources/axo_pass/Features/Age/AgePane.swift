@@ -27,6 +27,7 @@ struct AgePane: View {
         }
       }
     }
+    .paneBackground()
     .navigationTitle("Age")
     .navigationSplitViewColumnWidth(min: 200, ideal: 260)
     .toolbar {

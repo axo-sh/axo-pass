@@ -23,11 +23,9 @@ struct ItemsPane: View {
               }
           }
         }
-        .scrollContentBackground(.hidden)
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(.windowBackground)
+    .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
     .navigationTitle(model.selectedVault.map { $0.name ?? $0.key } ?? (model.isAllSecrets ? "All Secrets" : "Items"))
     .toolbar {

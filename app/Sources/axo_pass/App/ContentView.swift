@@ -58,6 +58,7 @@ private struct MainView: View {
       AgePane(model: ageModel)
     } else {
       ContentUnavailableView("Select a section", systemImage: "sidebar.left")
+        .paneBackground()
     }
   }
 }
