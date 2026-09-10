@@ -16,7 +16,7 @@ struct CredentialDrag: Codable, Transferable {
 
 extension UTType {
   fileprivate static let axoCredentialDrag = UTType(
-    exportedAs: "com.breakfastlabs.axo-pass.credential-drag"
+    exportedAs: "com.breakfastlabs.frittata.credential-drag"
   )
 }
 

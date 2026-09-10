@@ -1,0 +1,9 @@
+{
+  "UTExportedTypeDeclarations": [
+    {
+      "UTTypeIdentifier": "com.breakfastlabs.frittata.credential-drag",
+      "UTTypeDescription": "Axo Pass credential drag",
+      "UTTypeConformsTo": ["public.data"]
+    }
+  ]
+}

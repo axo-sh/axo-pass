@@ -23,6 +23,7 @@ build_number = "1"
 [build]
 source_dir             = "app"
 entitlements_json_path = "app/misc/entitlements.json"
+info_json_path         = "app/misc/info.json"
 target_name            = "axo_pass"
 provisioning_profile   = "app/misc/Frittata_Developer_ID_Application.provisionprofile"
 
