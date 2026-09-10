@@ -9,7 +9,6 @@ struct NewCredentialSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var title: String = ""
   @State private var key: String = ""
-  @State private var value: String = ""
   @State private var concealed: Bool = true
   @State private var multiline: Bool = false
   @State private var isSubmitting = false
@@ -18,14 +17,17 @@ struct NewCredentialSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("New Credential").font(.headline)
       Form {
-        TextField("Title", text: $title)
-        TextField("Key (a-z, 0-9, -, _)", text: $key)
-        LabeledContent("Value") {
-          ValueTextEditor(
-            text: $value,
-            multiline: multiline,
-            bordered: true,
-            font: .systemFont(ofSize: NSFont.systemFontSize))
+        LabeledContent("Title") {
+          TextField("", text: $title)
+        }
+        LabeledContent("Key") {
+          TextField("", text: $key)
+        }
+        LabeledContent("") {
+          Text("a-z, 0-9, -, _")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         HStack(spacing: 16) {
@@ -42,12 +44,12 @@ struct NewCredentialSheet: View {
           Task {
             isSubmitting = true
             let kind = FieldKindInfo(kind: "text", concealed: concealed, multiline: multiline)
-            if await onSubmit(key, title, value, kind) { dismiss() }
+            if await onSubmit(key, title, "", kind) { dismiss() }
             isSubmitting = false
           }
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(isSubmitting || key.isEmpty || title.isEmpty || value.isEmpty)
+        .disabled(isSubmitting || key.isEmpty || title.isEmpty)
       }
     }
     .padding(20)
