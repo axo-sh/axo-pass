@@ -60,6 +60,10 @@ final class VaultsModel {
   // True at launch and after a manual lock, false once an attempt has finished
   // and after an automatic lock, which requires a deliberate Unlock.
   private(set) var autoPromptPending = true
+  // Whether the user has started an unlock attempt since the last lock. Lets the
+  // lock screen re-raise the Touch ID prompt when returning to the app, since
+  // switching away cancels an evaluation in flight.
+  private var unlockEngaged = false
 
   // LAAuthenticationView replaces the system dialog only for the context it was
   // created with. This model owns that context, evaluates the policy on it, and
@@ -188,6 +192,20 @@ final class VaultsModel {
     unlock()
   }
 
+  /// Handle the app regaining focus. Raises the first automatic prompt through
+  /// `unlockIfActive`, then re-raises the Touch ID prompt if the user already
+  /// started an unlock and switching away cancelled the evaluation.
+  func handleBecameActive() {
+    unlockIfActive()
+
+    guard unlockEngaged, !isAppUnlocked, !isUnlocking, NSApp.isActive else { return }
+    guard biometry == .touchID else { return }
+    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible,
+      !vaultUnlockPrompt.panel.isVisible
+    else { return }
+    unlock()
+  }
+
   /// Whether the broker started this app to serve a request, rather than a
   /// person opening it.
   func isBrokerLaunch() -> Bool {
@@ -219,6 +237,7 @@ final class VaultsModel {
   /// field.
   func unlock() {
     guard !isUnlocking else { return }
+    unlockEngaged = true
     // The model owns the task. The lock screen's `.task` would cancel the
     // attempt as soon as a successful unlock swapped the view out.
     unlockTask = Task { [self] in
@@ -368,6 +387,7 @@ final class VaultsModel {
     selectedItemRef = nil
     unlockError = nil
     autoPromptPending = trigger == nil
+    unlockEngaged = false
   }
 
   // MARK: - Navigation

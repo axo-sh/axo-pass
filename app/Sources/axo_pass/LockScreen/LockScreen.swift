@@ -75,7 +75,7 @@ struct LockScreen: View {
     // for whenever the user comes back to the app.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     { _ in
-      model.unlockIfActive()
+      model.handleBecameActive()
     }
   }
 }
