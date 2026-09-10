@@ -26,6 +26,10 @@ pub enum FieldKind {
     Phone,
     Date,
     Totp,
+    /// A WebAuthn passkey. The credential's value is a JSON `Passkey` record
+    /// (see `passkey.rs`), holding the private key, so it is confidential in
+    /// the same way a password is. It is never editable as text.
+    Passkey,
     /// Unknown or newer kind written by another client. Rendered read-only.
     #[serde(untagged)]
     Unknown(serde_json::Value),

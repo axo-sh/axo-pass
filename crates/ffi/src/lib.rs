@@ -27,7 +27,7 @@ use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError,
     ExportProgress as CoreExportProgress, FieldKind, TextField, VaultFolder,
     VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, VaultWrapper, VaultsManager,
-    display_order,
+    autofill, display_order,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -270,12 +270,14 @@ pub struct CredentialPlacementInfo {
 }
 
 /// Flattened view of `FieldKind` for the UI. `kind` is the discriminator:
-/// "text", "email", "url", "phone", "date", "totp", or "unknown". `concealed`
-/// and `multiline` apply only to "text"; they are false for every other kind.
+/// "text", "email", "url", "phone", "date", "totp", "passkey", or "unknown".
+/// `multiline` applies only to "text"; it is false for every other kind, and
+/// `concealed` is true for "text" that conceals its value and for "passkey".
 ///
 /// The write path (`add_or_update_credential`) accepts every discriminator
-/// except "unknown", which cannot be reconstructed. When the caller wants to
-/// leave an existing credential's kind untouched it passes `None` instead.
+/// except "unknown", which cannot be reconstructed, and "passkey", whose value
+/// is a structured record only the authenticator may write. When the caller
+/// wants to leave an existing credential's kind untouched it passes `None`.
 #[derive(uniffi::Record, Clone)]
 pub struct FieldKindInfo {
     pub kind: String,
@@ -293,6 +295,7 @@ impl From<&FieldKind> for FieldKindInfo {
             FieldKind::Phone => ("phone", false, false),
             FieldKind::Date => ("date", false, false),
             FieldKind::Totp => ("totp", false, false),
+            FieldKind::Passkey => ("passkey", true, false),
             FieldKind::Unknown(_) => ("unknown", false, false),
         };
         Self {
@@ -323,6 +326,9 @@ impl TryFrom<FieldKindInfo> for FieldKind {
             "phone" => FieldKind::Phone,
             "date" => FieldKind::Date,
             "totp" => FieldKind::Totp,
+            // "passkey" is deliberately absent: a passkey's value is a
+            // structured record the CTAP2 authenticator owns, so it is never
+            // written through the generic credential path.
             other => {
                 return Err(FfiError::InvalidInput(format!(
                     "cannot set field kind {other:?}"
@@ -344,6 +350,32 @@ pub struct ItemInfo {
     /// Credentials outside any section first, then each section's
     /// credentials in section order.
     pub credentials: Vec<CredentialInfo>,
+}
+
+/// One fillable item, as the AutoFill identity store needs it. Mirrors
+/// [`autofill::AutofillItem`].
+#[derive(uniffi::Record)]
+pub struct AutofillItemInfo {
+    pub vault_key: String,
+    pub item_key: String,
+    pub title: String,
+    pub username: Option<String>,
+    /// The credential key holding the password to fill.
+    pub password_key: String,
+    pub urls: Vec<String>,
+}
+
+impl From<autofill::AutofillItem> for AutofillItemInfo {
+    fn from(item: autofill::AutofillItem) -> Self {
+        Self {
+            vault_key: item.vault_key,
+            item_key: item.item_key,
+            title: item.title,
+            username: item.username,
+            password_key: item.password_key,
+            urls: item.urls,
+        }
+    }
 }
 
 /// One vault inside an export bundle, as seen before import.
@@ -1589,6 +1621,37 @@ impl AxoPass {
                 display_order(a.position, &a.title).cmp(&display_order(b.position, &b.title))
             });
             Ok(folders.into_iter().map(FolderInfo::from).collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List every fillable item across every vault, for registering AutoFill
+    /// identities with the system. Requires the app to be unlocked; a vault
+    /// that fails to unlock is skipped rather than failing the listing.
+    ///
+    /// Only the username and URLs are read. The password stays in the vault
+    /// until the extension asks for it by name.
+    pub async fn list_autofill_items(&self) -> Result<Vec<AutofillItemInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault_keys: Vec<String> = m.iter_vault_keys().collect();
+            let mut items = Vec::new();
+            for vault_key in vault_keys {
+                let Some(vault) = m.get_vault_mut(&vault_key) else {
+                    continue;
+                };
+                if let Err(e) = vault.unlock() {
+                    log::error!("Failed to unlock vault {vault_key} for autofill: {e}");
+                    continue;
+                }
+                match autofill::collect_items(vault, None) {
+                    Ok(found) => items.extend(found.into_iter().map(AutofillItemInfo::from)),
+                    Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
+                }
+            }
+            Ok(items)
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
@@ -2947,6 +3010,7 @@ impl AxoPass {
             passphrase: Arc::new(DelegatingPassphraseAuthorizer {
                 delegate: passphrase_delegate,
             }),
+            keychain: Arc::new(app_broker::SystemKeychain),
             vault: Arc::new(DelegatingVaultAuthorizer {
                 delegate: vault_delegate,
             }),
@@ -3495,6 +3559,12 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+    /// The AutoFill extension's credential list: unlock every vault and return
+    /// the items that can fill `service`, without their passwords. `service` is
+    /// `None` when the extension is listing everything.
+    ListAutofillItems {
+        service: Option<String>,
+    },
     /// `ap exec` / `ap inject`: resolve `refs` behind one prompt. The refs may
     /// span several vaults.
     ResolveSecrets {
@@ -3568,6 +3638,9 @@ impl From<app_broker::VaultAction> for VaultAction {
             } => Self::ReadSecret {
                 item_key,
                 credential_key,
+            },
+            app_broker::VaultAction::ListAutofillItems { service } => {
+                Self::ListAutofillItems { service }
             },
             app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
                 purpose: purpose.into(),

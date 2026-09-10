@@ -13,7 +13,16 @@ use serde::{Deserialize, Serialize};
 use crate::audit::Actor;
 use crate::core::provenance::helpers::get_parent_pid;
 pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
+use crate::core::provenance::peer::own_signing_info;
 use crate::core::provenance::proc_info::ProcInfo;
+
+/// Our own team identifier, from our code signature. `None` for an unsigned or
+/// ad-hoc signed local build.
+pub fn team_identifier() -> Option<String> {
+    own_signing_info()
+        .map(|info| info.team_identifier)
+        .filter(|team| !team.is_empty())
+}
 
 pub struct Provenance {
     proc_info: Vec<ProcInfo>,

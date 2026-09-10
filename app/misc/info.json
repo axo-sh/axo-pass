@@ -5,5 +5,11 @@
       "UTTypeDescription": "Axo Pass item drag",
       "UTTypeConformsTo": ["public.data"]
     }
+  ],
+  "CFBundleURLTypes": [
+    {
+      "CFBundleURLName": "com.breakfastlabs.frittata",
+      "CFBundleURLSchemes": ["axopass"]
+    }
   ]
 }

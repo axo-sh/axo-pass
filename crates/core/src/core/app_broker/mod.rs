@@ -36,7 +36,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::audit;
 use crate::core::auth::ForeignContext;
-use crate::core::dirs::app_data_dir;
+use crate::core::dirs::{app_data_dir, app_group_dir};
 use crate::core::provenance::{PeerIdentity, PeerPolicy, ProcessNode};
 
 pub mod age;
@@ -53,7 +53,10 @@ pub use gpg::{
     CollectedPassphrase, ConfirmPrompt, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
     request_confirm, request_message, request_passphrase,
 };
-pub use keychain::{BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords};
+pub use keychain::{
+    BrokerPasswordEntry, KeychainLister, SystemKeychain, request_delete_managed_key,
+    request_keychain_passwords,
+};
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
     request_authorize_key_use, request_signature, request_ssh_passphrase,
@@ -61,8 +64,8 @@ pub use ssh::{
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
     VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, request_add_external_vault,
-    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
-    request_vault_secret, request_write_vault_secret,
+    request_autofill_items, request_export_vaults, request_import_vaults, request_resolve_secrets,
+    request_vault_items, request_vault_secret, request_write_vault_secret,
 };
 
 /// How long a client waits for the user to answer the app's prompt before
@@ -76,9 +79,19 @@ const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// The agent ships inside the app bundle, beside the app's own executable.
 const AGENT_EXECUTABLE_NAME: &str = "ap";
 
+/// The AutoFill credential provider extension, staged under `Contents/PlugIns`.
+/// Matches the `target_name` of the `[[extensions]]` entry in strudel.toml.
+pub const AUTOFILL_EXTENSION_NAME: &str = "AxoPassAutoFill";
+
 pub fn broker_socket_path() -> PathBuf {
     // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
     app_data_dir().join("app-broker.sock")
+}
+
+/// Where the AutoFill extension reaches the broker. `None` for an unsigned
+/// build, which has no team identifier and therefore no App Group container.
+pub fn autofill_socket_path() -> Option<PathBuf> {
+    Some(app_group_dir()?.join("autofill-broker.sock"))
 }
 
 /// Passed to the app by [`launch_app`] to say the launch is only to serve the
@@ -128,6 +141,10 @@ pub struct Authorizers {
     pub sign: Arc<dyn SignAuthorizer>,
     pub passphrase: Arc<dyn PassphraseAuthorizer>,
     pub vault: Arc<dyn VaultAuthorizer>,
+    /// Reads the saved passwords. Real builds pass [`SystemKeychain`]; this is
+    /// a field so tests can route the request without touching the developer's
+    /// own keychain.
+    pub keychain: Arc<dyn KeychainLister>,
 }
 
 /// The wire format: one JSON line each way, one request per connection.
@@ -264,6 +281,20 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// The AutoFill extension's credential list: unlock every vault and return
+    /// the items that can fill `service`, with their usernames and URLs. The
+    /// password is not included; the extension reads it with
+    /// [`WireRequest::ReadVaultSecret`] once the user picks an account.
+    ListAutofillItems {
+        /// The domain or URL the browser is asking for. `None` lists every
+        /// fillable item, which is what the extension's "show all" path wants.
+        #[serde(default)]
+        service: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
     /// possibly across several vaults, behind one prompt.
     ResolveSecrets {
@@ -386,6 +417,7 @@ impl WireRequest {
             | WireRequest::GetPassphrase { caller, .. }
             | WireRequest::GetSshPassphrase { caller, .. }
             | WireRequest::ListVaultItems { caller, .. }
+            | WireRequest::ListAutofillItems { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
             | WireRequest::WriteVaultSecret { caller, .. }
@@ -439,6 +471,9 @@ enum WireResponse {
     },
     VaultItems {
         items: Vec<vault::BrokerVaultItem>,
+    },
+    AutofillItems {
+        items: Vec<crate::secrets::vaults::AutofillItem>,
     },
     /// `None` when the credential does not exist.
     VaultSecret {
@@ -749,12 +784,41 @@ fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, BrokerError> {
 
 // Server (the app).
 
-/// Serve requests until `shutdown` resolves, then remove the socket.
+/// Serve requests until `shutdown` resolves, then remove the sockets.
+///
+/// Two sockets are bound: the one in the app data directory for `ap`, and, when
+/// this build is signed, one in the App Group container for the AutoFill
+/// extension. The extension is sandboxed and the App Group container is the
+/// only path both processes can reach.
 pub async fn serve(
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
-    serve_on(broker_socket_path(), agent_policy(), authorizers, shutdown).await
+    let (autofill_shutdown_tx, autofill_shutdown_rx) = tokio::sync::oneshot::channel();
+    let autofill = match autofill_socket_path() {
+        Some(path) => {
+            let authorizers = authorizers.clone();
+            Some(tokio::spawn(async move {
+                if let Err(e) =
+                    serve_on(path, extension_policy(), authorizers, autofill_shutdown_rx).await
+                {
+                    log::warn!("AutoFill broker failed to start: {e}");
+                }
+            }))
+        },
+        None => {
+            log::debug!("No team identifier: not serving the AutoFill broker");
+            None
+        },
+    };
+
+    let result = serve_on(broker_socket_path(), agent_policy(), authorizers, shutdown).await;
+
+    let _ = autofill_shutdown_tx.send(());
+    if let Some(autofill) = autofill {
+        let _ = autofill.await;
+    }
+    result
 }
 
 /// The body of [`serve`], with the socket path and the peer policy supplied
@@ -825,6 +889,19 @@ fn agent_policy() -> PeerPolicy {
             "App broker cannot check its peer's code signature: this build carries no team \
              identifier. Accepting {accepts}"
         );
+    }
+    policy
+}
+
+/// Who the AutoFill broker takes requests from: only the credential provider
+/// extension staged in our own bundle, signed by the same team.
+fn extension_policy() -> PeerPolicy {
+    let policy = PeerPolicy::bundled_executable(&format!(
+        "PlugIns/{AUTOFILL_EXTENSION_NAME}.appex/Contents/MacOS/{AUTOFILL_EXTENSION_NAME}"
+    ));
+    match policy.executable.as_ref() {
+        Some(path) => log::debug!("AutoFill broker accepts {}", path.display()),
+        None => log::warn!("AutoFill broker could not resolve the extension's executable"),
     }
     policy
 }
@@ -1158,6 +1235,19 @@ async fn handle_connection(
                 vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
                     .await
             },
+            WireRequest::ListAutofillItems { service, caller } => {
+                let prompt = vault::VaultAccessPrompt {
+                    // The listing spans every vault, so there is no single key to
+                    // name. The prompt describes the service instead.
+                    vault_key: String::new(),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ListAutofillItems { service },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+                    .await
+            },
             WireRequest::ReadVaultSecret {
                 vault_key,
                 item_key,
@@ -1315,7 +1405,7 @@ async fn handle_connection(
             },
             WireRequest::ListKeychainPasswords { .. } => {
                 log::debug!("App broker request: list keychain passwords");
-                keychain::list_passwords().await
+                keychain::list_passwords(&*authorizers.keychain).await
             },
             WireRequest::DeleteManagedKey { label, .. } => {
                 log::debug!("App broker request: delete managed key {label}");
@@ -1394,6 +1484,19 @@ mod tests {
         peers: Mutex<Vec<audit::Actor>>,
         ended: AtomicUsize,
         prompts_dropped: AtomicUsize,
+    }
+
+    /// Answers with a fixed entry instead of reading the login keychain, which
+    /// would raise an authorization prompt and stall the suite.
+    #[async_trait]
+    impl KeychainLister for StubAuthorizer {
+        async fn list_passwords(&self) -> Result<Vec<BrokerPasswordEntry>, String> {
+            Ok(vec![BrokerPasswordEntry {
+                password_type:
+                    crate::secrets::keychain::generic_password::PasswordEntryType::SSHKey,
+                key_id: "stub".to_string(),
+            }])
+        }
     }
 
     #[async_trait]
@@ -1511,6 +1614,7 @@ mod tests {
                     sign: authorizer.clone(),
                     passphrase: authorizer.clone(),
                     vault: authorizer.clone(),
+                    keychain: authorizer.clone(),
                 },
                 shutdown_rx,
             ));
@@ -1933,6 +2037,23 @@ mod tests {
         assert!(broker.authorizer.peers.lock().unwrap().is_empty());
     }
 
+    /// A keychain password listing is framed, parsed and routed to the
+    /// configured lister, and its entries come back on the wire.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn routes_a_keychain_password_listing() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
+
+        let response: WireResponse = serde_json::from_str(&response)
+            .expect("unexpected response to a keychain password listing");
+        let WireResponse::KeychainPasswords { entries } = response else {
+            panic!("expected a keychain password listing");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key_id, "stub");
+    }
+
     /// A rejected peer cannot list the saved passwords.
     #[tokio::test(flavor = "multi_thread")]
     async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
@@ -2034,7 +2155,8 @@ mod tests {
             Authorizers {
                 sign: authorizer.clone(),
                 passphrase: authorizer.clone(),
-                vault: authorizer,
+                vault: authorizer.clone(),
+                keychain: authorizer,
             },
             shutdown_rx,
         ));

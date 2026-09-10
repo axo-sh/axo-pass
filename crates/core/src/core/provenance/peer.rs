@@ -43,6 +43,15 @@ pub struct PeerPolicy {
     pub executable: Option<PathBuf>,
 }
 
+/// Our own code signature, or `None` when it cannot be read.
+pub fn own_signing_info() -> Option<SigningInfo> {
+    get_sec_code_for_self()
+        .and_then(|code| get_static_code_for_sec_code(&code))
+        .inspect_err(|e| log::warn!("Could not read our own code signature: {e}"))
+        .ok()
+        .and_then(|static_code| SigningInfo::from_sec_code(&static_code))
+}
+
 impl PeerPolicy {
     /// Accept only `executable_name` sitting beside this process's own
     /// executable and signed by the same team.
@@ -51,16 +60,27 @@ impl PeerPolicy {
     /// build. There is no anchor to check against, so the returned policy keeps
     /// the path and user checks and omits the code requirement.
     pub fn sibling_executable(executable_name: &str) -> Self {
-        let signing_info = get_sec_code_for_self()
-            .and_then(|code| get_static_code_for_sec_code(&code))
-            .inspect_err(|e| log::warn!("Could not read our own code signature: {e}"))
-            .ok()
-            .and_then(|static_code| SigningInfo::from_sec_code(&static_code));
+        Self::at_path(|main_executable| Some(main_executable.parent()?.join(executable_name)))
+    }
+
+    /// Accept only the executable at `relative`, resolved against our own
+    /// bundle's `Contents` directory, and signed by the same team. Used for the
+    /// extensions staged under `Contents/PlugIns`.
+    pub fn bundled_executable(relative: &str) -> Self {
+        Self::at_path(|main_executable| {
+            // .../Contents/MacOS/<exe> -> .../Contents
+            let contents = main_executable.parent()?.parent()?;
+            Some(contents.join(relative))
+        })
+    }
+
+    fn at_path(resolve: impl FnOnce(&Path) -> Option<PathBuf>) -> Self {
+        let signing_info = own_signing_info();
 
         let executable = signing_info
             .as_ref()
             .and_then(|info| info.main_executable.to_file_path().ok())
-            .and_then(|path| Some(path.parent()?.join(executable_name)));
+            .and_then(|path| resolve(&path));
 
         let requirement = signing_info
             .as_ref()

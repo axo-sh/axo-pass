@@ -25,7 +25,12 @@ source_dir             = "app"
 entitlements_json_path = "app/misc/entitlements.json"
 info_json_path         = "app/misc/info.json"
 target_name            = "axo_pass"
-provisioning_profile   = "app/misc/Frittata_Developer_ID_Application.provisionprofile"
+
+# App Groups are enforced against an embedded provisioning profile even under
+# Developer ID, so this profile must list the App Group and the AutoFill
+# Credential Provider capability, or the AutoFill extension fails to launch.
+# Regenerate it in the developer portal after changing entitlements.
+# provisioning_profile = "app/misc/Frittata_Developer_ID_Application.provisionprofile"
 
 [build.icon]
 src        = "app/misc/axo-pass.svg"
@@ -65,3 +70,21 @@ dest_dir = "Contents/Resources"
 [[build.copy]]
 src      = "app/misc/ap-ssh-askpass"
 dest_dir = "Contents/Resources"
+
+# AutoFill credential provider. Sandboxed, so it cannot read the vault files
+# directly; it talks to the app's broker over a socket in the App Group
+# container. See crates/core/src/core/app_broker/mod.rs.
+[[extensions]]
+kind                       = "app_extension"
+target_name                = "AxoPassAutoFill"
+bundle_id                  = "com.breakfastlabs.frittata.AutoFill"
+# No `name`: the bundle must stay AxoPassAutoFill.appex so it matches the path
+# `extension_policy()` checks the broker's peer against. See
+# AUTOFILL_EXTENSION_NAME in crates/core/src/core/app_broker/mod.rs.
+entitlements_json_path     = "app/misc/autofill-entitlements.json"
+info_json_path             = "app/misc/autofill-info.json"
+extension_point_identifier = "com.apple.authentication-services-credential-provider-ui"
+principal_class            = "AxoPassAutoFill.CredentialProviderViewController"
+# An [[extensions]] entry cannot pin a profile. strudel provisions this bundle
+# id itself and caches the profile at .strudel/<bundle_id>.mobileprovision,
+# which needs App Store Connect API credentials.

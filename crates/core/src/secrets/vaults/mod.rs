@@ -1,10 +1,13 @@
+pub mod autofill;
 mod errors;
 mod fields;
+pub mod passkey;
 mod vault;
 pub mod vault_export;
 mod vault_wrapper;
 mod vaults_manager;
 
+pub use autofill::AutofillItem;
 pub use errors::Error;
 pub use fields::{FieldKind, TextField};
 pub use vault::{

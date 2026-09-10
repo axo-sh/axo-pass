@@ -1,6 +1,7 @@
 //! `ap keychain`'s side of the broker: listing the saved generic passwords and
 //! deleting a managed Secure Enclave key.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{BrokerError, WireRequest, WireResponse, send_request};
@@ -62,19 +63,37 @@ pub fn request_delete_managed_key(label: &str, caller: Option<&str>) -> Result<(
 
 // Server (the app).
 
-pub(super) async fn list_passwords() -> WireResponse {
-    tokio::task::spawn_blocking(PasswordEntry::list)
-        .await
-        .map_or_else(
-            |e| Err(e.to_string()),
-            |result| result.map_err(|e| e.to_string()),
-        )
-        .map_or_else(
-            |message| WireResponse::Failed { message },
-            |entries| WireResponse::KeychainPasswords {
-                entries: entries.into_iter().map(BrokerPasswordEntry::from).collect(),
-            },
-        )
+/// Supplies the saved passwords the broker reports.
+///
+/// The one implementation that ships is [`SystemKeychain`]. It exists as a
+/// trait so tests can route the request without reading the developer's own
+/// login keychain, which raises an authorization prompt and stalls the suite.
+#[async_trait]
+pub trait KeychainLister: Send + Sync + 'static {
+    async fn list_passwords(&self) -> Result<Vec<BrokerPasswordEntry>, String>;
+}
+
+/// Reads the real login keychain.
+pub struct SystemKeychain;
+
+#[async_trait]
+impl KeychainLister for SystemKeychain {
+    async fn list_passwords(&self) -> Result<Vec<BrokerPasswordEntry>, String> {
+        tokio::task::spawn_blocking(PasswordEntry::list)
+            .await
+            .map_or_else(
+                |e| Err(e.to_string()),
+                |result| result.map_err(|e| e.to_string()),
+            )
+            .map(|entries| entries.into_iter().map(BrokerPasswordEntry::from).collect())
+    }
+}
+
+pub(super) async fn list_passwords(lister: &dyn KeychainLister) -> WireResponse {
+    match lister.list_passwords().await {
+        Ok(entries) => WireResponse::KeychainPasswords { entries },
+        Err(message) => WireResponse::Failed { message },
+    }
 }
 
 pub(super) async fn delete_managed_key(label: String, actor: audit::Actor) -> WireResponse {

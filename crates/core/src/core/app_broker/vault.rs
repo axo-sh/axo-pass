@@ -28,7 +28,7 @@ use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
-use crate::secrets::vaults::{FieldKind, VaultWrapper, VaultsManager};
+use crate::secrets::vaults::{AutofillItem, FieldKind, VaultWrapper, VaultsManager, autofill};
 
 /// One `axo://` reference to resolve, as it crosses the socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +64,10 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+
+    /// The AutoFill extension's credential list: return the fillable items
+    /// across every vault, with usernames and URLs but no passwords.
+    ListAutofillItems { service: Option<String> },
 
     /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
     /// possibly across several vaults, behind one prompt.
@@ -255,6 +259,26 @@ pub fn request_vault_items(
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
         _ => Err(BrokerError::Failed(
             "Unexpected response to vault listing".to_string(),
+        )),
+    }
+}
+
+/// Ask the app to unlock every vault and return the items that can fill
+/// `service`. Blocking, same as [`request_vault_items`].
+pub fn request_autofill_items(
+    service: Option<&str>,
+    caller: Option<&str>,
+) -> Result<Vec<AutofillItem>, BrokerError> {
+    let request = WireRequest::ListAutofillItems {
+        service: service.map(String::from),
+        caller: caller.map(String::from),
+    };
+    match send_request(&request)? {
+        WireResponse::AutofillItems { items } => Ok(items),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to autofill listing".to_string(),
         )),
     }
 }
@@ -489,6 +513,13 @@ fn record_access(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
+        VaultAction::ListAutofillItems { service } => (
+            Action::VaultItemsListed,
+            Subject::new(
+                SubjectKind::Vault,
+                service.clone().unwrap_or_else(|| "all".to_string()),
+            ),
+        ),
         VaultAction::ResolveSecrets { purpose, .. } => {
             let action = match purpose {
                 ResolvePurpose::Exec => Action::SecretExec,
@@ -542,6 +573,9 @@ fn record_access(
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
         },
+        Some(WireResponse::AutofillItems { items }) => {
+            event = event.detail("item_count", items.len().to_string());
+        },
         Some(WireResponse::VaultSecret { value }) => {
             event = event.detail("found", value.is_some().to_string());
         },
@@ -579,6 +613,9 @@ fn serve_on_context(
 ) -> Result<WireResponse, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
+        VaultAction::ListAutofillItems { service } => {
+            return collect_autofill_items(service.as_deref(), context);
+        },
         VaultAction::ExportVaults { vault_keys } => {
             let Some(VaultPayload::Export(export)) = payload else {
                 return Err("Missing export payload".to_string());
@@ -649,10 +686,40 @@ fn serve_on_context(
             Ok(WireResponse::VaultWritten { created })
         },
         VaultAction::ResolveSecrets { .. }
+        | VaultAction::ListAutofillItems { .. }
         | VaultAction::ExportVaults { .. }
         | VaultAction::ImportVaults { .. }
         | VaultAction::AddVault { .. } => unreachable!("handled above"),
     }
+}
+
+/// Unlock every vault on the app's context and collect the items that can fill
+/// `service`. A vault that fails to load or unlock is skipped rather than
+/// failing the whole listing, so one broken vault does not take AutoFill down.
+fn collect_autofill_items(
+    service: Option<&str>,
+    context: ForeignContext,
+) -> Result<WireResponse, String> {
+    let mut vm = VaultsManager::new();
+    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+    let mut items = Vec::new();
+
+    for vault_key in vault_keys {
+        let Some(vw) = vm.get_vault_mut(&vault_key) else {
+            continue;
+        };
+        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
+            log::error!("Failed to unlock vault {vault_key}: {e}");
+            continue;
+        }
+        match autofill::collect_items(vw, service) {
+            Ok(found) => items.extend(found),
+            Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
+        }
+    }
+
+    items.sort_by_key(|item| item.title.to_lowercase());
+    Ok(WireResponse::AutofillItems { items })
 }
 
 /// Unlock every named vault on the app's context and write the export bundle.

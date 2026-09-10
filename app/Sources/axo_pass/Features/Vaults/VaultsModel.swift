@@ -164,6 +164,9 @@ final class VaultsModel {
   // Vaults whose last load failed, with the error. They are not cached, so the
   // next load of the vault retries them.
   private(set) var itemLoadFailures: [String: String] = [:]
+
+  // Debounces the AutoFill re-index; see `scheduleAutofillRefresh`.
+  private var autofillRefreshTask: Task<Void, Never>? = nil
   var selectedItemRef: ItemRef? = nil
 
   // Surfaces failures from vault/item/credential mutations (create, rename,
@@ -423,6 +426,10 @@ final class VaultsModel {
       AuditBridge.recordVault(.unlocked)
       autoLock.start()
       await loadItemsForSelection()
+      // Re-index AutoFill on the same authentication, so the system's list of
+      // sites tracks whatever the vaults hold now. Covers the case where the
+      // selection is a tool pane and no vault load happens.
+      scheduleAutofillRefresh()
     } catch {
       try? core.endEmbeddedAuth()
       unlockError = Self.describeUnlockFailure(error)
@@ -590,7 +597,21 @@ final class VaultsModel {
     }
   }
 
+  /// Re-index AutoFill shortly after the vaults change. Every mutation reloads
+  /// its vault's items, so hanging the refresh off `loadItems` keeps the index
+  /// current without threading a call through each of them. The delay coalesces
+  /// a burst of edits into one pass over every vault.
+  private func scheduleAutofillRefresh() {
+    autofillRefreshTask?.cancel()
+    autofillRefreshTask = Task { [core] in
+      try? await Task.sleep(for: .seconds(2))
+      guard !Task.isCancelled else { return }
+      await AutofillIdentities.refresh(from: core)
+    }
+  }
+
   private func loadItems(for vaultKey: String) async {
+    defer { scheduleAutofillRefresh() }
     do {
       let items = try await core.listItems(vaultKey: vaultKey)
       let folders = try await core.listFolders(vaultKey: vaultKey)

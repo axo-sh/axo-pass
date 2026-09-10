@@ -50,6 +50,9 @@ pub enum Error {
     #[error("Invalid vault item reference: {0}")]
     InvalidVaultItemReference(String),
 
+    #[error("Passkey operation failed: {0}")]
+    Passkey(String),
+
     #[error("Failed to create new encryption: {0}")]
     KeyCreationFailed(KeychainError),
 

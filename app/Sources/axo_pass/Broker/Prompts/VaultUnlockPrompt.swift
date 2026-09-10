@@ -167,6 +167,8 @@ final class VaultUnlockPromptModel {
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
+    case .listAutofillItems(let service):
+      what = "find logins for \(service ?? "every site")"
     case .writeSecret(let itemKey, let credentialKey):
       what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
     case .exportVaults(let count):
@@ -188,7 +190,7 @@ final class VaultUnlockPromptModel {
     switch action {
     case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault:
       return true
-    case .listItems: return false
+    case .listItems, .listAutofillItems: return false
     }
   }
 
@@ -207,6 +209,7 @@ final class VaultUnlockPromptModel {
     case .readSecret: return "read"
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
+    case .listAutofillItems: return "autofill"
     case .writeSecret: return "write"
     case .exportVaults: return "export"
     case .importVaults: return "import"
@@ -228,6 +231,8 @@ final class VaultUnlockPromptModel {
       let count = refs.count
       return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
+    case .listAutofillItems(let service):
+      return "find logins for \(service ?? "every site")"
     case .writeSecret: return "write a secret"
     case .exportVaults(let count):
       return "export \(count) \(count == 1 ? "vault" : "vaults")"
@@ -255,8 +260,11 @@ private struct VaultUnlockView: View {
       PromptHeadline(parts: title)
 
       VStack(spacing: 8) {
-        PromptSubjectCard(
-          systemImage: "lock.fill", title: vaultKey, detail: nil, items: secrets)
+        // An AutoFill listing spans every vault, so it carries no vault key.
+        if !vaultKey.isEmpty {
+          PromptSubjectCard(
+            systemImage: "lock.fill", title: vaultKey, detail: nil, items: secrets)
+        }
         CallerChainView(
           chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
       }
