@@ -5,6 +5,7 @@ import SwiftUI
 struct SshPane: View {
   @Bindable var model: SshModel
   @State private var showingAgents = false
+  @State private var showingAddKeyConfirmation = false
 
   var body: some View {
     List(selection: $model.selectedFingerprint) {
@@ -34,7 +35,7 @@ struct SshPane: View {
     .toolbar {
       ToolbarItem {
         Button {
-          Task { await model.addManagedKey() }
+          showingAddKeyConfirmation = true
         } label: {
           Label("New Managed Key", systemImage: "plus")
         }
@@ -49,6 +50,9 @@ struct SshPane: View {
     }
     .sheet(isPresented: $showingAgents) {
       SshAgentSheet(model: model)
+    }
+    .sheet(isPresented: $showingAddKeyConfirmation) {
+      AddManagedKeySheet(model: model)
     }
     .task { await model.reload() }
     // The file may be edited outside the app, so re-read it on reactivation.
