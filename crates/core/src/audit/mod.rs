@@ -45,6 +45,33 @@ pub use event::{
 pub use reader::{AuditFilter, AuditPage, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};
 
+/// Record an `ssh.managed_key_delete` event from a delete result of `(label,
+/// SHA256 fingerprint)`. Shared by the app broker (deleting by label) and the
+/// FFI (deleting by fingerprint), which otherwise build an identical event.
+pub fn record_managed_key_delete(actor: Option<Actor>, result: &Result<(String, String), String>) {
+    let mut event = AuditEvent::new(
+        process_source(),
+        Action::SshManagedKeyDelete,
+        if result.is_ok() {
+            Outcome::Succeeded
+        } else {
+            Outcome::Failed
+        },
+    )
+    .maybe_actor(actor);
+    match result {
+        Ok((label, fingerprint)) => {
+            event = event.subject(
+                Subject::new(SubjectKind::SshKey, fingerprint.clone())
+                    .label(label.clone())
+                    .fingerprint(fingerprint.clone()),
+            );
+        },
+        Err(e) => event = event.message(e.clone()),
+    }
+    record(event);
+}
+
 /// Points the audit log at a scratch directory for the duration of a test.
 ///
 /// Any test that records an event needs one, not only the tests that read the

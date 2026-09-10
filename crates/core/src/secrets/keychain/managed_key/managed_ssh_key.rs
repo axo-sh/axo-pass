@@ -114,6 +114,15 @@ impl ManagedSshKey {
         }
         Ok(())
     }
+
+    /// Delete this key, returning its label and `SHA256:` fingerprint captured
+    /// beforehand, for callers that audit the deletion.
+    pub fn delete_capturing(self) -> anyhow::Result<(String, String)> {
+        let label = self.label();
+        let fingerprint = format!("SHA256:{}", self.fingerprint_sha256());
+        self.delete()?;
+        Ok((label, fingerprint))
+    }
 }
 
 impl ManagedSshKey {

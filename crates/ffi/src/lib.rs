@@ -1586,33 +1586,16 @@ impl AxoPass {
                 .into_iter()
                 .find(|k| k.fingerprint_sha256() == fingerprint_sha256)
                 .ok_or_else(|| FfiError::NotFound(fingerprint_sha256.clone()))?;
-            let label = key.label();
-            let fingerprint = format!("SHA256:{}", key.fingerprint_sha256());
-            key.delete().map_err(FfiError::from)?;
-            Ok::<_, FfiError>((label, fingerprint))
+            key.delete_capturing().map_err(FfiError::from)
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?;
 
-        let mut event = audit::AuditEvent::new(
-            audit::process_source(),
-            audit::Action::SshManagedKeyDelete,
-            match &result {
-                Ok(_) => audit::Outcome::Succeeded,
-                Err(_) => audit::Outcome::Failed,
-            },
-        );
-        match &result {
-            Ok((label, fingerprint)) => {
-                event = event.subject(
-                    audit::Subject::new(audit::SubjectKind::SshKey, fingerprint.clone())
-                        .label(label.clone())
-                        .fingerprint(fingerprint.clone()),
-                );
-            },
-            Err(e) => event = event.message(e.to_string()),
-        }
-        audit::record(event);
+        let audit_result = result
+            .as_ref()
+            .map(|captured| captured.clone())
+            .map_err(ToString::to_string);
+        audit::record_managed_key_delete(None, &audit_result);
 
         result.map(|_| ())
     }

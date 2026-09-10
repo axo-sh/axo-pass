@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{BrokerError, WireRequest, WireResponse, send_request};
-use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
+use crate::audit;
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::keychain::managed_key::ManagedSshKey;
 
@@ -82,27 +82,7 @@ pub(super) async fn delete_managed_key(label: String, actor: audit::Actor) -> Wi
         .await
         .unwrap_or_else(|e| Err(format!("Managed key deletion task failed: {e}")));
 
-    let mut event = AuditEvent::new(
-        audit::process_source(),
-        Action::SshManagedKeyDelete,
-        if result.is_ok() {
-            Outcome::Succeeded
-        } else {
-            Outcome::Failed
-        },
-    )
-    .actor(actor);
-    match &result {
-        Ok((label, fingerprint)) => {
-            event = event.subject(
-                Subject::new(SubjectKind::SshKey, fingerprint.clone())
-                    .label(label.clone())
-                    .fingerprint(fingerprint.clone()),
-            );
-        },
-        Err(e) => event = event.message(e.clone()),
-    }
-    audit::record(event);
+    audit::record_managed_key_delete(Some(actor), &result);
 
     match result {
         Ok(_) => WireResponse::Acknowledged,
@@ -110,15 +90,12 @@ pub(super) async fn delete_managed_key(label: String, actor: audit::Actor) -> Wi
     }
 }
 
-/// Find the managed key by label, capture its label and `SHA256:` fingerprint,
-/// then delete it.
+/// Find the managed key by label, then delete it, capturing its label and
+/// `SHA256:` fingerprint for the audit event.
 fn delete_managed_key_locally(label: &str) -> Result<(String, String), String> {
     let key = ManagedSshKey::find(label)
         .map_err(|e| format!("Failed to find managed key: {e}"))?
         .ok_or_else(|| format!("No managed key named {label}"))?;
-    let deleted_label = key.label();
-    let fingerprint = format!("SHA256:{}", key.fingerprint_sha256());
-    key.delete()
-        .map_err(|e| format!("Failed to delete managed key: {e}"))?;
-    Ok((deleted_label, fingerprint))
+    key.delete_capturing()
+        .map_err(|e| format!("Failed to delete managed key: {e}"))
 }
