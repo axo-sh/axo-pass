@@ -52,9 +52,7 @@ pub use gpg::{
     CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
     request_message, request_passphrase,
 };
-pub use keychain::{
-    BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords,
-};
+pub use keychain::{BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords};
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_authorize_key_use,
     request_signature, request_ssh_passphrase,
@@ -1496,8 +1494,7 @@ mod tests {
     async fn routes_a_keychain_password_listing() {
         let broker = TestBroker::start(accepting_policy()).await;
 
-        let response =
-            broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
+        let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
 
         let response: Result<WireResponse, _> = serde_json::from_str(&response);
         assert!(
@@ -1514,8 +1511,7 @@ mod tests {
     async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
         let broker = TestBroker::start(rejecting_policy()).await;
 
-        let response =
-            broker.request(r#"{"request":"list_keychain_passwords","caller":"evil"}"#);
+        let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"evil"}"#);
 
         assert!(response.is_empty(), "broker answered a rejected peer");
     }
@@ -1526,8 +1522,9 @@ mod tests {
     async fn answers_a_managed_key_deletion_for_an_unknown_label() {
         let broker = TestBroker::start(accepting_policy()).await;
 
-        let response = broker
-            .request(r#"{"request":"delete_managed_key","label":"ssh-key-nosuchkey","caller":"ap"}"#);
+        let response = broker.request(
+            r#"{"request":"delete_managed_key","label":"ssh-key-nosuchkey","caller":"ap"}"#,
+        );
 
         let response: WireResponse = serde_json::from_str(&response).unwrap();
         assert!(
