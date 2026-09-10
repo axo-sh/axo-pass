@@ -41,6 +41,14 @@ struct AxoPassApp: App {
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
 
+    Window("Keychain", id: Self.keychainWindowID) {
+      KeychainWindow()
+        .environment(appDelegate.model)
+        .frame(minWidth: 640, minHeight: 360)
+    }
+    .defaultSize(width: 900, height: 520)
+    .defaultLaunchBehavior(.suppressed)
+
     Settings {
       SettingsView()
         .environment(appDelegate.model)
@@ -55,6 +63,8 @@ struct AxoPassApp: App {
       CommandGroup(after: .help) {
         AuditLogMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
+        KeychainMenuItem(windows: appDelegate.windows)
+          .environment(appDelegate.model)
       }
       // Declared rather than left to the default menu: the passphrase panel
       // is shown from a launch that opens no window, and pasting a
@@ -65,6 +75,7 @@ struct AxoPassApp: App {
 
   static let mainWindowID = "main"
   static let auditWindowID = "audit"
+  static let keychainWindowID = "keychain"
 }
 
 /// Help ▸ Audit Log. The Audit Log is only available while unlocked; a locked
@@ -83,6 +94,27 @@ private struct AuditLogMenuItem: View {
       NSApp.setActivationPolicy(.regular)
       NSApp.activate(ignoringOtherApps: true)
       openWindow(id: AxoPassApp.auditWindowID)
+    }
+    .disabled(!model.isAppUnlocked)
+  }
+}
+
+/// Help ▸ Keychain. Read-only, and only available while unlocked; a locked app
+/// shows the main window, and its lock screen, instead.
+private struct KeychainMenuItem: View {
+  let windows: WindowRequests
+  @Environment(VaultsModel.self) private var model
+  @Environment(\.openWindow) private var openWindow
+
+  var body: some View {
+    Button("Keychain") {
+      guard model.isAppUnlocked else {
+        windows.requestMain()
+        return
+      }
+      NSApp.setActivationPolicy(.regular)
+      NSApp.activate(ignoringOtherApps: true)
+      openWindow(id: AxoPassApp.keychainWindowID)
     }
     .disabled(!model.isAppUnlocked)
   }

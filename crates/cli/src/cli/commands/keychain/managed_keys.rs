@@ -1,57 +1,51 @@
-use anyhow::{Context, anyhow};
-use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
-use axo_pass_core::secrets::keychain::keychain_query::KeychainQuery;
-use axo_pass_core::secrets::keychain::managed_key::{self, ManagedKeyQuery, ManagedSshKey};
+use axo_pass_core::core::app_broker::{self, BrokerError};
+use axo_pass_core::core::provenance::Provenance;
 use clml::cprintln;
+use ssh_key::HashAlg;
+
+/// Who asked, resolved from this process's parent chain and delegated to the
+/// broker the same way `ap age` does it.
+fn caller() -> Option<String> {
+    Provenance::resolve_current_parent().and_then(|provenance| provenance.caller())
+}
+
+fn exit_on_broker_err(e: BrokerError) -> ! {
+    match e {
+        BrokerError::Cancelled => log::error!("Cancelled"),
+        e => log::error!("{e}"),
+    }
+    std::process::exit(1);
+}
 
 pub async fn cmd_list_managed_keys() {
-    let keys = run_on_auth_thread(
-        AuthContext::OneTime,
-        AuthMethod::Policy {
-            reason: "list managed keys".to_string(),
-        },
-        move |la_context| {
-            ManagedKeyQuery::build()
-                .with_key_class(managed_key::KeyClass::Public)
-                .list(la_context)
-        },
-    )
-    .flatten()
-    .unwrap();
+    let identities = match app_broker::list_identities() {
+        Ok(identities) => identities,
+        Err(e) => exit_on_broker_err(e),
+    };
 
-    if keys.is_empty() {
+    if identities.is_empty() {
         println!("No managed keys found");
         return;
     }
 
-    for (i, key) in keys.iter().enumerate() {
-        cprintln!(
-            "<green>Label:</green> {}",
-            key.label.as_deref().unwrap_or("<unknown>")
-        );
-        match key.public_key() {
+    for (i, identity) in identities.iter().enumerate() {
+        cprintln!("<green>Label:</green> {}", identity.key_label);
+        match ssh_key::PublicKey::from_openssh(&identity.public_key) {
             Ok(public_key) => cprintln!(
                 "<green>Public Key:</green> {}",
-                public_key.fingerprint(ssh_key::HashAlg::Sha256)
+                public_key.fingerprint(HashAlg::Sha256)
             ),
-            Err(e) => cprintln!("<red>Failed to get public key:</red> {e}"),
+            Err(e) => cprintln!("<red>Failed to parse public key:</red> {e}"),
         }
-        if i < keys.len() - 1 {
+        if i < identities.len() - 1 {
             println!();
-        };
+        }
     }
 }
 
 pub async fn cmd_delete_managed_key(label: &str) {
-    // Find the key by label (need to query private keys to be able to delete)
-    if let Err(e) = ManagedSshKey::find(label)
-        .context("Failed to find managed key")
-        .and_then(|ssh_key| ssh_key.ok_or(anyhow!("Key not found")))
-        .and_then(|ssh_key| ssh_key.delete())
-    {
-        cprintln!("<red>Failed to delete key:</red> {e}");
-        std::process::exit(1);
-    } else {
-        cprintln!("<green>Deleted managed key:</green> {label}");
+    match app_broker::request_delete_managed_key(label, caller().as_deref()) {
+        Ok(()) => cprintln!("<green>Deleted managed key:</green> {label}"),
+        Err(e) => exit_on_broker_err(e),
     }
 }

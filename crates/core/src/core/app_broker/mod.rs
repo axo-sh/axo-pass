@@ -40,6 +40,7 @@ use crate::core::provenance::{PeerIdentity, PeerPolicy, ProcessNode};
 
 pub mod age;
 pub mod gpg;
+pub mod keychain;
 pub mod ssh;
 pub mod vault;
 
@@ -50,6 +51,9 @@ pub use age::{
 pub use gpg::{
     CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
     request_message, request_passphrase,
+};
+pub use keychain::{
+    BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords,
 };
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_authorize_key_use,
@@ -317,6 +321,21 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap keychain generic-password`: list the saved generic passwords,
+    /// metadata only. Raises no prompt.
+    ListKeychainPasswords {
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// `ap keychain managed-keys delete <label>`: remove a managed Secure
+    /// Enclave key. Raises no prompt.
+    DeleteManagedKey {
+        label: String,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
@@ -348,7 +367,9 @@ impl WireRequest {
             | WireRequest::ListAgeKeys { caller, .. }
             | WireRequest::GetAgeIdentity { caller, .. }
             | WireRequest::CreateAgeKey { caller, .. }
-            | WireRequest::DeleteAgeKey { caller, .. } => caller.as_deref(),
+            | WireRequest::DeleteAgeKey { caller, .. }
+            | WireRequest::ListKeychainPasswords { caller, .. }
+            | WireRequest::DeleteManagedKey { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
@@ -429,6 +450,10 @@ enum WireResponse {
     AgeKey {
         name: String,
         recipient: String,
+    },
+    /// Saved generic passwords, metadata only.
+    KeychainPasswords {
+        entries: Vec<keychain::BrokerPasswordEntry>,
     },
     Acknowledged,
     Cancelled,
@@ -1021,6 +1046,14 @@ async fn handle_connection(
             log::debug!("App broker request: delete age key {key_id}");
             age::delete_key(key_id, actor).await
         },
+        WireRequest::ListKeychainPasswords { .. } => {
+            log::debug!("App broker request: list keychain passwords");
+            keychain::list_passwords().await
+        },
+        WireRequest::DeleteManagedKey { label, .. } => {
+            log::debug!("App broker request: delete managed key {label}");
+            keychain::delete_managed_key(label, actor).await
+        },
         WireRequest::Confirm { description } => {
             log::debug!("App broker request: confirm");
             WireResponse::Confirmed {
@@ -1454,6 +1487,53 @@ mod tests {
             "unexpected response to an unknown age key",
         );
         assert!(broker.authorizer.peers.lock().unwrap().is_empty());
+    }
+
+    /// A keychain password listing is framed, parsed and routed. The response
+    /// depends on the test machine's keychain, so only reaching a well-formed
+    /// answer is asserted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn routes_a_keychain_password_listing() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response =
+            broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
+
+        let response: Result<WireResponse, _> = serde_json::from_str(&response);
+        assert!(
+            matches!(
+                response,
+                Ok(WireResponse::KeychainPasswords { .. } | WireResponse::Failed { .. })
+            ),
+            "unexpected response to a keychain password listing"
+        );
+    }
+
+    /// A rejected peer cannot list the saved passwords.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
+        let broker = TestBroker::start(rejecting_policy()).await;
+
+        let response =
+            broker.request(r#"{"request":"list_keychain_passwords","caller":"evil"}"#);
+
+        assert!(response.is_empty(), "broker answered a rejected peer");
+    }
+
+    /// Deleting a managed key that does not exist answers `Failed` rather than
+    /// panicking.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn answers_a_managed_key_deletion_for_an_unknown_label() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let response = broker
+            .request(r#"{"request":"delete_managed_key","label":"ssh-key-nosuchkey","caller":"ap"}"#);
+
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(response, WireResponse::Failed { .. }),
+            "unexpected response to an unknown managed key deletion"
+        );
     }
 
     /// A rejected peer cannot ask for an age identity.
