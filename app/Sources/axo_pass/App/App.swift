@@ -37,6 +37,9 @@ struct AxoPassApp: App {
       AuditLogWindow()
         .environment(appDelegate.model)
         .frame(minWidth: 640, minHeight: 360)
+        // Only reachable from an unlocked app, so a relaunch (always locked)
+        // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
+        .background(WindowAccessor { $0.isRestorable = false })
     }
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
@@ -45,6 +48,9 @@ struct AxoPassApp: App {
       KeychainWindow()
         .environment(appDelegate.model)
         .frame(minWidth: 640, minHeight: 360)
+        // Only reachable from an unlocked app, so a relaunch (always locked)
+        // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
+        .background(WindowAccessor { $0.isRestorable = false })
     }
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
