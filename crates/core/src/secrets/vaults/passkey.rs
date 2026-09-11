@@ -31,7 +31,10 @@ use passkey_types::ctap2::make_credential::{
     PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity,
 };
 use passkey_types::ctap2::{Aaguid, Ctap2Error, StatusCode, get_assertion, make_credential};
-use passkey_types::webauthn::PublicKeyCredentialDescriptor;
+use passkey_types::webauthn::{
+    PublicKeyCredentialDescriptor, PublicKeyCredentialParameters, PublicKeyCredentialType,
+    PublicKeyCredentialUserEntity as WebauthnUserEntity,
+};
 use passkey_types::{Passkey, Bytes};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -120,6 +123,187 @@ pub fn list(vw: &VaultWrapper) -> Result<Vec<StoredPasskey>, Error> {
         }
     }
     Ok(out)
+}
+
+// MARK: - Broker wire types
+
+/// A WebAuthn registration request, as it crosses the broker socket. The
+/// AutoFill extension fills this from an `ASPasskeyCredentialRequest`; the app
+/// runs the authenticator against an unlocked vault.
+#[derive(Debug, Clone)]
+pub struct CreatePasskeyRequest {
+    pub rp_id: String,
+    pub rp_name: Option<String>,
+    /// The relying party's opaque user id.
+    pub user_handle: Vec<u8>,
+    pub user_name: String,
+    pub user_display_name: String,
+    /// SHA-256 of the client data, signed over by the attestation.
+    pub client_data_hash: Vec<u8>,
+    /// COSE algorithm identifiers the client accepts, most preferred first. An
+    /// empty list means ES256.
+    pub algorithms: Vec<i64>,
+    /// Credential ids the relying party already holds for this user. A match
+    /// makes the authenticator refuse, so the browser does not double-register.
+    pub excluded_credentials: Vec<Vec<u8>>,
+}
+
+/// The result of a registration, ready for `ASPasskeyRegistrationCredential`.
+#[derive(Debug, Clone)]
+pub struct CreatePasskeyResponse {
+    pub credential_id: Vec<u8>,
+    /// CBOR-encoded WebAuthn attestation object.
+    pub attestation_object: Vec<u8>,
+}
+
+/// A WebAuthn assertion request, as it crosses the broker socket.
+#[derive(Debug, Clone)]
+pub struct AssertPasskeyRequest {
+    pub rp_id: String,
+    pub client_data_hash: Vec<u8>,
+    /// Credential ids the relying party will accept. Empty means any passkey
+    /// for the relying party.
+    pub allowed_credentials: Vec<Vec<u8>>,
+}
+
+/// The result of an assertion, ready for `ASPasskeyAssertionCredential`.
+#[derive(Debug, Clone)]
+pub struct AssertPasskeyResponse {
+    pub credential_id: Vec<u8>,
+    pub user_handle: Vec<u8>,
+    /// Serialized authenticator data.
+    pub authenticator_data: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+/// Map a COSE algorithm identifier to the `coset` enum. Only the algorithms the
+/// authenticator can actually produce are listed; anything else is dropped from
+/// the parameter list.
+fn cose_algorithm(id: i64) -> Option<coset::iana::Algorithm> {
+    use coset::iana::Algorithm;
+    Some(match id {
+        -7 => Algorithm::ES256,
+        -8 => Algorithm::EdDSA,
+        -35 => Algorithm::ES384,
+        -36 => Algorithm::ES512,
+        -257 => Algorithm::RS256,
+        _ => return None,
+    })
+}
+
+fn descriptors(ids: Vec<Vec<u8>>) -> Option<Vec<PublicKeyCredentialDescriptor>> {
+    if ids.is_empty() {
+        return None;
+    }
+    Some(
+        ids.into_iter()
+            .map(|id| PublicKeyCredentialDescriptor {
+                ty: PublicKeyCredentialType::PublicKey,
+                id: Bytes::from(id),
+                transports: None,
+            })
+            .collect(),
+    )
+}
+
+/// Register a passkey in an unlocked vault from a broker request.
+pub async fn create_from_wire(
+    vw: &mut VaultWrapper,
+    req: CreatePasskeyRequest,
+) -> Result<CreatePasskeyResponse, Error> {
+    let mut params: Vec<PublicKeyCredentialParameters> = req
+        .algorithms
+        .iter()
+        .filter_map(|id| cose_algorithm(*id))
+        .map(|alg| PublicKeyCredentialParameters {
+            ty: PublicKeyCredentialType::PublicKey,
+            alg,
+        })
+        .collect();
+    if params.is_empty() {
+        params.push(PublicKeyCredentialParameters {
+            ty: PublicKeyCredentialType::PublicKey,
+            alg: coset::iana::Algorithm::ES256,
+        });
+    }
+
+    let request = make_credential::Request {
+        client_data_hash: req.client_data_hash.into(),
+        rp: PublicKeyCredentialRpEntity {
+            id: req.rp_id,
+            name: req.rp_name,
+        },
+        user: WebauthnUserEntity {
+            id: req.user_handle.into(),
+            name: req.user_name,
+            display_name: req.user_display_name,
+        },
+        pub_key_cred_params: params,
+        exclude_list: descriptors(req.excluded_credentials),
+        extensions: None,
+        options: get_assertion::Options {
+            rk: true,
+            up: true,
+            uv: true,
+        },
+        pin_auth: None,
+        pin_protocol: None,
+    };
+
+    let response = create(vw, request).await?;
+    let credential_id = response
+        .auth_data
+        .attested_credential_data
+        .as_ref()
+        .map(|acd| acd.credential_id().to_vec())
+        .ok_or_else(|| {
+            Error::Passkey("Registration response carries no attested credential data".to_string())
+        })?;
+    Ok(CreatePasskeyResponse {
+        credential_id,
+        attestation_object: response.as_webauthn_bytes().to_vec(),
+    })
+}
+
+/// Assert an existing passkey in an unlocked vault from a broker request. The
+/// user handle is read back from the stored record rather than the CTAP2
+/// response, which omits it for a non-discoverable assertion.
+pub async fn assert_from_wire(
+    vw: &mut VaultWrapper,
+    req: AssertPasskeyRequest,
+) -> Result<AssertPasskeyResponse, Error> {
+    let request = get_assertion::Request {
+        rp_id: req.rp_id.clone(),
+        client_data_hash: req.client_data_hash.into(),
+        allow_list: descriptors(req.allowed_credentials),
+        extensions: None,
+        options: get_assertion::Options {
+            rk: true,
+            up: true,
+            uv: true,
+        },
+        pin_auth: None,
+        pin_protocol: None,
+    };
+
+    let response = assert(vw, request).await?;
+    let credential_id = response
+        .credential
+        .map(|d| d.id.as_slice().to_vec())
+        .ok_or_else(|| Error::Passkey("Assertion response names no credential".to_string()))?;
+
+    let user_handle = list(vw)?
+        .into_iter()
+        .find(|s| s.passkey.credential_id.as_slice() == credential_id.as_slice())
+        .and_then(|s| s.passkey.user_handle.map(|h| h.as_slice().to_vec()))
+        .unwrap_or_default();
+
+    Ok(AssertPasskeyResponse {
+        credential_id,
+        user_handle,
+        authenticator_data: response.auth_data.to_vec(),
+        signature: response.signature.as_slice().to_vec(),
+    })
 }
 
 // MARK: - On-disk record

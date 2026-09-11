@@ -28,7 +28,9 @@ use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
-use crate::secrets::vaults::{AutofillItem, FieldKind, VaultWrapper, VaultsManager, autofill};
+use crate::secrets::vaults::{
+    AutofillItem, DEFAULT_VAULT, FieldKind, VaultWrapper, VaultsManager, autofill, passkey,
+};
 
 /// One `axo://` reference to resolve, as it crosses the socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +100,16 @@ pub enum VaultAction {
     /// `ap vault add`: unlock the vault at `path` to validate it, then register
     /// it as an external vault in the app config.
     AddVault { path: String },
+
+    /// The AutoFill extension's passkey registration: run the WebAuthn
+    /// authenticator against an unlocked vault and return the attestation. The
+    /// request data travels in [`CreatePasskeyPayload`].
+    CreatePasskey { rp_id: String },
+
+    /// The AutoFill extension's passkey assertion: sign the challenge with a
+    /// stored passkey's private key. The request data travels in
+    /// [`AssertPasskeyPayload`].
+    AssertPasskey { rp_id: String },
 }
 
 /// The secret an [`VaultAction::WriteSecret`] writes, kept out of
@@ -126,6 +138,20 @@ pub struct ImportPayload {
     pub selection: Vec<(String, String)>,
 }
 
+/// The WebAuthn registration request for an [`VaultAction::CreatePasskey`],
+/// kept out of [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct CreatePasskeyPayload {
+    pub request: crate::secrets::vaults::passkey::CreatePasskeyRequest,
+}
+
+/// The WebAuthn assertion request for an [`VaultAction::AssertPasskey`], kept
+/// out of [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct AssertPasskeyPayload {
+    pub request: crate::secrets::vaults::passkey::AssertPasskeyRequest,
+}
+
 /// A payload that does not belong in [`VaultAccessPrompt`] because it carries a
 /// secret or would clutter the prompt.
 #[derive(Clone)]
@@ -133,6 +159,8 @@ pub(super) enum VaultPayload {
     Write(WriteSecretPayload),
     Export(ExportPayload),
     Import(ImportPayload),
+    CreatePasskey(CreatePasskeyPayload),
+    AssertPasskey(AssertPasskeyPayload),
 }
 
 /// How the export bundle key is protected, as it crosses the socket.
@@ -434,6 +462,83 @@ pub fn request_add_external_vault(
     }
 }
 
+/// Ask the app to register a passkey against an unlocked vault and return the
+/// attestation. Blocking, same as [`request_vault_items`].
+pub fn request_create_passkey(
+    request: crate::secrets::vaults::passkey::CreatePasskeyRequest,
+    caller: Option<&str>,
+) -> Result<crate::secrets::vaults::passkey::CreatePasskeyResponse, BrokerError> {
+    let wire = WireRequest::CreatePasskey {
+        rp_id: request.rp_id.clone(),
+        rp_name: request.rp_name.clone(),
+        user_handle: b64_encode(&request.user_handle),
+        user_name: request.user_name.clone(),
+        user_display_name: request.user_display_name.clone(),
+        client_data_hash: b64_encode(&request.client_data_hash),
+        algorithms: request.algorithms.clone(),
+        excluded_credentials: request.excluded_credentials.iter().map(|c| b64_encode(c)).collect(),
+        caller: caller.map(String::from),
+    };
+    match send_request(&wire)? {
+        WireResponse::PasskeyRegistered {
+            credential_id,
+            attestation_object,
+        } => Ok(crate::secrets::vaults::passkey::CreatePasskeyResponse {
+            credential_id: b64_decode(&credential_id)?,
+            attestation_object: b64_decode(&attestation_object)?,
+        }),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to passkey registration".to_string(),
+        )),
+    }
+}
+
+/// Ask the app to sign an assertion challenge with a stored passkey. Blocking,
+/// same as [`request_vault_items`].
+pub fn request_assert_passkey(
+    request: crate::secrets::vaults::passkey::AssertPasskeyRequest,
+    caller: Option<&str>,
+) -> Result<crate::secrets::vaults::passkey::AssertPasskeyResponse, BrokerError> {
+    let wire = WireRequest::AssertPasskey {
+        rp_id: request.rp_id.clone(),
+        client_data_hash: b64_encode(&request.client_data_hash),
+        allowed_credentials: request.allowed_credentials.iter().map(|c| b64_encode(c)).collect(),
+        caller: caller.map(String::from),
+    };
+    match send_request(&wire)? {
+        WireResponse::PasskeyAsserted {
+            credential_id,
+            user_handle,
+            authenticator_data,
+            signature,
+        } => Ok(crate::secrets::vaults::passkey::AssertPasskeyResponse {
+            credential_id: b64_decode(&credential_id)?,
+            user_handle: b64_decode(&user_handle)?,
+            authenticator_data: b64_decode(&authenticator_data)?,
+            signature: b64_decode(&signature)?,
+        }),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to passkey assertion".to_string(),
+        )),
+    }
+}
+
+fn b64_encode(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|e| BrokerError::Failed(format!("Malformed base64 in passkey response: {e}")))
+}
+
 pub(super) async fn authorize_and_serve(
     authorizer: &dyn VaultAuthorizer,
     prompt: VaultAccessPrompt,
@@ -465,7 +570,8 @@ pub(super) async fn authorize_and_serve(
     }
 
     let job = prompt.clone();
-    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, payload))
+    let rt = tokio::runtime::Handle::current();
+    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, payload, rt))
         .await
         .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
@@ -550,6 +656,14 @@ fn record_access(
             Action::VaultLinked,
             Subject::new(SubjectKind::Vault, path.clone()),
         ),
+        VaultAction::CreatePasskey { rp_id } => (
+            Action::PasskeyRegistered,
+            Subject::new(SubjectKind::Credential, rp_id.clone()),
+        ),
+        VaultAction::AssertPasskey { rp_id } => (
+            Action::PasskeyAsserted,
+            Subject::new(SubjectKind::Credential, rp_id.clone()),
+        ),
     };
 
     // A write that created the item records `vault.item_created` instead. The
@@ -610,11 +724,24 @@ fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
     payload: Option<VaultPayload>,
+    rt: tokio::runtime::Handle,
 ) -> Result<WireResponse, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
         VaultAction::ListAutofillItems { service } => {
             return collect_autofill_items(service.as_deref(), context);
+        },
+        VaultAction::CreatePasskey { .. } => {
+            let Some(VaultPayload::CreatePasskey(p)) = payload else {
+                return Err("Missing passkey registration payload".to_string());
+            };
+            return create_passkey(p.request, context, &rt);
+        },
+        VaultAction::AssertPasskey { .. } => {
+            let Some(VaultPayload::AssertPasskey(p)) = payload else {
+                return Err("Missing passkey assertion payload".to_string());
+            };
+            return assert_passkey(p.request, context, &rt);
         },
         VaultAction::ExportVaults { vault_keys } => {
             let Some(VaultPayload::Export(export)) = payload else {
@@ -689,7 +816,9 @@ fn serve_on_context(
         | VaultAction::ListAutofillItems { .. }
         | VaultAction::ExportVaults { .. }
         | VaultAction::ImportVaults { .. }
-        | VaultAction::AddVault { .. } => unreachable!("handled above"),
+        | VaultAction::AddVault { .. }
+        | VaultAction::CreatePasskey { .. }
+        | VaultAction::AssertPasskey { .. } => unreachable!("handled above"),
     }
 }
 
@@ -720,6 +849,78 @@ fn collect_autofill_items(
 
     items.sort_by_key(|item| item.title.to_lowercase());
     Ok(WireResponse::AutofillItems { items })
+}
+
+/// Register a passkey in the default vault on the app's context. The extension
+/// names no vault, so a new passkey always lands in the default one; the item
+/// detail view moves it afterward if the user wants it elsewhere.
+fn create_passkey(
+    request: passkey::CreatePasskeyRequest,
+    context: ForeignContext,
+    rt: &tokio::runtime::Handle,
+) -> Result<WireResponse, String> {
+    let vault_key = {
+        let vm = VaultsManager::new();
+        let keys: Vec<String> = vm.iter_vault_keys().collect();
+        if keys.iter().any(|k| k == DEFAULT_VAULT) || keys.is_empty() {
+            DEFAULT_VAULT.to_string()
+        } else {
+            keys.into_iter().next().unwrap()
+        }
+    };
+    let mut vw = VaultWrapper::load(&vaults_dir(), Some(vault_key.clone()))
+        .map_err(|e| format!("Failed to load vault {vault_key}: {e}"))?;
+    vw.unlock_on(AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to unlock vault {vault_key}: {e}"))?;
+
+    let response = rt
+        .block_on(passkey::create_from_wire(&mut vw, request))
+        .map_err(|e| format!("Failed to register the passkey: {e}"))?;
+    Ok(WireResponse::PasskeyRegistered {
+        credential_id: b64_encode(&response.credential_id),
+        attestation_object: b64_encode(&response.attestation_object),
+    })
+}
+
+/// Sign an assertion challenge with a stored passkey. The credential may be in
+/// any vault, so each is tried until one holds a passkey for the relying party.
+fn assert_passkey(
+    request: passkey::AssertPasskeyRequest,
+    context: ForeignContext,
+    rt: &tokio::runtime::Handle,
+) -> Result<WireResponse, String> {
+    let mut vm = VaultsManager::new();
+    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+
+    let mut last_error = None;
+    for vault_key in vault_keys {
+        let Some(vw) = vm.get_vault_mut(&vault_key) else {
+            continue;
+        };
+        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
+            log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
+            continue;
+        }
+        let holds_credential = passkey::list(vw)
+            .map(|passkeys| passkeys.iter().any(|s| s.passkey.rp_id == request.rp_id))
+            .unwrap_or(false);
+        if !holds_credential {
+            continue;
+        }
+        match rt.block_on(passkey::assert_from_wire(vw, request.clone())) {
+            Ok(response) => {
+                return Ok(WireResponse::PasskeyAsserted {
+                    credential_id: b64_encode(&response.credential_id),
+                    user_handle: b64_encode(&response.user_handle),
+                    authenticator_data: b64_encode(&response.authenticator_data),
+                    signature: b64_encode(&response.signature),
+                });
+            },
+            Err(e) => last_error = Some(e.to_string()),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "No stored passkey matched the request".to_string()))
 }
 
 /// Unlock every named vault on the app's context and write the export bundle.

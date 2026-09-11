@@ -38,9 +38,17 @@ struct CredentialRow: View {
   // actually changes. Nil until the secret is revealed.
   @State private var quickOriginal: String? = nil
 
+  /// Passkeys are shown read only: their value is a structured record the
+  /// authenticator owns, not free text to edit.
+  private var isPasskey: Bool { cred.kind.kind == "passkey" }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      readView
+      if isPasskey {
+        passkeyView
+      } else {
+        readView
+      }
       if let err = error {
         Text(err).font(.caption).foregroundStyle(.red)
       }
@@ -245,6 +253,56 @@ struct CredentialRow: View {
     }
   }
 
+  // MARK: - Passkey
+
+  private var passkeyView: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: "person.badge.key.fill")
+          .foregroundStyle(.tint)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(cred.title).fontWeight(.semibold)
+          referenceLabel
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 4) {
+        passkeyRow("Site", passkeyRecord?.rpId)
+        passkeyRow("Account", passkeyRecord?.displayAccount)
+        passkeyRow("Credential ID", passkeyRecord?.credentialId)
+      }
+      .padding(.vertical, 6)
+      .padding(.horizontal, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+      .task(id: cred.key) {
+        if secret == nil, !isRevealing { onReveal() }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func passkeyRow(_ label: String, _ value: String?) -> some View {
+    if let value, !value.isEmpty {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(label)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(width: 96, alignment: .leading)
+        Text(value)
+          .font(.system(.callout, design: .monospaced))
+          .textSelection(.enabled)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+    }
+  }
+
+  private var passkeyRecord: PasskeyRecord? {
+    guard let json = revealedText, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(PasskeyRecord.self, from: data)
+  }
+
   // MARK: - Helpers
 
   /// The reference `ap exec` and `ap inject` resolve for this credential.
@@ -292,6 +350,26 @@ struct CredentialRow: View {
     }
     onQuickSaveValue(value)
     cancelQuickEdit()
+  }
+}
+
+/// The stored passkey record, decoded for the read-only detail view. Mirrors
+/// `StoredRecord` in crates/core/src/secrets/vaults/passkey.rs.
+struct PasskeyRecord: Decodable {
+  let rpId: String
+  let credentialId: String
+  let username: String?
+  let userDisplayName: String?
+
+  var displayAccount: String? {
+    userDisplayName?.isEmpty == false ? userDisplayName : username
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case rpId = "rp_id"
+    case credentialId = "credential_id"
+    case username
+    case userDisplayName = "user_display_name"
   }
 }
 

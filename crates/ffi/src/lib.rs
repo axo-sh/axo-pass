@@ -27,7 +27,7 @@ use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError,
     ExportProgress as CoreExportProgress, FieldKind, TextField, VaultFolder,
     VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, VaultWrapper, VaultsManager,
-    autofill, display_order,
+    autofill, display_order, passkey,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -363,6 +363,21 @@ pub struct AutofillItemInfo {
     /// The credential key holding the password to fill.
     pub password_key: String,
     pub urls: Vec<String>,
+}
+
+/// One stored passkey, as the AutoFill identity store needs it. The system
+/// matches on the relying party; the record identifier points the assertion
+/// back at the vault credential.
+#[derive(uniffi::Record)]
+pub struct PasskeyIdentityInfo {
+    pub vault_key: String,
+    pub item_key: String,
+    pub credential_key: String,
+    pub rp_id: String,
+    pub credential_id: Vec<u8>,
+    pub user_name: String,
+    /// Empty when the record carries no user handle.
+    pub user_handle: Vec<u8>,
 }
 
 impl From<autofill::AutofillItem> for AutofillItemInfo {
@@ -1652,6 +1667,49 @@ impl AxoPass {
                 }
             }
             Ok(items)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List every stored passkey across every vault, for registering
+    /// `ASPasskeyCredentialIdentity` entries with the system. Requires the app
+    /// to be unlocked; a vault that fails to unlock is skipped.
+    ///
+    /// Only the metadata the identity store needs is read. The private key
+    /// stays in the vault until the extension asks for an assertion.
+    pub async fn list_passkey_identities(&self) -> Result<Vec<PasskeyIdentityInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault_keys: Vec<String> = m.iter_vault_keys().collect();
+            let mut identities = Vec::new();
+            for vault_key in vault_keys {
+                let Some(vault) = m.get_vault_mut(&vault_key) else {
+                    continue;
+                };
+                if let Err(e) = vault.unlock() {
+                    log::error!("Failed to unlock vault {vault_key} for passkeys: {e}");
+                    continue;
+                }
+                match passkey::list(vault) {
+                    Ok(found) => identities.extend(found.into_iter().map(|s| PasskeyIdentityInfo {
+                        vault_key: vault_key.clone(),
+                        item_key: s.item_key,
+                        credential_key: s.credential_key,
+                        rp_id: s.passkey.rp_id,
+                        credential_id: s.passkey.credential_id.as_slice().to_vec(),
+                        user_name: s.passkey.username.unwrap_or_default(),
+                        user_handle: s
+                            .passkey
+                            .user_handle
+                            .map(|h| h.as_slice().to_vec())
+                            .unwrap_or_default(),
+                    })),
+                    Err(e) => log::error!("Failed to list passkeys in {vault_key}: {e}"),
+                }
+            }
+            Ok(identities)
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
@@ -3013,6 +3071,7 @@ impl AxoPass {
             keychain: Arc::new(app_broker::SystemKeychain),
             vault: Arc::new(DelegatingVaultAuthorizer {
                 delegate: vault_delegate,
+                manager: Arc::clone(&self.manager),
             }),
         };
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -3589,6 +3648,14 @@ pub enum VaultAction {
     AddVault {
         path: String,
     },
+    /// The AutoFill extension is registering a passkey for `rp_id`.
+    CreatePasskey {
+        rp_id: String,
+    },
+    /// The AutoFill extension is asserting a passkey for `rp_id`.
+    AssertPasskey {
+        rp_id: String,
+    },
 }
 
 /// Mirrors [`app_broker::ResolvePurpose`].
@@ -3660,6 +3727,8 @@ impl From<app_broker::VaultAction> for VaultAction {
                 count: count as u32,
             },
             app_broker::VaultAction::AddVault { path } => Self::AddVault { path },
+            app_broker::VaultAction::CreatePasskey { rp_id } => Self::CreatePasskey { rp_id },
+            app_broker::VaultAction::AssertPasskey { rp_id } => Self::AssertPasskey { rp_id },
         }
     }
 }
@@ -3715,10 +3784,42 @@ pub trait VaultPromptDelegate: Send + Sync {
 
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
+
+    /// A broker request wrote to one or more vaults on disk. The app drops its
+    /// cached copy of each named vault and re-indexes AutoFill. An empty list
+    /// means the written vault could not be named, so treat every vault as
+    /// possibly changed.
+    async fn vaults_changed(&self, vault_keys: Vec<String>);
 }
 
 struct DelegatingVaultAuthorizer {
     delegate: Arc<dyn VaultPromptDelegate>,
+    /// The app's long-lived manager. A broker write goes to disk through its
+    /// own `VaultWrapper`, so this copy is relocked afterwards to force a
+    /// reload on the next read.
+    manager: Arc<Mutex<VaultsManager>>,
+}
+
+/// Whether a completed vault action changed the vault on disk.
+fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
+    matches!(
+        action,
+        app_broker::VaultAction::WriteSecret { .. }
+            | app_broker::VaultAction::CreatePasskey { .. }
+            | app_broker::VaultAction::AssertPasskey { .. }
+            | app_broker::VaultAction::ImportVaults { .. }
+            | app_broker::VaultAction::AddVault { .. }
+    )
+}
+
+/// The vault keys a mutating action wrote to, when the prompt names them.
+/// `WriteSecret` carries the real key; the passkey, import and add actions do
+/// not, so they return an empty list and every vault is relocked.
+fn changed_vault_keys(prompt: &app_broker::VaultAccessPrompt) -> Vec<String> {
+    match &prompt.action {
+        app_broker::VaultAction::WriteSecret { .. } => vec![prompt.vault_key.clone()],
+        _ => Vec::new(),
+    }
 }
 
 #[async_trait::async_trait]
@@ -3749,8 +3850,25 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
     }
 
     async fn end(&self, prompt: app_broker::VaultAccessPrompt, outcome: app_broker::PromptOutcome) {
+        let changed = matches!(outcome, app_broker::PromptOutcome::Succeeded)
+            && vault_action_mutates(&prompt.action);
+        let changed_keys = changed_vault_keys(&prompt);
+
         self.delegate
             .end_authorization(prompt.into(), outcome.into())
             .await;
+
+        if changed {
+            if let Ok(mut manager) = self.manager.lock() {
+                if changed_keys.is_empty() {
+                    manager.lock_all();
+                } else {
+                    for key in &changed_keys {
+                        manager.relock(key);
+                    }
+                }
+            }
+            self.delegate.vaults_changed(changed_keys).await;
+        }
     }
 }

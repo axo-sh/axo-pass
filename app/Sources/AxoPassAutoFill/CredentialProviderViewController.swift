@@ -54,6 +54,13 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   }
 
   override func prepareInterfaceToProvideCredential(for request: any ASCredentialRequest) {
+    if let passkeyRequest = request as? ASPasskeyCredentialRequest,
+      let identity = request.credentialIdentity as? ASPasskeyCredentialIdentity
+    {
+      provideAssertion(passkeyRequest, identity: identity)
+      return
+    }
+
     guard let ref = CredentialRef(recordIdentifier: request.credentialIdentity.recordIdentifier)
     else {
       cancel(.credentialIdentityNotFound)
@@ -61,6 +68,93 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     let user = (request.credentialIdentity as? ASPasswordCredentialIdentity)?.user ?? ""
     model.fillDirectly(ref: ref, user: user)
+  }
+
+  // MARK: - Passkeys
+
+  override func prepareInterface(forPasskeyRegistration registrationRequest: any ASCredentialRequest)
+  {
+    guard let request = registrationRequest as? ASPasskeyCredentialRequest,
+      let identity = registrationRequest.credentialIdentity as? ASPasskeyCredentialIdentity
+    else {
+      cancel(.failed)
+      return
+    }
+    guard BrokerClient.isAvailable else {
+      model.report(BrokerError.unavailable)
+      return
+    }
+
+    let name = identity.userName.isEmpty ? identity.relyingPartyIdentifier : identity.userName
+    model.beginFilling(name)
+    Task { [weak self] in
+      do {
+        let registration = try await BrokerClient.registerPasskey(
+          rpID: identity.relyingPartyIdentifier,
+          rpName: nil,
+          userHandle: identity.userHandle,
+          userName: identity.userName,
+          userDisplayName: identity.userName,
+          clientDataHash: request.clientDataHash,
+          algorithms: request.supportedAlgorithms.map(\.rawValue),
+          excludedCredentials: [])
+        self?.completeRegistration(
+          rpID: identity.relyingPartyIdentifier,
+          clientDataHash: request.clientDataHash,
+          registration: registration)
+      } catch {
+        self?.model.report(error)
+      }
+    }
+  }
+
+  private func provideAssertion(
+    _ request: ASPasskeyCredentialRequest, identity: ASPasskeyCredentialIdentity
+  ) {
+    guard BrokerClient.isAvailable else {
+      model.report(BrokerError.unavailable)
+      return
+    }
+    let name = identity.userName.isEmpty ? identity.relyingPartyIdentifier : identity.userName
+    model.beginFilling(name)
+    Task { [weak self] in
+      do {
+        let assertion = try await BrokerClient.assertPasskey(
+          rpID: identity.relyingPartyIdentifier,
+          clientDataHash: request.clientDataHash,
+          allowedCredentialIDs: [identity.credentialID])
+        self?.completeAssertion(
+          rpID: identity.relyingPartyIdentifier,
+          clientDataHash: request.clientDataHash,
+          assertion: assertion)
+      } catch {
+        self?.model.report(error)
+      }
+    }
+  }
+
+  private func completeRegistration(
+    rpID: String, clientDataHash: Data, registration: BrokerClient.Registration
+  ) {
+    let credential = ASPasskeyRegistrationCredential(
+      relyingParty: rpID,
+      clientDataHash: clientDataHash,
+      credentialID: registration.credentialID,
+      attestationObject: registration.attestationObject)
+    extensionContext.completeRegistrationRequest(using: credential, completionHandler: nil)
+  }
+
+  private func completeAssertion(
+    rpID: String, clientDataHash: Data, assertion: BrokerClient.Assertion
+  ) {
+    let credential = ASPasskeyAssertionCredential(
+      userHandle: assertion.userHandle,
+      relyingParty: rpID,
+      signature: assertion.signature,
+      clientDataHash: clientDataHash,
+      authenticatorData: assertion.authenticatorData,
+      credentialID: assertion.credentialID)
+    extensionContext.completeAssertionRequest(using: credential, completionHandler: nil)
   }
 
   /// Read the password and hand it back to the system.

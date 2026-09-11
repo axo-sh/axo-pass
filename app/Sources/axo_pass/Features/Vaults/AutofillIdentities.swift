@@ -30,12 +30,34 @@ enum AutofillIdentities {
       return
     }
 
-    let identities = items.flatMap(passwordIdentities)
+    let passkeys: [PasskeyIdentityInfo]
+    do {
+      passkeys = try await core.listPasskeyIdentities()
+    } catch {
+      NSLog("Failed to list passkey identities: %@", String(describing: error))
+      passkeys = []
+    }
+
+    let identities: [ASCredentialIdentity] =
+      items.flatMap(passwordIdentities) + passkeys.map(passkeyIdentity)
     do {
       try await ASCredentialIdentityStore.shared.replaceCredentialIdentities(identities)
     } catch {
       NSLog("Failed to register autofill identities: %@", String(describing: error))
     }
+  }
+
+  /// One passkey identity: the system matches on the relying party, and hands
+  /// the record identifier back when the user picks it.
+  private static func passkeyIdentity(
+    for passkey: PasskeyIdentityInfo
+  ) -> ASPasskeyCredentialIdentity {
+    ASPasskeyCredentialIdentity(
+      relyingPartyIdentifier: passkey.rpId,
+      userName: passkey.userName.isEmpty ? passkey.rpId : passkey.userName,
+      credentialID: passkey.credentialId,
+      userHandle: passkey.userHandle,
+      recordIdentifier: "\(passkey.vaultKey)/\(passkey.itemKey)/\(passkey.credentialKey)")
   }
 
   /// One identity per URL on the item: the system matches on the service, so an

@@ -209,7 +209,9 @@ final class VaultsModel {
     guard signingBridge == nil else { return }
     let signing = SigningPromptBridge(model: signingPrompt)
     let passphrase = PassphrasePromptBridge(model: passphrasePrompt)
-    let vaultUnlock = VaultUnlockPromptBridge(model: vaultUnlockPrompt)
+    let vaultUnlock = VaultUnlockPromptBridge(model: vaultUnlockPrompt) { [weak self] keys in
+      await self?.brokerVaultsChanged(keys)
+    }
     signingBridge = signing
     passphraseBridge = passphrase
     vaultUnlockBridge = vaultUnlock
@@ -608,6 +610,22 @@ final class VaultsModel {
       guard !Task.isCancelled else { return }
       await AutofillIdentities.refresh(from: core)
     }
+  }
+
+  /// A broker request wrote to a vault behind the app's back: a passkey
+  /// registration or assertion from the AutoFill extension, or `ap item set`.
+  /// The core has already relocked its copy of each vault, so drop the matching
+  /// cache entries to force a reload, then re-index AutoFill. An empty `keys`
+  /// means the written vault could not be named, so clear the whole cache.
+  func brokerVaultsChanged(_ keys: [String]) async {
+    if keys.isEmpty {
+      itemCache.removeAll()
+    } else {
+      for key in keys { itemCache.removeValue(forKey: key) }
+    }
+    guard isAppUnlocked else { return }
+    await loadItemsForSelection()
+    scheduleAutofillRefresh()
   }
 
   private func loadItems(for vaultKey: String) async {

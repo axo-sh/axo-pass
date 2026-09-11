@@ -255,6 +255,10 @@ pub enum Action {
     VaultExported,
     #[serde(rename = "vault.imported")]
     VaultImported,
+    #[serde(rename = "passkey.registered")]
+    PasskeyRegistered,
+    #[serde(rename = "passkey.asserted")]
+    PasskeyAsserted,
 
     #[serde(rename = "auth.grant_created")]
     AuthGrantCreated,
@@ -305,6 +309,8 @@ impl Action {
             Action::VaultLinked => "vault.linked",
             Action::VaultExported => "vault.exported",
             Action::VaultImported => "vault.imported",
+            Action::PasskeyRegistered => "passkey.registered",
+            Action::PasskeyAsserted => "passkey.asserted",
             Action::AuthGrantCreated => "auth.grant_created",
             Action::AuthGrantReused => "auth.grant_reused",
             Action::AuthGrantExpired => "auth.grant_expired",

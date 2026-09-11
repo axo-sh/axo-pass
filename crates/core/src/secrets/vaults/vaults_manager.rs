@@ -244,6 +244,17 @@ impl VaultsManager {
         }
     }
 
+    /// Drop one decrypted vault from memory, so the next read reloads it from
+    /// disk. Used after a broker request writes to a vault this manager also
+    /// holds, since that write goes straight to disk through a separate
+    /// `VaultWrapper` and does not touch this copy.
+    pub fn relock(&mut self, key: &str) {
+        if let Some(vault) = self.vaults.get_mut(key) {
+            log::debug!("Relocking vault {key} after a broker write");
+            vault.lock();
+        }
+    }
+
     /// Get-or-create + unlock a vault, run `f`, then save. Generic over the
     /// caller's own error type so each frontend (CLI, FFI) can keep its own
     /// error taxonomy — it just needs `From<Error>` to absorb failures from

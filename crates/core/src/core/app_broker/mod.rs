@@ -64,8 +64,9 @@ pub use ssh::{
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
     VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, request_add_external_vault,
-    request_autofill_items, request_export_vaults, request_import_vaults, request_resolve_secrets,
-    request_vault_items, request_vault_secret, request_write_vault_secret,
+    request_assert_passkey, request_autofill_items, request_create_passkey, request_export_vaults,
+    request_import_vaults, request_resolve_secrets, request_vault_items, request_vault_secret,
+    request_write_vault_secret,
 };
 
 /// How long a client waits for the user to answer the app's prompt before
@@ -391,6 +392,35 @@ enum WireRequest {
         caller: Option<String>,
     },
 
+    /// The AutoFill extension's passkey registration: run the WebAuthn
+    /// authenticator against an unlocked vault and return the attestation.
+    /// Byte fields are standard base64.
+    CreatePasskey {
+        rp_id: String,
+        #[serde(default)]
+        rp_name: Option<String>,
+        user_handle: String,
+        user_name: String,
+        user_display_name: String,
+        client_data_hash: String,
+        algorithms: Vec<i64>,
+        #[serde(default)]
+        excluded_credentials: Vec<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// The AutoFill extension's passkey assertion: sign the challenge with a
+    /// stored passkey's private key. Byte fields are standard base64.
+    AssertPasskey {
+        rp_id: String,
+        client_data_hash: String,
+        #[serde(default)]
+        allowed_credentials: Vec<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
@@ -429,7 +459,9 @@ impl WireRequest {
             | WireRequest::CreateAgeKey { caller, .. }
             | WireRequest::DeleteAgeKey { caller, .. }
             | WireRequest::ListKeychainPasswords { caller, .. }
-            | WireRequest::DeleteManagedKey { caller, .. } => caller.as_deref(),
+            | WireRequest::DeleteManagedKey { caller, .. }
+            | WireRequest::CreatePasskey { caller, .. }
+            | WireRequest::AssertPasskey { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
@@ -501,6 +533,18 @@ enum WireResponse {
         vault_key: String,
         name: Option<String>,
     },
+    /// A freshly registered passkey. Byte fields are standard base64.
+    PasskeyRegistered {
+        credential_id: String,
+        attestation_object: String,
+    },
+    /// A passkey assertion. Byte fields are standard base64.
+    PasskeyAsserted {
+        credential_id: String,
+        user_handle: String,
+        authenticator_data: String,
+        signature: String,
+    },
     /// Saved age keys, public halves only.
     AgeKeys {
         keys: Vec<age::BrokerAgeKey>,
@@ -523,6 +567,13 @@ enum WireResponse {
     Failed {
         message: String,
     },
+}
+
+/// Decode a standard-base64 wire field into bytes, mapping a bad encoding to an
+/// `InvalidData` error so the connection is dropped rather than mishandled.
+fn decode_b64(value: &str) -> std::io::Result<Vec<u8>> {
+    b64.decode(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 // Client (the agent).
@@ -1386,6 +1437,82 @@ async fn handle_connection(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
                     .await
+            },
+            WireRequest::CreatePasskey {
+                rp_id,
+                rp_name,
+                user_handle,
+                user_name,
+                user_display_name,
+                client_data_hash,
+                algorithms,
+                excluded_credentials,
+                caller,
+            } => {
+                let mut excluded = Vec::with_capacity(excluded_credentials.len());
+                for c in &excluded_credentials {
+                    excluded.push(decode_b64(c)?);
+                }
+                let request = crate::secrets::vaults::passkey::CreatePasskeyRequest {
+                    rp_id: rp_id.clone(),
+                    rp_name,
+                    user_handle: decode_b64(&user_handle)?,
+                    user_name,
+                    user_display_name,
+                    client_data_hash: decode_b64(&client_data_hash)?,
+                    algorithms,
+                    excluded_credentials: excluded,
+                };
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: crate::secrets::vaults::DEFAULT_VAULT.to_string(),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::CreatePasskey { rp_id },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::CreatePasskey(
+                        vault::CreatePasskeyPayload { request },
+                    )),
+                    &in_flight,
+                )
+                .await
+            },
+            WireRequest::AssertPasskey {
+                rp_id,
+                client_data_hash,
+                allowed_credentials,
+                caller,
+            } => {
+                let mut allowed = Vec::with_capacity(allowed_credentials.len());
+                for c in &allowed_credentials {
+                    allowed.push(decode_b64(c)?);
+                }
+                let request = crate::secrets::vaults::passkey::AssertPasskeyRequest {
+                    rp_id: rp_id.clone(),
+                    client_data_hash: decode_b64(&client_data_hash)?,
+                    allowed_credentials: allowed,
+                };
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: String::new(),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::AssertPasskey { rp_id },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::AssertPasskey(
+                        vault::AssertPasskeyPayload { request },
+                    )),
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::ListAgeKeys { .. } => {
                 log::debug!("App broker request: list age keys");

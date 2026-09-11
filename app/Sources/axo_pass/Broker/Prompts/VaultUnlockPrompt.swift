@@ -150,7 +150,8 @@ final class VaultUnlockPromptModel {
         let path = "\(ref.itemKey)/\(ref.credentialKey)"
         return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
       }
-    case .listItems, .exportVaults, .importVaults, .addVault:
+    case .listItems, .listAutofillItems, .exportVaults, .importVaults, .addVault,
+      .createPasskey, .assertPasskey:
       return []
     }
   }
@@ -177,6 +178,10 @@ final class VaultUnlockPromptModel {
       what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
     case .addVault(let path):
       what = "add the vault at \(path)"
+    case let .createPasskey(rpId):
+      what = "create a passkey for \(rpId)"
+    case let .assertPasskey(rpId):
+      what = "sign in to \(rpId) with a passkey"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -188,7 +193,8 @@ final class VaultUnlockPromptModel {
   /// every request. A listing does not.
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
-    case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault:
+    case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault,
+      .createPasskey, .assertPasskey:
       return true
     case .listItems, .listAutofillItems: return false
     }
@@ -214,6 +220,8 @@ final class VaultUnlockPromptModel {
     case .exportVaults: return "export"
     case .importVaults: return "import"
     case .addVault: return "add"
+    case .createPasskey: return "passkey-create"
+    case .assertPasskey: return "passkey-assert"
     }
   }
 
@@ -239,6 +247,8 @@ final class VaultUnlockPromptModel {
     case .importVaults(let count):
       return "import \(count) \(count == 1 ? "vault" : "vaults")"
     case .addVault: return "add a vault"
+    case let .createPasskey(rpId): return "create a passkey for \(rpId)"
+    case let .assertPasskey(rpId): return "sign in to \(rpId)"
     }
   }
 }
@@ -289,8 +299,17 @@ private struct VaultUnlockView: View {
 final class VaultUnlockPromptBridge: VaultPromptDelegate {
   private let model: VaultUnlockPromptModel
 
-  init(model: VaultUnlockPromptModel) {
+  /// Called when a broker request writes to one or more vaults. An empty list
+  /// means the written vault could not be named. `VaultsModel` passes this in
+  /// to drop its item cache and re-index AutoFill.
+  private let onVaultsChanged: (@Sendable ([String]) async -> Void)?
+
+  init(
+    model: VaultUnlockPromptModel,
+    onVaultsChanged: (@Sendable ([String]) async -> Void)? = nil
+  ) {
     self.model = model
+    self.onVaultsChanged = onVaultsChanged
   }
 
   func beginAuthorization(prompt: VaultAccessPrompt, peer: RequestActor) async throws -> UInt64 {
@@ -303,5 +322,9 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
 
   func endAuthorization(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {
     await model.end(prompt: prompt, outcome: outcome)
+  }
+
+  func vaultsChanged(vaultKeys: [String]) async {
+    await onVaultsChanged?(vaultKeys)
   }
 }

@@ -124,6 +124,81 @@ struct BrokerClient {
     return value
   }
 
+  /// One registered passkey, as the broker reports it.
+  struct Registration {
+    let credentialID: Data
+    let attestationObject: Data
+  }
+
+  /// One passkey assertion, as the broker reports it.
+  struct Assertion {
+    let credentialID: Data
+    let userHandle: Data
+    let authenticatorData: Data
+    let signature: Data
+  }
+
+  /// Ask the app to register a passkey against an unlocked vault. Prompts every
+  /// time.
+  static func registerPasskey(
+    rpID: String, rpName: String?, userHandle: Data, userName: String, userDisplayName: String,
+    clientDataHash: Data, algorithms: [Int], excludedCredentials: [Data]
+  ) async throws -> Registration {
+    var request: [String: Any] = [
+      "request": "create_passkey",
+      "rp_id": rpID,
+      "user_handle": userHandle.base64EncodedString(),
+      "user_name": userName,
+      "user_display_name": userDisplayName,
+      "client_data_hash": clientDataHash.base64EncodedString(),
+      "algorithms": algorithms,
+      "excluded_credentials": excludedCredentials.map { $0.base64EncodedString() },
+    ]
+    if let rpName { request["rp_name"] = rpName }
+    let response = try await send(request)
+    guard response["status"] as? String == "passkey_registered" else {
+      throw error(from: response, fallback: "Unexpected response to the passkey registration.")
+    }
+    guard let credentialID = decodeBase64(response["credential_id"]),
+      let attestationObject = decodeBase64(response["attestation_object"])
+    else {
+      throw BrokerError.failed("The passkey registration response was incomplete.")
+    }
+    return Registration(credentialID: credentialID, attestationObject: attestationObject)
+  }
+
+  /// Ask the app to sign an assertion challenge with a stored passkey. Prompts
+  /// every time.
+  static func assertPasskey(
+    rpID: String, clientDataHash: Data, allowedCredentialIDs: [Data]
+  ) async throws -> Assertion {
+    let response = try await send([
+      "request": "assert_passkey",
+      "rp_id": rpID,
+      "client_data_hash": clientDataHash.base64EncodedString(),
+      "allowed_credentials": allowedCredentialIDs.map { $0.base64EncodedString() },
+    ])
+    guard response["status"] as? String == "passkey_asserted" else {
+      throw error(from: response, fallback: "Unexpected response to the passkey assertion.")
+    }
+    guard let credentialID = decodeBase64(response["credential_id"]),
+      let authenticatorData = decodeBase64(response["authenticator_data"]),
+      let signature = decodeBase64(response["signature"])
+    else {
+      throw BrokerError.failed("The passkey assertion response was incomplete.")
+    }
+    return Assertion(
+      credentialID: credentialID,
+      userHandle: decodeBase64(response["user_handle"]) ?? Data(),
+      authenticatorData: authenticatorData,
+      signature: signature)
+  }
+
+  private static func decodeBase64(_ value: Any?) -> Data? {
+    guard let string = value as? String else { return nil }
+    return Data(base64Encoded: string)
+  }
+
   private static func error(from response: [String: Any], fallback: String) -> BrokerError {
     switch response["status"] as? String {
     case "cancelled": return .cancelled
