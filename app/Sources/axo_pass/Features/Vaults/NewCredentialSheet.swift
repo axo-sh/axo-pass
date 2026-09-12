@@ -4,7 +4,7 @@ import SwiftUI
 
 struct NewCredentialSheet: View {
   let onSubmit:
-    (_ key: String, _ title: String, _ value: String, _ kind: FieldKindInfo) async -> Bool
+    (_ key: String, _ title: String, _ value: String, _ kind: FieldKindInfo) async -> String?
 
   @Environment(\.dismiss) private var dismiss
   @State private var title: String = ""
@@ -12,6 +12,7 @@ struct NewCredentialSheet: View {
   @State private var concealed: Bool = true
   @State private var multiline: Bool = false
   @State private var isSubmitting = false
+  @State private var errorMessage: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -37,14 +38,25 @@ struct NewCredentialSheet: View {
         .toggleStyle(.checkbox)
       }
 
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+
       HStack {
         Spacer()
         Button("Cancel") { dismiss() }
         Button("Create") {
           Task {
             isSubmitting = true
+            errorMessage = nil
             let kind = FieldKindInfo(kind: "text", concealed: concealed, multiline: multiline)
-            if await onSubmit(key, title, "", kind) { dismiss() }
+            if let error = await onSubmit(key, title, "", kind) {
+              errorMessage = error
+            } else {
+              dismiss()
+            }
             isSubmitting = false
           }
         }

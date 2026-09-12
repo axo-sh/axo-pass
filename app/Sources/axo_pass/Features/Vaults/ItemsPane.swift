@@ -41,20 +41,24 @@ struct ItemsPane: View {
     }
     .sheet(isPresented: $showingNewItemSheet) {
       NewItemSheet { key, title in
-        guard let vaultKey = model.selectedVaultKey else { return false }
-        return await model.addOrUpdateItem(vaultKey: vaultKey, itemKey: key, itemTitle: title)
+        guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
+        if await model.addOrUpdateItem(vaultKey: vaultKey, itemKey: key, itemTitle: title) {
+          return nil
+        }
+        return model.actionError ?? "Failed to create item."
       }
     }
   }
 }
 
 private struct NewItemSheet: View {
-  let onSubmit: (_ key: String, _ title: String) async -> Bool
+  let onSubmit: (_ key: String, _ title: String) async -> String?
 
   @Environment(\.dismiss) private var dismiss
   @State private var title: String = ""
   @State private var key: String = ""
   @State private var isSubmitting = false
+  @State private var errorMessage: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -70,13 +74,24 @@ private struct NewItemSheet: View {
         }
       }
 
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+
       HStack {
         Spacer()
         Button("Cancel") { dismiss() }
         Button("Create") {
           Task {
             isSubmitting = true
-            if await onSubmit(key, title) { dismiss() }
+            errorMessage = nil
+            if let error = await onSubmit(key, title) {
+              errorMessage = error
+            } else {
+              dismiss()
+            }
             isSubmitting = false
           }
         }
