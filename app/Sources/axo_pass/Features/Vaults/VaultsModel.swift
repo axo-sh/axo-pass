@@ -354,9 +354,8 @@ final class VaultsModel {
   }
 
   /// `automatic` marks a lock the user did not ask for: idle timeout, sleep, or
-  /// screen lock. Those land on the lock screen without a prompt, so returning
-  /// to the app takes a deliberate Unlock rather than a Touch ID prompt the user
-  /// did not expect.
+  /// screen lock. Recorded for the audit log; both automatic and manual locks
+  /// raise Touch ID again on return.
   func lock(automatic trigger: AutoLockTrigger? = nil) {
     autoLock.stop()
     // A failure here means the core's state is poisoned, not that the vaults
@@ -388,7 +387,7 @@ final class VaultsModel {
     itemCache = [:]
     selectedItemRef = nil
     unlockError = nil
-    autoPromptPending = trigger == nil
+    autoPromptPending = true
     unlockEngaged = false
   }
 
