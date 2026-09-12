@@ -142,7 +142,7 @@ struct CredentialRow: View {
       }
     } label: {
       Text(reference)
-        .font(.caption)
+        .font(.subheadline)
         .foregroundStyle(referenceColor)
         .lineLimit(1)
         .truncationMode(.middle)
