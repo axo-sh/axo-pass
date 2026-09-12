@@ -268,9 +268,3 @@ enum SVGPath {
     }
   }
 }
-
-#Preview {
-  AxoLogo()
-    .frame(width: 200, height: 200)
-    .padding(40)
-}
