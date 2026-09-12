@@ -108,7 +108,9 @@ final class VaultsModel {
 
   func reload() {
     do {
-      vaults = try core.listVaults()
+      vaults = try core.listVaults().sorted {
+        ($0.name ?? $0.key).localizedCaseInsensitiveCompare($1.name ?? $1.key) == .orderedAscending
+      }
       loadError = nil
       if sidebarSelection == nil, let key = vaults.first?.key {
         selectSidebarDestination(.vault(key))
