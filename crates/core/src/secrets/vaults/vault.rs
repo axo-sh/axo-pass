@@ -323,15 +323,12 @@ impl Vault {
             .get_mut(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
 
-        // update secret if secret is non-empty
+        // update secret if secret is non-empty; an empty secret on update leaves the
+        // existing secret unchanged, and on create leaves the credential with no secret
         let secret = cred_value.expose_secret();
         if !secret.is_empty() {
             let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
             self.secrets.insert(cred_id, encrypted_secret);
-        } else if !self.secrets.contains_key(&cred_id) {
-            // if secret is empty and credential doesn't already exist, throw error (to
-            // prevent creating credentials with empty secrets by mistake)
-            return Err(Error::InvalidEmptyCredentialValue);
         }
 
         // add or update credential in item.credentials

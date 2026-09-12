@@ -84,9 +84,6 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidCredentialKey(k) => {
                 FfiError::InvalidInput(format!("Invalid credential key: {k}"))
             },
-            VaultError::InvalidEmptyCredentialValue => {
-                FfiError::InvalidInput("Credential secret cannot be empty".to_string())
-            },
             other => FfiError::Internal(other.to_string()),
         }
     }

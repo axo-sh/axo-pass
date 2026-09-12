@@ -71,9 +71,6 @@ pub enum Error {
     #[error("Reorder must list every credential of item {0} exactly once")]
     InvalidCredentialOrder(String),
 
-    #[error("Credential secret cannot be empty")]
-    InvalidEmptyCredentialValue,
-
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
 
