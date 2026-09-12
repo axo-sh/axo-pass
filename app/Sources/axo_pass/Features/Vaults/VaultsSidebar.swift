@@ -187,9 +187,17 @@ private struct VaultFormSheet: View {
       Text(isCreating ? "New Vault" : "Rename Vault")
         .font(.headline)
 
-      TextField("Name", text: $name)
-      if isCreating {
-        TextField("Key (a-z, 0-9, -, _)", text: $key)
+      Form {
+        TextField("Name", text: $name)
+        if isCreating {
+          TextField("Key", text: $key)
+          LabeledContent("") {
+            Text("a-z, 0-9, -, _")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
       }
 
       if let error {

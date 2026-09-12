@@ -59,8 +59,16 @@ private struct NewItemSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text("New Item").font(.headline)
-      TextField("Title", text: $title)
-      TextField("Key (a-z, 0-9, -, _)", text: $key)
+      Form {
+        TextField("Title", text: $title)
+        TextField("Key", text: $key)
+        LabeledContent("") {
+          Text("a-z, 0-9, -, _")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
 
       HStack {
         Spacer()
