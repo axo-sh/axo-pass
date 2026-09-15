@@ -1,11 +1,10 @@
 use std::fmt::{self, Display};
 
-use libproc::bsd_info::BSDInfo;
-use libproc::proc_pid::pidinfo;
+use libproc::proc_pid::pidpath;
 use objc2_security::SecCode;
 
 use crate::core::provenance::helpers::{
-    get_host_for_sec_code, get_sec_code_for_pid, get_static_code_for_sec_code,
+    get_host_for_sec_code, get_parent_pid, get_sec_code_for_pid, get_static_code_for_sec_code,
 };
 use crate::core::provenance::signing_info::SigningInfo;
 
@@ -19,11 +18,23 @@ pub struct ProcInfo {
 }
 
 impl ProcInfo {
-    pub fn pid_only(pid: u32) -> Self {
+    /// A process we could not get a SecCode for (e.g. it runs as another
+    /// uid and is SIP-restricted), but whose ppid and executable path are
+    /// still readable via pidinfo/proc_pidpath so the walk can continue
+    /// past it.
+    pub fn pid_and_parent(pid: u32, parent_pid: Option<u32>) -> Self {
+        let command = pidpath(pid as i32)
+            .ok()
+            .and_then(|path| {
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "?".to_string());
         ProcInfo {
             pid,
-            parent_pid: None,
-            command: "?".to_string(),
+            parent_pid,
+            command,
             signing_info: None,
             host: None,
         }
@@ -46,10 +57,11 @@ impl ProcInfo {
         // Get signing info for the executable
         let signing_info = SigningInfo::from_sec_code(&static_code);
 
-        // get parent pid
-        let ppid = pidinfo::<BSDInfo>(pid as i32, 0)
-            .ok()
-            .map(|info| info.pbi_ppid);
+        // get parent pid via sysctl(KERN_PROC_PID) rather than proc_pidinfo, so
+        // this works even when `pid` runs as another uid (e.g. `login`, uid 0)
+        let ppid = get_parent_pid(pid)
+            .inspect_err(|e| log::error!("ProcInfo::from_sec_code({pid}) ppid: {e}"))
+            .ok();
 
         // get the process host
         let host_signing_info = get_host_for_sec_code(code)

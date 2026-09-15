@@ -110,6 +110,8 @@ pub fn get_static_code_for_sec_code(code: &SecCode) -> anyhow::Result<Retained<S
     }
 }
 
+pub use crate::core::provenance::kinfo::get_parent_pid;
+
 // Host is typically mach_kernel, need to investigate if there are other
 // possible values
 pub fn get_host_for_sec_code(code: &SecCode) -> anyhow::Result<Retained<SecStaticCode>> {

@@ -1,14 +1,17 @@
 mod helpers;
+mod kinfo;
 mod peer;
 mod proc_info;
 mod signing_info;
 
+use std::collections::HashSet;
 use std::fmt;
 
 use objc2_security::SecCode;
 use serde::{Deserialize, Serialize};
 
 use crate::audit::Actor;
+use crate::core::provenance::helpers::get_parent_pid;
 pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
 use crate::core::provenance::proc_info::ProcInfo;
 
@@ -61,17 +64,53 @@ impl Provenance {
         Provenance { proc_info }
     }
 
-    /// Recursively get the process chain for a given pid
+    /// Walk parent pids from `pid`, innermost first. A process we cannot get
+    /// a SecCode for (e.g. `login`, which is SIP-restricted and runs as
+    /// uid 0) still yields its ppid via `pidinfo`, so the walk continues
+    /// past it instead of stopping there.
     fn get_process_chain(pid: u32) -> Vec<ProcInfo> {
-        let Some(current_proc_info) = ProcInfo::lookup(pid) else {
-            return vec![ProcInfo::pid_only(pid)];
-        };
-        let parent_pid = current_proc_info.parent_pid();
-        let mut out = vec![current_proc_info];
-        if let Some(parent_id) = parent_pid {
-            out.extend(Self::get_process_chain(parent_id));
+        const MAX_DEPTH: usize = 32;
+
+        let mut out = Vec::new();
+        let mut visited = HashSet::new();
+        let mut current = Some(pid);
+
+        while let Some(current_pid) = current {
+            if out.len() >= MAX_DEPTH || !visited.insert(current_pid) {
+                break;
+            }
+
+            let (proc_info, parent_pid) = match ProcInfo::lookup(current_pid) {
+                Some(info) => {
+                    let parent_pid = info.parent_pid();
+                    (info, parent_pid)
+                },
+                None => {
+                    let parent_pid = Self::lookup_parent_pid(current_pid);
+                    (
+                        ProcInfo::pid_and_parent(current_pid, parent_pid),
+                        parent_pid,
+                    )
+                },
+            };
+            out.push(proc_info);
+
+            current = match parent_pid {
+                Some(0) | Some(1) | None => None,
+                Some(ppid) if ppid == current_pid => None,
+                Some(ppid) => Some(ppid),
+            };
         }
+
         out
+    }
+
+    /// Get the parent pid for `pid` without needing a `SecCode`, so this
+    /// works across uids.
+    fn lookup_parent_pid(pid: u32) -> Option<u32> {
+        get_parent_pid(pid)
+            .inspect_err(|e| log::error!("lookup_parent_pid({pid}): {e}"))
+            .ok()
     }
 
     /// Get a short, human-readable name for the caller, assuming to be the last
