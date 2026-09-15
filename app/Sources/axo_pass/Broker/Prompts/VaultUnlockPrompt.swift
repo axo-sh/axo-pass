@@ -218,9 +218,7 @@ private struct VaultUnlockView: View {
         .frame(width: 64, height: 64)
 
       VStack(spacing: 4) {
-        Text(title)
-          .font(.headline)
-          .multilineTextAlignment(.center)
+        PromptTitle(text: title, callerChain: callerChain)
 
         Text("Vault \(vaultKey)")
           .font(.subheadline)

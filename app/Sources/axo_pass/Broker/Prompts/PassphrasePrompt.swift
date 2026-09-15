@@ -187,10 +187,9 @@ private struct PassphraseUnlockView: View {
           .multilineTextAlignment(.center)
 
         if let caller = prompt.caller, !caller.isEmpty {
-          Text("Requested by \(caller)")
-            .font(.body)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
+          PromptTitle(
+            text: "Requested by \(caller)", callerChain: prompt.callerChain, font: .body,
+            color: .secondary, iconSize: 20)
         }
       }
 
@@ -232,10 +231,9 @@ private struct PassphraseEntryView: View {
         .multilineTextAlignment(.center)
 
         if let caller = prompt.caller, !caller.isEmpty {
-          Text("Requested by \(caller)")
-            .font(.body)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
+          PromptTitle(
+            text: "Requested by \(caller)", callerChain: prompt.callerChain, font: .body,
+            color: .secondary, iconSize: 20)
         }
       }
 

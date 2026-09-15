@@ -181,9 +181,7 @@ private struct SigningPromptView: View {
         .frame(width: 64, height: 64)
 
       VStack(spacing: 4) {
-        Text(title)
-          .font(.headline)
-          .multilineTextAlignment(.center)
+        PromptTitle(text: title, callerChain: callerChain)
 
         Text("\(managed ? "Secure Enclave key" : "SSH key") \(keyName)")
           .font(.subheadline)
