@@ -11,32 +11,34 @@ struct SettingsView: View {
   @Environment(VaultsModel.self) private var model
   @EnvironmentObject private var updaterUI: SunshineUpdaterUIController
   @State private var window: NSWindow?
+  @State private var titleLock = WindowTitleLock()
 
   var body: some View {
     TabView {
       GeneralSettingsView()
-        .tabItem { Label("General", systemImage: "gearshape") }
-      SecuritySettingsView()
-        .tabItem { Label("Security", systemImage: "lock.shield") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("General", symbol: "gearshape") }
       VaultsSettingsView()
-        .tabItem { Label("Vaults", systemImage: "archivebox") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("Vaults", symbol: "archivebox") }
       SshSettingsView()
-        .tabItem { Label("SSH", systemImage: "key.horizontal") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("SSH", symbol: "key.horizontal") }
       GpgSettingsView()
-        .tabItem { Label("GPG", systemImage: "lock.doc") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("GPG", symbol: "lock.doc") }
       ShellSettingsView()
-        .tabItem { Label("Shell", systemImage: "terminal") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("Shell", symbol: "terminal") }
       SunshineUpdateSettingsView(controller: updaterUI)
-        .tabItem { Label("About", systemImage: "info.circle") }
+        .settingsPane()
+        .tabItem { SettingsTab.label("About", symbol: "info.circle") }
     }
-    .padding(20)
-    .frame(width: 440)
-    .frame(minHeight: 280, alignment: .top)
-    .fixedSize(horizontal: false, vertical: true)
-    .navigationTitle("Axo Pass Settings")
     .background(
       WindowAccessor {
         window = $0
+        if $0.toolbarStyle != .preference { $0.toolbarStyle = .preference }
+        titleLock.lock($0, to: "Axo Pass")
         closeIfLocked()
       }
     )
@@ -46,6 +48,66 @@ struct SettingsView: View {
   private func closeIfLocked() {
     guard !model.isAppUnlocked else { return }
     window?.close()
+  }
+}
+
+/// Keeps a window's title fixed. The Settings scene's `TabView` is an
+/// `NSTabViewController`, which copies the selected tab's label into the
+/// window title on every tab switch.
+@MainActor
+private final class WindowTitleLock {
+  private var observation: NSKeyValueObservation?
+  private weak var window: NSWindow?
+
+  func lock(_ window: NSWindow, to title: String) {
+    if window.title != title { window.title = title }
+    guard self.window !== window else { return }
+    self.window = window
+    observation = window.observe(\.title) { window, _ in
+      MainActor.assumeIsolated {
+        if window.title != title { window.title = title }
+      }
+    }
+  }
+}
+
+/// A Settings toolbar tab label whose icon is a symbol drawn into a fixed-size
+/// template image. Toolbar items given the symbol directly place it by its own
+/// size and alignment insets, which differ per symbol and between the selected
+/// and unselected states, so the icons shift on every tab switch.
+///
+/// This returns a `Label` rather than being a view, because `tabItem` only reads
+/// a `Label`, `Text`, or `Image` passed to it directly.
+private enum SettingsTab {
+  static func label(_ title: String, symbol: String) -> Label<Text, Image> {
+    Label {
+      Text(title)
+    } icon: {
+      Image(nsImage: icon(symbol))
+    }
+  }
+
+  private static let canvas = NSSize(width: 28, height: 28)
+  /// Empty space at the bottom of the canvas, which separates the icon from
+  /// the label below it.
+  private static let labelGap: CGFloat = 4
+
+  private static func icon(_ name: String) -> NSImage {
+    let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+    guard
+      let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+        .withSymbolConfiguration(configuration)
+    else { return NSImage(size: canvas) }
+    let image = NSImage(size: canvas, flipped: false) { rect in
+      let size = symbol.size
+      let origin = NSPoint(
+        x: (rect.width - size.width) / 2,
+        y: labelGap + (rect.height - labelGap - size.height) / 2)
+      symbol.draw(in: NSRect(origin: origin, size: size))
+      return true
+    }
+    image.isTemplate = true
+    return image
   }
 }
 
@@ -69,6 +131,8 @@ struct SettingsMenuItem: View {
 private struct GeneralSettingsView: View {
   @AppStorage(Preferences.Key.autoLockMinutes)
   private var autoLockMinutes = Preferences.defaultAutoLockMinutes
+  @AppStorage(Preferences.Key.reuseApprovals)
+  private var reuseApprovals = Preferences.defaultReuseApprovals
 
   var body: some View {
     Form {
@@ -80,16 +144,7 @@ private struct GeneralSettingsView: View {
       .fixedSize()
       Text("App always locks on screen lock or sleep.")
         .settingsCaption()
-    }
-  }
-}
 
-private struct SecuritySettingsView: View {
-  @AppStorage(Preferences.Key.reuseApprovals)
-  private var reuseApprovals = Preferences.defaultReuseApprovals
-
-  var body: some View {
-    Form {
       Toggle(
         "Reuse an approval for up to \(Self.absolute)",
         isOn: $reuseApprovals)
@@ -389,6 +444,16 @@ private struct ShellSettingsView: View {
 }
 
 extension View {
+  /// Gives every tab the same size. The tab controller resizes the window to
+  /// each tab's own fitting size, so a size set on the `TabView` itself does
+  /// not apply, and panes of different sizes resize the window on every tab
+  /// switch, which moves the centered toolbar items.
+  fileprivate func settingsPane() -> some View {
+    self
+      .padding(20)
+      .frame(width: 440, height: 340, alignment: .top)
+  }
+
   /// The look of explanatory text under a control: smaller and secondary.
   fileprivate func captionStyle() -> some View {
     self
