@@ -31,6 +31,9 @@ pub struct ProcessNode {
     /// Verified code identity. See [`ProcInfo::code_id`].
     #[serde(default)]
     pub code_id: Option<String>,
+    /// Whether the details above can be trusted. See [`ProcInfo::verified`].
+    #[serde(default)]
+    pub verified: bool,
 }
 
 /// An identity for a whole caller chain, for keying approvals that are reused
@@ -175,6 +178,7 @@ impl Provenance {
                 bundle_id: p.bundle_id(),
                 team_id: p.team_id(),
                 code_id: p.code_id().map(String::from),
+                verified: p.verified(),
             })
             .collect()
     }
@@ -262,6 +266,7 @@ mod tests {
             bundle_id: None,
             team_id: None,
             code_id: code_id.map(String::from),
+            verified: code_id.is_some(),
         }
     }
 
@@ -289,6 +294,7 @@ mod tests {
         let info = ProcInfo::lookup(std::process::id()).unwrap();
         let code_id = info.code_id().unwrap();
         assert!(code_id.starts_with("cdhash:"), "{code_id}");
+        assert!(info.verified());
         assert!(!info.is_system());
     }
 }

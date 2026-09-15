@@ -23,6 +23,9 @@ pub struct ProcInfo {
     /// could not be verified. See [`ProcInfo::code_id`].
     code_id: Option<String>,
 
+    /// See [`ProcInfo::verified`].
+    verified: bool,
+
     /// True when the process is Apple's `login`, checked against a code
     /// requirement rather than read from the self-reported identifier.
     is_apple_login: bool,
@@ -64,6 +67,9 @@ impl ProcInfo {
             command,
             signing_info: None,
             host: None,
+            // Nothing here is self-reported: the path and uid come from the
+            // kernel.
+            verified: code_id.is_some(),
             code_id,
             is_apple_login: false,
         }
@@ -111,6 +117,25 @@ impl ProcInfo {
             },
         };
 
+        // The team identifier comes from an entitlement the binary sets itself,
+        // so a claimed team counts only when an Apple-issued certificate for
+        // that team signed the code.
+        let team_ok = match signing_info
+            .as_ref()
+            .map(|s| s.team_identifier.as_str())
+            .filter(|team| !team.is_empty())
+        {
+            None => true,
+            Some(team) => {
+                let requirement =
+                    format!(r#"anchor apple generic and certificate leaf[subject.OU] = "{team}""#);
+                check_requirement(code, &requirement)
+                    .inspect_err(|e| log::warn!("ProcInfo::from_sec_code({pid}) team: {e}"))
+                    .is_ok()
+            },
+        };
+        let verified = code_id.is_some() && team_ok;
+
         let is_apple_login = code_id.is_some()
             && signing_info
                 .as_ref()
@@ -129,8 +154,21 @@ impl ProcInfo {
             signing_info,
             host: host_signing_info,
             code_id,
+            verified,
             is_apple_login,
         })
+    }
+
+    /// True when the details reported for this process can be trusted: its
+    /// running code passed `SecCodeCheckValidity`, and any team identifier it
+    /// claims is backed by an Apple-issued certificate for that team. For a
+    /// process running as another user with no SecCode, true when its kernel
+    /// path was read.
+    ///
+    /// False means the bundle id, team id, and display name were reported by
+    /// the binary itself and may be forged.
+    pub fn verified(&self) -> bool {
+        self.verified
     }
 
     /// A verified identity for the code this process runs:

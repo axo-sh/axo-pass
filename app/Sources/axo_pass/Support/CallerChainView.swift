@@ -89,8 +89,16 @@ private struct ProcessRow: View {
         .foregroundStyle(.secondary)
 
       VStack(alignment: .leading, spacing: 2) {
-        command
-          .font(.body.weight(.medium))
+        HStack(spacing: 6) {
+          command
+            .font(.body.weight(.medium))
+          if !node.verified {
+            Label("Unverified", systemImage: "exclamationmark.triangle.fill")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.orange)
+              .help("This process's code signature could not be verified. Its name and bundle ID may be forged.")
+          }
+        }
         Text(metadata)
           .font(monoFont)
           .foregroundStyle(.secondary)

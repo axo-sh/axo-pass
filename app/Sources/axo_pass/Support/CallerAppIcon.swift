@@ -34,8 +34,9 @@ enum CallerAppIcon {
   /// `chain` is innermost first (the peer process, then its ancestors), so
   /// the outermost app is the one that ultimately launched the request, e.g.
   /// the terminal hosting the shell that ran `ssh-add`. Walk from the end and
-  /// take the first node that has a bundle identifier and an executable
-  /// inside an `.app` bundle.
+  /// take the first verified node that has a bundle identifier and an
+  /// executable inside an `.app` bundle. Unverified nodes are skipped so a
+  /// forged bundle identifier cannot borrow another app's icon.
   static func icon(for chain: [ProcessNode]) -> NSImage? {
     guard let path = appBundlePath(for: chain) else { return nil }
     return NSWorkspace.shared.icon(forFile: path)
@@ -43,7 +44,8 @@ enum CallerAppIcon {
 
   private static func appBundlePath(for chain: [ProcessNode]) -> String? {
     for node in chain.reversed() {
-      guard let bundleId = node.bundleId, !bundleId.isEmpty,
+      guard node.verified,
+        let bundleId = node.bundleId, !bundleId.isEmpty,
         let executable = node.executable,
         let path = appBundlePath(fromExecutable: executable)
       else { continue }

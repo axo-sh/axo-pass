@@ -2182,6 +2182,9 @@ pub struct ProcessNode {
     pub pid: u32,
     pub bundle_id: Option<String>,
     pub team_id: Option<String>,
+    /// False when `command`, `bundle_id`, and `team_id` were reported by the
+    /// binary itself and could not be verified.
+    pub verified: bool,
 }
 
 impl From<provenance::ProcessNode> for ProcessNode {
@@ -2192,6 +2195,7 @@ impl From<provenance::ProcessNode> for ProcessNode {
             pid: node.pid,
             bundle_id: node.bundle_id,
             team_id: node.team_id,
+            verified: node.verified,
         }
     }
 }
