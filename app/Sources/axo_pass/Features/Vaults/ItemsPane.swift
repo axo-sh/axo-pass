@@ -31,17 +31,16 @@ struct ItemsPane: View {
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
     .navigationTitle(
       model.selectedVault.map { $0.name ?? $0.key }
-        ?? (model.isAllSecrets ? "All Secrets" : "Items")
+        ?? (model.isAllSecrets ? "All Secrets" : "")
     )
     .toolbar {
-      if model.selectedVault != nil {
-        ToolbarItem(placement: .primaryAction) {
-          Button {
-            showingNewItemSheet = true
-          } label: {
-            Label("New Item", systemImage: "plus")
-          }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          showingNewItemSheet = true
+        } label: {
+          Label("New Item", systemImage: "plus")
         }
+        .disabled(model.selectedVault == nil)
       }
     }
     .sheet(isPresented: $showingNewItemSheet) {
