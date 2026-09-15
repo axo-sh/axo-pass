@@ -128,10 +128,13 @@ struct CredentialList: View {
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in
-        await model.addOrUpdateCredential(
+        if await model.addOrUpdateCredential(
           vaultKey: vaultKey, itemKey: item.key, credKey: key, title: title, value: value,
           kind: kind
-        )
+        ) {
+          return nil
+        }
+        return model.actionError ?? "Failed to create credential."
       }
     }
   }
