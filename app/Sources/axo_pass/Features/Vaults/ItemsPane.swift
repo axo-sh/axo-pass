@@ -18,7 +18,9 @@ struct ItemsPane: View {
               .padding(6)
               .contextMenu {
                 Button("Delete", role: .destructive) {
-                  Task { await model.deleteItem(vaultKey: display.vaultKey, itemKey: display.item.key) }
+                  Task {
+                    await model.deleteItem(vaultKey: display.vaultKey, itemKey: display.item.key)
+                  }
                 }
               }
           }
@@ -27,7 +29,10 @@ struct ItemsPane: View {
     }
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
-    .navigationTitle(model.selectedVault.map { $0.name ?? $0.key } ?? (model.isAllSecrets ? "All Secrets" : "Items"))
+    .navigationTitle(
+      model.selectedVault.map { $0.name ?? $0.key }
+        ?? (model.isAllSecrets ? "All Secrets" : "Items")
+    )
     .toolbar {
       if model.selectedVault != nil {
         ToolbarItem(placement: .primaryAction) {
