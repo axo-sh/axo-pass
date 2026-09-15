@@ -26,6 +26,10 @@ pub struct SigningInfo {
 
     /// Code-signing flags bitmask. See SecCodeSignatureFlags
     pub flags: u32,
+
+    /// Code directory hash (`kSecCodeInfoUnique`), lowercase hex. Only
+    /// meaningful once the code it came from has passed a validity check.
+    pub cdhash: Option<String>,
 }
 
 impl SigningInfo {
@@ -51,6 +55,9 @@ impl SigningInfo {
             let main_executable = dict.get_url(kSecCodeInfoMainExecutable.to_string());
             let format = dict.get_string("format").unwrap_or_default();
             let flags = dict.get_u32("flags").unwrap_or(0);
+            let cdhash = dict
+                .get_data("unique")
+                .map(|bytes| bytes.iter().map(|b| format!("{b:02x}")).collect());
 
             let display_name = dict
                 .get_dict("info-plist")
@@ -79,6 +86,7 @@ impl SigningInfo {
                 team_identifier,
                 format,
                 flags,
+                cdhash,
             })
         }
     }
@@ -122,6 +130,7 @@ impl fmt::Debug for SigningInfo {
             .field("team_identifier", &self.team_identifier)
             .field("format", &self.format)
             .field("flags", &format!("0x{:x}", self.flags))
+            .field("cdhash", &self.cdhash)
             .finish()
     }
 }

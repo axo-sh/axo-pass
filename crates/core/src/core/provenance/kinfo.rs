@@ -152,6 +152,15 @@ struct KinfoProc {
 /// Get a process's parent pid via `sysctl(KERN_PROC_PID)`. See the module docs
 /// for why this is used instead of `proc_pidinfo`.
 pub fn get_parent_pid(pid: u32) -> anyhow::Result<u32> {
+    Ok(fetch(pid)?.kp_eproc.e_ppid as u32)
+}
+
+/// Get a process's effective uid via `sysctl(KERN_PROC_PID)`.
+pub fn get_effective_uid(pid: u32) -> anyhow::Result<u32> {
+    Ok(fetch(pid)?.kp_eproc.e_ucred.cr_uid)
+}
+
+fn fetch(pid: u32) -> anyhow::Result<KinfoProc> {
     let mut mib: [libc::c_int; 4] = [
         libc::CTL_KERN,
         libc::KERN_PROC,
@@ -183,7 +192,7 @@ pub fn get_parent_pid(pid: u32) -> anyhow::Result<u32> {
     if size == 0 {
         anyhow::bail!("sysctl(KERN_PROC_PID, {pid}): no such process");
     }
-    Ok(info.kp_eproc.e_ppid as u32)
+    Ok(info)
 }
 
 #[cfg(test)]

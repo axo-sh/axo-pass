@@ -2114,6 +2114,10 @@ pub trait SignPromptDelegate: Send + Sync {
         // The full requesting process chain, innermost first. Shown when the
         // user expands the prompt.
         caller_chain: Vec<ProcessNode>,
+        // A verified identity for `caller_chain`, for keying reused approvals.
+        // `None` when any process in the chain could not be verified, in which
+        // case no approval may be reused.
+        caller_identity: Option<String>,
         // True for a managed Secure Enclave key. False for a confirm-on-use
         // gate on a key the agent holds directly, which the app words
         // differently and never reuses across requests.
@@ -2138,6 +2142,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
         prompt: app_broker::SignPrompt,
         peer: audit::Actor,
     ) -> Result<ForeignContext, String> {
+        let caller_identity = provenance::chain_identity(&prompt.caller_chain);
         let context_ptr = self
             .delegate
             .begin_authorization(
@@ -2146,6 +2151,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 prompt.comment,
                 prompt.caller,
                 prompt.caller_chain.into_iter().map(Into::into).collect(),
+                caller_identity,
                 prompt.managed,
                 peer.into(),
             )
@@ -2274,6 +2280,10 @@ pub struct PassphrasePrompt {
     /// The full requesting process chain, innermost first. Shown when the user
     /// expands the prompt.
     pub caller_chain: Vec<ProcessNode>,
+    /// A verified identity for `caller_chain`, for keying reused approvals.
+    /// `None` when any process in the chain could not be verified, in which
+    /// case no approval may be reused.
+    pub caller_identity: Option<String>,
 }
 
 impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
@@ -2285,6 +2295,7 @@ impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
             prompt: prompt.prompt,
             error_message: prompt.error_message,
             caller: prompt.caller,
+            caller_identity: provenance::chain_identity(&prompt.caller_chain),
             caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
         }
     }
@@ -2486,6 +2497,10 @@ pub struct VaultAccessPrompt {
     /// The full requesting process chain, innermost first. Shown when the user
     /// expands the prompt.
     pub caller_chain: Vec<ProcessNode>,
+    /// A verified identity for `caller_chain`, for keying reused approvals.
+    /// `None` when any process in the chain could not be verified, in which
+    /// case no approval may be reused.
+    pub caller_identity: Option<String>,
     pub action: VaultAction,
 }
 
@@ -2494,6 +2509,7 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
         Self {
             vault_key: prompt.vault_key,
             caller: prompt.caller,
+            caller_identity: provenance::chain_identity(&prompt.caller_chain),
             caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
             action: prompt.action.into(),
         }

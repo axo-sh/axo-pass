@@ -57,10 +57,10 @@ final class SigningPromptModel {
   /// context stays referenced here, so it outlives the signing attempt.
   func begin(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
-    callerChain: [ProcessNode], managed: Bool, peer: RequestActor
+    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor
   ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
-    let key = GrantKey(subject: subject, caller: caller)
+    let key = GrantKey(subject: subject, caller: caller, callerIdentity: callerIdentity)
     active = ActiveRequest(key: key, managed: managed)
     // Confirm-on-use keys (`ssh-add -c`) prompt every time: the point of the
     // constraint is that every signature is approved, so no approval is reused.
@@ -216,11 +216,11 @@ final class SigningPromptBridge: SignPromptDelegate {
 
   func beginAuthorization(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
-    callerChain: [ProcessNode], managed: Bool, peer: RequestActor
+    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor
   ) async throws -> UInt64 {
     await model.begin(
       keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
-      callerChain: callerChain, managed: managed, peer: peer)
+      callerChain: callerChain, callerIdentity: callerIdentity, managed: managed, peer: peer)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

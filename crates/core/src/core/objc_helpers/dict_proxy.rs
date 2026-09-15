@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 
 use objc2::rc::Retained;
 use objc2_core_foundation::{
-    CFDictionary, CFNumber, CFRetained, CFString, CFType, CFURL, ConcreteType,
+    CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CFURL, ConcreteType,
 };
 use url::Url;
 
@@ -49,6 +49,11 @@ impl CFDictionaryProxy {
     /// Looks up `key` and returns the value as a `u32` (if it is a `CFNumber`).
     pub fn get_u32(&self, key: &str) -> Option<u32> {
         self.get::<CFNumber>(key)?.as_i32().map(|v| v as u32)
+    }
+
+    /// Looks up `key` and returns the value as bytes (if it is a `CFData`).
+    pub fn get_data(&self, key: &str) -> Option<Vec<u8>> {
+        self.get::<CFData>(key).map(|data| data.to_vec())
     }
 
     /// Looks up `key` and returns the value as a nested `CFDictionaryProxy`.

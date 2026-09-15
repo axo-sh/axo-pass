@@ -166,7 +166,9 @@ final class VaultUnlockPromptModel {
   /// approving a listing does not authorize a read.
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
     let subject = GrantSubject(kind: .vault, id: prompt.vaultKey, label: nil)
-    return GrantKey(subject: subject, caller: prompt.caller, scope: scope(for: prompt.action))
+    return GrantKey(
+      subject: subject, caller: prompt.caller, callerIdentity: prompt.callerIdentity,
+      scope: scope(for: prompt.action))
   }
 
   private static func scope(for action: VaultAction) -> String {

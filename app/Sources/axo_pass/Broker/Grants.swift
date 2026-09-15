@@ -77,12 +77,16 @@ struct GrantSubject: Hashable, Sendable {
   }
 }
 
-/// Identifies an approval. Reuse is scoped to the requesting process as well as
-/// the key, so approving a request for one caller does not silently authorize a
-/// different caller's request on the same key inside the reuse window.
+/// Identifies an approval. Reuse is scoped to the requesting process chain as
+/// well as the key, so approving a request for one caller does not silently
+/// authorize a different caller's request on the same key inside the reuse
+/// window.
 ///
-/// A nil caller is its own bucket. It means the caller could not be resolved,
-/// which happens on an unsigned local build.
+/// `callerIdentity` is the core's verified identity for the caller chain: the
+/// validated code hash of each process in it. Equality and hashing use it and
+/// not `caller`, which is a display label any process can reproduce. A nil
+/// identity means some process in the chain could not be verified, and
+/// `AuthorizationGrants.begin` never reuses an approval for it.
 ///
 /// `scope` narrows a key further when one subject covers operations of
 /// different weight. A vault uses it to keep a listing's approval from
@@ -93,7 +97,19 @@ struct GrantSubject: Hashable, Sendable {
 struct GrantKey: Hashable, CustomStringConvertible, Sendable {
   let subject: GrantSubject
   let caller: String?
+  let callerIdentity: String?
   var scope: String? = nil
+
+  static func == (lhs: GrantKey, rhs: GrantKey) -> Bool {
+    lhs.subject == rhs.subject && lhs.callerIdentity == rhs.callerIdentity
+      && lhs.scope == rhs.scope
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(subject)
+    hasher.combine(callerIdentity)
+    hasher.combine(scope)
+  }
 
   var description: String {
     guard let scope else { return subject.id }
@@ -159,12 +175,14 @@ final class AuthorizationGrants {
   /// `end`.
   ///
   /// `policy` applies to a grant this call creates. An existing grant keeps the
-  /// policy it was created with.
+  /// policy it was created with. A key with no verified caller identity always
+  /// gets `.everyUse`.
   ///
   /// `peer` is the process the broker verified for this request. It is recorded
   /// on the grant event, and kept on the grant so a later expiry can name the
   /// last process to use it.
   func begin(_ key: Key, policy: GrantPolicy = .standard, peer: RequestActor) -> Grant {
+    let policy: GrantPolicy = key.callerIdentity == nil ? .everyUse : policy
     // Check the clocks here as well as on the timer. A timer cannot fire while
     // a request is in flight, and none run while the machine is asleep, so an
     // approval can be past its deadline with its timer still pending.

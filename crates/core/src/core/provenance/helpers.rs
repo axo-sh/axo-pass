@@ -110,7 +110,17 @@ pub fn get_static_code_for_sec_code(code: &SecCode) -> anyhow::Result<Retained<S
     }
 }
 
-pub use crate::core::provenance::kinfo::get_parent_pid;
+pub use crate::core::provenance::kinfo::{get_effective_uid, get_parent_pid};
+
+/// Check that `code` is validly signed and that the running process matches
+/// its signature, without any further requirement.
+pub fn check_valid(code: &SecCode) -> anyhow::Result<()> {
+    let status = unsafe { code.check_validity(SecCSFlags(0), None) };
+    if status != 0 {
+        bail!("SecCodeCheckValidity failed: {status}");
+    }
+    Ok(())
+}
 
 // Host is typically mach_kernel, need to investigate if there are other
 // possible values

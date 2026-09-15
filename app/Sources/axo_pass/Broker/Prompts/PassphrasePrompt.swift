@@ -159,7 +159,7 @@ final class PassphrasePromptModel {
       }
     let id = prompt.keyId ?? ""
     let subject = GrantSubject(kind: kind, id: id, label: nil)
-    return GrantKey(subject: subject, caller: prompt.caller)
+    return GrantKey(subject: subject, caller: prompt.caller, callerIdentity: prompt.callerIdentity)
   }
 }
 

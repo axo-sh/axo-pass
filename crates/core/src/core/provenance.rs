@@ -28,6 +28,29 @@ pub struct ProcessNode {
     pub pid: u32,
     pub bundle_id: Option<String>,
     pub team_id: Option<String>,
+    /// Verified code identity. See [`ProcInfo::code_id`].
+    #[serde(default)]
+    pub code_id: Option<String>,
+}
+
+/// An identity for a whole caller chain, for keying approvals that are reused
+/// across requests. Two chains share an identity only when every user-visible
+/// process in them runs the same verified code, in the same order.
+///
+/// `None` when the chain is empty or any process in it could not be verified.
+/// A request with no identity must not reuse an approval.
+///
+/// Ancestors are found by parent pid, so a parent that exits while the chain
+/// is resolved can be replaced by an unrelated process that reuses its pid.
+pub fn chain_identity(chain: &[ProcessNode]) -> Option<String> {
+    if chain.is_empty() {
+        return None;
+    }
+    chain
+        .iter()
+        .map(|node| node.code_id.as_deref())
+        .collect::<Option<Vec<_>>>()
+        .map(|ids| ids.join("\n"))
 }
 
 impl Provenance {
@@ -151,6 +174,7 @@ impl Provenance {
                 pid: p.pid(),
                 bundle_id: p.bundle_id(),
                 team_id: p.team_id(),
+                code_id: p.code_id().map(String::from),
             })
             .collect()
     }
@@ -223,5 +247,48 @@ impl fmt::Debug for Provenance {
         f.debug_struct("Provenance")
             .field("proc_info", &self.proc_info)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(code_id: Option<&str>) -> ProcessNode {
+        ProcessNode {
+            command: "test".to_string(),
+            executable: None,
+            pid: 42,
+            bundle_id: None,
+            team_id: None,
+            code_id: code_id.map(String::from),
+        }
+    }
+
+    #[test]
+    fn chain_identity_requires_every_node_verified() {
+        assert_eq!(chain_identity(&[]), None);
+        assert_eq!(chain_identity(&[node(Some("cdhash:aa")), node(None)]), None);
+        assert_eq!(
+            chain_identity(&[node(Some("cdhash:aa")), node(Some("path:/usr/bin/login"))]),
+            Some("cdhash:aa\npath:/usr/bin/login".to_string())
+        );
+    }
+
+    #[test]
+    fn chain_identity_distinguishes_order() {
+        let a = chain_identity(&[node(Some("cdhash:aa")), node(Some("cdhash:bb"))]);
+        let b = chain_identity(&[node(Some("cdhash:bb")), node(Some("cdhash:aa"))]);
+        assert_ne!(a, b);
+    }
+
+    /// The test binary is at least linker-signed, so it passes the validity
+    /// check and gets a cdhash identity.
+    #[test]
+    fn current_process_has_a_verified_code_id() {
+        let info = ProcInfo::lookup(std::process::id()).unwrap();
+        let code_id = info.code_id().unwrap();
+        assert!(code_id.starts_with("cdhash:"), "{code_id}");
+        assert!(!info.is_system());
     }
 }
