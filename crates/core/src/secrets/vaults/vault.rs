@@ -170,15 +170,21 @@ impl Vault {
 
             for (cred_id, cred_overview) in &item_overview.credentials {
                 let existing_metadata = self.metadata_blobs.get(cred_id);
+                // A credential created with no value yet has no entry in
+                // `self.secrets` (see `add_or_update_item_credential`); encrypt
+                // an empty value for it rather than treating this as an error.
+                let secret = match self.secrets.get(cred_id) {
+                    Some(secret) => secret.clone(),
+                    None => self
+                        .cipher
+                        .encrypt_cred_value(item_overview.id, *cred_id, "")?,
+                };
                 vault.add_credential(
                     &self.cipher,
                     existing_metadata,
                     item_overview.id,
                     cred_overview,
-                    self.secrets
-                        .get(cred_id)
-                        .ok_or_else(|| Error::InvalidCredentialKey(cred_id.to_string()))?
-                        .clone(),
+                    secret,
                 )?;
             }
         }
@@ -323,13 +329,9 @@ impl Vault {
             .get_mut(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
 
-        // update secret if secret is non-empty; an empty secret on update leaves the
-        // existing secret unchanged, and on create leaves the credential with no secret
         let secret = cred_value.expose_secret();
-        if !secret.is_empty() {
-            let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
-            self.secrets.insert(cred_id, encrypted_secret);
-        }
+        let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
+        self.secrets.insert(cred_id, encrypted_secret);
 
         // add or update credential in item.credentials
         item.credentials.insert(cred_id, cred_overview);
