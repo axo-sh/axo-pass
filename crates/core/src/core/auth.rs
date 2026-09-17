@@ -49,8 +49,12 @@ impl ForeignContext {
     /// `context_ptr` must point to a live `LAContext`. The caller keeps its own
     /// reference; this takes an additional one.
     pub unsafe fn from_ptr(context_ptr: *mut c_void) -> Result<Self, KeychainError> {
-        let context = unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }
-            .ok_or_else(|| KeychainError::from(anyhow!("null LAContext pointer")))?;
+        let context =
+            unsafe { Retained::retain(context_ptr.cast::<LAContext>()) }.ok_or_else(|| {
+                KeychainError::from(anyhow!(
+                    "the app's authentication session was invalid, try again"
+                ))
+            })?;
         Ok(Self(context))
     }
 }

@@ -100,7 +100,7 @@ pub enum BrokerError {
     #[error("User cancelled the prompt")]
     Cancelled,
 
-    #[error("App broker failed: {0}")]
+    #[error("Axo Pass failed: {0}")]
     Failed(String),
 }
 

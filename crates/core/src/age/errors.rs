@@ -33,7 +33,7 @@ pub enum AgeError {
     #[error("Cancelled")]
     Cancelled,
 
-    #[error("App broker failed: {0}")]
+    #[error("Axo Pass failed to authenticate: {0}")]
     Broker(String),
 
     #[error("The app is not running. Start Axo Pass and try again.")]

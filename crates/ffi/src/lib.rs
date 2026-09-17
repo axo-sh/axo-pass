@@ -1062,7 +1062,9 @@ impl AxoPass {
     /// `LAContext`; the caller keeps its own reference across the call.
     pub fn adopt_auth_context(&self, context_ptr: u64) -> Result<(), FfiError> {
         if context_ptr == 0 {
-            return Err(FfiError::InvalidInput("null LAContext pointer".into()));
+            return Err(FfiError::InvalidInput(
+                "the app did not return an authentication session".into(),
+            ));
         }
         unsafe { adopt_shared_context(context_ptr as *mut std::ffi::c_void) }
             .map_err(FfiError::from)
@@ -2158,7 +2160,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {
-            return Err("null LAContext pointer".to_string());
+            return Err("the app did not return an authentication session for signing".to_string());
         }
         // SAFETY: the app holds a reference to the context until
         // `end_authorization`, which the broker calls after signing.
@@ -2362,7 +2364,9 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {
-            return Err("null LAContext pointer".to_string());
+            return Err(
+                "the app did not return an authentication session for the request".to_string(),
+            );
         }
         // SAFETY: the app holds a reference to the context until
         // `end_authorization`, which the broker calls after the read.
@@ -2557,7 +2561,9 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
             .await
             .map_err(|e| e.to_string())?;
         if context_ptr == 0 {
-            return Err("null LAContext pointer".to_string());
+            return Err(
+                "the app did not return an authentication session for unlocking".to_string(),
+            );
         }
         // SAFETY: the app holds a reference to the context until
         // `end_authorization`, which the broker calls after the unlock.
