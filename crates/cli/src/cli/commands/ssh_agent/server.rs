@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axo_pass_core::audit::{Action, Actor, Outcome};
 use axo_pass_core::core::provenance::PeerIdentity;
@@ -10,6 +11,7 @@ use axo_pass_core::ssh::agent_client::default_socket_path;
 use ssh_agent_lib::agent::{Agent, Session};
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::ssh_agent::audit;
@@ -90,21 +92,56 @@ impl SshAgentServer {
         audit::record_lifecycle(Action::SshAgentStart, Outcome::Succeeded, None, None);
 
         let mut shutdown_rx = self.shutdown_sender.subscribe();
-        tokio::select! {
-            result = ssh_agent_lib::agent::listen(listener, self.clone()) => {
-              if let Err(e) = result {
-                log::error!("ssh-agent error: {e}");
-              }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                log::info!("ssh-agent: Received Ctrl+C, shutting down...");
-            }
-            _ = shutdown_rx.recv() => {
-                log::info!("ssh-agent: Shutting down...");
+        let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
+            let _ = fs::remove_file(&socket_path);
+            SshAgentError::CouldNotCreateSocket(format!("Failed to install SIGTERM handler: {e}"))
+        })?;
+        // Installing a handler replaces the default SIGHUP action, which would
+        // terminate the process.
+        let mut sighup = signal(SignalKind::hangup()).map_err(|e| {
+            let _ = fs::remove_file(&socket_path);
+            SshAgentError::CouldNotCreateSocket(format!("Failed to install SIGHUP handler: {e}"))
+        })?;
+
+        let listen = ssh_agent_lib::agent::listen(listener, self.clone());
+        tokio::pin!(listen);
+        loop {
+            tokio::select! {
+                result = &mut listen => {
+                    match result {
+                        Ok(()) => log::error!("ssh-agent: listener exited, shutting down..."),
+                        Err(e) => log::error!("ssh-agent: listener failed, shutting down: {e}"),
+                    }
+                    break;
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    log::info!("ssh-agent: Received SIGINT, shutting down...");
+                    break;
+                }
+                _ = sigterm.recv() => {
+                    log::info!("ssh-agent: Received SIGTERM, shutting down...");
+                    break;
+                }
+                _ = sighup.recv() => {
+                    log::info!("ssh-agent: Received SIGHUP, ignoring");
+                }
+                _ = shutdown_rx.recv() => {
+                    log::info!("ssh-agent: Shutting down...");
+                    break;
+                }
             }
         }
-        audit::record_lifecycle(Action::SshAgentStop, Outcome::Succeeded, None, None);
+        // Remove the socket path first so new clients fail immediately instead
+        // of connecting to a listener that is no longer accepting.
         let _ = fs::remove_file(&socket_path);
+
+        // ssh_agent_lib::agent::listen spawns a detached task per connection and
+        // gives us no handle to join. Give in-flight sessions a moment to finish
+        // their current request/response before the runtime is torn down, or
+        // they hit the tail end of a read/write with a shutdown-related IO error.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        audit::record_lifecycle(Action::SshAgentStop, Outcome::Succeeded, None, None);
         Ok(())
     }
 }
