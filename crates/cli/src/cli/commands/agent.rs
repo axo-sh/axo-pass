@@ -6,7 +6,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use std::{fmt, io};
 
-use axo_pass_core::ssh::agent_client::{default_lock_path, default_socket_path};
+use axo_pass_core::ssh::agent_client::{
+    AgentStatus, default_lock_path, default_socket_path, get_agent_status_for_socket,
+};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 
@@ -104,10 +106,17 @@ impl AgentCommand {
 }
 
 /// Starts the agent as a separate process by re-executing `ap` with
-/// `agent run --daemonized`, then exits. The agent uses Security.framework,
-/// XPC, and LAContext, which are not supported in a forked child that has not
-/// called exec, so the agent must not be created with fork alone.
+/// `agent run --daemonized`, then exits. Exits without spawning if an agent
+/// is already running on the socket. The lock is the only guard against two
+/// agents, since a spawned agent exits 0 if it cannot take it. We cannot use
+/// fork because the agent uses Security.framework, XPC, and LAContext, which
+/// are not supported in a forked child.
 pub fn spawn_detached() -> ! {
+    if get_agent_status_for_socket(default_socket_path()) == AgentStatus::Running {
+        log::info!("Agent is already running");
+        std::process::exit(0);
+    }
+
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => {
