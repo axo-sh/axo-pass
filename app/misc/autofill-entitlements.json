@@ -1,0 +1,9 @@
+{
+  "com.apple.application-identifier": "75J48AQ5LF.com.breakfastlabs.frittata.AutoFill",
+  "com.apple.developer.team-identifier": "75J48AQ5LF",
+  "com.apple.security.app-sandbox": true,
+  "com.apple.security.application-groups": [
+    "75J48AQ5LF.com.breakfastlabs.frittata.shared"
+  ],
+  "com.apple.developer.authentication-services.autofill-credential-provider": true
+}

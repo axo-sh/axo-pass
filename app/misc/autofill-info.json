@@ -1,0 +1,11 @@
+{
+  "NSExtension": {
+    "NSExtensionAttributes": {
+      "ASCredentialProviderExtensionCapabilities": {
+        "ProvidesPasswords": true,
+        "ProvidesPasskeys": true
+      },
+      "ASCredentialProviderExtensionShowsConfigurationUI": true
+    }
+  }
+}
