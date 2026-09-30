@@ -487,7 +487,13 @@ fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
     let mut response_line = String::new();
     BufReader::new(&stream)
         .read_line(&mut response_line)
-        .map_err(|e| BrokerError::Failed(format!("Failed to read response: {e}")))?;
+        .map_err(|e| match e.kind() {
+            // macOS reports an expired socket read timeout as WouldBlock.
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                BrokerError::Failed("Timed out waiting for a response".to_string())
+            },
+            _ => BrokerError::Failed(format!("Failed to read response: {e}")),
+        })?;
     if response_line.trim().is_empty() {
         // The app went away mid-request.
         return Err(BrokerError::Disconnected);
