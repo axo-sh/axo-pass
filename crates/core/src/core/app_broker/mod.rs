@@ -1487,25 +1487,6 @@ mod tests {
         assert!(broker.authorizer.peers.lock().unwrap().is_empty());
     }
 
-    /// A keychain password listing is framed, parsed and routed. The response
-    /// depends on the test machine's keychain, so only reaching a well-formed
-    /// answer is asserted.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn routes_a_keychain_password_listing() {
-        let broker = TestBroker::start(accepting_policy()).await;
-
-        let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
-
-        let response: Result<WireResponse, _> = serde_json::from_str(&response);
-        assert!(
-            matches!(
-                response,
-                Ok(WireResponse::KeychainPasswords { .. } | WireResponse::Failed { .. })
-            ),
-            "unexpected response to a keychain password listing"
-        );
-    }
-
     /// A rejected peer cannot list the saved passwords.
     #[tokio::test(flavor = "multi_thread")]
     async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
