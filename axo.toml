@@ -35,6 +35,8 @@ test = "cargo test --workspace"
 "app:cli" = "./scripts/build-cli.sh"
 "app:cli:release" = "PROFILE=release ./scripts/build-cli.sh"
 
+"app:fmt" = "swift format -i --recursive ."
+
 [env]
 FRITTATA_DEBUG = "1"
 

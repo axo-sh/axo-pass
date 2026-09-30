@@ -96,7 +96,9 @@ private struct ProcessRow: View {
             Label("Unverified", systemImage: "exclamationmark.triangle.fill")
               .font(.caption.weight(.semibold))
               .foregroundStyle(.orange)
-              .help("This process's code signature could not be verified. Its name and bundle ID may be forged.")
+              .help(
+                "This process's code signature could not be verified. Its name and bundle ID may be forged."
+              )
           }
         }
         Text(metadata)

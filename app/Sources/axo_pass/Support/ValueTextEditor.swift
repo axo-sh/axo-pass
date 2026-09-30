@@ -77,7 +77,11 @@ struct ValueTextEditor: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .fixedSize(horizontal: false, vertical: true)
       .hidden()
-      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+      .onGeometryChange(for: CGFloat.self) {
+        $0.size.height
+      } action: {
+        contentHeight = $0
+      }
   }
 
   private var lineHeight: CGFloat {

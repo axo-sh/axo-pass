@@ -336,10 +336,11 @@ private struct GpgKeyDetail: View {
       items.append((label: "Stored", value: dir, monospaced: true))
     }
     if let last = recentEvents.first {
-      items.append((
-        label: "Last used", value: "\(last.timeText) · \(actionLabel(last.action))",
-        monospaced: false
-      ))
+      items.append(
+        (
+          label: "Last used", value: "\(last.timeText) · \(actionLabel(last.action))",
+          monospaced: false
+        ))
     }
     items.append((label: "Expires", value: expiryText(key), monospaced: false))
     if let created = GpgFormat.date(key.createdAt) {

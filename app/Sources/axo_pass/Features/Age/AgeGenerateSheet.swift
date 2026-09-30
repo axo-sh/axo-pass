@@ -12,9 +12,11 @@ struct AgeGenerateSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("New Age Key").font(.headline)
       TextField("Name", text: $name)
-      Text("The secret identity is stored in the keychain. Its public recipient is shown once the key is created.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+      Text(
+        "The secret identity is stored in the keychain. Its public recipient is shown once the key is created."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
 
       HStack {
         Spacer()

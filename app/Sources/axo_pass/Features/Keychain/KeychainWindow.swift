@@ -80,7 +80,9 @@ struct KeychainWindow: View {
     case .keys:
       Table(model.managedKeys, selection: $keySelection) {
         TableColumn("Label", value: \.label)
-        TableColumn("SHA256") { Text($0.fingerprintSha256).font(.system(.body, design: .monospaced)) }
+        TableColumn("SHA256") {
+          Text($0.fingerprintSha256).font(.system(.body, design: .monospaced))
+        }
       }
     }
   }

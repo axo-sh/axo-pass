@@ -149,11 +149,12 @@ struct GpgSubkeySheet: View {
       items.append((label: "Created", value: created, monospaced: false))
     }
     items.append((label: "Expires", value: expiryText, monospaced: false))
-    items.append((
-      label: "Capability",
-      value: subkey.capabilities.isEmpty ? "—" : GpgFormat.capabilityList(subkey.capabilities),
-      monospaced: false
-    ))
+    items.append(
+      (
+        label: "Capability",
+        value: subkey.capabilities.isEmpty ? "—" : GpgFormat.capabilityList(subkey.capabilities),
+        monospaced: false
+      ))
     if let curve = subkey.curve {
       items.append((label: "Curve", value: curve, monospaced: false))
     }

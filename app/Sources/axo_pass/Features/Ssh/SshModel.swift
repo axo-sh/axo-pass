@@ -47,7 +47,8 @@ final class SshModel {
       keys = []
       loadError = String(describing: error)
     }
-    if let selectedFingerprint, !keys.contains(where: { $0.fingerprintSha256 == selectedFingerprint })
+    if let selectedFingerprint,
+      !keys.contains(where: { $0.fingerprintSha256 == selectedFingerprint })
     {
       self.selectedFingerprint = nil
     }

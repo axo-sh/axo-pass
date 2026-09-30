@@ -37,7 +37,8 @@ struct CharWrappingText: NSViewRepresentable {
           range: NSRange(location: 0, length: firstSpace.location))
         let afterFirst = firstSpace.location + firstSpace.length
         let secondSpace = ns.range(
-          of: " ", options: [], range: NSRange(location: afterFirst, length: ns.length - afterFirst))
+          of: " ", options: [], range: NSRange(location: afterFirst, length: ns.length - afterFirst)
+        )
         if secondSpace.location != NSNotFound {
           result.addAttribute(
             .foregroundColor, value: NSColor.secondaryLabelColor,

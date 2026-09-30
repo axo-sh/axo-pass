@@ -131,18 +131,18 @@ final class VaultUnlockPromptModel {
     switch prompt.action {
     case .readSecret:
       what = "read a secret from vault \(prompt.vaultKey)"
-    case let .resolveSecrets(purpose, count):
+    case .resolveSecrets(let purpose, let count):
       let verb = purpose == .read ? "read" : "resolve"
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
-    case let .writeSecret(itemKey, credentialKey):
+    case .writeSecret(let itemKey, let credentialKey):
       what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
-    case let .exportVaults(count):
+    case .exportVaults(let count):
       what = "export \(count) \(count == 1 ? "vault" : "vaults") to \(prompt.vaultKey)"
-    case let .importVaults(count):
+    case .importVaults(let count):
       what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
-    case let .addVault(path):
+    case .addVault(let path):
       what = "add the vault at \(path)"
     }
     if let caller = prompt.caller, !caller.isEmpty {
@@ -192,14 +192,14 @@ final class VaultUnlockPromptModel {
   private static func headline(for action: VaultAction) -> String {
     switch action {
     case .readSecret: return "read a secret"
-    case let .resolveSecrets(purpose, count):
+    case .resolveSecrets(let purpose, let count):
       let verb = purpose == .read ? "read" : "resolve"
       return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
     case .writeSecret: return "write a secret"
-    case let .exportVaults(count):
+    case .exportVaults(let count):
       return "export \(count) \(count == 1 ? "vault" : "vaults")"
-    case let .importVaults(count):
+    case .importVaults(let count):
       return "import \(count) \(count == 1 ? "vault" : "vaults")"
     case .addVault: return "add a vault"
     }

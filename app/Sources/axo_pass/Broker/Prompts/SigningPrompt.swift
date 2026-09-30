@@ -162,7 +162,9 @@ final class SigningPromptModel {
       return String(id.prefix(6))
     }
     guard let fingerprint, !fingerprint.isEmpty else { return "key" }
-    let body = fingerprint.hasPrefix("SHA256:") ? String(fingerprint.dropFirst("SHA256:".count)) : fingerprint
+    let body =
+      fingerprint.hasPrefix("SHA256:")
+      ? String(fingerprint.dropFirst("SHA256:".count)) : fingerprint
     return String(body.suffix(8))
   }
 }
