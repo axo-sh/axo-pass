@@ -1,10 +1,11 @@
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{fmt, io};
 
+use serde::{Deserialize, Serialize};
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::client::Client;
-use ssh_agent_lib::proto::Identity;
+use ssh_agent_lib::proto::{Extension, Identity};
 use thiserror::Error;
 use tokio::net::UnixStream;
 
@@ -112,6 +113,100 @@ pub enum SshAgentClientError {
 
     #[error("Request error: {0}")]
     RequestError(String),
+
+    #[error("Invalid response from SSH agent: {0}")]
+    InvalidResponse(String),
+
+    #[error("Socket file not found")]
+    NoSocketFound,
+}
+
+/// Makes the agent exit with code 0, which launchd does not restart.
+pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
+/// Makes the agent exit with `EX_TEMPFAIL` so launchd starts it again.
+pub const AXO_RESTART_EXT: &str = "restart@pass.axo.sh";
+/// Returns the agent's [`AgentInfo`] as JSON.
+pub const AXO_AGENT_INFO_EXT: &str = "agent-info@pass.axo.sh";
+
+/// How the running agent was started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Launcher {
+    /// `ap agent run` in the foreground, as started by launchd.
+    Launchd,
+    /// `ap agent run --daemonized`, as started by `ap agent start`.
+    Detached,
+}
+
+impl fmt::Display for Launcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Launcher::Launchd => "launchd",
+            Launcher::Detached => "detached",
+        })
+    }
+}
+
+/// The agent's answer to the `agent-info@pass.axo.sh` extension, encoded as
+/// JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub version: String,
+    pub launcher: Launcher,
+}
+
+/// Connects to the agent and sends an extension request with no payload.
+async fn send_extension(name: &str) -> Result<Option<Extension>, SshAgentClientError> {
+    let socket_path = default_socket_path();
+    if !socket_path.exists() {
+        return Err(SshAgentClientError::NoSocketFound);
+    }
+    let stream = UnixStream::connect(&socket_path).await?;
+    let request = Extension {
+        name: name.to_string(),
+        details: Vec::new().into(),
+    };
+    Ok(Client::new(stream).extension(request).await?)
+}
+
+/// Asks the running agent to exit with code 0.
+pub async fn request_agent_shutdown() -> Result<(), SshAgentClientError> {
+    send_extension(AXO_SHUTDOWN_EXT).await?;
+    Ok(())
+}
+
+/// Asks the running agent to exit with a nonzero code so launchd starts it
+/// again.
+pub async fn request_agent_restart() -> Result<(), SshAgentClientError> {
+    send_extension(AXO_RESTART_EXT).await?;
+    Ok(())
+}
+
+/// Restarts the running agent and waits for it to stop answering on its
+/// socket. Nothing here starts it again: launchd does that for an agent it
+/// owns, and for a detached agent the caller must run [`start_agent`].
+pub async fn restart_agent() -> Result<(), String> {
+    request_agent_restart()
+        .await
+        .map_err(|e| format!("Failed to restart SSH agent: {e}"))?;
+
+    let socket_path = default_socket_path();
+    for _ in 0..40 {
+        if get_agent_status_for_socket(&socket_path) != AgentStatus::Running {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    Err("SSH agent did not shut down in time".to_string())
+}
+
+/// Asks the running agent for its version and launcher.
+pub async fn request_agent_info() -> Result<AgentInfo, SshAgentClientError> {
+    let response = send_extension(AXO_AGENT_INFO_EXT)
+        .await?
+        .ok_or_else(|| SshAgentClientError::InvalidResponse("empty response".to_string()))?;
+    serde_json::from_slice(response.details.as_ref())
+        .map_err(|e| SshAgentClientError::InvalidResponse(e.to_string()))
 }
 
 pub async fn list_system_agent_identities() -> Result<Vec<Identity>, SshAgentClientError> {
@@ -146,4 +241,20 @@ where
         SshAgentClientError::RequestError(format!("Failed to request identities: {e}"))
     })?;
     Ok(identities)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_info_round_trips_as_json() {
+        let info = AgentInfo {
+            version: "1.2.3".to_string(),
+            launcher: Launcher::Detached,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert_eq!(json, r#"{"version":"1.2.3","launcher":"detached"}"#);
+        assert_eq!(serde_json::from_str::<AgentInfo>(&json).unwrap(), info);
+    }
 }

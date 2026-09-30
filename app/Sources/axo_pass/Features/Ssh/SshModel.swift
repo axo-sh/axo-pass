@@ -9,6 +9,10 @@ final class SshModel {
   // AxoPass instance rather than sharing VaultsModel's.
   private let core = AxoPass()
 
+  /// How the Axo Pass agent is run. Shared, since the main window and Settings
+  /// each have a model.
+  let agentService = AgentService.shared
+
   var keys: [SshKeyEntry] = []
   /// SHA256 fingerprint of the key shown in the detail pane.
   var selectedFingerprint: String? = nil
@@ -35,6 +39,7 @@ final class SshModel {
     loadError = nil
     axoAgentStatus = core.getSshAgentStatus(agentType: .axo)
     systemAgentStatus = core.getSshAgentStatus(agentType: .system)
+    agentService.refreshStatus()
     refreshConfStatus()
     do {
       keys = try await core.listSshKeys()
@@ -70,7 +75,7 @@ final class SshModel {
     isTogglingAgent = true
     agentError = nil
     do {
-      try await core.startSshAgent()
+      try await agentService.start()
     } catch {
       agentError = String(describing: error)
     }
@@ -82,7 +87,7 @@ final class SshModel {
     isTogglingAgent = true
     agentError = nil
     do {
-      try await core.stopSshAgent()
+      try await agentService.stop()
     } catch {
       agentError = String(describing: error)
     }

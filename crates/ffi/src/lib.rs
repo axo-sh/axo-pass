@@ -366,6 +366,32 @@ pub struct SshAgentStatusResponse {
     pub socket_path: Option<String>,
 }
 
+/// How the running Axo Pass agent was started.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshAgentLauncher {
+    /// Run by the launchd service. launchd restarts it if it exits.
+    Launchd,
+    /// Started by `ap agent start`. Nothing restarts it.
+    Detached,
+}
+
+impl From<agent_client::Launcher> for SshAgentLauncher {
+    fn from(launcher: agent_client::Launcher) -> Self {
+        match launcher {
+            agent_client::Launcher::Launchd => SshAgentLauncher::Launchd,
+            agent_client::Launcher::Detached => SshAgentLauncher::Detached,
+        }
+    }
+}
+
+#[derive(uniffi::Record)]
+pub struct SshAgentInfo {
+    pub version: String,
+    pub launcher: SshAgentLauncher,
+    /// Whether the agent's version matches the `ap` bundled with this app.
+    pub is_current: bool,
+}
+
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum PasswordEntryType {
     GpgKey,
@@ -1688,6 +1714,27 @@ impl AxoPass {
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?
             .map_err(FfiError::Internal)
+    }
+
+    /// Ask the running Axo Pass agent for its version and launcher. `None` if
+    /// no agent answers, or if it is too old to know the request.
+    pub async fn get_ssh_agent_info(&self) -> Option<SshAgentInfo> {
+        let info = agent_client::request_agent_info()
+            .await
+            .inspect_err(|e| log::debug!("agent info unavailable: {e}"))
+            .ok()?;
+        Some(SshAgentInfo {
+            is_current: info.version == env!("CARGO_PKG_VERSION"),
+            version: info.version,
+            launcher: info.launcher.into(),
+        })
+    }
+
+    /// Make the running agent exit so it can start again on the bundled `ap`.
+    /// Returns once the socket stops answering. launchd starts a launchd agent
+    /// again. A detached agent stays down until `start_ssh_agent`.
+    pub async fn restart_ssh_agent(&self) -> Result<(), FfiError> {
+        agent_client::restart_agent().await.map_err(FfiError::Internal)
     }
 
     /// Report whether ssh's `IdentityAgent` resolves to this app's agent

@@ -45,6 +45,13 @@ src      = "target/dist/ap"
 dest_dir = "Contents/MacOS"
 sign     = true
 
+# launchd job for `ap agent run`, registered by the app with SMAppService. The
+# plist's BundleProgram points at Contents/MacOS/ap, which ties the background
+# item to this app in System Settings. See plans/2026-09-29-launch-agent.md.
+[[build.copy]]
+src      = "app/misc/com.breakfastlabs.frittata.agent.plist"
+dest_dir = "Contents/Library/LaunchAgents"
+
 # `pinentry-program` takes a bare path with no arguments, so gpg-agent can't
 # invoke `ap pinentry` directly. This wrapper is what gets pointed to instead;
 # see crates/cli/src/cli/commands/pinentry.rs.

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axo_pass_core::audit::{Action, Actor, Outcome};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
+use axo_pass_core::ssh::agent_client::{AXO_AGENT_INFO_EXT, AXO_RESTART_EXT, AXO_SHUTDOWN_EXT};
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{
@@ -12,7 +13,7 @@ use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
-use crate::cli::commands::agent::AgentInfo;
+use crate::cli::commands::agent::current_agent_info;
 use crate::cli::commands::ssh_agent::audit;
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::managed_credential::list_managed_credentials;
@@ -20,12 +21,6 @@ use crate::cli::commands::ssh_agent::server::StopReason;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
-
-pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
-/// Makes the agent exit with `EX_TEMPFAIL` so launchd starts it again.
-pub const AXO_RESTART_EXT: &str = "restart@pass.axo.sh";
-/// Returns the agent's version and launcher as JSON.
-pub const AXO_AGENT_INFO_EXT: &str = "agent-info@pass.axo.sh";
 
 pub struct SshAgentSession {
     caller: Option<String>,
@@ -395,7 +390,7 @@ impl Session for SshAgentSession {
         }
 
         if extension.name == AXO_AGENT_INFO_EXT {
-            let details = serde_json::to_vec(&AgentInfo::current())
+            let details = serde_json::to_vec(&current_agent_info())
                 .map_err(|e| AgentError::Other(e.into()))?;
             return Ok(Some(proto::Extension {
                 name: AXO_AGENT_INFO_EXT.to_string(),

@@ -4,13 +4,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use std::{fmt, io};
+use std::io;
 
 use axo_pass_core::ssh::agent_client::{
-    AgentStatus, default_lock_path, default_socket_path, get_agent_status_for_socket,
+    AgentInfo, AgentStatus, Launcher, default_lock_path, default_socket_path,
+    get_agent_status_for_socket,
 };
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
 
 use crate::cli;
 use crate::cli::commands::ssh_agent::server::{SshAgentServer, StopReason};
@@ -27,41 +27,12 @@ const EX_TEMPFAIL: i32 = 75;
 
 static LAUNCHER: OnceLock<Launcher> = OnceLock::new();
 
-/// How the running agent was started.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Launcher {
-    /// `ap agent run` in the foreground, as started by launchd.
-    Launchd,
-    /// `ap agent run --daemonized`, as started by `ap agent start`.
-    Detached,
-}
-
-impl fmt::Display for Launcher {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Launcher::Launchd => "launchd",
-            Launcher::Detached => "detached",
-        })
-    }
-}
-
-/// The agent's answer to the `agent-info@pass.axo.sh` extension, encoded as
-/// JSON.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentInfo {
-    pub version: String,
-    pub launcher: Launcher,
-}
-
-impl AgentInfo {
-    /// The running agent's info. The launcher is `Detached` if the agent was
-    /// not started through `run`.
-    pub fn current() -> Self {
-        AgentInfo {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            launcher: LAUNCHER.get().copied().unwrap_or(Launcher::Detached),
-        }
+/// The running agent's info. The launcher is `Detached` if the agent was not
+/// started through `run`.
+pub fn current_agent_info() -> AgentInfo {
+    AgentInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        launcher: LAUNCHER.get().copied().unwrap_or(Launcher::Detached),
     }
 }
 
@@ -304,16 +275,5 @@ mod tests {
         assert!(flock(&second, false).unwrap());
 
         let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn agent_info_round_trips_as_json() {
-        let info = AgentInfo {
-            version: "1.2.3".to_string(),
-            launcher: Launcher::Detached,
-        };
-        let json = serde_json::to_string(&info).unwrap();
-        assert_eq!(json, r#"{"version":"1.2.3","launcher":"detached"}"#);
-        assert_eq!(serde_json::from_str::<AgentInfo>(&json).unwrap(), info);
     }
 }

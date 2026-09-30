@@ -18,7 +18,7 @@ use clml::cprintln;
 
 use crate::cli::commands::agent;
 pub use crate::cli::commands::ssh_agent::client::{
-    SshAgentClientError, get_agent_status, request_agent_info, restart_ssh_agent, stop_ssh_agent,
+    SshAgentClientError, get_agent_status, request_agent_info, stop_ssh_agent,
 };
 
 #[derive(Parser, Debug)]

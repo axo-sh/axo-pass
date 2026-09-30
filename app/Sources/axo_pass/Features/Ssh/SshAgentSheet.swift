@@ -16,6 +16,7 @@ struct SshAgentSheet: View {
       Divider()
 
       axoAgentRow
+      serviceNotice
       Divider()
       systemAgentRow
       if let error = model.agentError {
@@ -67,6 +68,29 @@ struct SshAgentSheet: View {
         Button("Start") { Task { await model.startAgent() } }
           .controlSize(.small)
       }
+    }
+  }
+
+  /// Explains why the agent is not run by launchd. Without the background
+  /// item, the agent still runs, but nothing restarts it if it stops.
+  @ViewBuilder
+  private var serviceNotice: some View {
+    if model.agentService.status == .requiresApproval {
+      VStack(alignment: .leading, spacing: 6) {
+        Label(
+          "Allow Axo Pass in System Settings > General > Login Items & Extensions so the agent restarts if it stops.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+        Button("Open Login Items…") { model.agentService.openLoginItemsSettings() }
+          .controlSize(.small)
+      }
+    } else if model.agentService.status != .enabled, model.axoAgentStatus?.status == .running {
+      Text("This agent does not restart if it stops.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
   }
 
