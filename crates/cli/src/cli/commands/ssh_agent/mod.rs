@@ -10,6 +10,7 @@ mod stored_credential;
 mod userauth_request;
 
 use std::fs;
+use std::process::{Command, Stdio};
 
 use axo_pass_core::ssh::agent_client::default_socket_path;
 pub use axo_pass_core::ssh::agent_client::{
@@ -37,6 +38,11 @@ pub enum SshAgentSubcommand {
         /// Debug mode: run SSH agent in the foreground
         #[arg(short = 'd')]
         debug: bool,
+
+        /// Set by the detaching parent when it re-executes `ap` as the agent
+        /// process. Runs in the foreground in a new session and logs to a file.
+        #[arg(long, hide = true)]
+        daemonized: bool,
     },
 
     /// Stop SSH agent
@@ -49,8 +55,59 @@ pub enum SshAgentSubcommand {
 impl SshAgentCommand {
     pub fn should_detach(&self) -> bool {
         match &self.subcommand {
-            SshAgentSubcommand::Start { debug } => !*debug,
+            SshAgentSubcommand::Start { debug, daemonized } => !*debug && !*daemonized,
             _ => false,
+        }
+    }
+
+    pub fn is_daemonized(&self) -> bool {
+        matches!(
+            &self.subcommand,
+            SshAgentSubcommand::Start {
+                daemonized: true,
+                ..
+            }
+        )
+    }
+
+    /// Starts the agent as a separate process by re-executing `ap` with
+    /// `--daemonized`, then exits. The agent uses Security.framework, XPC, and
+    /// LAContext, which are not supported in a forked child that has not called
+    /// exec, so the agent must not be created with fork alone.
+    pub fn spawn_detached(&self) -> ! {
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                log::error!("Failed to resolve ap executable path: {e}");
+                std::process::exit(1);
+            },
+        };
+        let spawned = Command::new(&exe)
+            .args(["ssh-agent", "start", "--daemonized"])
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match spawned {
+            Ok(child) => {
+                log::debug!("SSH agent started with pid {}", child.id());
+                std::process::exit(0);
+            },
+            Err(e) => {
+                log::error!("Failed to start SSH agent process {}: {e}", exe.display());
+                std::process::exit(1);
+            },
+        }
+    }
+
+    /// Detaches the re-executed agent from the parent's session and controlling
+    /// terminal.
+    pub fn detach_session(&self) {
+        // The spawned child is never a process group leader, so this succeeds
+        // unless the process was started some other way.
+        if unsafe { libc::setsid() } == -1 {
+            log::warn!("setsid failed: {}", std::io::Error::last_os_error());
         }
     }
 
