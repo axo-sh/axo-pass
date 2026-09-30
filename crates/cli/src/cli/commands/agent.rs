@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use std::io;
 
 use axo_pass_core::ssh::agent_client::{
-    AgentInfo, AgentStatus, Launcher, default_lock_path, default_socket_path,
-    get_agent_status_for_socket,
+    AgentInfo, AgentStatus, Launcher, LaunchdService, default_lock_path, default_socket_path,
+    get_agent_status_for_socket, launchd_service,
 };
 use clap::{Parser, Subcommand};
 
@@ -86,6 +86,15 @@ pub fn spawn_detached() -> ! {
     if get_agent_status_for_socket(default_socket_path()) == AgentStatus::Running {
         log::info!("Agent is already running");
         std::process::exit(0);
+    }
+    // Only the app can register the service, so a stopped service agent
+    // cannot be started from here. A detached agent would run alongside a
+    // service that the app then sees as healthy.
+    if launchd_service() == LaunchdService::Loaded {
+        eprintln!(
+            "The agent is managed by launchd and is not running. Start it from Axo Pass, or log in again."
+        );
+        std::process::exit(1);
     }
 
     let exe = match std::env::current_exe() {

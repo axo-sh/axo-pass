@@ -121,6 +121,44 @@ pub enum SshAgentClientError {
     NoSocketFound,
 }
 
+/// The label of the launchd service in the app's bundle.
+const LAUNCHD_LABEL: &str = "com.breakfastlabs.frittata.agent";
+
+/// State of the agent's launchd service, as seen from `ap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchdService {
+    /// `ap` is not running from an app bundle, so there is no service.
+    NotInBundle,
+    /// launchd has the service loaded. It runs the agent and restarts it if
+    /// it fails, but not after an exit 0 such as `ap ssh-agent stop`.
+    Loaded,
+    /// The app has not registered the service, or the user has not allowed it.
+    NotLoaded,
+}
+
+/// Whether launchd has the agent's service loaded. Only the app can register
+/// or unregister it, through `SMAppService`, but `launchctl print` can read
+/// its state.
+pub fn launchd_service() -> LaunchdService {
+    if crate::core::app_broker::app_bundle_path().is_none() {
+        return LaunchdService::NotInBundle;
+    }
+    let target = format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() });
+    let loaded = Command::new("/bin/launchctl")
+        .args(["print", &target])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .inspect_err(|e| log::debug!("Failed to run launchctl: {e}"))
+        .unwrap_or(false);
+    if loaded {
+        LaunchdService::Loaded
+    } else {
+        LaunchdService::NotLoaded
+    }
+}
+
 /// Makes the agent exit with code 0, which launchd does not restart.
 pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
 /// Makes the agent exit with `EX_TEMPFAIL` so launchd starts it again.

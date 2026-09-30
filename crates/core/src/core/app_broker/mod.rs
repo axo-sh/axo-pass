@@ -508,7 +508,7 @@ fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
 /// assuming a fixed depth: `current_exe` is not always canonical (a wrapper
 /// that execs `.../Contents/Resources/../MacOS/ap` leaves the `..` in place),
 /// so a fixed number of `parent()` calls can land in the wrong directory.
-fn app_bundle_path() -> Option<PathBuf> {
+pub(crate) fn app_bundle_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     log::debug!("Resolving the app bundle from {}", exe.display());

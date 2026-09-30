@@ -10,8 +10,8 @@ mod stored_credential;
 mod userauth_request;
 
 pub use axo_pass_core::ssh::agent_client::{
-    AgentStatus, get_agent_status_for_socket, get_system_socket_path, list_axo_agent_identities,
-    list_system_agent_identities,
+    AgentStatus, LaunchdService, get_agent_status_for_socket, get_system_socket_path,
+    launchd_service, list_axo_agent_identities, list_system_agent_identities,
 };
 use clap::{Parser, Subcommand};
 use clml::cprintln;
@@ -69,27 +69,33 @@ impl SshAgentCommand {
                     },
                 },
             },
-            SshAgentSubcommand::Status => match get_agent_status() {
-                AgentStatus::Running => {
-                    cprintln!("SSH agent status: <green>running</green>");
-                    match request_agent_info().await {
-                        Ok(info) => {
-                            println!("Version: {}", info.version);
-                            println!("Started by: {}", info.launcher);
-                        },
-                        Err(e) => log::debug!("Failed to get agent info: {e}"),
-                    }
-                    std::process::exit(0)
-                },
-                AgentStatus::NotRunning => {
-                    cprintln!("SSH agent status: <yellow>not running</yellow>");
-                    std::process::exit(1)
-                },
-                AgentStatus::StaleSocket => {
-                    cprintln!("SSH agent status: <yellow>not running</yellow>");
-                    println!("Warning: stale socket found");
-                    std::process::exit(1)
-                },
+            SshAgentSubcommand::Status => {
+                let status = get_agent_status();
+                match status {
+                    AgentStatus::Running => {
+                        cprintln!("SSH agent status: <green>running</green>");
+                        match request_agent_info().await {
+                            Ok(info) => {
+                                println!("Version: {}", info.version);
+                                println!("Started by: {}", info.launcher);
+                            },
+                            Err(e) => log::debug!("Failed to get agent info: {e}"),
+                        }
+                    },
+                    AgentStatus::NotRunning => {
+                        cprintln!("SSH agent status: <yellow>not running</yellow>");
+                    },
+                    AgentStatus::StaleSocket => {
+                        cprintln!("SSH agent status: <yellow>not running</yellow>");
+                        println!("Warning: stale socket found");
+                    },
+                }
+                match launchd_service() {
+                    LaunchdService::NotInBundle => {},
+                    LaunchdService::Loaded => println!("Launchd service: loaded"),
+                    LaunchdService::NotLoaded => println!("Launchd service: not loaded"),
+                }
+                std::process::exit(if status == AgentStatus::Running { 0 } else { 1 })
             },
         }
     }
