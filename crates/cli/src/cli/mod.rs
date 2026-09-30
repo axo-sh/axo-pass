@@ -1,6 +1,7 @@
 pub mod commands;
 
 use std::io;
+use std::sync::LazyLock;
 
 use axo_pass_core::core::build_sha;
 use axo_pass_core::core::dirs::{log_data_dir, vaults_dir};
@@ -8,6 +9,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use fork::daemon;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt, reload};
@@ -20,6 +22,27 @@ use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::ssh_agent::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::cli::commands::{pinentry, ssh_askpass};
+
+/// The daemonized SSH agent's log file, ~/Library/Logs/Axo Pass/agent.log.*.
+/// `None` if the appender could not be created.
+static AGENT_LOG: LazyLock<Option<RollingFileAppender>> = LazyLock::new(|| {
+    RollingFileAppender::builder()
+        .max_log_files(7)
+        .rotation(Rotation::DAILY)
+        .filename_prefix("agent.log")
+        .build(log_data_dir())
+        .ok()
+});
+
+/// Log writer for the daemonized SSH agent. It must not panic: a panic here
+/// re-enters the logger from the panic hook and aborts the process. If the
+/// log file is unavailable, output is discarded.
+fn agent_log_writer() -> Box<dyn io::Write> {
+    match AGENT_LOG.as_ref() {
+        Some(appender) => Box::new(appender.make_writer()),
+        None => Box::new(io::sink()),
+    }
+}
 
 #[derive(Parser, Debug)]
 pub struct AxoPassCli {
@@ -118,16 +141,7 @@ impl AxoPassCommand {
                 let _ = reload_log
                     .modify(|layer| {
                         layer.set_ansi(false);
-                        *layer.writer_mut() = || -> Box<dyn io::Write> {
-                            //  ~/Library/Logs/Axo Pass/agent.log
-                            let log_appender = RollingFileAppender::builder()
-                                .max_log_files(7)
-                                .rotation(Rotation::DAILY)
-                                .filename_prefix("agent.log")
-                                .build(log_data_dir())
-                                .unwrap();
-                            Box::new(log_appender)
-                        };
+                        *layer.writer_mut() = agent_log_writer;
                     })
                     .inspect_err(|e| {
                         log::warn!("Failed to modify log destination: {e}");
