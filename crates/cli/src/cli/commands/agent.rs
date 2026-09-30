@@ -1,13 +1,13 @@
 use std::fs::{self, File, OpenOptions};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use std::io;
 
 use axo_pass_core::ssh::agent_client::{
-    AgentInfo, AgentStatus, Launcher, LaunchdService, default_lock_path, default_socket_path,
+    AgentInfo, AgentStatus, LaunchdService, Launcher, default_lock_path, default_socket_path,
     get_agent_status_for_socket, launchd_service, start_launchd_service,
 };
 use clap::{Parser, Subcommand};

@@ -1734,7 +1734,9 @@ impl AxoPass {
     /// Returns once the socket stops answering. launchd starts a launchd agent
     /// again. A detached agent stays down until `start_ssh_agent`.
     pub async fn restart_ssh_agent(&self) -> Result<(), FfiError> {
-        agent_client::restart_agent().await.map_err(FfiError::Internal)
+        agent_client::restart_agent()
+            .await
+            .map_err(FfiError::Internal)
     }
 
     /// Report whether ssh's `IdentityAgent` resolves to this app's agent

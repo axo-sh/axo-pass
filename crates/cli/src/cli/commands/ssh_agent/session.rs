@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axo_pass_core::audit::{Action, Actor, Outcome};
 use axo_pass_core::core::provenance::ProcessNode;
-use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use axo_pass_core::ssh::agent_client::{AXO_AGENT_INFO_EXT, AXO_RESTART_EXT, AXO_SHUTDOWN_EXT};
+use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
 use ssh_agent_lib::agent::Session;
 use ssh_agent_lib::error::AgentError;
 use ssh_agent_lib::proto::{
