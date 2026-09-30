@@ -67,6 +67,10 @@ struct CredentialRow: View {
       guard isEditing else { return }
       resetDrafts()
       cancelQuickEdit()
+      // Edit mode reveals every existing credential up front, but one added
+      // while editing has no secret yet. The onChange below seeds the draft
+      // when the reveal lands.
+      if secret == nil, !isRevealing { onReveal() }
     }
     .onChange(of: isEditing) { wasEditing, editing in
       if !editing, wasEditing {
