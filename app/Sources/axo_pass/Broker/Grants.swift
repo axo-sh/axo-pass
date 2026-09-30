@@ -197,11 +197,17 @@ final class AuthorizationGrants {
     grant.lastPeer = peer
 
     if existing == nil {
+      log("new approval for \(key), prompting")
       AuditBridge.recordGrant(key, .created, peer: peer)
     } else if existing?.approvedAt != nil {
       // A still-valid approval, reused without a prompt. The agent or pinentry
       // records the key use; this explains why no prompt appeared.
+      log("reusing approval for \(key)")
       AuditBridge.recordGrant(key, .reused, peer: peer)
+    } else {
+      // A grant with no approval yet: an earlier prompt is still on screen or
+      // was cancelled. Its context is evaluated again, so this request prompts.
+      log("unapproved grant for \(key) (\(grant.inFlight) in flight), prompting")
     }
 
     // Incremented before the context leaves this method: the broker retains it
