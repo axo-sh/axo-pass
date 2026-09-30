@@ -216,11 +216,48 @@ private struct VaultsSettingsView: View {
 private struct SshSettingsView: View {
   @State private var model = SshModel()
   @State private var showingSetup = false
+  @State private var startAtLoginError: String? = nil
 
   private var state: SshIdentityAgentState? { model.confStatus?.state }
 
+  private var startAtLogin: Binding<Bool> {
+    Binding(
+      get: { model.agentService.startsOnLogin },
+      set: { on in
+        startAtLoginError = nil
+        Task {
+          do {
+            try await model.agentService.setStartsOnLogin(on)
+          } catch {
+            startAtLoginError = String(describing: error)
+          }
+          await model.reload()
+        }
+      }
+    )
+  }
+
   var body: some View {
     Form {
+      LabeledContent("Agent:") {
+        Toggle("Start at login", isOn: startAtLogin)
+      }
+      if model.agentService.startsOnLogin && model.agentService.status == .requiresApproval {
+        Text("Allow Axo Pass in System Settings > General > Login Items & Extensions.")
+          .foregroundStyle(.orange)
+          .settingsCaption()
+        LabeledContent("") {
+          Button("Open Login Items…") { model.agentService.openLoginItemsSettings() }
+        }
+      }
+      if let error = startAtLoginError {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      Text("Runs the agent in the background and restarts it if it stops.")
+        .settingsCaption()
+      Divider()
       LabeledContent("IdentityAgent:") {
         HStack(spacing: 6) {
           if let state {
@@ -261,11 +298,16 @@ private struct SshSettingsView: View {
     // and a caption apiece, so they need the room.
     .padding(.horizontal, 10)
     .padding(.vertical, 12)
-    .task { model.refreshConfStatus() }
+    .task {
+      model.refreshConfStatus()
+      model.agentService.refreshStatus()
+    }
     // The file may be edited outside the app, so re-read it on reactivation.
+    // The user may also have allowed the background item in System Settings.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     { _ in
       model.refreshConfStatus()
+      model.agentService.refreshStatus()
     }
     .sheet(isPresented: $showingSetup) {
       SshSetupSheet(model: model)

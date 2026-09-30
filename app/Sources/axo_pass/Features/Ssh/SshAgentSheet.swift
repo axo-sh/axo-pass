@@ -71,11 +71,12 @@ struct SshAgentSheet: View {
     }
   }
 
-  /// Explains why the agent is not run by launchd. Without the background
-  /// item, the agent still runs, but nothing restarts it if it stops.
+  /// Explains why the agent is not run by launchd. Without the service, the
+  /// agent still runs, but nothing restarts it if it stops. "Start at login"
+  /// in Settings controls the service.
   @ViewBuilder
   private var serviceNotice: some View {
-    if model.agentService.status == .requiresApproval {
+    if model.agentService.startsOnLogin && model.agentService.status == .requiresApproval {
       VStack(alignment: .leading, spacing: 6) {
         Label(
           "Allow Axo Pass in System Settings > General > Login Items & Extensions so the agent restarts if it stops.",
