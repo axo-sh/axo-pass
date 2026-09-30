@@ -159,6 +159,23 @@ pub fn launchd_service() -> LaunchdService {
     }
 }
 
+/// Starts the loaded launchd service with `launchctl kickstart`. This starts
+/// the agent even if it exited 0 and launchd did not restart it. Fails if the
+/// service is not loaded.
+pub fn start_launchd_service() -> std::io::Result<()> {
+    let target = format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() });
+    let output = Command::new("/bin/launchctl")
+        .args(["kickstart", &target])
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "launchctl kickstart {target} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
+}
+
 /// Makes the agent exit with code 0, which launchd does not restart.
 pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
 /// Makes the agent exit with `EX_TEMPFAIL` so launchd starts it again.
