@@ -13,14 +13,13 @@ enum Preferences {
     /// Whether an approval may be reused inside its window, or every request
     /// prompts.
     static let reuseApprovals = "security.reuseApprovals"
-    /// Whether the user wants the SSH agent running. Start sets it, Stop
-    /// clears it.
-    static let sshAgentEnabled = "ssh.agentEnabled"
+    /// Whether the SSH agent starts at login, as a launchd service.
+    static let sshStartOnLogin = "ssh.startOnLogin"
   }
 
   static let defaultAutoLockMinutes = 5
   static let defaultReuseApprovals = true
-  static let defaultSshAgentEnabled = true
+  static let defaultSshStartOnLogin = true
 
   /// The values offered in Settings, in minutes. 0 is "Never".
   static let autoLockChoices = [1, 5, 15, 30, 60, 0]
@@ -31,7 +30,7 @@ enum Preferences {
     UserDefaults.standard.register(defaults: [
       Key.autoLockMinutes: defaultAutoLockMinutes,
       Key.reuseApprovals: defaultReuseApprovals,
-      Key.sshAgentEnabled: defaultSshAgentEnabled,
+      Key.sshStartOnLogin: defaultSshStartOnLogin,
     ])
   }
 

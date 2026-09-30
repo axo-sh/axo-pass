@@ -57,9 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // window, and closing the window later must not stop serving prompts.
     Task { await model.startBroker() }
 
-    Task { await AgentService.shared.sync() }
+    let brokerLaunch = model.isBrokerLaunch()
+    Task { await AgentService.shared.sync(launch: true, startIfStopped: !brokerLaunch) }
 
-    if model.isBrokerLaunch() {
+    if brokerLaunch {
       NSApp.setActivationPolicy(.accessory)
     } else {
       windows.requestMain()
@@ -69,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Check the agent against the bundled `ap` when the app comes to the front,
   /// since an update replaces the binary under a running agent.
   func applicationDidBecomeActive(_ notification: Notification) {
-    Task { await AgentService.shared.sync() }
+    Task { await AgentService.shared.sync(launch: false) }
   }
 
   /// The app always starts from a locked state, so a relaunch shows only the
