@@ -34,9 +34,9 @@ pub fn create_la_auth_callback() -> (
                 LAError::UserCancel => KeychainError::UserCancelled,
                 // cause: context has been invalidated
                 LAError::InvalidContext => KeychainError::AuthenticationExpired,
-                // cause: another process's concurrent evaluatePolicy call won the race and
-                // the system canceled this one; retried by the caller.
-                LAError::SystemCancel => KeychainError::AuthenticationInProgress,
+                // cause: another process's concurrent evaluatePolicy call, the
+                // screen locking, or a focus change.
+                LAError::SystemCancel => KeychainError::SystemCancelled,
                 _ => anyhow!("Failed to authenticate with LAContext: {err:?}").into(),
             };
             let _ = tx.send(Err(err));

@@ -152,7 +152,8 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                             AuthContext::OneTime => unsafe { LAContext::new() },
                             AuthContext::Foreign(ref context) => context.0.clone(),
                         };
-                        match authenticate(selected_la_ctx.clone(), work.auth) {
+                        let is_foreign_context = matches!(work.context, AuthContext::Foreign(_));
+                        match authenticate(selected_la_ctx.clone(), work.auth, is_foreign_context) {
                             Ok(_) => {
                                 log::debug!("Authentication successful ({:?})", work.context);
                                 let _ = work.auth_reply.send(Ok(()));
@@ -243,7 +244,7 @@ pub fn external_auth_lock() -> std::fs::File {
 
 // evaluatePolicy shows OS authentication UI; if a second process calls it while
 // another process's prompt is up, the system cancels the first request
-// (LAError::SystemCancel / KeychainError::AuthenticationInProgress) instead of
+// (LAError::SystemCancel / KeychainError::SystemCancelled) instead of
 // queuing it. We serialize calls across processes with a blocking file lock so
 // concurrent invocations (e.g. `ap inject` run back-to-back) waits their turn
 // instead of repeatedly triggering.
@@ -265,8 +266,14 @@ fn acquire_auth_lock() -> std::fs::File {
 const AUTH_RETRY_ATTEMPTS: u32 = 50;
 const AUTH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
-// Authenticate the LAContext using the specified method
-fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(), KeychainError> {
+// Authenticate the LAContext using the specified method. When
+// `retry_system_cancel` is set, a system cancellation is retried up to
+// AUTH_RETRY_ATTEMPTS times.
+fn authenticate(
+    la_context: Retained<LAContext>,
+    method: AuthMethod,
+    is_foreign_context: bool,
+) -> Result<(), KeychainError> {
     // Nothing to evaluate and no prompt to serialize against, so skip the lock.
     if matches!(method, AuthMethod::None) {
         return Ok(());
@@ -307,7 +314,12 @@ fn authenticate(la_context: Retained<LAContext>, method: AuthMethod) -> Result<(
         };
 
         match result {
-            Err(KeychainError::AuthenticationInProgress) if attempts_left > 0 => {
+            Err(KeychainError::SystemCancelled) if is_foreign_context => {
+                // Don't retry foreign contexts on system cancellation, since it's probably
+                // caused by external factors like the screen being locked.
+                return Err(KeychainError::SystemCancelled);
+            },
+            Err(KeychainError::SystemCancelled) if attempts_left > 0 => {
                 attempts_left -= 1;
                 thread::sleep(AUTH_RETRY_DELAY);
             },

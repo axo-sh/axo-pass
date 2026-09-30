@@ -8,10 +8,13 @@ pub enum KeychainError {
     #[error("Authentication expired")]
     AuthenticationExpired,
 
+    /// `LAError::SystemCancel`. The system cancels a prompt when another
+    /// process starts one, and also when the screen locks or the prompt's
+    /// application loses focus.
     #[error(
-        "Authentication was canceled by the system because another authentication request was in progress"
+        "Authentication was canceled by the system (another prompt, the screen locking, or a focus change)"
     )]
-    AuthenticationInProgress,
+    SystemCancelled,
 
     #[error("Item exists but access is not allowed without user authentication")]
     ItemNotAccessible,
