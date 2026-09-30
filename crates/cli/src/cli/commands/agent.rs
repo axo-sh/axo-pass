@@ -11,9 +11,11 @@ use axo_pass_core::ssh::agent_client::{
     get_agent_status_for_socket, launchd_service,
 };
 use clap::{Parser, Subcommand};
+use clml::cprintln;
 
 use crate::cli;
 use crate::cli::commands::ssh_agent::server::{SshAgentServer, StopReason};
+use crate::cli::commands::ssh_agent::{get_agent_status, request_agent_info};
 
 /// First delay before restarting a failed listener.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
@@ -47,6 +49,9 @@ pub enum AgentSubcommand {
     /// Start the agent in the background unless one is already running
     Start,
 
+    /// Get the agent's status. Same as `ap ssh-agent status`.
+    Status,
+
     /// Run the agent in the foreground. Started by launchd.
     #[command(hide = true)]
     Run {
@@ -71,9 +76,41 @@ impl AgentCommand {
     pub async fn execute(&self) -> ! {
         match self.subcommand {
             AgentSubcommand::Start => spawn_detached(),
+            AgentSubcommand::Status => status().await,
             AgentSubcommand::Run { daemonized } => run(daemonized).await,
         }
     }
+}
+
+/// Prints whether the agent is running and the state of its launchd service.
+/// Exits 0 if the agent is running and 1 if it is not.
+pub async fn status() -> ! {
+    let status = get_agent_status();
+    match status {
+        AgentStatus::Running => {
+            cprintln!("SSH agent status: <green>running</green>");
+            match request_agent_info().await {
+                Ok(info) => {
+                    println!("Version: {}", info.version);
+                    println!("Started by: {}", info.launcher);
+                },
+                Err(e) => log::debug!("Failed to get agent info: {e}"),
+            }
+        },
+        AgentStatus::NotRunning => {
+            cprintln!("SSH agent status: <yellow>not running</yellow>");
+        },
+        AgentStatus::StaleSocket => {
+            cprintln!("SSH agent status: <yellow>not running</yellow>");
+            println!("Warning: stale socket found");
+        },
+    }
+    match launchd_service() {
+        LaunchdService::NotInBundle => {},
+        LaunchdService::Loaded => println!("Launchd service: loaded"),
+        LaunchdService::NotLoaded => println!("Launchd service: not loaded"),
+    }
+    std::process::exit(if status == AgentStatus::Running { 0 } else { 1 })
 }
 
 /// Starts the agent as a separate process by re-executing `ap` with

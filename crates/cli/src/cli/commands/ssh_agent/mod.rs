@@ -14,7 +14,6 @@ pub use axo_pass_core::ssh::agent_client::{
     launchd_service, list_axo_agent_identities, list_system_agent_identities,
 };
 use clap::{Parser, Subcommand};
-use clml::cprintln;
 
 use crate::cli::commands::agent;
 pub use crate::cli::commands::ssh_agent::client::{
@@ -69,34 +68,7 @@ impl SshAgentCommand {
                     },
                 },
             },
-            SshAgentSubcommand::Status => {
-                let status = get_agent_status();
-                match status {
-                    AgentStatus::Running => {
-                        cprintln!("SSH agent status: <green>running</green>");
-                        match request_agent_info().await {
-                            Ok(info) => {
-                                println!("Version: {}", info.version);
-                                println!("Started by: {}", info.launcher);
-                            },
-                            Err(e) => log::debug!("Failed to get agent info: {e}"),
-                        }
-                    },
-                    AgentStatus::NotRunning => {
-                        cprintln!("SSH agent status: <yellow>not running</yellow>");
-                    },
-                    AgentStatus::StaleSocket => {
-                        cprintln!("SSH agent status: <yellow>not running</yellow>");
-                        println!("Warning: stale socket found");
-                    },
-                }
-                match launchd_service() {
-                    LaunchdService::NotInBundle => {},
-                    LaunchdService::Loaded => println!("Launchd service: loaded"),
-                    LaunchdService::NotLoaded => println!("Launchd service: not loaded"),
-                }
-                std::process::exit(if status == AgentStatus::Running { 0 } else { 1 })
-            },
+            SshAgentSubcommand::Status => agent::status().await,
         }
     }
 }
