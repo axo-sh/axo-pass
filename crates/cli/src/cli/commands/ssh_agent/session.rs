@@ -12,14 +12,20 @@ use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
+use crate::cli::commands::agent::AgentInfo;
 use crate::cli::commands::ssh_agent::audit;
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::managed_credential::list_managed_credentials;
+use crate::cli::commands::ssh_agent::server::StopReason;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
 
 pub const AXO_SHUTDOWN_EXT: &str = "ssh-shutdown@pass.axo.sh";
+/// Makes the agent exit with `EX_TEMPFAIL` so launchd starts it again.
+pub const AXO_RESTART_EXT: &str = "restart@pass.axo.sh";
+/// Returns the agent's version and launcher as JSON.
+pub const AXO_AGENT_INFO_EXT: &str = "agent-info@pass.axo.sh";
 
 pub struct SshAgentSession {
     caller: Option<String>,
@@ -27,7 +33,7 @@ pub struct SshAgentSession {
     state: Arc<Mutex<Vec<StoredCredential>>>,
     pub(crate) sessions: Vec<SessionBinding>,
     pub(crate) session_bind_attempted: bool,
-    shutdown_sender: broadcast::Sender<()>,
+    shutdown_sender: broadcast::Sender<StopReason>,
 }
 
 impl SshAgentSession {
@@ -35,7 +41,7 @@ impl SshAgentSession {
         state: Arc<Mutex<Vec<StoredCredential>>>,
         caller: Option<String>,
         actor: Option<Actor>,
-        shutdown_sender: broadcast::Sender<()>,
+        shutdown_sender: broadcast::Sender<StopReason>,
     ) -> Self {
         SshAgentSession {
             caller,
@@ -378,8 +384,23 @@ impl Session for SshAgentSession {
         // Check for our shutdown extension
         if extension.name == AXO_SHUTDOWN_EXT {
             log::info!("Received shutdown extension, signaling server shutdown");
-            let _ = self.shutdown_sender.send(());
+            let _ = self.shutdown_sender.send(StopReason::Shutdown);
             return Ok(None);
+        }
+
+        if extension.name == AXO_RESTART_EXT {
+            log::info!("Received restart extension, signaling server restart");
+            let _ = self.shutdown_sender.send(StopReason::Restart);
+            return Ok(None);
+        }
+
+        if extension.name == AXO_AGENT_INFO_EXT {
+            let details = serde_json::to_vec(&AgentInfo::current())
+                .map_err(|e| AgentError::Other(e.into()))?;
+            return Ok(Some(proto::Extension {
+                name: AXO_AGENT_INFO_EXT.to_string(),
+                details: details.into(),
+            }));
         }
 
         // Unknown/unsupported extension

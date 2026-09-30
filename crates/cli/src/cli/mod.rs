@@ -11,7 +11,7 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, fmt, reload};
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::agent::AgentCommand;
@@ -24,8 +24,7 @@ use crate::cli::commands::vault::VaultCommand;
 use crate::cli::commands::{pinentry, ssh_askpass};
 
 /// The agent's log file, ~/Library/Logs/Axo Pass/agent.log.*. Used by
-/// `ap agent run` and the daemonized `ap ssh-agent start`.
-/// `None` if the appender could not be created.
+/// `ap agent run`. `None` if the appender could not be created.
 static AGENT_LOG: LazyLock<Option<RollingFileAppender>> = LazyLock::new(|| {
     RollingFileAppender::builder()
         .max_log_files(7)
@@ -35,7 +34,7 @@ static AGENT_LOG: LazyLock<Option<RollingFileAppender>> = LazyLock::new(|| {
         .ok()
 });
 
-/// Log writer for the daemonized SSH agent. It must not panic: a panic here
+/// Log writer for the agent. It must not panic: a panic here
 /// re-enters the logger from the panic hook and aborts the process. If the
 /// log file is unavailable, output is discarded.
 fn agent_log_writer() -> Box<dyn io::Write> {
@@ -124,7 +123,7 @@ pub enum AxoPassCommand {
 impl AxoPassCommand {
     pub fn execute(&self) {
         let debug_log = std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions);
-        let reload_log = if matches!(self, AxoPassCommand::Agent(_)) {
+        if matches!(self, AxoPassCommand::Agent(agent) if agent.logs_to_file()) {
             // launchd sends stderr to /dev/null, so the agent always logs to
             // its file, including in release builds.
             let level = if debug_log { "debug" } else { "info" };
@@ -136,47 +135,25 @@ impl AxoPassCommand {
                         .with_writer(agent_log_writer as fn() -> Box<dyn io::Write>),
                 )
                 .init();
-            None
         } else if debug_log {
-            let filter = EnvFilter::new("debug,ssh_agent_lib=error");
-            let layer: fmt::Layer<_, _, _, fn() -> Box<dyn io::Write>> = fmt::layer()
-                .with_ansi(true)
-                .with_writer(|| -> Box<dyn io::Write> { Box::new(io::stderr()) });
-            let (layer, reload_layer) = reload::Layer::new(layer);
             tracing_subscriber::registry()
-                .with(filter)
-                .with(layer)
+                .with(EnvFilter::new("debug,ssh_agent_lib=error"))
+                .with(
+                    fmt::layer()
+                        .with_ansi(true)
+                        .with_writer(io::stderr as fn() -> io::Stderr),
+                )
                 .init();
-            Some(reload_layer)
-        } else {
-            None
-        };
-
-        if let AxoPassCommand::SshAgent(ssh_agent) = self
-            && ssh_agent.should_detach()
-        {
-            ssh_agent.pre_run();
-            log::debug!("Starting detached SSH agent process...");
-            ssh_agent.spawn_detached();
         }
 
-        if let AxoPassCommand::SshAgent(ssh_agent) = self
-            && ssh_agent.is_daemonized()
-        {
-            ssh_agent.detach_session();
-
-            // stderr is /dev/null in the detached process, so log to a file.
-            if let Some(reload_log) = reload_log {
-                let _ = reload_log
-                    .modify(|layer| {
-                        layer.set_ansi(false);
-                        *layer.writer_mut() = agent_log_writer;
-                    })
-                    .inspect_err(|e| {
-                        log::warn!("Failed to modify log destination: {e}");
-                    });
-            }
-            log::info!("SSH agent daemonized successfully.");
+        let detach = match self {
+            AxoPassCommand::Agent(agent) => agent.should_detach(),
+            AxoPassCommand::SshAgent(ssh_agent) => ssh_agent.should_detach(),
+            _ => false,
+        };
+        if detach {
+            log::debug!("Starting detached agent process...");
+            commands::agent::spawn_detached();
         }
 
         // Initialize tokio runtime

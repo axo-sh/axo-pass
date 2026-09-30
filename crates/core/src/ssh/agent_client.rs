@@ -23,6 +23,12 @@ pub fn default_socket_path() -> PathBuf {
     app_data_dir().join("agent.sock")
 }
 
+/// The lock file an agent holds for the life of its process. Typically
+/// ~/Library/Application Support/Axo Pass/agent.lock.
+pub fn default_lock_path() -> PathBuf {
+    app_data_dir().join("agent.lock")
+}
+
 pub fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatus {
     let socket_path = socket_path.as_ref();
     if !socket_path.exists() {
@@ -38,27 +44,20 @@ pub fn get_agent_status_for_socket<P: AsRef<Path>>(socket_path: P) -> AgentStatu
     }
 }
 
-/// Starts the Axo Pass SSH agent by running `ap ssh-agent start`. That process
-/// forks and the invoked process exits as soon as the fork succeeds, before
-/// the detached child has bound the socket, so this polls briefly afterward
-/// rather than trusting the exit status alone.
-///
-/// A stale socket is removed first, since the CLI's interactive prompt for
-/// that can't be answered from here.
+/// Starts the Axo Pass agent by running `ap agent start`. That process spawns
+/// the detached agent and exits as soon as the spawn succeeds, before the agent
+/// has bound the socket, so this polls briefly afterward rather than trusting
+/// the exit status alone. The agent removes a stale socket itself once it
+/// holds the agent lock.
 pub fn start_agent() -> Result<(), String> {
     let socket_path = default_socket_path();
-    if get_agent_status_for_socket(&socket_path) == AgentStatus::StaleSocket {
-        std::fs::remove_file(&socket_path)
-            .map_err(|e| format!("Failed to remove stale socket: {e}"))?;
-    }
-
     let ap = ap_bin_path().ok_or("Could not determine ap binary path")?;
     let status = Command::new(&ap)
-        .args(["ssh-agent", "start"])
+        .args(["agent", "start"])
         .status()
-        .map_err(|e| format!("Failed to run ap ssh-agent start: {e}"))?;
+        .map_err(|e| format!("Failed to run ap agent start: {e}"))?;
     if !status.success() {
-        return Err(format!("ap ssh-agent start exited with {status}"));
+        return Err(format!("ap agent start exited with {status}"));
     }
 
     const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);

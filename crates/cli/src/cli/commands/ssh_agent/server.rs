@@ -22,7 +22,7 @@ use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 pub struct SshAgentServer {
     pub credentials: Arc<Mutex<Vec<StoredCredential>>>,
     pub socket_path: Arc<Mutex<Option<PathBuf>>>,
-    pub shutdown_sender: broadcast::Sender<()>,
+    pub shutdown_sender: broadcast::Sender<StopReason>,
 }
 
 #[derive(Error, Debug)]
@@ -44,6 +44,8 @@ pub enum StopReason {
     Signal,
     /// A client sent the shutdown extension.
     Shutdown,
+    /// A client sent the restart extension. The process should exit nonzero.
+    Restart,
     /// The listener ended on its own. The server can be run again.
     ListenerExited,
 }
@@ -147,9 +149,9 @@ impl SshAgentServer {
                 _ = sighup.recv() => {
                     log::info!("ssh-agent: Received SIGHUP, ignoring");
                 }
-                _ = shutdown_rx.recv() => {
+                request = shutdown_rx.recv() => {
                     log::info!("ssh-agent: Shutting down...");
-                    break StopReason::Shutdown;
+                    break request.unwrap_or(StopReason::Shutdown);
                 }
             }
         };

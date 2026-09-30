@@ -9,21 +9,16 @@ mod session_binding;
 mod stored_credential;
 mod userauth_request;
 
-use std::fs;
-use std::process::{Command, Stdio};
-
-use axo_pass_core::ssh::agent_client::default_socket_path;
 pub use axo_pass_core::ssh::agent_client::{
     AgentStatus, get_agent_status_for_socket, get_system_socket_path, list_axo_agent_identities,
     list_system_agent_identities,
 };
 use clap::{Parser, Subcommand};
 use clml::cprintln;
-use server::SshAgentServer;
 
-use crate::cli;
+use crate::cli::commands::agent;
 pub use crate::cli::commands::ssh_agent::client::{
-    SshAgentClientError, get_agent_status, stop_ssh_agent,
+    SshAgentClientError, get_agent_status, request_agent_info, restart_ssh_agent, stop_ssh_agent,
 };
 
 #[derive(Parser, Debug)]
@@ -34,16 +29,11 @@ pub struct SshAgentCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum SshAgentSubcommand {
-    /// Start the SSH agent
+    /// Start the SSH agent. Same as `ap agent start`.
     Start {
-        /// Debug mode: run SSH agent in the foreground
+        /// Debug mode: run the agent in the foreground
         #[arg(short = 'd')]
         debug: bool,
-
-        /// Set by the detaching parent when it re-executes `ap` as the agent
-        /// process. Runs in the foreground in a new session and logs to a file.
-        #[arg(long, hide = true)]
-        daemonized: bool,
     },
 
     /// Stop SSH agent
@@ -54,108 +44,14 @@ pub enum SshAgentSubcommand {
 }
 
 impl SshAgentCommand {
+    /// `start` without `-d` spawns the agent before the tokio runtime exists.
     pub fn should_detach(&self) -> bool {
-        match &self.subcommand {
-            SshAgentSubcommand::Start { debug, daemonized } => !*debug && !*daemonized,
-            _ => false,
-        }
-    }
-
-    pub fn is_daemonized(&self) -> bool {
-        matches!(
-            &self.subcommand,
-            SshAgentSubcommand::Start {
-                daemonized: true,
-                ..
-            }
-        )
-    }
-
-    /// Starts the agent as a separate process by re-executing `ap` with
-    /// `--daemonized`, then exits. The agent uses Security.framework, XPC, and
-    /// LAContext, which are not supported in a forked child that has not called
-    /// exec, so the agent must not be created with fork alone.
-    pub fn spawn_detached(&self) -> ! {
-        let exe = match std::env::current_exe() {
-            Ok(exe) => exe,
-            Err(e) => {
-                log::error!("Failed to resolve ap executable path: {e}");
-                std::process::exit(1);
-            },
-        };
-        let spawned = Command::new(&exe)
-            .args(["ssh-agent", "start", "--daemonized"])
-            .current_dir("/")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        match spawned {
-            Ok(child) => {
-                log::debug!("SSH agent started with pid {}", child.id());
-                std::process::exit(0);
-            },
-            Err(e) => {
-                log::error!("Failed to start SSH agent process {}: {e}", exe.display());
-                std::process::exit(1);
-            },
-        }
-    }
-
-    /// Detaches the re-executed agent from the parent's session and controlling
-    /// terminal.
-    pub fn detach_session(&self) {
-        // The spawned child is never a process group leader, so this succeeds
-        // unless the process was started some other way.
-        if unsafe { libc::setsid() } == -1 {
-            log::warn!("setsid failed: {}", std::io::Error::last_os_error());
-        }
-    }
-
-    // code to run before detach (i.e. tokio is not initialized, user can still
-    // interact with the program)
-    pub fn pre_run(&self) {
-        if matches!(&self.subcommand, SshAgentSubcommand::Start { .. }) {
-            match get_agent_status() {
-                AgentStatus::Running => {
-                    log::info!("SSH agent is already running.");
-                    std::process::exit(0);
-                },
-                AgentStatus::StaleSocket => {
-                    let socket_path = default_socket_path();
-                    let replace = inquire::Confirm::new(&format!(
-                        "Stale socket found ({}). Replace it?",
-                        socket_path.display()
-                    ))
-                    .with_default(true)
-                    .prompt()
-                    .unwrap_or(false);
-
-                    if !replace {
-                        std::process::exit(1);
-                    } else if let Err(e) = fs::remove_file(&socket_path) {
-                        log::error!("Failed to remove stale socket: {e}");
-                        std::process::exit(1);
-                    }
-                },
-                _ => {},
-            }
-        }
+        matches!(&self.subcommand, SshAgentSubcommand::Start { debug: false })
     }
 
     pub async fn run(&self) -> ! {
         match &self.subcommand {
-            SshAgentSubcommand::Start { .. } => {
-                log::info!("Starting SSH agent...");
-                cli::log_panics();
-                let server = SshAgentServer::new();
-                if let Err(e) = server.run().await {
-                    log::error!("SSH Agent failed: {e}");
-                    std::process::exit(1);
-                }
-                log::info!("SSH agent exited.");
-                std::process::exit(0)
-            },
+            SshAgentSubcommand::Start { .. } => agent::run(false).await,
 
             SshAgentSubcommand::Stop => match stop_ssh_agent().await {
                 Ok(_) => {
@@ -176,6 +72,13 @@ impl SshAgentCommand {
             SshAgentSubcommand::Status => match get_agent_status() {
                 AgentStatus::Running => {
                     cprintln!("SSH agent status: <green>running</green>");
+                    match request_agent_info().await {
+                        Ok(info) => {
+                            println!("Version: {}", info.version);
+                            println!("Started by: {}", info.launcher);
+                        },
+                        Err(e) => log::debug!("Failed to get agent info: {e}"),
+                    }
                     std::process::exit(0)
                 },
                 AgentStatus::NotRunning => {

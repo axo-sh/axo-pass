@@ -1,10 +1,14 @@
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+use std::{fmt, io};
 
-use axo_pass_core::ssh::agent_client::{
-    AgentStatus, default_socket_path, get_agent_status_for_socket,
-};
+use axo_pass_core::ssh::agent_client::{default_lock_path, default_socket_path};
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 
 use crate::cli;
 use crate::cli::commands::ssh_agent::server::{SshAgentServer, StopReason};
@@ -15,6 +19,49 @@ const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// A listener that ran at least this long resets the backoff when it fails.
 const HEALTHY_RUN: Duration = Duration::from_secs(60);
+/// Exit code for the restart extension. launchd restarts the agent on any
+/// nonzero exit.
+const EX_TEMPFAIL: i32 = 75;
+
+static LAUNCHER: OnceLock<Launcher> = OnceLock::new();
+
+/// How the running agent was started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Launcher {
+    /// `ap agent run` in the foreground, as started by launchd.
+    Launchd,
+    /// `ap agent run --daemonized`, as started by `ap agent start`.
+    Detached,
+}
+
+impl fmt::Display for Launcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Launcher::Launchd => "launchd",
+            Launcher::Detached => "detached",
+        })
+    }
+}
+
+/// The agent's answer to the `agent-info@pass.axo.sh` extension, encoded as
+/// JSON.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub version: String,
+    pub launcher: Launcher,
+}
+
+impl AgentInfo {
+    /// The running agent's info. The launcher is `Detached` if the agent was
+    /// not started through `run`.
+    pub fn current() -> Self {
+        AgentInfo {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            launcher: LAUNCHER.get().copied().unwrap_or(Launcher::Detached),
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 pub struct AgentCommand {
@@ -24,36 +71,118 @@ pub struct AgentCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum AgentSubcommand {
+    /// Start the agent in the background unless one is already running
+    Start,
+
     /// Run the agent in the foreground. Started by launchd.
-    Run,
+    #[command(hide = true)]
+    Run {
+        /// Set by `ap agent start`. Runs in a new session, and exits 0 if
+        /// another agent holds the lock instead of waiting for it.
+        #[arg(long)]
+        daemonized: bool,
+    },
 }
 
 impl AgentCommand {
+    /// `start` spawns the agent before the tokio runtime exists.
+    pub fn should_detach(&self) -> bool {
+        matches!(self.subcommand, AgentSubcommand::Start)
+    }
+
+    /// `run` logs to the agent log file, since its stderr is /dev/null.
+    pub fn logs_to_file(&self) -> bool {
+        matches!(self.subcommand, AgentSubcommand::Run { .. })
+    }
+
     pub async fn execute(&self) -> ! {
         match self.subcommand {
-            AgentSubcommand::Run => run().await,
+            AgentSubcommand::Start => spawn_detached(),
+            AgentSubcommand::Run { daemonized } => run(daemonized).await,
         }
     }
 }
 
-/// Runs the SSH listener until SIGTERM, SIGINT, or the shutdown extension.
-/// A listener that fails is restarted with backoff. Keys added with `ssh-add`
-/// survive a restart, since the same server is reused.
+/// Starts the agent as a separate process by re-executing `ap` with
+/// `agent run --daemonized`, then exits. The agent uses Security.framework,
+/// XPC, and LAContext, which are not supported in a forked child that has not
+/// called exec, so the agent must not be created with fork alone.
+pub fn spawn_detached() -> ! {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log::error!("Failed to resolve ap executable path: {e}");
+            std::process::exit(1);
+        },
+    };
+    let spawned = Command::new(&exe)
+        .args(["agent", "run", "--daemonized"])
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(child) => {
+            log::debug!("Agent started with pid {}", child.id());
+            std::process::exit(0);
+        },
+        Err(e) => {
+            log::error!("Failed to start agent process {}: {e}", exe.display());
+            std::process::exit(1);
+        },
+    }
+}
+
+/// Runs the SSH listener until SIGTERM, SIGINT, the shutdown extension, or the
+/// restart extension. A listener that fails is restarted with backoff. Keys
+/// added with `ssh-add` survive a listener restart, since the same server is
+/// reused.
 ///
-/// Exits 0 if another agent already answers on the socket. launchd's
-/// `KeepAlive { SuccessfulExit = false }` leaves that exit alone.
-async fn run() -> ! {
+/// The process owns the socket while it holds an exclusive lock on the agent
+/// lock file. A daemonized agent exits 0 if another agent holds the lock. A
+/// foreground agent waits for it, so a launchd agent takes over when a
+/// detached agent exits.
+pub async fn run(daemonized: bool) -> ! {
+    if daemonized {
+        // The spawned child is never a process group leader, so this succeeds
+        // unless the process was started some other way.
+        if unsafe { libc::setsid() } == -1 {
+            log::warn!("setsid failed: {}", io::Error::last_os_error());
+        }
+    }
+    let launcher = if daemonized {
+        Launcher::Detached
+    } else {
+        Launcher::Launchd
+    };
+    let _ = LAUNCHER.set(launcher);
+
     log::info!(
-        "agent: starting (pid {}, version {})",
+        "agent: starting (pid {}, version {}, launcher {launcher})",
         std::process::id(),
         env!("CARGO_PKG_VERSION")
     );
     cli::log_panics();
 
+    // Held until the process exits. The kernel releases it when the process
+    // dies.
+    let _lock = match acquire_lock(!daemonized).await {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            log::info!("agent: another agent holds the lock, exiting");
+            std::process::exit(0);
+        },
+        Err(e) => {
+            log::error!("agent: failed to take the agent lock: {e}");
+            std::process::exit(1);
+        },
+    };
+
     let server = SshAgentServer::new();
     let mut backoff = MIN_BACKOFF;
     loop {
-        if let Err(e) = prepare_socket() {
+        if let Err(e) = remove_existing_socket() {
             log::error!("agent: {e}");
         } else {
             let started = Instant::now();
@@ -61,6 +190,10 @@ async fn run() -> ! {
                 Ok(StopReason::Signal | StopReason::Shutdown) => {
                     log::info!("agent: exited");
                     std::process::exit(0);
+                },
+                Ok(StopReason::Restart) => {
+                    log::info!("agent: exiting for restart");
+                    std::process::exit(EX_TEMPFAIL);
                 },
                 Ok(StopReason::ListenerExited) => {},
                 Err(e) => log::error!("agent: SSH listener failed: {e}"),
@@ -76,27 +209,102 @@ async fn run() -> ! {
     }
 }
 
-/// Removes a stale socket so the listener can bind. Exits 0 if another agent
-/// is listening.
-fn prepare_socket() -> Result<(), String> {
+/// Removes the socket file left by a previous agent. The caller holds the
+/// agent lock, so any existing socket file is stale.
+fn remove_existing_socket() -> Result<(), String> {
     let socket_path = default_socket_path();
-    match get_agent_status_for_socket(&socket_path) {
-        AgentStatus::NotRunning => Ok(()),
-        AgentStatus::Running => {
-            log::info!(
-                "agent: another agent is listening on {}, exiting",
-                socket_path.display()
-            );
-            std::process::exit(0);
+    match fs::remove_file(&socket_path) {
+        Ok(()) => {
+            log::info!("agent: removed stale socket {}", socket_path.display());
+            Ok(())
         },
-        AgentStatus::StaleSocket => {
-            log::info!("agent: removing stale socket {}", socket_path.display());
-            fs::remove_file(&socket_path).map_err(|e| {
-                format!(
-                    "failed to remove stale socket {}: {e}",
-                    socket_path.display()
-                )
-            })
-        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!(
+            "failed to remove stale socket {}: {e}",
+            socket_path.display()
+        )),
+    }
+}
+
+/// Takes the exclusive agent lock. Returns `None` if another process holds it
+/// and `wait` is false. With `wait`, blocks until the holder exits.
+async fn acquire_lock(wait: bool) -> io::Result<Option<File>> {
+    let lock_path = default_lock_path();
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&lock_path)?;
+
+    if flock(&file, false)? {
+        return Ok(Some(file));
+    }
+    if !wait {
+        return Ok(None);
+    }
+    log::info!(
+        "agent: another agent holds {}, waiting for it to exit",
+        lock_path.display()
+    );
+    let file = tokio::task::spawn_blocking(move || flock(&file, true).map(|_| file))
+        .await
+        .map_err(io::Error::other)??;
+    log::info!("agent: took the agent lock");
+    Ok(Some(file))
+}
+
+/// Takes an exclusive `flock`. Without `block`, returns `Ok(false)` if another
+/// process holds the lock.
+fn flock(file: &File, block: bool) -> io::Result<bool> {
+    let op = if block {
+        libc::LOCK_EX
+    } else {
+        libc::LOCK_EX | libc::LOCK_NB
+    };
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), op) } == 0 {
+            return Ok(true);
+        }
+        let err = io::Error::last_os_error();
+        match err.kind() {
+            io::ErrorKind::WouldBlock => return Ok(false),
+            io::ErrorKind::Interrupted => continue,
+            _ => return Err(err),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_is_exclusive_until_released() {
+        let path = std::env::temp_dir().join(format!("ap-agent-lock-{}", std::process::id()));
+        let first = File::create(&path).unwrap();
+        let second = File::open(&path).unwrap();
+
+        assert!(flock(&first, false).unwrap());
+        assert!(!flock(&second, false).unwrap());
+        drop(first);
+        assert!(flock(&second, false).unwrap());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn agent_info_round_trips_as_json() {
+        let info = AgentInfo {
+            version: "1.2.3".to_string(),
+            launcher: Launcher::Detached,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert_eq!(json, r#"{"version":"1.2.3","launcher":"detached"}"#);
+        assert_eq!(serde_json::from_str::<AgentInfo>(&json).unwrap(), info);
     }
 }
