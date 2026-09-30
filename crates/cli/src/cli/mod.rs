@@ -14,6 +14,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt, reload};
 
 use crate::cli::commands::age::AgeCommand;
+use crate::cli::commands::agent::AgentCommand;
 use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
@@ -22,7 +23,8 @@ use crate::cli::commands::ssh_agent::SshAgentCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::cli::commands::{pinentry, ssh_askpass};
 
-/// The daemonized SSH agent's log file, ~/Library/Logs/Axo Pass/agent.log.*.
+/// The agent's log file, ~/Library/Logs/Axo Pass/agent.log.*. Used by
+/// `ap agent run` and the daemonized `ap ssh-agent start`.
 /// `None` if the appender could not be created.
 static AGENT_LOG: LazyLock<Option<RollingFileAppender>> = LazyLock::new(|| {
     RollingFileAppender::builder()
@@ -42,6 +44,7 @@ fn agent_log_writer() -> Box<dyn io::Write> {
         None => Box::new(io::sink()),
     }
 }
+
 /// Logs panics with a backtrace. The agent's stderr is /dev/null, so a panic
 /// that is not logged here leaves no record.
 pub(crate) fn log_panics() {
@@ -97,6 +100,10 @@ pub enum AxoPassCommand {
 
     SshAgent(SshAgentCommand),
 
+    /// Long-lived agent process run by launchd
+    #[command(hide = true)]
+    Agent(AgentCommand),
+
     /// Serve gpg-agent's pinentry protocol on stdin/stdout
     #[command(hide = true)]
     Pinentry,
@@ -116,7 +123,21 @@ pub enum AxoPassCommand {
 
 impl AxoPassCommand {
     pub fn execute(&self) {
-        let reload_log = if std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions) {
+        let debug_log = std::env::var("FRITTATA_DEBUG").is_ok() || cfg!(debug_assertions);
+        let reload_log = if matches!(self, AxoPassCommand::Agent(_)) {
+            // launchd sends stderr to /dev/null, so the agent always logs to
+            // its file, including in release builds.
+            let level = if debug_log { "debug" } else { "info" };
+            tracing_subscriber::registry()
+                .with(EnvFilter::new(format!("{level},ssh_agent_lib=error")))
+                .with(
+                    fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(agent_log_writer as fn() -> Box<dyn io::Write>),
+                )
+                .init();
+            None
+        } else if debug_log {
             let filter = EnvFilter::new("debug,ssh_agent_lib=error");
             let layer: fmt::Layer<_, _, _, fn() -> Box<dyn io::Write>> = fmt::layer()
                 .with_ansi(true)
@@ -192,6 +213,7 @@ impl AxoPassCommand {
                 println!("Vault dir: {}", vaults_dir().display());
             },
             AxoPassCommand::SshAgent(ssh_agent) => ssh_agent.run().await,
+            AxoPassCommand::Agent(agent) => agent.execute().await,
             AxoPassCommand::Pinentry => pinentry::run().await,
             AxoPassCommand::SshAskpass { prompt } => ssh_askpass::run(prompt.clone()).await,
             AxoPassCommand::Shellenv { shell } => {
