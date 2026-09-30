@@ -3,7 +3,7 @@ mod client;
 mod credential;
 mod destination_constraint;
 mod managed_credential;
-mod server;
+pub(crate) mod server;
 mod session;
 mod session_binding;
 mod stored_credential;
@@ -21,6 +21,7 @@ use clap::{Parser, Subcommand};
 use clml::cprintln;
 use server::SshAgentServer;
 
+use crate::cli;
 pub use crate::cli::commands::ssh_agent::client::{
     SshAgentClientError, get_agent_status, stop_ssh_agent,
 };
@@ -146,16 +147,7 @@ impl SshAgentCommand {
         match &self.subcommand {
             SshAgentSubcommand::Start { .. } => {
                 log::info!("Starting SSH agent...");
-                // stderr is /dev/null once daemonized, so panics are logged
-                // explicitly to reach the agent log.
-                let default_hook = std::panic::take_hook();
-                std::panic::set_hook(Box::new(move |info| {
-                    let thread = std::thread::current();
-                    let thread = thread.name().unwrap_or("<unnamed>");
-                    let backtrace = std::backtrace::Backtrace::force_capture();
-                    log::error!("ssh-agent: panic in thread {thread}: {info}\n{backtrace}");
-                    default_hook(info);
-                }));
+                cli::log_panics();
                 let server = SshAgentServer::new();
                 if let Err(e) = server.run().await {
                     log::error!("SSH Agent failed: {e}");

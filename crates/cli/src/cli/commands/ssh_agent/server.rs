@@ -1,7 +1,7 @@
 use std::fs::{self, Permissions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +37,17 @@ pub enum SshAgentError {
     CouldNotCreateSocket(String),
 }
 
+/// Why [`SshAgentServer::run`] returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// SIGINT or SIGTERM.
+    Signal,
+    /// A client sent the shutdown extension.
+    Shutdown,
+    /// The listener ended on its own. The server can be run again.
+    ListenerExited,
+}
+
 impl Default for SshAgentServer {
     fn default() -> Self {
         Self::new()
@@ -53,15 +64,28 @@ impl SshAgentServer {
         }
     }
 
-    pub async fn run(&self) -> Result<(), SshAgentError> {
+    pub async fn run(&self) -> Result<StopReason, SshAgentError> {
+        // check if this server is already running
         if let Some(socket_path) = self.socket_path.lock().await.as_ref() {
             return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
         }
+
+        // check if the default socket path exist (created by another agent/stale file)
         let socket_path = default_socket_path();
         if socket_path.exists() {
             return Err(SshAgentError::ServerSocketFileExists(socket_path.clone()));
         }
 
+        *self.socket_path.lock().await = Some(socket_path.clone());
+        let result = self.serve(&socket_path).await;
+        *self.socket_path.lock().await = None;
+        result
+    }
+
+    /// Binds the agent socket and serves until a signal, the shutdown
+    /// extension, or the listener ends. The socket file is removed on return,
+    /// so the server can be run again with the same credentials.
+    async fn serve(&self, socket_path: &Path) -> Result<StopReason, SshAgentError> {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 SshAgentError::CouldNotCreateSocket(format!(
@@ -70,19 +94,17 @@ impl SshAgentServer {
                 ))
             })?;
         }
-        *self.socket_path.lock().await = Some(socket_path.clone());
-
         log::debug!("SSH Agent socket path: {}", socket_path.display());
-        let listener = UnixListener::bind(&socket_path).map_err(|e| {
-            let _ = fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(socket_path).map_err(|e| {
+            let _ = fs::remove_file(socket_path);
             SshAgentError::CouldNotCreateSocket(format!(
                 "Failed to bind to socket {}: {e}",
                 socket_path.display()
             ))
         })?;
 
-        fs::set_permissions(&socket_path, Permissions::from_mode(0o600)).map_err(|e| {
-            let _ = fs::remove_file(&socket_path);
+        fs::set_permissions(socket_path, Permissions::from_mode(0o600)).map_err(|e| {
+            let _ = fs::remove_file(socket_path);
             SshAgentError::CouldNotCreateSocket(format!(
                 "Failed to set permissions on socket {}: {e}",
                 socket_path.display()
@@ -93,47 +115,47 @@ impl SshAgentServer {
 
         let mut shutdown_rx = self.shutdown_sender.subscribe();
         let mut sigterm = signal(SignalKind::terminate()).map_err(|e| {
-            let _ = fs::remove_file(&socket_path);
+            let _ = fs::remove_file(socket_path);
             SshAgentError::CouldNotCreateSocket(format!("Failed to install SIGTERM handler: {e}"))
         })?;
         // Installing a handler replaces the default SIGHUP action, which would
         // terminate the process.
         let mut sighup = signal(SignalKind::hangup()).map_err(|e| {
-            let _ = fs::remove_file(&socket_path);
+            let _ = fs::remove_file(socket_path);
             SshAgentError::CouldNotCreateSocket(format!("Failed to install SIGHUP handler: {e}"))
         })?;
 
         let listen = ssh_agent_lib::agent::listen(listener, self.clone());
         tokio::pin!(listen);
-        loop {
+        let reason = loop {
             tokio::select! {
                 result = &mut listen => {
                     match result {
-                        Ok(()) => log::error!("ssh-agent: listener exited, shutting down..."),
-                        Err(e) => log::error!("ssh-agent: listener failed, shutting down: {e}"),
+                        Ok(()) => log::error!("ssh-agent: listener exited"),
+                        Err(e) => log::error!("ssh-agent: listener failed: {e}"),
                     }
-                    break;
+                    break StopReason::ListenerExited;
                 }
                 _ = tokio::signal::ctrl_c() => {
                     log::info!("ssh-agent: Received SIGINT, shutting down...");
-                    break;
+                    break StopReason::Signal;
                 }
                 _ = sigterm.recv() => {
                     log::info!("ssh-agent: Received SIGTERM, shutting down...");
-                    break;
+                    break StopReason::Signal;
                 }
                 _ = sighup.recv() => {
                     log::info!("ssh-agent: Received SIGHUP, ignoring");
                 }
                 _ = shutdown_rx.recv() => {
                     log::info!("ssh-agent: Shutting down...");
-                    break;
+                    break StopReason::Shutdown;
                 }
             }
-        }
+        };
         // Remove the socket path first so new clients fail immediately instead
         // of connecting to a listener that is no longer accepting.
-        let _ = fs::remove_file(&socket_path);
+        let _ = fs::remove_file(socket_path);
 
         // ssh_agent_lib::agent::listen spawns a detached task per connection and
         // gives us no handle to join. Give in-flight sessions a moment to finish
@@ -142,7 +164,7 @@ impl SshAgentServer {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         audit::record_lifecycle(Action::SshAgentStop, Outcome::Succeeded, None, None);
-        Ok(())
+        Ok(reason)
     }
 }
 

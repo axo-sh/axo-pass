@@ -42,6 +42,18 @@ fn agent_log_writer() -> Box<dyn io::Write> {
         None => Box::new(io::sink()),
     }
 }
+/// Logs panics with a backtrace. The agent's stderr is /dev/null, so a panic
+/// that is not logged here leaves no record.
+pub(crate) fn log_panics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let thread = thread.name().unwrap_or("<unnamed>");
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        log::error!("panic in thread {thread}: {info}\n{backtrace}");
+        default_hook(info);
+    }));
+}
 
 #[derive(Parser, Debug)]
 pub struct AxoPassCli {
