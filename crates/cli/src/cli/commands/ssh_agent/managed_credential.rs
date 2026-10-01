@@ -98,7 +98,7 @@ impl Credential for ManagedCredential {
     }
 
     fn key_type(&self) -> SshKeyType {
-        SshKeyType::Ecdsa
+        self.public_key.algorithm().into()
     }
 
     fn public_key_data(&self) -> KeyData {
@@ -122,6 +122,7 @@ impl Credential for ManagedCredential {
                 Some(&fingerprint),
                 comment,
                 &req.data,
+                req.flags,
                 caller,
                 caller_chain,
             )

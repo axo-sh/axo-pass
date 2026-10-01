@@ -164,6 +164,10 @@ enum WireRequest {
 
         /// Base64 of the bytes to sign.
         data: String,
+
+        /// The agent sign request's flags, e.g. `SSH_AGENT_RSA_SHA2_512`.
+        #[serde(default)]
+        flags: u32,
     },
 
     /// A GPG passphrase, either unlocked from the keychain behind a biometric
@@ -822,6 +826,9 @@ async fn handle_connection(
             caller,
             caller_chain: _,
             data,
+            // Secure Enclave keys are ECDSA P-256 and have no flag-selected
+            // hash.
+            flags: _,
         } => {
             let data = b64
                 .decode(&data)

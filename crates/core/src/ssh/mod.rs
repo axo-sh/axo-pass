@@ -4,5 +4,6 @@ pub mod app_grants;
 pub mod askpass;
 pub mod key_overview;
 pub mod known_hosts;
+pub mod rsa_signing;
 pub mod ssh_keys;
 pub mod utils;

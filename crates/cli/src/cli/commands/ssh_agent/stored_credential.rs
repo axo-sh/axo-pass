@@ -1,16 +1,14 @@
-mod rsa_signing;
-
 use std::fmt::Debug;
 
 use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use axo_pass_core::core::provenance::ProcessNode;
+use axo_pass_core::ssh::rsa_signing;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
-use rsa::signature::Signer;
 use ssh_agent_lib::proto::{self, extension};
+use ssh_key::HashAlg;
 use ssh_key::public::KeyData;
-use ssh_key::{Algorithm, HashAlg};
 use time::{Duration, UtcDateTime};
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
@@ -148,18 +146,8 @@ impl Credential for StoredCredential {
         self.validate(caller, caller_chain)?;
         match &self.credential {
             proto::PrivateCredential::Key { privkey, .. } => {
-                let key_algorithm = privkey.algorithm().map_err(|e| {
-                    log::error!("Failed to get key algorithm: {e}");
-                    CredentialError::SigningFailed
-                })?;
-
-                // special handling for rsa keys due to bugs in dependencies (see rsa_signing)
-                if matches!(key_algorithm, Algorithm::Rsa { .. }) {
-                    return rsa_signing::sign_rsa(privkey, &req.data, req.flags);
-                };
-
-                privkey.try_sign(&req.data).map_err(|e| {
-                    log::error!("Failed to sign data with private key: {e}");
+                rsa_signing::sign_with_flags(privkey, &req.data, req.flags).map_err(|e| {
+                    log::error!("Failed to sign data with private key: {e:#}");
                     CredentialError::SigningFailed
                 })
             },

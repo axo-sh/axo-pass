@@ -113,6 +113,7 @@ pub fn request_signature(
     fingerprint: Option<&str>,
     comment: Option<&str>,
     data: &[u8],
+    flags: u32,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
 ) -> Result<Signature, BrokerError> {
@@ -123,6 +124,7 @@ pub fn request_signature(
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
         data: b64.encode(data),
+        flags,
     };
     match send_request(&request)? {
         WireResponse::Signed {
