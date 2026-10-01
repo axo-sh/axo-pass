@@ -188,10 +188,15 @@ final class VaultsModel {
     guard autoPromptPending, NSApp.isActive else { return }
     // A broker panel holds the auth lock and carries its own biometric; the
     // lock screen must not raise a competing one behind it.
-    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible,
-      !vaultUnlockPrompt.panel.isVisible
-    else { return }
+    guard !isBrokerPromptVisible else { return }
     unlock()
+  }
+
+  /// Whether a broker prompt is on screen. Such a panel holds the auth lock and
+  /// carries its own biometric, so no other unlock prompt should start.
+  var isBrokerPromptVisible: Bool {
+    signingPrompt.panel.isVisible || passphrasePrompt.panel.isVisible
+      || vaultUnlockPrompt.panel.isVisible
   }
 
   /// Handle the app regaining focus. Raises the first automatic prompt through
@@ -202,9 +207,7 @@ final class VaultsModel {
 
     guard unlockEngaged, !isAppUnlocked, !isUnlocking, NSApp.isActive else { return }
     guard biometry == .touchID else { return }
-    guard !signingPrompt.panel.isVisible, !passphrasePrompt.panel.isVisible,
-      !vaultUnlockPrompt.panel.isVisible
-    else { return }
+    guard !isBrokerPromptVisible else { return }
     unlock()
   }
 
@@ -263,6 +266,39 @@ final class VaultsModel {
     }
   }
 
+  /// Unlock on `context`, which the caller has bound to an
+  /// `LAAuthenticationView` it shows. The palette uses this so its prompt does
+  /// not share a context with the lock screen's icon.
+  ///
+  /// Takes over from a prompt already in flight, such as the lock screen's:
+  /// that prompt is dismissed, and this one starts once its attempt has
+  /// finished and released the auth lock. Returns the attempt, or nil when a
+  /// broker prompt is up and none was started.
+  @discardableResult
+  func unlock(on context: LAContext) -> Task<Void, Never>? {
+    guard !isBrokerPromptVisible else { return nil }
+    unlockEngaged = true
+    let pending = unlockTask
+    pending?.cancel()
+    cancelEvaluation()
+    let task = Task { [self] in
+      await pending?.value
+      // The attempt taken over may have succeeded before it could be
+      // dismissed.
+      guard !Task.isCancelled, !isAppUnlocked else { return }
+      await authenticate(with: context)
+    }
+    unlockTask = task
+    return task
+  }
+
+  /// Fail the evaluation running on `context`, if it is still in flight.
+  func cancelUnlock(on context: LAContext) {
+    guard evaluatingContext === context else { return }
+    unlockTask?.cancel()
+    cancelEvaluation()
+  }
+
   private func authenticate(with context: LAContext) async {
     guard !isUnlocking else { return }
     isUnlocking = true
@@ -286,6 +322,9 @@ final class VaultsModel {
     do {
       try await context.evaluatePolicy(
         .deviceOwnerAuthentication, localizedReason: "unlock Axo Pass")
+      // The evaluation is over, so there is no prompt left to cancel, and the
+      // context must not be invalidated while the core adopts it.
+      evaluatingContext = nil
       // Release the cross-process auth lock before adopting the context.
       // adoptAuthContext runs on the core's shared-auth thread, which takes the
       // same lock for its own work; holding it here while that call blocks
@@ -481,7 +520,44 @@ final class VaultsModel {
     }
   }
 
+  /// Load the items of every vault not yet cached. The palette searches all of
+  /// them.
+  func loadAllItems() async {
+    guard isAppUnlocked else { return }
+    for vault in vaults where itemCache[vault.key] == nil {
+      await loadItems(for: vault.key)
+      if !isAppUnlocked { return }
+    }
+  }
+
+  /// Every cached item across all vaults, in vault order.
+  var allItems: [DisplayItem] {
+    vaults.flatMap { vault in
+      (itemCache[vault.key] ?? []).map { DisplayItem(vaultKey: vault.key, item: $0) }
+    }
+  }
+
+  /// Select `ref` in the main window: its vault in the sidebar, then the item.
+  /// Only an item whose vault is cached is selected, since a vault that has to
+  /// load first settles on its first row instead.
+  func showItem(_ ref: ItemRef) {
+    selectSidebarDestination(.vault(ref.vaultKey))
+    if itemCache[ref.vaultKey] != nil { selectedItemRef = ref }
+  }
+
   // MARK: - Credentials
+
+  /// Fetch a credential and put it on the pasteboard without keeping it.
+  /// Returns an error message on failure, nil on success.
+  func copyCredential(vaultKey: String, itemKey: String, credKey: String) async -> String? {
+    do {
+      let secret = try await credentialSecret(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
+      return secureCopy(secret) ? nil : "The value is not text."
+    } catch {
+      return String(describing: error)
+    }
+  }
 
   func credentialSecret(vaultKey: String, itemKey: String, credKey: String) async throws
     -> SymmetricKey

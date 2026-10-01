@@ -15,6 +15,9 @@ enum Preferences {
     static let reuseApprovals = "security.reuseApprovals"
     /// Whether the SSH agent starts at login, as a launchd service.
     static let sshStartOnLogin = "ssh.startOnLogin"
+    /// The system-wide shortcut that shows the palette, as a `HotKey` raw
+    /// value. Absent when none is set.
+    static let paletteHotKey = "general.paletteHotKey"
   }
 
   static let defaultAutoLockMinutes = 5
@@ -44,6 +47,10 @@ enum Preferences {
 
   static var reuseApprovals: Bool {
     UserDefaults.standard.bool(forKey: Key.reuseApprovals)
+  }
+
+  static var paletteHotKey: HotKey? {
+    UserDefaults.standard.string(forKey: Key.paletteHotKey).flatMap(HotKey.init(rawValue:))
   }
 
   static func label(forAutoLockMinutes minutes: Int) -> String {

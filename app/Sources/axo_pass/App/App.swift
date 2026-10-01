@@ -6,6 +6,7 @@ import SwiftUI
 struct AxoPassApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
   @Environment(\.openWindow) private var openWindow
+  @Environment(\.openSettings) private var openSettings
 
   var body: some Scene {
     // `.defaultLaunchBehavior(.suppressed)` keeps SwiftUI from opening these on
@@ -31,6 +32,18 @@ struct AxoPassApp: App {
       NSApp.setActivationPolicy(.regular)
       NSApp.activate(ignoringOtherApps: true)
       openWindow(id: Self.mainWindowID)
+    }
+    // Requests from the status item. Each window is only available while
+    // unlocked; a locked app shows the main window, and its lock screen,
+    // instead.
+    .onChange(of: appDelegate.windows.auditOpens) { _, _ in
+      openUnlocked { openWindow(id: Self.auditWindowID) }
+    }
+    .onChange(of: appDelegate.windows.keychainOpens) { _, _ in
+      openUnlocked { openWindow(id: Self.keychainWindowID) }
+    }
+    .onChange(of: appDelegate.windows.settingsOpens) { _, _ in
+      openUnlocked { openSettings() }
     }
 
     Window("Audit Log", id: Self.auditWindowID) {
@@ -77,6 +90,16 @@ struct AxoPassApp: App {
       // passphrase out of a password manager needs these key equivalents.
       TextEditingCommands()
     }
+  }
+
+  private func openUnlocked(_ open: () -> Void) {
+    guard appDelegate.model.isAppUnlocked else {
+      appDelegate.windows.requestMain()
+      return
+    }
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+    open()
   }
 
   static let mainWindowID = "main"

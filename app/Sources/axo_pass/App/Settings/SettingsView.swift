@@ -133,9 +133,22 @@ private struct GeneralSettingsView: View {
   private var autoLockMinutes = Preferences.defaultAutoLockMinutes
   @AppStorage(Preferences.Key.reuseApprovals)
   private var reuseApprovals = Preferences.defaultReuseApprovals
+  @AppStorage(Preferences.Key.paletteHotKey)
+  private var paletteHotKey: HotKey?
 
   var body: some View {
     Form {
+      LabeledContent("Show palette:") {
+        HotKeyRecorder(hotKey: $paletteHotKey)
+      }
+      if GlobalHotKey.shared.registrationFailed {
+        Text("This shortcut is in use by another app. Choose a different one.")
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      Text("Opens the search palette from any app.")
+        .settingsCaption()
+
       Picker("Lock when idle for:", selection: $autoLockMinutes) {
         ForEach(Preferences.autoLockChoices, id: \.self) { minutes in
           Text(Preferences.label(forAutoLockMinutes: minutes)).tag(minutes)

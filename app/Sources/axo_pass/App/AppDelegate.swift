@@ -46,9 +46,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// built it. Held weakly: the scene owns its lifetime.
   private weak var mainWindow: NSWindow?
 
+  /// The menu bar icon, its palette and its menu. Present for every launch,
+  /// including a broker launch, so an app without a window can still be
+  /// reached and quit.
+  private var statusItem: StatusItemController?
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     Preferences.registerDefaults()
     observeWindowClose()
+    statusItem = StatusItemController(model: model, windows: windows) { [weak self] in
+      guard let self else { return }
+      // The result shows in the main window.
+      self.windows.requestMain()
+      self.updaterUI.checkForUpdatesButtonTapped()
+    }
 
     // Confirms a pending relaunch from a previous update. Must run early.
     SunshineUpdater.confirmSuccessfulRelaunchIfNeeded()
