@@ -26,6 +26,7 @@ test = "cargo test --workspace"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
+"test:ssh:sign" = "echo 123 | ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n test"
 
 # app:ffi is the pre-build codegen step: uniffi-bindgen must run before Swift compiles.
 "app:ffi" = "./scripts/build-ffi.sh"
