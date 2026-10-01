@@ -207,16 +207,13 @@ struct PaletteView: View {
       }
       .frame(width: 56, height: 56)
 
-      Text("Unlock to search secrets")
+      Text("Unlock Axo Pass")
         .font(.headline)
 
       if let error = model.vaults.unlockError {
         Text(error)
           .foregroundStyle(.red)
           .multilineTextAlignment(.center)
-      } else if model.vaults.isUnlocking {
-        Text(model.vaults.unlockInstruction)
-          .foregroundStyle(.secondary)
       }
 
       if !model.vaults.isUnlocking {
@@ -305,9 +302,17 @@ private struct ResultRow: View {
       Spacer(minLength: 8)
       // The path already says what a credential row is.
       if result.credential == nil {
-        Text(result.kind.label)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+        if let shortcut = result.shortcut {
+          HStack(spacing: 3) {
+            ForEach(Array(shortcut.enumerated()), id: \.offset) { _, key in
+              KeyCap(key: key)
+            }
+          }
+        } else {
+          Text(result.kind.label)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        }
       }
     }
     .padding(.horizontal, 10)
@@ -323,6 +328,26 @@ private struct ResultRow: View {
     result.breadcrumb.reduce(Text("")) { text, name in
       text + Text(name).foregroundStyle(.secondary) + Text(" › ").foregroundStyle(.tertiary)
     } + Text(result.title)
+  }
+}
+
+/// One key of a shortcut, drawn as a small keyboard cap.
+private struct KeyCap: View {
+  let key: Character
+
+  var body: some View {
+    Text(String(key))
+      .font(.system(size: 11, weight: .medium, design: .rounded))
+      .foregroundStyle(.secondary)
+      .frame(minWidth: 18, minHeight: 18)
+      .background(
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+          .fill(Color.primary.opacity(0.08))
+      )
+      .overlay(
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+          .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)
+      )
   }
 }
 

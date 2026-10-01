@@ -52,6 +52,8 @@ struct PaletteResult: Identifiable {
   var credential: PaletteCredential? = nil
   /// Names of the vault and item a row sits in, shown before its title.
   var breadcrumb: [String] = []
+  /// The menu key equivalent of a command row, shown in place of the kind.
+  var shortcut: String? = nil
 
   var defaultAction: PaletteAction? { actions.first }
 }
@@ -586,8 +588,7 @@ final class PaletteModel {
     )
   }
 
-  private func copyAction(_ cred: CredentialInfo, of ref: ItemRef, title: String) -> PaletteAction
-  {
+  private func copyAction(_ cred: CredentialInfo, of ref: ItemRef, title: String) -> PaletteAction {
     PaletteAction(id: "copy:\(cred.key)", title: title, systemImage: "doc.on.doc") { [vaults] in
       await vaults.copyCredential(vaultKey: ref.vaultKey, itemKey: ref.itemKey, credKey: cred.key)
     }
@@ -702,7 +703,8 @@ final class PaletteModel {
   private var commands: [PaletteResult] {
     var commands: [PaletteResult] = []
     func add(
-      _ id: String, _ title: String, _ systemImage: String, closes: Bool = true,
+      _ id: String, _ title: String, _ systemImage: String, shortcut: String? = nil,
+      closes: Bool = true,
       _ perform: @escaping @MainActor () async -> String?
     ) {
       commands.append(
@@ -712,11 +714,11 @@ final class PaletteModel {
             PaletteAction(
               id: id, title: title, systemImage: systemImage, closesPalette: closes,
               perform: perform)
-          ]))
+          ], shortcut: shortcut))
     }
 
     if vaults.isAppUnlocked {
-      add("lock", "Lock Axo Pass", "lock") { [vaults] in
+      add("lock", "Lock Axo Pass", "lock", shortcut: "⌘L") { [vaults] in
         vaults.lock()
         return nil
       }
@@ -726,7 +728,7 @@ final class PaletteModel {
       return nil
     }
     if vaults.isAppUnlocked {
-      add("settings", "Settings…", "gearshape") { [windows] in
+      add("settings", "Settings…", "gearshape", shortcut: "⌘,") { [windows] in
         windows.requestSettings()
         return nil
       }
@@ -735,7 +737,7 @@ final class PaletteModel {
       checkForUpdates()
       return nil
     }
-    add("quit", "Quit Axo Pass", "power") {
+    add("quit", "Quit Axo Pass Completely", "power", shortcut: "⌘Q") {
       NSApp.terminate(nil)
       return nil
     }
