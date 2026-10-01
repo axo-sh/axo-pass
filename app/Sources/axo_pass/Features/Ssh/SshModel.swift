@@ -37,9 +37,7 @@ final class SshModel {
   func reload() async {
     isLoading = true
     loadError = nil
-    axoAgentStatus = core.getSshAgentStatus(agentType: .axo)
-    systemAgentStatus = core.getSshAgentStatus(agentType: .system)
-    agentService.refreshStatus()
+    refreshAgentStatus()
     refreshConfStatus()
     do {
       keys = try await core.listSshKeys()
@@ -53,6 +51,13 @@ final class SshModel {
       self.selectedFingerprint = nil
     }
     isLoading = false
+  }
+
+  /// Re-read agent state, which the CLI can change (`ap ssh-agent stop`) without the app knowing.
+  func refreshAgentStatus() {
+    axoAgentStatus = core.getSshAgentStatus(agentType: .axo)
+    systemAgentStatus = core.getSshAgentStatus(agentType: .system)
+    agentService.refreshStatus()
   }
 
   /// Pick up edits made in the terminal, cheap enough to run whenever the pane appears or the app

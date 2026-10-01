@@ -55,10 +55,19 @@ struct SshPane: View {
       AddManagedKeySheet(model: model)
     }
     .task { await model.reload() }
+    // The CLI can start or stop the agent while the window is visible, so poll while the pane
+    // is on screen.
+    .task {
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(2))
+        model.refreshAgentStatus()
+      }
+    }
     // The file may be edited outside the app, so re-read it on reactivation.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     { _ in
       model.refreshConfStatus()
+      model.refreshAgentStatus()
     }
   }
 
