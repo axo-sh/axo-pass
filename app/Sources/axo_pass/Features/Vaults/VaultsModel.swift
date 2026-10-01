@@ -233,6 +233,9 @@ final class VaultsModel {
   private func cancelEvaluation() {
     guard let context = evaluatingContext else { return }
     context.invalidate()
+    // Clearing this tells an attempt still waiting on the auth lock that its
+    // context is dead, so it does not evaluate it.
+    evaluatingContext = nil
     // An invalidated context cannot be evaluated again, so replace it.
     if context === authContext { resetAuthContext() }
   }
@@ -316,6 +319,13 @@ final class VaultsModel {
       try await core.beginEmbeddedAuth()
     } catch {
       unlockError = String(describing: error)
+      return
+    }
+
+    // The attempt may have been cancelled while waiting for the lock, which
+    // invalidates the context.
+    guard evaluatingContext === context else {
+      try? core.endEmbeddedAuth()
       return
     }
 
