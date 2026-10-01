@@ -53,7 +53,7 @@ extension CredentialList {
   /// whether the value reached the pasteboard.
   func copy(_ cred: CredentialInfo) async -> Bool {
     if let secret = secrets[cred.key] {
-      return copyToPasteboard(secret)
+      return secureCopy(secret)
     }
     revealing.insert(cred.key)
     errors.removeValue(forKey: cred.key)
@@ -62,18 +62,10 @@ extension CredentialList {
       let secret = try await model.credentialSecret(
         vaultKey: vaultKey, itemKey: item.key, credKey: cred.key
       )
-      return copyToPasteboard(secret)
+      return secureCopy(secret)
     } catch {
       errors[cred.key] = String(describing: error)
       return false
-    }
-  }
-
-  private func copyToPasteboard(_ secret: SymmetricKey) -> Bool {
-    secret.withUnsafeBytes { ptr in
-      guard let str = String(bytes: ptr, encoding: .utf8) else { return false }
-      secureCopy(str)
-      return true
     }
   }
 

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 
 extension NSPasteboard.PasteboardType {
@@ -17,6 +18,16 @@ func secureCopy(_ secret: String) {
   pasteboard.setString(secret, forType: .string)
   pasteboard.setString(secret, forType: .concealed)
   pasteboard.setData(Data(), forType: .transient)
+}
+
+/// Copy a secret held as key material. Returns false when it is not UTF-8
+/// text, in which case the pasteboard is left alone.
+func secureCopy(_ secret: SymmetricKey) -> Bool {
+  secret.withUnsafeBytes { ptr in
+    guard let str = String(bytes: ptr, encoding: .utf8) else { return false }
+    secureCopy(str)
+    return true
+  }
 }
 
 /// The rounded value box shared by the vault credential rows and the key
