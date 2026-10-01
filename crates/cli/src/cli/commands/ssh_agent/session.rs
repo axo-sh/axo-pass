@@ -332,6 +332,7 @@ impl Session for SshAgentSession {
             managed,
             comment.as_deref(),
             key_label.as_deref(),
+            &self.sessions,
             &result,
         );
         result

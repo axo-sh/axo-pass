@@ -13,7 +13,7 @@ pub struct KnownHosts {
 }
 
 impl KnownHosts {
-    fn load_from_str(data: &str) -> anyhow::Result<Self> {
+    pub(crate) fn load_from_str(data: &str) -> anyhow::Result<Self> {
         let entries = SshKeyKnownHosts::new(data)
             .filter_map(|result| result.ok())
             .collect();
@@ -52,9 +52,14 @@ impl KnownHosts {
     }
 
     pub fn find_host_by_key(&self, key_data: &KeyData) -> Vec<String> {
-        let key = key_data.fingerprint(ssh_key::HashAlg::Sha256);
+        self.find_host_by_fingerprint(&key_data.fingerprint(ssh_key::HashAlg::Sha256))
+    }
+
+    /// Host names for a host key's SHA-256 fingerprint. Hashed entries cannot
+    /// be reversed and are skipped.
+    pub fn find_host_by_fingerprint(&self, fingerprint: &Fingerprint) -> Vec<String> {
         self.keyed_entries
-            .get(&key)
+            .get(fingerprint)
             .into_iter() // handle the Option, get iter over &Vec<HostPatterns>
             .flatten() // flatten the iterator to HostPatterns
             .flat_map(|patterns| match patterns {

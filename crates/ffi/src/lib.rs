@@ -32,6 +32,7 @@ use axo_pass_core::ssh::app_grants;
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
+use axo_pass_core::ssh::related_hosts::{self, RelatedHost};
 use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
 use axo_pass_core::{audit, shell_integration};
 use secrecy::{ExposeSecret, SecretString};
@@ -398,6 +399,35 @@ impl From<app_grants::AppGrant> for SshAppGrant {
         SshAppGrant {
             app: grant.app.into(),
             created_at: grant.created_at.unix_timestamp(),
+        }
+    }
+}
+
+/// A host an SSH key signed in to. Mirrors [`RelatedHost`].
+#[derive(uniffi::Record, Clone)]
+pub struct SshRelatedHost {
+    /// `None` when the host key is not in `known_hosts` or only in a hashed
+    /// entry.
+    pub host: Option<String>,
+    /// `SHA256:...` of the server's host key.
+    pub hostkey_fingerprint: String,
+    pub user: Option<String>,
+    /// Unix seconds.
+    pub last_used: i64,
+    /// Unix seconds. The oldest signature counted in `use_count`.
+    pub first_used: i64,
+    pub use_count: u32,
+}
+
+impl From<RelatedHost> for SshRelatedHost {
+    fn from(host: RelatedHost) -> Self {
+        SshRelatedHost {
+            host: host.host,
+            hostkey_fingerprint: host.hostkey_fingerprint,
+            user: host.user,
+            last_used: host.last_used.unix_timestamp(),
+            first_used: host.first_used.unix_timestamp(),
+            use_count: host.use_count,
         }
     }
 }
@@ -1822,6 +1852,19 @@ impl AxoPass {
             &result,
         );
         result
+    }
+
+    /// Hosts an SSH key signed in to, from the audit log.
+    pub async fn related_ssh_hosts(
+        &self,
+        fingerprint_sha256: String,
+    ) -> Result<Vec<SshRelatedHost>, FfiError> {
+        let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
+        tokio::task::spawn_blocking(move || related_hosts::related_hosts(&fingerprint))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map(|hosts| hosts.into_iter().map(Into::into).collect())
+            .map_err(FfiError::from)
     }
 
     /// Rewrite a managed SSH key's public key file from the Secure Enclave,

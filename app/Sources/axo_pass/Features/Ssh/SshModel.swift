@@ -140,6 +140,11 @@ final class SshModel {
     (try? await core.listSshAppGrants(fingerprintSha256: fingerprintSha256)) ?? []
   }
 
+  /// Hosts a key signed in to, from the audit log. Empty on failure.
+  func relatedHosts(fingerprintSha256: String) async -> [SshRelatedHost] {
+    (try? await core.relatedSshHosts(fingerprintSha256: fingerprintSha256)) ?? []
+  }
+
   @discardableResult
   func removeAppGrant(fingerprintSha256: String, app: SshGrantApp) async -> Bool {
     do {

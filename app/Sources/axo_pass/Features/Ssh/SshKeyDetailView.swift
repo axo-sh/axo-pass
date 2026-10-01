@@ -23,6 +23,7 @@ private struct SshKeyDetail: View {
 
   @State private var recentEvents: [AuditLogRow] = []
   @State private var appGrants: [SshAppGrant] = []
+  @State private var relatedHosts: [SshRelatedHost] = []
   @State private var showingSavePasswordSheet = false
   @State private var showingDeleteConfirmation = false
   @State private var showingDeletePassphraseConfirmation = false
@@ -85,6 +86,10 @@ private struct SshKeyDetail: View {
             InspectorRow("MD5", value: key.fingerprintMd5, monospaced: true)
           }
         }
+        if !relatedHosts.isEmpty {
+          sectionTitle("Known Hosts")
+          InsetGroupedSection { hostsTable }
+        }
         if key.policy == .default {
           sectionTitle("Allowed Apps")
           InsetGroupedSection { allowedApps }
@@ -101,6 +106,7 @@ private struct SshKeyDetail: View {
     .task(id: key.fingerprintSha256) {
       recentEvents = await model.recentEvents(
         fingerprintSha256: key.fingerprintSha256, limit: Self.recentEventCount)
+      relatedHosts = await model.relatedHosts(fingerprintSha256: key.fingerprintSha256)
       appGrants =
         key.policy == .default
         ? await model.appGrants(fingerprintSha256: key.fingerprintSha256) : []
@@ -241,6 +247,67 @@ private struct SshKeyDetail: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// Hosts this key signed in to, most recently used first.
+  private var hostsTable: some View {
+    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+      GridRow {
+        columnHeader("Host")
+        columnHeader("User")
+        columnHeader("Last Used").gridColumnAlignment(.trailing)
+      }
+      Divider().gridCellColumns(3)
+      ForEach(Array(relatedHosts.enumerated()), id: \.offset) { _, host in
+        GridRow {
+          hostName(host)
+          Text(host.user ?? "—")
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Text(lastUsedText(host))
+            .foregroundStyle(.secondary)
+            .help(useCountText(host))
+        }
+        .font(.callout)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  /// A host key missing from `known_hosts`, or only in a hashed entry, has no
+  /// name, so its fingerprint stands in.
+  @ViewBuilder
+  private func hostName(_ host: SshRelatedHost) -> some View {
+    if let name = host.host {
+      Text(name)
+        .lineLimit(1)
+        .truncationMode(.middle)
+    } else {
+      Text(host.hostkeyFingerprint)
+        .font(.callout.monospaced())
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .help(
+          "Host key \(host.hostkeyFingerprint). The host is not in known_hosts, or only as a "
+            + "hashed entry.")
+    }
+  }
+
+  private func lastUsedText(_ host: SshRelatedHost) -> String {
+    Date(timeIntervalSince1970: TimeInterval(host.lastUsed))
+      .formatted(.relative(presentation: .named))
+  }
+
+  /// The count covers the signatures the audit log still holds, so it is
+  /// stated from the oldest of them.
+  private func useCountText(_ host: SshRelatedHost) -> String {
+    let since = Date(timeIntervalSince1970: TimeInterval(host.firstUsed))
+      .formatted(date: .abbreviated, time: .shortened)
+    if host.useCount == 1 {
+      return "Used once, on \(since)"
+    }
+    return "Used \(host.useCount) times since \(since)"
   }
 
   /// Apps that sign with this key without a prompt.

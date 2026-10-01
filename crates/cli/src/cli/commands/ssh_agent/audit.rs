@@ -7,10 +7,12 @@
 use axo_pass_core::audit::{
     self, Action, Actor, AuditEvent, Outcome, Source, Subject, SubjectKind,
 };
+use axo_pass_core::ssh::known_hosts::KnownHosts;
 use ssh_agent_lib::error::AgentError;
 use ssh_key::public::KeyData;
 use ssh_key::{HashAlg, Signature};
 
+use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
 
 /// Classify a `sign` result into an audit outcome and message.
@@ -42,6 +44,7 @@ pub fn record_sign(
     managed: bool,
     comment: Option<&str>,
     key_label: Option<&str>,
+    sessions: &[SessionBinding],
     result: &Result<Signature, AgentError>,
 ) {
     let fingerprint = pubkey.fingerprint(HashAlg::Sha256).to_string();
@@ -66,10 +69,12 @@ pub fn record_sign(
             event = event.detail("user", user);
         }
         if let Some(hostkey) = req.hostkey {
-            event = event.detail(
-                "hostkey_fingerprint",
-                hostkey.fingerprint(HashAlg::Sha256).to_string(),
-            );
+            event = event
+                .detail(
+                    "hostkey_fingerprint",
+                    hostkey.fingerprint(HashAlg::Sha256).to_string(),
+                )
+                .maybe_detail("host", host_name(&hostkey, sessions));
         }
     }
 
@@ -78,6 +83,20 @@ pub fn record_sign(
         event = event.message(message);
     }
     audit::record(event);
+}
+
+/// The server's host name, from a session binding for its host key or else
+/// from `known_hosts`. Hashed `known_hosts` entries give no name.
+fn host_name(hostkey: &KeyData, sessions: &[SessionBinding]) -> Option<String> {
+    if let Some(binding) = sessions.iter().find(|s| s.inner.host_key == *hostkey) {
+        // The binding already looked the host key up in `known_hosts`.
+        return binding.host_name.clone();
+    }
+    KnownHosts::load_from_user_ssh_dir()
+        .ok()?
+        .find_host_by_key(hostkey)
+        .into_iter()
+        .next()
 }
 
 /// Record an `ssh.key_add` or `ssh.key_remove` event.
