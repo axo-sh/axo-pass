@@ -15,6 +15,7 @@ use crate::core::auth::run_local_onetime;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
+use crate::ssh::app_grants;
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, get_ssh_dir};
 
 const SSH_KEY_LABEL_PREFIX: &str = "ssh-key-";
@@ -110,6 +111,11 @@ impl ManagedSshKey {
 
     pub fn delete(&self) -> anyhow::Result<()> {
         self.managed_key.delete()?;
+
+        let fingerprint = format!("SHA256:{}", self.fingerprint_sha256());
+        if let Err(e) = app_grants::remove_all_for(&fingerprint) {
+            log::error!("Failed to remove app grants for {fingerprint}: {e}");
+        }
 
         // Also try to delete the associated public key file
         let pubkey_path = self.pubkey_path()?;

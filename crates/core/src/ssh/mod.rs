@@ -1,5 +1,6 @@
 pub mod agent_client;
 pub mod agent_conf;
+pub mod app_grants;
 pub mod askpass;
 pub mod key_overview;
 pub mod known_hosts;

@@ -826,7 +826,6 @@ async fn handle_connection(
             let data = b64
                 .decode(&data)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let policy = ssh::resolve_policy(key_label.clone()).await;
             let prompt = SignPrompt {
                 key_label,
                 fingerprint,
@@ -834,10 +833,11 @@ async fn handle_connection(
                 caller,
                 caller_chain: caller_chain.clone(),
                 managed: true,
-                policy,
+                policy: None,
+                grant_candidate: None,
             };
             log::debug!("App broker request: {prompt:?}");
-            ssh::authorize_and_sign(&*authorizers.sign, prompt, actor, data).await
+            ssh::sign_managed(&*authorizers.sign, prompt, actor, data).await
         },
         WireRequest::AuthorizeKeyUse {
             fingerprint,
@@ -853,6 +853,7 @@ async fn handle_connection(
                 caller_chain: caller_chain.clone(),
                 managed: false,
                 policy: None,
+                grant_candidate: None,
             };
             log::debug!("App broker request: authorize key use {prompt:?}");
             ssh::authorize_key_use(&*authorizers.sign, prompt, actor).await
@@ -1120,6 +1121,13 @@ mod tests {
 
         async fn end(&self, _prompt: SignPrompt, _outcome: PromptOutcome) {
             self.ended.fetch_add(1, Ordering::SeqCst);
+        }
+
+        async fn notify_preapproved(
+            &self,
+            _prompt: SignPrompt,
+            _app: crate::ssh::app_grants::GrantApp,
+        ) {
         }
     }
 

@@ -42,6 +42,15 @@ enum CallerAppIcon {
     return NSWorkspace.shared.icon(forFile: path)
   }
 
+  /// The icon of an installed app, looked up by bundle identifier. `nil` when
+  /// no app with that identifier is installed.
+  static func icon(bundleId: String) -> NSImage? {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+      return nil
+    }
+    return NSWorkspace.shared.icon(forFile: url.path)
+  }
+
   private static func appBundlePath(for chain: [ProcessNode]) -> String? {
     for node in chain.reversed() {
       guard node.verified,

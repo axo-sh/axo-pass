@@ -467,18 +467,16 @@ pub fn sign_with_managed_key_on(
 }
 
 /// Sign with a [`KeyPolicy::Default`] key without a prompt, for a request the
-/// caller has already authorized (an app grant). The caller must check the
-/// key's policy first; a key with a hardware access control still prompts.
+/// caller has already authorized (an app grant). Runs on a fresh context with
+/// interaction disallowed, so a key with a hardware access control fails
+/// rather than raising the system dialog.
 pub fn sign_with_managed_key_preapproved(
     managed_key_label: &str,
     data: &[u8],
 ) -> Result<Signature, KeychainError> {
-    sign_with_auth(
-        AuthContext::OneTime,
-        AuthMethod::None,
-        managed_key_label,
-        data,
-    )
+    let managed_key_label = managed_key_label.to_string();
+    let data = data.to_vec();
+    run_local_onetime(move |la_context| find_and_sign(&managed_key_label, &data, la_context))
 }
 
 fn sign_with_auth(
@@ -491,15 +489,23 @@ fn sign_with_auth(
     let data = data.to_vec();
 
     run_on_auth_thread(auth_context, auth_method, move |la_context| {
-        match ManagedSshKey::find_with_la_context(&managed_key_label, la_context) {
-            Ok(Some(managed_key)) => managed_key
-                .sign(&data)
-                .inspect(|_| log::debug!("Completed signing with key {managed_key_label}"))
-                .map_err(|e| KeychainError::SigningFailed(e.to_string())),
-            Ok(None) => Err(KeychainError::SigningFailed(format!(
-                "{managed_key_label} not found"
-            ))),
-            Err(e) => Err(e),
-        }
+        find_and_sign(&managed_key_label, &data, la_context)
     })?
+}
+
+fn find_and_sign(
+    managed_key_label: &str,
+    data: &[u8],
+    la_context: Retained<LAContext>,
+) -> Result<Signature, KeychainError> {
+    match ManagedSshKey::find_with_la_context(managed_key_label, la_context) {
+        Ok(Some(managed_key)) => managed_key
+            .sign(data)
+            .inspect(|_| log::debug!("Completed signing with key {managed_key_label}"))
+            .map_err(|e| KeychainError::SigningFailed(e.to_string())),
+        Ok(None) => Err(KeychainError::SigningFailed(format!(
+            "{managed_key_label} not found"
+        ))),
+        Err(e) => Err(e),
+    }
 }

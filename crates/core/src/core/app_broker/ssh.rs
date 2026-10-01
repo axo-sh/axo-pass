@@ -18,11 +18,13 @@ use super::{
 use crate::audit;
 use crate::core::auth::{
     AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,
+    sign_with_managed_key_preapproved,
 };
 use crate::core::provenance::ProcessNode;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
+use crate::ssh::app_grants::{self, GrantApp};
 
 /// What the app needs to describe the prompt.
 #[derive(Debug, Clone)]
@@ -53,6 +55,11 @@ pub struct SignPrompt {
     /// The managed key's policy, read from the keychain by the broker. `None`
     /// for a key the agent holds directly, or when the key could not be read.
     pub policy: Option<KeyPolicy>,
+
+    /// The app the user may grant lasting access to this key from the prompt.
+    /// Set only for a [`KeyPolicy::Default`] key requested through a fully
+    /// verified chain that contains a signed app.
+    pub grant_candidate: Option<GrantApp>,
 }
 
 /// Supplies an `LAContext` to sign on, and learns how the attempt ended so it
@@ -72,6 +79,10 @@ pub trait SignAuthorizer: Send + Sync + 'static {
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
     async fn end(&self, prompt: SignPrompt, outcome: PromptOutcome);
+
+    /// The broker signed without a prompt because `app` holds a grant for the
+    /// key. Neither `begin` nor `end` is called for such a request.
+    async fn notify_preapproved(&self, prompt: SignPrompt, app: GrantApp);
 }
 
 /// A managed key as the agent sees it: enough to advertise the identity and to
@@ -184,13 +195,23 @@ pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> 
     Ok(identities)
 }
 
-/// Read a managed key's policy without prompting. `None` when the key is not
-/// found or the keychain read fails.
-pub(super) async fn resolve_policy(key_label: String) -> Option<KeyPolicy> {
+/// A managed key's policy and canonical `SHA256:...` fingerprint, read from the
+/// keychain without prompting.
+pub(super) struct ResolvedKey {
+    pub policy: KeyPolicy,
+    pub fingerprint: String,
+}
+
+/// Read a managed key without prompting. `None` when the key is not found or
+/// the keychain read fails.
+pub(super) async fn resolve_key(key_label: String) -> Option<ResolvedKey> {
     tokio::task::spawn_blocking(move || match ManagedSshKey::find(&key_label) {
-        Ok(key) => key.map(|k| k.policy()),
+        Ok(key) => key.map(|k| ResolvedKey {
+            policy: k.policy(),
+            fingerprint: format!("SHA256:{}", k.fingerprint_sha256()),
+        }),
         Err(e) => {
-            log::debug!("Could not read the policy of {key_label}: {e}");
+            log::debug!("Could not read {key_label}: {e}");
             None
         },
     })
@@ -199,7 +220,121 @@ pub(super) async fn resolve_policy(key_label: String) -> Option<KeyPolicy> {
     .flatten()
 }
 
-pub(super) async fn authorize_and_sign(
+/// The grant that covers this request, if any. The fingerprint is the one the
+/// broker read from the keychain, not the one the agent sent.
+async fn find_grant(
+    key: &ResolvedKey,
+    caller_chain: &[ProcessNode],
+) -> Option<app_grants::AppGrant> {
+    if key.policy != KeyPolicy::Default {
+        return None;
+    }
+    let grants = tokio::task::spawn_blocking(app_grants::load)
+        .await
+        .ok()?
+        .inspect_err(|e| log::warn!("Could not read SSH app grants: {e}"))
+        .ok()?;
+    app_grants::find_match(&grants, &key.fingerprint, key.policy, caller_chain).cloned()
+}
+
+/// Sign without a prompt for an app that holds a grant. `None` when the
+/// signature could not be made, so the caller falls back to prompting.
+async fn sign_preapproved(
+    authorizer: &dyn SignAuthorizer,
+    prompt: &SignPrompt,
+    peer: &audit::Actor,
+    grant: app_grants::AppGrant,
+    data: &[u8],
+) -> Option<WireResponse> {
+    let key_label = prompt.key_label.clone();
+    let data = data.to_vec();
+    let result =
+        tokio::task::spawn_blocking(move || sign_with_managed_key_preapproved(&key_label, &data))
+            .await;
+    let signature = match result {
+        Ok(Ok(signature)) => signature,
+        Ok(Err(e)) => {
+            log::warn!(
+                "Signing for granted app {} failed: {e}",
+                grant.app.bundle_id
+            );
+            return None;
+        },
+        Err(e) => {
+            log::warn!("Signing task for granted app failed: {e}");
+            return None;
+        },
+    };
+
+    let mut subject = audit::Subject::new(audit::SubjectKind::SshKey, grant.fingerprint.clone())
+        .fingerprint(grant.fingerprint.clone());
+    if let Some(comment) = prompt.comment.as_deref().filter(|c| !c.is_empty()) {
+        subject = subject.label(comment);
+    }
+    audit::record(
+        audit::AuditEvent::new(
+            audit::process_source(),
+            audit::Action::AuthGrantReused,
+            audit::Outcome::Succeeded,
+        )
+        .subject(subject)
+        .actor(peer.clone())
+        .detail("scope", "ssh.sign")
+        .detail("grant", format!("app:{}", grant.app.bundle_id)),
+    );
+
+    authorizer
+        .notify_preapproved(prompt.clone(), grant.app)
+        .await;
+    Some(WireResponse::Signed {
+        algorithm: signature.algorithm().to_string(),
+        signature: b64.encode(signature.as_bytes()),
+    })
+}
+
+/// Serve a managed-key signature: without a prompt when an app grant covers
+/// the request, through the app's prompt otherwise.
+pub(super) async fn sign_managed(
+    authorizer: &dyn SignAuthorizer,
+    mut prompt: SignPrompt,
+    peer: audit::Actor,
+    data: Vec<u8>,
+) -> WireResponse {
+    let key = resolve_key(prompt.key_label.clone()).await;
+    prompt.policy = key.as_ref().map(|k| k.policy);
+
+    if let Some(key) = &key {
+        if let Some(grant) = find_grant(key, &prompt.caller_chain).await
+            && let Some(response) = sign_preapproved(authorizer, &prompt, &peer, grant, &data).await
+        {
+            return response;
+        }
+        if key.policy == KeyPolicy::Default {
+            prompt.grant_candidate = app_grants::candidate_app(&prompt.caller_chain);
+        }
+    }
+    log::debug!(
+        "Signing with {}: policy {:?}, grant candidate {:?}, chain {:?}",
+        prompt.key_label,
+        prompt.policy,
+        prompt.grant_candidate,
+        prompt
+            .caller_chain
+            .iter()
+            .map(|n| (
+                n.command.as_str(),
+                n.bundle_id.as_deref(),
+                n.team_id.as_deref(),
+                n.verified,
+                n.code_id.is_some(),
+            ))
+            .collect::<Vec<_>>(),
+    );
+
+    authorize_and_sign(authorizer, prompt, peer, data).await
+}
+
+async fn authorize_and_sign(
     authorizer: &dyn SignAuthorizer,
     prompt: SignPrompt,
     peer: audit::Actor,

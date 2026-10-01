@@ -22,6 +22,7 @@ private struct SshKeyDetail: View {
   let key: SshKeyEntry
 
   @State private var recentEvents: [AuditLogRow] = []
+  @State private var appGrants: [SshAppGrant] = []
   @State private var showingSavePasswordSheet = false
   @State private var showingDeleteConfirmation = false
   @State private var showingDeletePassphraseConfirmation = false
@@ -84,6 +85,10 @@ private struct SshKeyDetail: View {
             InspectorRow("MD5", value: key.fingerprintMd5, monospaced: true)
           }
         }
+        if key.policy == .default {
+          sectionTitle("Allowed Apps")
+          InsetGroupedSection { allowedApps }
+        }
         if !recentEvents.isEmpty {
           sectionTitle("Recent Activity")
           InsetGroupedSection { activityTable }
@@ -96,6 +101,9 @@ private struct SshKeyDetail: View {
     .task(id: key.fingerprintSha256) {
       recentEvents = await model.recentEvents(
         fingerprintSha256: key.fingerprintSha256, limit: Self.recentEventCount)
+      appGrants =
+        key.policy == .default
+        ? await model.appGrants(fingerprintSha256: key.fingerprintSha256) : []
     }
     .onChange(of: key.fingerprintSha256) { copiedPublicKey = false }
     .sheet(isPresented: $showingSavePasswordSheet) {
@@ -235,6 +243,62 @@ private struct SshKeyDetail: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
+  /// Apps that sign with this key without a prompt.
+  @ViewBuilder
+  private var allowedApps: some View {
+    if appGrants.isEmpty {
+      Text(
+        "No apps. Tick \u{201C}Always allow\u{201D} when an app asks to sign to let it use this "
+          + "key without asking."
+      )
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    } else {
+      VStack(spacing: 8) {
+        ForEach(Array(appGrants.enumerated()), id: \.element.app.bundleId) { index, grant in
+          if index > 0 {
+            Divider()
+          }
+          allowedAppRow(grant)
+        }
+        Text("Anything these apps run, such as git hooks, can also use this key.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private func allowedAppRow(_ grant: SshAppGrant) -> some View {
+    HStack(spacing: 8) {
+      if let icon = CallerAppIcon.icon(bundleId: grant.app.bundleId) {
+        Image(nsImage: icon)
+          .resizable()
+          .frame(width: 20, height: 20)
+      } else {
+        Image(systemName: "app.dashed")
+          .frame(width: 20, height: 20)
+          .foregroundStyle(.secondary)
+      }
+      VStack(alignment: .leading, spacing: 1) {
+        Text(grant.app.displayName)
+        Text(grant.app.bundleId)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+      Button("Remove") {
+        Task {
+          if await model.removeAppGrant(fingerprintSha256: key.fingerprintSha256, app: grant.app) {
+            appGrants = await model.appGrants(fingerprintSha256: key.fingerprintSha256)
+          }
+        }
+      }
+      .controlSize(.small)
+    }
+  }
+
   private func columnHeader(_ text: String) -> some View {
     Text(text.uppercased())
       .font(.caption2)
@@ -249,6 +313,8 @@ private struct SshKeyDetail: View {
     case "ssh.key_add": return "Added to agent"
     case "ssh.key_remove": return "Removed from agent"
     case "ssh.session_bind": return "Session bound"
+    case "ssh.app_grant_add": return "App allowed"
+    case "ssh.app_grant_remove": return "App removed"
     default: return action
     }
   }

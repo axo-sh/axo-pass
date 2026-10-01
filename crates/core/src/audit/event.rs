@@ -196,6 +196,10 @@ pub enum Action {
     SshManagedKeyCreate,
     #[serde(rename = "ssh.managed_key_delete")]
     SshManagedKeyDelete,
+    #[serde(rename = "ssh.app_grant_add")]
+    SshAppGrantAdd,
+    #[serde(rename = "ssh.app_grant_remove")]
+    SshAppGrantRemove,
     #[serde(rename = "ssh.session_bind")]
     SshSessionBind,
     #[serde(rename = "ssh.agent_start")]
@@ -273,6 +277,8 @@ impl Action {
             Action::SshKeyRemove => "ssh.key_remove",
             Action::SshManagedKeyCreate => "ssh.managed_key_create",
             Action::SshManagedKeyDelete => "ssh.managed_key_delete",
+            Action::SshAppGrantAdd => "ssh.app_grant_add",
+            Action::SshAppGrantRemove => "ssh.app_grant_remove",
             Action::SshSessionBind => "ssh.session_bind",
             Action::SshAgentStart => "ssh.agent_start",
             Action::SshAgentStop => "ssh.agent_stop",

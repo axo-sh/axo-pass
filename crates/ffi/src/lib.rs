@@ -28,6 +28,7 @@ use axo_pass_core::secrets::vaults::{
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
+use axo_pass_core::ssh::app_grants;
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
@@ -354,6 +355,90 @@ impl From<SshKeyOverview> for SshKeyEntry {
             agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
         }
     }
+}
+
+/// An app that can hold lasting access to an SSH key. Mirrors
+/// [`app_grants::GrantApp`].
+#[derive(uniffi::Record, Clone)]
+pub struct SshGrantApp {
+    pub team_id: String,
+    pub bundle_id: String,
+    pub display_name: String,
+}
+
+impl From<app_grants::GrantApp> for SshGrantApp {
+    fn from(app: app_grants::GrantApp) -> Self {
+        SshGrantApp {
+            team_id: app.team_id,
+            bundle_id: app.bundle_id,
+            display_name: app.display_name,
+        }
+    }
+}
+
+impl From<SshGrantApp> for app_grants::GrantApp {
+    fn from(app: SshGrantApp) -> Self {
+        app_grants::GrantApp {
+            team_id: app.team_id,
+            bundle_id: app.bundle_id,
+            display_name: app.display_name,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct SshAppGrant {
+    pub app: SshGrantApp,
+    /// Unix seconds.
+    pub created_at: i64,
+}
+
+impl From<app_grants::AppGrant> for SshAppGrant {
+    fn from(grant: app_grants::AppGrant) -> Self {
+        SshAppGrant {
+            app: grant.app.into(),
+            created_at: grant.created_at.unix_timestamp(),
+        }
+    }
+}
+
+/// The canonical `SHA256:...` form of a fingerprint that may arrive without
+/// the prefix.
+fn canonical_ssh_fingerprint(fingerprint: &str) -> String {
+    if fingerprint.starts_with("SHA256:") {
+        fingerprint.to_string()
+    } else {
+        format!("SHA256:{fingerprint}")
+    }
+}
+
+/// Record an `ssh.app_grant_add` or `ssh.app_grant_remove` event.
+fn record_app_grant_event(
+    action: audit::Action,
+    fingerprint: &str,
+    bundle_id: &str,
+    peer: Option<RequestActor>,
+    result: &Result<(), FfiError>,
+) {
+    let mut event = audit::AuditEvent::new(
+        audit::process_source(),
+        action,
+        if result.is_ok() {
+            audit::Outcome::Succeeded
+        } else {
+            audit::Outcome::Failed
+        },
+    )
+    .subject(
+        audit::Subject::new(audit::SubjectKind::SshKey, fingerprint.to_string())
+            .fingerprint(fingerprint.to_string()),
+    )
+    .detail("grant", format!("app:{bundle_id}"))
+    .maybe_actor(peer.map(audit::Actor::from));
+    if let Err(e) = result {
+        event = event.message(e.to_string());
+    }
+    audit::record(event);
 }
 
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
@@ -1658,6 +1743,87 @@ impl AxoPass {
         result.map(|_| ())
     }
 
+    /// The apps with lasting access to an SSH key.
+    pub async fn list_ssh_app_grants(
+        &self,
+        fingerprint_sha256: String,
+    ) -> Result<Vec<SshAppGrant>, FfiError> {
+        let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
+        tokio::task::spawn_blocking(move || app_grants::list_for(&fingerprint))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map(|grants| grants.into_iter().map(Into::into).collect())
+            .map_err(FfiError::from)
+    }
+
+    /// Give `app` lasting access to a managed SSH key. Fails for a key that
+    /// always requires authentication. `peer` is the requester the grant was
+    /// given from, for the audit event.
+    pub async fn add_ssh_app_grant(
+        &self,
+        fingerprint_sha256: String,
+        app: SshGrantApp,
+        peer: Option<RequestActor>,
+    ) -> Result<(), FfiError> {
+        let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
+        let bundle_id = app.bundle_id.clone();
+        let fp = fingerprint.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let key = ManagedSshKey::list()
+                .map_err(FfiError::from)?
+                .into_iter()
+                .find(|k| format!("SHA256:{}", k.fingerprint_sha256()) == fp)
+                .ok_or_else(|| FfiError::NotFound(fp.clone()))?;
+            if key.policy() != KeyPolicy::Default {
+                return Err(FfiError::InvalidInput(
+                    "This key always requires authentication and cannot be granted to an app."
+                        .to_string(),
+                ));
+            }
+            app_grants::add(&fp, app.into())
+                .map(|_| ())
+                .map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
+
+        record_app_grant_event(
+            audit::Action::SshAppGrantAdd,
+            &fingerprint,
+            &bundle_id,
+            peer,
+            &result,
+        );
+        result
+    }
+
+    /// Remove an app's lasting access to an SSH key.
+    pub async fn remove_ssh_app_grant(
+        &self,
+        fingerprint_sha256: String,
+        team_id: String,
+        bundle_id: String,
+    ) -> Result<(), FfiError> {
+        let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
+        let (fp, bid) = (fingerprint.clone(), bundle_id.clone());
+        let result = tokio::task::spawn_blocking(move || {
+            app_grants::remove(&fp, &team_id, &bid)
+                .map(|_| ())
+                .map_err(FfiError::from)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
+
+        record_app_grant_event(
+            audit::Action::SshAppGrantRemove,
+            &fingerprint,
+            &bundle_id,
+            None,
+            &result,
+        );
+        result
+    }
+
     /// Rewrite a managed SSH key's public key file from the Secure Enclave,
     /// for a key whose `~/.ssh/id_se_*.pub` was deleted. Returns its path.
     pub async fn write_managed_ssh_key_pubkey(
@@ -2209,10 +2375,27 @@ pub trait SignPromptDelegate: Send + Sync {
         // The process the broker verified, for the grant events the app
         // records. Not shown to the user: `caller` is what the prompt says.
         peer: RequestActor,
+        // The managed key's policy. `None` for a confirm-on-use gate.
+        policy: Option<SshKeyPolicy>,
+        // The app the prompt may offer lasting access to. Set only for a
+        // default-policy key requested through a verified chain with a signed
+        // app in it.
+        grant_candidate: Option<SshGrantApp>,
     ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, key_label: String, outcome: PromptOutcome);
+
+    /// The broker signed without a prompt because `app` holds a grant for the
+    /// key. No `begin_authorization` or `end_authorization` is made for it.
+    async fn notify_preapproved(
+        &self,
+        key_label: String,
+        fingerprint: Option<String>,
+        comment: Option<String>,
+        caller: Option<String>,
+        app: SshGrantApp,
+    );
 }
 
 struct DelegatingAuthorizer {
@@ -2238,6 +2421,8 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 caller_identity,
                 prompt.managed,
                 peer.into(),
+                prompt.policy.map(SshKeyPolicy::from),
+                prompt.grant_candidate.map(SshGrantApp::from),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -2253,6 +2438,18 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
     async fn end(&self, prompt: app_broker::SignPrompt, outcome: app_broker::PromptOutcome) {
         self.delegate
             .end_authorization(prompt.key_label, outcome.into())
+            .await;
+    }
+
+    async fn notify_preapproved(&self, prompt: app_broker::SignPrompt, app: app_grants::GrantApp) {
+        self.delegate
+            .notify_preapproved(
+                prompt.key_label,
+                prompt.fingerprint,
+                prompt.comment,
+                prompt.caller,
+                app.into(),
+            )
             .await;
     }
 }

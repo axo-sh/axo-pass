@@ -18,6 +18,7 @@ pub struct SigningInfo {
     // e.g. "com.apple.ssh-add"
     pub identifier: String,
 
+    // `teamid` from the signing certificate, or
     // entitlements-dict["com.apple.developer.team-identifier"]
     pub team_identifier: String,
 
@@ -39,9 +40,11 @@ impl SigningInfo {
     pub fn from_sec_code(static_code: &SecStaticCode) -> Option<SigningInfo> {
         unsafe {
             let mut raw: *const CFDictionary = ptr::null();
+            // kSecCSSigningInformation (1 << 1) adds the team identifier taken
+            // from the signing certificate.
             let status = SecCode::copy_signing_information(
                 static_code,
-                SecCSFlags(0),
+                SecCSFlags(1 << 1),
                 NonNull::new_unchecked(&mut raw),
             );
             if status != 0 || raw.is_null() {
@@ -74,9 +77,16 @@ impl SigningInfo {
                 })
                 .unwrap_or_default();
 
+            // `teamid` is set for any code signed with a team certificate. The
+            // entitlement is only present on code signed with a provisioning
+            // profile, and is kept as a fallback.
             let team_identifier = dict
-                .get_dict("entitlements-dict")
-                .and_then(|e| e.get_string("com.apple.developer.team-identifier"))
+                .get_string("teamid")
+                .filter(|t| !t.is_empty())
+                .or_else(|| {
+                    dict.get_dict("entitlements-dict")
+                        .and_then(|e| e.get_string("com.apple.developer.team-identifier"))
+                })
                 .unwrap_or_default();
 
             Some(SigningInfo {

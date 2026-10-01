@@ -135,6 +135,23 @@ final class SshModel {
     }
   }
 
+  /// The apps with lasting access to a key. Empty on failure.
+  func appGrants(fingerprintSha256: String) async -> [SshAppGrant] {
+    (try? await core.listSshAppGrants(fingerprintSha256: fingerprintSha256)) ?? []
+  }
+
+  @discardableResult
+  func removeAppGrant(fingerprintSha256: String, app: SshGrantApp) async -> Bool {
+    do {
+      try await core.removeSshAppGrant(
+        fingerprintSha256: fingerprintSha256, teamId: app.teamId, bundleId: app.bundleId)
+      return true
+    } catch {
+      loadError = String(describing: error)
+      return false
+    }
+  }
+
   /// The most recent SSH audit events for one key, newest first. Events name
   /// their key by SHA256 fingerprint, which the reader's query matches against
   /// the subject id.

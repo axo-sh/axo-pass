@@ -31,7 +31,16 @@ final class SigningPromptModel {
     /// Whether the key is managed, so `end` words its notification to match the
     /// panel `begin` put up.
     let managed: Bool
+
+    /// The app the panel offers lasting access to, and whether the user ticked
+    /// it. Acted on in `end` only when the signature succeeded.
+    let grantCandidate: SshGrantApp?
+    let grantChoice: GrantChoice
+    let fingerprint: String?
+    let peer: RequestActor
   }
+
+  private let core = AxoPass()
 
   /// Where the prompt is drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
@@ -57,11 +66,15 @@ final class SigningPromptModel {
   /// context stays referenced here, so it outlives the signing attempt.
   func begin(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
-    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor
+    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor,
+    grantCandidate: SshGrantApp?
   ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
     let key = GrantKey(subject: subject, caller: caller, callerIdentity: callerIdentity)
-    active = ActiveRequest(key: key, managed: managed)
+    let grantChoice = GrantChoice()
+    active = ActiveRequest(
+      key: key, managed: managed, grantCandidate: grantCandidate, grantChoice: grantChoice,
+      fingerprint: fingerprint, peer: peer)
     // Confirm-on-use keys (`ssh-add -c`) prompt every time: the point of the
     // constraint is that every signature is approved, so no approval is reused.
     let grant = grants.begin(key, policy: managed ? .standard : .everyUse, peer: peer)
@@ -74,7 +87,8 @@ final class SigningPromptModel {
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
       self?.showPanel(
-        key: key, keyName: keyName, managed: managed, callerChain: callerChain, view: grant.view)
+        key: key, keyName: keyName, managed: managed, callerChain: callerChain,
+        grantCandidate: grantCandidate, grantChoice: grantChoice, view: grant.view)
     }
 
     return contextPointer(grant.context)
@@ -94,6 +108,28 @@ final class SigningPromptModel {
     grants.end(key, outcome: outcome)
     let name = key.subject.label ?? Self.shortName(keyLabel: keyLabel, fingerprint: key.subject.id)
     report(name: name, caller: key.caller, managed: active.managed, outcome: outcome)
+
+    if case .succeeded = outcome, active.grantChoice.allowAlways,
+      let app = active.grantCandidate, let fingerprint = active.fingerprint
+    {
+      let peer = active.peer
+      Task {
+        do {
+          try await core.addSshAppGrant(fingerprintSha256: fingerprint, app: app, peer: peer)
+        } catch {
+          NSLog("SigningPrompt: could not save app grant: %@", String(describing: error))
+        }
+      }
+    }
+  }
+
+  /// The broker signed without a prompt for an app that holds a grant. The
+  /// notification is the only sign that the key was used.
+  func notifyPreapproved(
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, app: SshGrantApp
+  ) {
+    let name = comment ?? Self.shortName(keyLabel: keyLabel, fingerprint: fingerprint)
+    report(name: name, caller: caller ?? app.displayName, managed: true, outcome: .succeeded)
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
@@ -139,13 +175,15 @@ final class SigningPromptModel {
 
   private func showPanel(
     key: GrantKey, keyName: String, managed: Bool, callerChain: [ProcessNode],
-    view: LAAuthenticationView
+    grantCandidate: SshGrantApp?, grantChoice: GrantChoice, view: LAAuthenticationView
   ) {
     let content = SigningPromptView(
       caller: key.caller,
       keyName: keyName,
       managed: managed,
       callerChain: callerChain,
+      grantCandidate: grantCandidate,
+      grantChoice: grantChoice,
       icon: AuthenticationIcon(view: view),
       onCancel: { [weak self] in self?.cancel(key: key) }
     )
@@ -169,11 +207,20 @@ final class SigningPromptModel {
   }
 }
 
+/// Whether the user ticked "Always allow" in the panel. A class so the panel
+/// and the model share it.
+@Observable
+final class GrantChoice {
+  var allowAlways = false
+}
+
 private struct SigningPromptView: View {
   let caller: String?
   let keyName: String
   let managed: Bool
   let callerChain: [ProcessNode]
+  let grantCandidate: SshGrantApp?
+  @Bindable var grantChoice: GrantChoice
   let icon: AuthenticationIcon
   let onCancel: () -> Void
 
@@ -191,6 +238,17 @@ private struct SigningPromptView: View {
       }
 
       CallerChainView(chain: callerChain)
+
+      if let grantCandidate {
+        Toggle(
+          "Always allow \(grantCandidate.displayName) to use this key",
+          isOn: $grantChoice.allowAlways
+        )
+        .toggleStyle(.checkbox)
+        .help(
+          "\(grantCandidate.displayName) and anything it runs, such as git hooks, will sign "
+            + "with this key without asking. Remove access in the key's details.")
+      }
 
       Button("Cancel", action: onCancel)
         .keyboardShortcut(.cancelAction)
@@ -218,14 +276,23 @@ final class SigningPromptBridge: SignPromptDelegate {
 
   func beginAuthorization(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
-    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor
+    callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor,
+    policy: SshKeyPolicy?, grantCandidate: SshGrantApp?
   ) async throws -> UInt64 {
     await model.begin(
       keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
-      callerChain: callerChain, callerIdentity: callerIdentity, managed: managed, peer: peer)
+      callerChain: callerChain, callerIdentity: callerIdentity, managed: managed, peer: peer,
+      grantCandidate: grantCandidate)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {
     await model.end(keyLabel: keyLabel, outcome: outcome)
+  }
+
+  func notifyPreapproved(
+    keyLabel: String, fingerprint: String?, comment: String?, caller: String?, app: SshGrantApp
+  ) async {
+    await model.notifyPreapproved(
+      keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller, app: app)
   }
 }
