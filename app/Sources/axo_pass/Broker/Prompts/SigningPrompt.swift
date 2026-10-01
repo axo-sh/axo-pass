@@ -95,7 +95,10 @@ final class SigningPromptModel {
   }
 
   /// The signing attempt finished, successfully or not.
-  func end(keyLabel: String, outcome: PromptOutcome) {
+  ///
+  /// Saves a chosen app grant before returning. The broker holds the next
+  /// request until this returns, and that request must find the grant.
+  func end(keyLabel: String, outcome: PromptOutcome) async {
     showTask?.cancel()
     showTask = nil
     panel.hide()
@@ -114,13 +117,11 @@ final class SigningPromptModel {
     {
       let peer = active.peer
       let expiresIn = active.grantChoice.expiration.seconds
-      Task {
-        do {
-          try await core.addSshAppGrant(
-            fingerprintSha256: fingerprint, app: app, expiresInSeconds: expiresIn, peer: peer)
-        } catch {
-          NSLog("SigningPrompt: could not save app grant: %@", String(describing: error))
-        }
+      do {
+        try await core.addSshAppGrant(
+          fingerprintSha256: fingerprint, app: app, expiresInSeconds: expiresIn, peer: peer)
+      } catch {
+        NSLog("SigningPrompt: could not save app grant: %@", String(describing: error))
       }
     }
   }

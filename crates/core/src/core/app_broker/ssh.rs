@@ -316,6 +316,11 @@ async fn record_grant_use(
         .await;
 }
 
+/// Held from the grant check until the app's prompt has ended, so a request
+/// that arrives while another is being approved waits and then finds the grant
+/// the user gave. The app also keeps one active request at a time.
+static SIGN_REQUESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Serve a managed-key signature: without a prompt when an app grant covers
 /// the request, through the app's prompt otherwise.
 pub(super) async fn sign_managed(
@@ -324,6 +329,7 @@ pub(super) async fn sign_managed(
     peer: audit::Actor,
     data: Vec<u8>,
 ) -> WireResponse {
+    let _serial = SIGN_REQUESTS.lock().await;
     let key = resolve_key(prompt.key_label.clone()).await;
     prompt.policy = key.as_ref().map(|k| k.policy);
 
@@ -435,6 +441,7 @@ pub(super) async fn authorize_key_use(
     peer: audit::Actor,
     allow_grants: bool,
 ) -> WireResponse {
+    let _serial = SIGN_REQUESTS.lock().await;
     if allow_grants && let Some(fingerprint) = prompt.fingerprint.clone() {
         let key = ResolvedKey {
             policy: KeyPolicy::Default,
