@@ -5,7 +5,7 @@ use std::path::Path;
 use ssh_agent_lib::proto::Identity;
 
 use crate::secrets::keychain::generic_password::PasswordEntry;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
+use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 use crate::ssh::agent_client::{list_axo_agent_identities, list_system_agent_identities};
 use crate::ssh::ssh_keys::{SshKeyType, SystemSshKey};
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
@@ -43,6 +43,8 @@ pub struct SshKeyOverview {
     pub fingerprint_md5: String,
     pub has_saved_password: bool,
     pub is_managed: bool,
+    /// Set for managed keys only.
+    pub policy: Option<KeyPolicy>,
     pub agents: Vec<SshKeyAgentKind>,
 }
 
@@ -75,6 +77,7 @@ impl From<SystemSshKey> for SshKeyOverview {
             fingerprint_md5: system_key.fingerprint_md5,
             has_saved_password,
             is_managed: false,
+            policy: None,
             agents: Vec::new(),
         }
     }
@@ -98,6 +101,7 @@ impl From<ManagedSshKey> for SshKeyOverview {
             fingerprint_md5: managed_key.fingerprint_md5(),
             has_saved_password: false,
             is_managed: true,
+            policy: Some(managed_key.policy()),
             agents: Vec::new(),
         }
     }
@@ -125,6 +129,7 @@ impl From<Identity> for SshKeyOverview {
             fingerprint_md5,
             has_saved_password,
             is_managed: false,
+            policy: None,
             agents: Vec::new(),
         }
     }

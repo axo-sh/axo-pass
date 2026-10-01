@@ -97,9 +97,9 @@ final class SshModel {
   }
 
   @discardableResult
-  func addManagedKey() async -> Bool {
+  func addManagedKey(alwaysRequireAuth: Bool) async -> Bool {
     do {
-      let key = try await core.addManagedSshKey()
+      let key = try await core.addManagedSshKey(alwaysRequireAuth: alwaysRequireAuth)
       await reload()
       selectedFingerprint = key.fingerprintSha256
       return true

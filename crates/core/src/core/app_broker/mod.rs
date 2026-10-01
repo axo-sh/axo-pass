@@ -826,6 +826,7 @@ async fn handle_connection(
             let data = b64
                 .decode(&data)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let policy = ssh::resolve_policy(key_label.clone()).await;
             let prompt = SignPrompt {
                 key_label,
                 fingerprint,
@@ -833,6 +834,7 @@ async fn handle_connection(
                 caller,
                 caller_chain: caller_chain.clone(),
                 managed: true,
+                policy,
             };
             log::debug!("App broker request: {prompt:?}");
             ssh::authorize_and_sign(&*authorizers.sign, prompt, actor, data).await
@@ -850,6 +852,7 @@ async fn handle_connection(
                 caller,
                 caller_chain: caller_chain.clone(),
                 managed: false,
+                policy: None,
             };
             log::debug!("App broker request: authorize key use {prompt:?}");
             ssh::authorize_key_use(&*authorizers.sign, prompt, actor).await

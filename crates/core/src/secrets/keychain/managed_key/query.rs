@@ -2,9 +2,12 @@ use std::os::raw::c_void;
 
 use anyhow::anyhow;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFBoolean, CFDictionary, CFMutableDictionary, CFString, CFType, Type};
+use objc2_core_foundation::{
+    CFBoolean, CFData, CFDictionary, CFMutableDictionary, CFString, CFType, Type,
+};
 use objc2_security::{
-    SecKey, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes, kSecReturnRef, kSecValueRef,
+    SecKey, kSecAttrApplicationTag, kSecAttrKeyClass, kSecAttrLabel, kSecReturnAttributes,
+    kSecReturnRef, kSecValueRef,
 };
 
 use crate::secrets::keychain::errors::KeychainError;
@@ -50,6 +53,13 @@ impl KeychainQuery for ManagedKeyQuery {
                 cf_dict_ref.value(kSecAttrLabel as *const _ as *const c_void) as *const CFString;
             let label = label_ptr.as_ref();
 
+            let tag_ptr = cf_dict_ref.value(kSecAttrApplicationTag as *const _ as *const c_void)
+                as *const CFType;
+            let tag = tag_ptr
+                .as_ref()
+                .and_then(|t| t.downcast_ref::<CFData>())
+                .map(|d| String::from_utf8_lossy(d.as_bytes_unchecked()).to_string());
+
             let seckey_ptr =
                 cf_dict_ref.value(kSecValueRef as *const _ as *const c_void) as *const SecKey;
             let Some(sec_key) = seckey_ptr.as_ref() else {
@@ -57,6 +67,7 @@ impl KeychainQuery for ManagedKeyQuery {
             };
             Ok(ManagedKey::new(
                 label.as_ref().map(|l| l.to_string()),
+                tag,
                 sec_key.retain().into(),
             ))
         }

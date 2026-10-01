@@ -18,7 +18,7 @@ use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
 };
-use axo_pass_core::secrets::keychain::managed_key::ManagedSshKey;
+use axo_pass_core::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 use axo_pass_core::secrets::vaults::vault_export::{
     BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity,
     WorkFactor as CoreWorkFactor,
@@ -253,6 +253,22 @@ pub enum SshKeyLocation {
     SshDir,
 }
 
+/// Mirrors [`KeyPolicy`].
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SshKeyPolicy {
+    Default,
+    AlwaysRequireAuth,
+}
+
+impl From<KeyPolicy> for SshKeyPolicy {
+    fn from(p: KeyPolicy) -> Self {
+        match p {
+            KeyPolicy::Default => SshKeyPolicy::Default,
+            KeyPolicy::AlwaysRequireAuth => SshKeyPolicy::AlwaysRequireAuth,
+        }
+    }
+}
+
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SshKeyAgent {
     SystemAgent,
@@ -296,6 +312,8 @@ pub struct SshKeyEntry {
     pub fingerprint_md5: String,
     pub has_saved_password: bool,
     pub is_managed: bool,
+    /// Set for managed keys only.
+    pub policy: Option<SshKeyPolicy>,
     pub agents: Vec<SshKeyAgent>,
 }
 
@@ -332,6 +350,7 @@ impl From<SshKeyOverview> for SshKeyEntry {
             fingerprint_md5: overview.fingerprint_md5,
             has_saved_password: overview.has_saved_password,
             is_managed: overview.is_managed,
+            policy: overview.policy.map(SshKeyPolicy::from),
             agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
         }
     }
@@ -1572,9 +1591,19 @@ impl AxoPass {
     // SSH pane
     // -----------------------------------------------------------------------
 
-    /// Create a new Secure Enclave-backed managed SSH key.
-    pub async fn add_managed_ssh_key(&self) -> Result<SshKeyEntry, FfiError> {
-        let result = ManagedSshKey::create().await.map_err(FfiError::from);
+    /// Create a new Secure Enclave-backed managed SSH key. With
+    /// `always_require_auth`, the Secure Enclave requires authentication for
+    /// every use and the key cannot be granted to an app.
+    pub async fn add_managed_ssh_key(
+        &self,
+        always_require_auth: bool,
+    ) -> Result<SshKeyEntry, FfiError> {
+        let policy = if always_require_auth {
+            KeyPolicy::AlwaysRequireAuth
+        } else {
+            KeyPolicy::Default
+        };
+        let result = ManagedSshKey::create(policy).await.map_err(FfiError::from);
 
         let mut event = audit::AuditEvent::new(
             audit::process_source(),
@@ -1583,6 +1612,10 @@ impl AxoPass {
                 Ok(_) => audit::Outcome::Succeeded,
                 Err(_) => audit::Outcome::Failed,
             },
+        )
+        .detail(
+            "always_require_auth",
+            if always_require_auth { "true" } else { "false" },
         );
         match &result {
             Ok(key) => {

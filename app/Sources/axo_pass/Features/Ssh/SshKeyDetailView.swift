@@ -177,6 +177,9 @@ private struct SshKeyDetail: View {
     HStack(spacing: 8) {
       KeyBadge(text: keyTypeLabel, size: .regular)
       KeyBadge(text: locationLabel, size: .regular)
+      if key.policy == .alwaysRequireAuth {
+        KeyBadge(text: "Always requires authentication", size: .regular)
+      }
       // Secure Enclave keys have no passphrase to save.
       if key.location == .sshDir {
         KeyBadge(

@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::core::auth::run_local_onetime;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, get_ssh_dir};
 
 const SSH_KEY_LABEL_PREFIX: &str = "ssh-key-";
@@ -48,6 +48,10 @@ impl ManagedSshKey {
 
     pub fn public_key(&self) -> &KeyData {
         &self.public_key
+    }
+
+    pub fn policy(&self) -> KeyPolicy {
+        self.managed_key.policy()
     }
 
     /// The public key in OpenSSH format, commented with the key's id. Derived
@@ -126,12 +130,12 @@ impl ManagedSshKey {
 }
 
 impl ManagedSshKey {
-    pub async fn create() -> Result<ManagedSshKey, KeychainError> {
+    pub async fn create(policy: KeyPolicy) -> Result<ManagedSshKey, KeychainError> {
         let key_uuid = Uuid::new_v4();
         let key_id = key_uuid.simple();
         let label = format!("{SSH_KEY_LABEL_PREFIX}{key_id}");
 
-        let managed_key = ManagedKey::create(&label)?;
+        let managed_key = ManagedKey::create(&label, policy)?;
 
         let pubkey = managed_key.public_key()?;
         let key = ManagedSshKey {

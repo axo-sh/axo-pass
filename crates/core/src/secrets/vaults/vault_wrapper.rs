@@ -14,7 +14,7 @@ use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_au
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
@@ -453,7 +453,11 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
         Ok(None) => {
             log::debug!("Vault encryption key not found, initializing new key...");
             run_on_auth_thread(auth_context, AuthMethod::None, move |la_context| {
-                ManagedKey::create_with_context(VAULT_ENCRYPTION_KEY_LABEL, Some(la_context))
+                ManagedKey::create_with_context(
+                    VAULT_ENCRYPTION_KEY_LABEL,
+                    KeyPolicy::AlwaysRequireAuth,
+                    Some(la_context),
+                )
             })
             .map_err(Error::KeyCreationFailed)?
             .map_err(Error::KeyCreationFailed)

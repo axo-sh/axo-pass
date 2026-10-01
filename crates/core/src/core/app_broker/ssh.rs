@@ -22,7 +22,7 @@ use crate::core::auth::{
 use crate::core::provenance::ProcessNode;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
+use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 
 /// What the app needs to describe the prompt.
 #[derive(Debug, Clone)]
@@ -49,6 +49,10 @@ pub struct SignPrompt {
     /// directly (a confirm-on-use gate from `ssh-add -c`). The app words its
     /// prompt differently for each.
     pub managed: bool,
+
+    /// The managed key's policy, read from the keychain by the broker. `None`
+    /// for a key the agent holds directly, or when the key could not be read.
+    pub policy: Option<KeyPolicy>,
 }
 
 /// Supplies an `LAContext` to sign on, and learns how the attempt ended so it
@@ -180,6 +184,21 @@ pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> 
     Ok(identities)
 }
 
+/// Read a managed key's policy without prompting. `None` when the key is not
+/// found or the keychain read fails.
+pub(super) async fn resolve_policy(key_label: String) -> Option<KeyPolicy> {
+    tokio::task::spawn_blocking(move || match ManagedSshKey::find(&key_label) {
+        Ok(key) => key.map(|k| k.policy()),
+        Err(e) => {
+            log::debug!("Could not read the policy of {key_label}: {e}");
+            None
+        },
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 pub(super) async fn authorize_and_sign(
     authorizer: &dyn SignAuthorizer,
     prompt: SignPrompt,
@@ -201,10 +220,14 @@ pub(super) async fn authorize_and_sign(
 
     let key_label = prompt.key_label.clone();
     let caller = prompt.caller.clone();
+    // A key whose policy could not be read is treated as the stricter kind. The
+    // Secure Enclave enforces the real access control either way.
+    let policy = prompt.policy.unwrap_or(KeyPolicy::AlwaysRequireAuth);
     let result = tokio::task::spawn_blocking(move || {
         sign_with_managed_key_on(
             AuthContext::Foreign(context),
             &key_label,
+            policy,
             &data,
             caller.as_deref(),
         )

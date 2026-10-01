@@ -10,7 +10,11 @@ use objc2_security::{
 
 pub enum AccessControl {
     GenericPassword,
+    /// The Secure Enclave requires user presence for every use of the key.
     ManagedKey,
+    /// The Secure Enclave only restricts the key to this device. The app gates
+    /// each use itself, which lets it skip the prompt for a granted app.
+    ManagedKeyAppEnforced,
 }
 
 impl AccessControl {
@@ -31,6 +35,12 @@ impl AccessControl {
                     kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
                     SecAccessControlCreateFlags::UserPresence
                         | SecAccessControlCreateFlags::PrivateKeyUsage,
+                    &mut cf_error_ptr,
+                ),
+                AccessControl::ManagedKeyAppEnforced => SecAccessControl::with_flags(
+                    None,
+                    kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                    SecAccessControlCreateFlags::PrivateKeyUsage,
                     &mut cf_error_ptr,
                 ),
             }

@@ -17,7 +17,7 @@ use ssh_key::Signature;
 use crate::core::auth::la_context::create_la_auth_callback;
 use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::managed_key::ManagedSshKey;
+use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 
 // How long a Touch ID match can be reused, capped by the system at
 // LATouchIDAuthenticationMaximumAllowableReuseDuration (300s as of macOS 15).
@@ -423,9 +423,14 @@ pub fn sign_with_managed_key(
     data: &[u8],
     caller: Option<&str>,
 ) -> Result<Signature, String> {
+    let policy = ManagedSshKey::find(managed_key_label)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("{managed_key_label} not found"))?
+        .policy();
     sign_with_managed_key_on(
         AuthContext::WithContext(managed_key_label.to_string()),
         managed_key_label,
+        policy,
         data,
         caller,
     )
@@ -436,25 +441,57 @@ pub fn sign_with_managed_key(
 /// [`AuthContext::Foreign`] so the app that owns the context draws the prompt.
 /// Unlike [`sign_with_managed_key`] this keeps the error typed, so a caller can
 /// tell a cancelled prompt from a failure.
+///
+/// `policy` selects the prompt. A [`KeyPolicy::AlwaysRequireAuth`] key is
+/// authorized by evaluating its access control. A [`KeyPolicy::Default`] key
+/// has no access control to evaluate, so the context evaluates the device owner
+/// policy instead. Passing the wrong policy does not weaken anything: the
+/// Secure Enclave still enforces the access control the key was created with.
 pub fn sign_with_managed_key_on(
     auth_context: AuthContext,
     managed_key_label: &str,
+    policy: KeyPolicy,
     data: &[u8],
     caller: Option<&str>,
 ) -> Result<Signature, KeychainError> {
-    let managed_key_label = managed_key_label.to_string();
-    let data = data.to_vec();
-    let reason = signing_reason(&managed_key_label, caller);
-
-    run_on_auth_thread(
-        auth_context,
-        AuthMethod::AccessControl {
+    let reason = signing_reason(managed_key_label, caller);
+    let auth_method = match policy {
+        KeyPolicy::AlwaysRequireAuth => AuthMethod::AccessControl {
             access_control: AccessControl::ManagedKey,
             operation: LAAccessControlOperation::UseKeySign,
             reason,
         },
-        move |la_context| match ManagedSshKey::find_with_la_context(&managed_key_label, la_context)
-        {
+        KeyPolicy::Default => AuthMethod::Policy { reason },
+    };
+    sign_with_auth(auth_context, auth_method, managed_key_label, data)
+}
+
+/// Sign with a [`KeyPolicy::Default`] key without a prompt, for a request the
+/// caller has already authorized (an app grant). The caller must check the
+/// key's policy first; a key with a hardware access control still prompts.
+pub fn sign_with_managed_key_preapproved(
+    managed_key_label: &str,
+    data: &[u8],
+) -> Result<Signature, KeychainError> {
+    sign_with_auth(
+        AuthContext::OneTime,
+        AuthMethod::None,
+        managed_key_label,
+        data,
+    )
+}
+
+fn sign_with_auth(
+    auth_context: AuthContext,
+    auth_method: AuthMethod,
+    managed_key_label: &str,
+    data: &[u8],
+) -> Result<Signature, KeychainError> {
+    let managed_key_label = managed_key_label.to_string();
+    let data = data.to_vec();
+
+    run_on_auth_thread(auth_context, auth_method, move |la_context| {
+        match ManagedSshKey::find_with_la_context(&managed_key_label, la_context) {
             Ok(Some(managed_key)) => managed_key
                 .sign(&data)
                 .inspect(|_| log::debug!("Completed signing with key {managed_key_label}"))
@@ -463,6 +500,6 @@ pub fn sign_with_managed_key_on(
                 "{managed_key_label} not found"
             ))),
             Err(e) => Err(e),
-        },
-    )?
+        }
+    })?
 }

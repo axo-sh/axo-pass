@@ -32,8 +32,43 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 use crate::secrets::keychain::managed_key::utils::sec1_to_ssh_ecdsa;
 
+/// `kSecAttrApplicationTag` written on keys created with
+/// [`KeyPolicy::Default`]. Keys without it were created before the policy
+/// existed and carry the hardware access control.
+const APP_ENFORCED_TAG: &str = "axo.ssh.app-enforced";
+
+/// How a managed key's use is authorized. Fixed when the key is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyPolicy {
+    /// The Secure Enclave allows use without a prompt and the app evaluates a
+    /// policy before each use. The app may skip the prompt for a granted app.
+    Default,
+    /// The Secure Enclave requires user presence for every use.
+    AlwaysRequireAuth,
+}
+
+impl KeyPolicy {
+    fn access_control(self) -> AccessControl {
+        match self {
+            KeyPolicy::Default => AccessControl::ManagedKeyAppEnforced,
+            KeyPolicy::AlwaysRequireAuth => AccessControl::ManagedKey,
+        }
+    }
+
+    fn tag(self) -> Option<&'static str> {
+        match self {
+            KeyPolicy::Default => Some(APP_ENFORCED_TAG),
+            KeyPolicy::AlwaysRequireAuth => None,
+        }
+    }
+}
+
 pub struct ManagedKey {
     pub label: Option<String>,
+    /// `kSecAttrApplicationTag`, read from the keychain item's attributes.
+    /// `SecKeyCopyAttributes` on the key ref does not return it.
+    tag: Option<String>,
     sec_key: Retained<SecKey>,
 }
 
@@ -56,12 +91,16 @@ impl ManagedKey {
         query.into()
     }
 
-    pub fn new(label: Option<String>, sec_key: Retained<SecKey>) -> Self {
-        ManagedKey { label, sec_key }
+    pub fn new(label: Option<String>, tag: Option<String>, sec_key: Retained<SecKey>) -> Self {
+        ManagedKey {
+            label,
+            tag,
+            sec_key,
+        }
     }
 
-    pub fn create(label: &str) -> Result<ManagedKey, KeychainError> {
-        Self::create_with_context(label, None)
+    pub fn create(label: &str, policy: KeyPolicy) -> Result<ManagedKey, KeychainError> {
+        Self::create_with_context(label, policy, None)
     }
 
     /// Create a managed key, optionally on a caller-owned `LAContext`. Secure
@@ -70,6 +109,7 @@ impl ManagedKey {
     /// in the app panel rather than the system dialog.
     pub fn create_with_context(
         label: &str,
+        policy: KeyPolicy,
         la_context: Option<Retained<LAContext>>,
     ) -> Result<ManagedKey, KeychainError> {
         log::debug!("Creating new user key with label: {label}");
@@ -80,8 +120,11 @@ impl ManagedKey {
             let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
             private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
 
-            let access_control = AccessControl::ManagedKey.to_sec_access_control()?;
+            let access_control = policy.access_control().to_sec_access_control()?;
             private_attrs.add(kSecAttrAccessControl, &*access_control);
+            if let Some(tag) = policy.tag() {
+                private_attrs.add(kSecAttrApplicationTag, &CFData::from_bytes(tag.as_bytes()));
+            }
 
             if let Some(la_context) = &la_context {
                 let la_context = Retained::as_ptr(la_context) as *const CFType;
@@ -115,7 +158,11 @@ impl ManagedKey {
             // SecKey::new_random_key follows the Create Rule and hands back an
             // owned CFRetained, so this takes it as-is. Retaining again would
             // leak the key, and with it the LAContext the key was created on.
-            let managed_key = ManagedKey::new(Some(label.to_string()), sec_key.into());
+            let managed_key = ManagedKey::new(
+                Some(label.to_string()),
+                policy.tag().map(String::from),
+                sec_key.into(),
+            );
             log::debug!("Created new managed key: {managed_key:?}");
             Ok(managed_key)
         }
@@ -137,12 +184,16 @@ impl ManagedKey {
         }
     }
 
-    pub fn tag(&self) -> Option<String> {
-        unsafe {
-            let attrs = self.sec_key.attributes().unwrap();
-            let attr: &CFDictionary<CFString, CFData> = attrs.cast_unchecked();
-            attr.get(kSecAttrApplicationTag)
-                .map(|d| String::from_utf8_lossy(d.as_bytes_unchecked()).to_string())
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    /// The policy the key was created with. Untagged keys predate the policy
+    /// and carry the hardware access control.
+    pub fn policy(&self) -> KeyPolicy {
+        match self.tag() {
+            Some(APP_ENFORCED_TAG) => KeyPolicy::Default,
+            _ => KeyPolicy::AlwaysRequireAuth,
         }
     }
 
@@ -265,6 +316,7 @@ impl Debug for ManagedKey {
             .field("label", &self.label)
             .field("app_label", &self.app_label())
             .field("tag", &self.tag())
+            .field("policy", &self.policy())
             .field("is_private", &self.is_private())
             .finish()
     }
