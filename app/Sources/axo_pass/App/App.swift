@@ -79,6 +79,10 @@ struct AxoPassApp: App {
         SettingsMenuItem()
           .environment(appDelegate.model)
       }
+      CommandGroup(after: .appSettings) {
+        LockMenuItem()
+          .environment(appDelegate.model)
+      }
       CommandGroup(after: .help) {
         AuditLogMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
@@ -105,6 +109,17 @@ struct AxoPassApp: App {
   static let mainWindowID = "main"
   static let auditWindowID = "audit"
   static let keychainWindowID = "keychain"
+}
+
+/// Axo Pass ▸ Lock, bound to Command-L. Disabled while already locked.
+private struct LockMenuItem: View {
+  @Environment(VaultsModel.self) private var model
+
+  var body: some View {
+    Button("Lock") { model.lock() }
+      .keyboardShortcut("l", modifiers: .command)
+      .disabled(!model.isAppUnlocked)
+  }
 }
 
 /// Help ▸ Audit Log. The Audit Log is only available while unlocked; a locked
