@@ -48,7 +48,7 @@ private struct SshKeyDetail: View {
           }
         }
         // Everything the pills already say is left to them.
-        if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase {
+        if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase || showsAutoload {
           sectionTitle("Details")
           InsetGroupedSection {
             VStack(spacing: 8) {
@@ -75,6 +75,12 @@ private struct SshKeyDetail: View {
                   remove: { showingDeletePassphraseConfirmation = true }
                 )
               }
+              if showsAutoload {
+                if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase {
+                  Divider()
+                }
+                autoloadRow
+              }
             }
           }
         }
@@ -90,7 +96,7 @@ private struct SshKeyDetail: View {
           sectionTitle("Known Hosts")
           InsetGroupedSection { hostsTable }
         }
-        if key.policy == .default {
+        if grantsApply {
           sectionTitle("Allowed Apps")
           InsetGroupedSection { allowedApps }
         }
@@ -108,7 +114,7 @@ private struct SshKeyDetail: View {
         fingerprintSha256: key.fingerprintSha256, limit: Self.recentEventCount)
       relatedHosts = await model.relatedHosts(fingerprintSha256: key.fingerprintSha256)
       appGrants =
-        key.policy == .default
+        grantsApply
         ? await model.appGrants(fingerprintSha256: key.fingerprintSha256) : []
     }
     .onChange(of: key.fingerprintSha256) { copiedPublicKey = false }
@@ -143,6 +149,29 @@ private struct SshKeyDetail: View {
   /// A key file on disk can carry a passphrase worth saving. Secure Enclave
   /// keys and agent-only identities have none.
   private var showsPassphrase: Bool { key.location == .sshDir }
+
+  /// Only a key file on disk can be auto-loaded.
+  /// A key file on disk can be auto-loaded. A configured key shows here
+  /// wherever it was found, e.g. one added to the agent by hand, so it can be
+  /// turned off.
+  private var showsAutoload: Bool {
+    key.autoload || (key.location == .sshDir && key.path != nil)
+  }
+
+  /// Every key can hold app grants except a Secure Enclave key that always
+  /// requires authentication.
+  private var grantsApply: Bool { key.policy != .alwaysRequireAuth }
+
+  /// When a key the agent holds uses its grants. Nil for Secure Enclave keys,
+  /// where grants always apply.
+  private var grantsNote: String? {
+    guard !key.isManaged else { return nil }
+    let confirmNote = "Keys added with ssh-add -c ask every time."
+    if key.autoload {
+      return confirmNote
+    }
+    return "These apps sign without asking only while auto-load is on. \(confirmNote)"
+  }
 
   // MARK: - Header
 
@@ -193,6 +222,9 @@ private struct SshKeyDetail: View {
       KeyBadge(text: locationLabel, size: .regular)
       if key.policy == .alwaysRequireAuth {
         KeyBadge(text: "Always requires authentication", size: .regular)
+      }
+      if key.autoload {
+        KeyBadge(text: "Auto-load", size: .regular)
       }
       // Secure Enclave keys have no passphrase to save.
       if key.location == .sshDir {
@@ -315,8 +347,8 @@ private struct SshKeyDetail: View {
   private var allowedApps: some View {
     if appGrants.isEmpty {
       Text(
-        "No apps. Tick \u{201C}Always allow\u{201D} when an app asks to sign to let it use this "
-          + "key without asking."
+        "No apps. Tick \u{201C}Allow\u{201D} when an app asks to sign to let it use this key "
+          + "without asking."
       )
       .font(.callout)
       .foregroundStyle(.secondary)
@@ -329,10 +361,13 @@ private struct SshKeyDetail: View {
           }
           allowedAppRow(grant)
         }
-        Text("Anything these apps run, such as git hooks, can also use this key.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
+        Text(
+          ["Anything these apps run, such as git hooks, can also use this key.", grantsNote]
+            .compactMap { $0 }.joined(separator: " ")
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
   }
@@ -355,6 +390,9 @@ private struct SshKeyDetail: View {
           .foregroundStyle(.secondary)
       }
       Spacer()
+      Text(expiryText(grant))
+        .font(.caption)
+        .foregroundStyle(.secondary)
       Button("Remove") {
         Task {
           if await model.removeAppGrant(fingerprintSha256: key.fingerprintSha256, app: grant.app) {
@@ -364,6 +402,17 @@ private struct SshKeyDetail: View {
       }
       .controlSize(.small)
     }
+  }
+
+  /// The list is loaded when the key is selected, so a grant can pass its
+  /// expiration while shown. It stops applying at that time regardless.
+  private func expiryText(_ grant: SshAppGrant) -> String {
+    guard let expiresAt = grant.expiresAt else { return "No expiration" }
+    let date = Date(timeIntervalSince1970: TimeInterval(expiresAt))
+    if date <= Date() {
+      return "Expired"
+    }
+    return "Expires \(date.formatted(.relative(presentation: .named)))"
   }
 
   private func columnHeader(_ text: String) -> some View {
@@ -400,6 +449,33 @@ private struct SshKeyDetail: View {
         Task { await model.writeManagedKeyPubkey(fingerprintSha256: key.fingerprintSha256) }
       }
       .controlSize(.small)
+    }
+  }
+
+  /// The Axo agent lists the key from the start and reads it from disk the
+  /// first time something signs with it.
+  private var autoloadRow: some View {
+    // An untitled checkbox has no text baseline, so this row centers it on the
+    // label instead of using the inspector style's baseline alignment.
+    HStack(alignment: .center, spacing: 8) {
+      Text("Auto-load")
+        .foregroundStyle(.secondary)
+        .frame(width: 100, alignment: .leading)
+      Toggle(
+        "Auto-load",
+        isOn: Binding(
+          get: { key.autoload },
+          set: { enabled in
+            guard let path = key.path else { return }
+            Task {
+              await model.setAutoload(
+                fingerprintSha256: key.fingerprintSha256, path: path, enabled: enabled)
+            }
+          })
+      )
+      .toggleStyle(.checkbox)
+      .labelsHidden()
+      Spacer()
     }
   }
 

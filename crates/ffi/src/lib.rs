@@ -28,12 +28,12 @@ use axo_pass_core::secrets::vaults::{
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
-use axo_pass_core::ssh::app_grants;
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
 };
 use axo_pass_core::ssh::related_hosts::{self, RelatedHost};
 use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
+use axo_pass_core::ssh::{app_grants, autoload};
 use axo_pass_core::{audit, shell_integration};
 use secrecy::{ExposeSecret, SecretString};
 
@@ -317,6 +317,8 @@ pub struct SshKeyEntry {
     /// Set for managed keys only.
     pub policy: Option<SshKeyPolicy>,
     pub agents: Vec<SshKeyAgent>,
+    /// The Axo agent advertises this `~/.ssh` key and loads it on first use.
+    pub autoload: bool,
 }
 
 impl From<CoreSshKeyLocation> for SshKeyLocation {
@@ -354,6 +356,7 @@ impl From<SshKeyOverview> for SshKeyEntry {
             is_managed: overview.is_managed,
             policy: overview.policy.map(SshKeyPolicy::from),
             agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
+            autoload: overview.autoload,
         }
     }
 }
@@ -392,6 +395,8 @@ pub struct SshAppGrant {
     pub app: SshGrantApp,
     /// Unix seconds.
     pub created_at: i64,
+    /// Unix seconds. `None` for a grant with no expiration.
+    pub expires_at: Option<i64>,
 }
 
 impl From<app_grants::AppGrant> for SshAppGrant {
@@ -399,6 +404,7 @@ impl From<app_grants::AppGrant> for SshAppGrant {
         SshAppGrant {
             app: grant.app.into(),
             created_at: grant.created_at.unix_timestamp(),
+            expires_at: grant.expires_at.map(|t| t.unix_timestamp()),
         }
     }
 }
@@ -443,10 +449,12 @@ fn canonical_ssh_fingerprint(fingerprint: &str) -> String {
 }
 
 /// Record an `ssh.app_grant_add` or `ssh.app_grant_remove` event.
+/// `expires_in_seconds` is the added grant's expiration, if it has one.
 fn record_app_grant_event(
     action: audit::Action,
     fingerprint: &str,
     bundle_id: &str,
+    expires_in_seconds: Option<u32>,
     peer: Option<RequestActor>,
     result: &Result<(), FfiError>,
 ) {
@@ -465,6 +473,9 @@ fn record_app_grant_event(
     )
     .detail("grant", format!("app:{bundle_id}"))
     .maybe_actor(peer.map(audit::Actor::from));
+    if let Some(seconds) = expires_in_seconds {
+        event = event.detail("expires_in", seconds.to_string());
+    }
     if let Err(e) = result {
         event = event.message(e.to_string());
     }
@@ -1786,31 +1797,39 @@ impl AxoPass {
             .map_err(FfiError::from)
     }
 
-    /// Give `app` lasting access to a managed SSH key. Fails for a key that
-    /// always requires authentication. `peer` is the requester the grant was
-    /// given from, for the audit event.
+    /// Give `app` lasting access to an SSH key. Fails for a managed key that
+    /// always requires authentication. For a key the agent holds, the grant
+    /// applies while the key is auto-loaded, and never to a key added with
+    /// `ssh-add -c`. `peer` is the requester the grant was given from, for the
+    /// audit event.
     pub async fn add_ssh_app_grant(
         &self,
         fingerprint_sha256: String,
         app: SshGrantApp,
+        // Seconds until the grant expires, from 30 seconds to 12 hours. `None`
+        // for a grant with no expiration.
+        expires_in_seconds: Option<u32>,
         peer: Option<RequestActor>,
     ) -> Result<(), FfiError> {
         let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
         let bundle_id = app.bundle_id.clone();
         let fp = fingerprint.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let key = ManagedSshKey::list()
+            let expires_in = expires_in_seconds
+                .map(app_grants::expiration_from_seconds)
+                .transpose()
+                .map_err(FfiError::InvalidInput)?;
+            let managed = ManagedSshKey::list()
                 .map_err(FfiError::from)?
                 .into_iter()
-                .find(|k| format!("SHA256:{}", k.fingerprint_sha256()) == fp)
-                .ok_or_else(|| FfiError::NotFound(fp.clone()))?;
-            if key.policy() != KeyPolicy::Default {
+                .find(|k| format!("SHA256:{}", k.fingerprint_sha256()) == fp);
+            if managed.is_some_and(|key| key.policy() != KeyPolicy::Default) {
                 return Err(FfiError::InvalidInput(
                     "This key always requires authentication and cannot be granted to an app."
                         .to_string(),
                 ));
             }
-            app_grants::add(&fp, app.into())
+            app_grants::add(&fp, app.into(), expires_in)
                 .map(|_| ())
                 .map_err(FfiError::from)
         })
@@ -1821,6 +1840,7 @@ impl AxoPass {
             audit::Action::SshAppGrantAdd,
             &fingerprint,
             &bundle_id,
+            expires_in_seconds,
             peer,
             &result,
         );
@@ -1849,9 +1869,28 @@ impl AxoPass {
             &fingerprint,
             &bundle_id,
             None,
+            None,
             &result,
         );
         result
+    }
+
+    /// Turn auto-load on or off for the `~/.ssh` key at `path`. The Axo agent
+    /// picks up the change on its next request. The key's app grants are kept,
+    /// and apply only while auto-load is on.
+    pub async fn set_ssh_autoload(
+        &self,
+        fingerprint_sha256: String,
+        path: String,
+        enabled: bool,
+    ) -> Result<(), FfiError> {
+        let fingerprint = canonical_ssh_fingerprint(&fingerprint_sha256);
+        tokio::task::spawn_blocking(move || {
+            autoload::set(&fingerprint, std::path::Path::new(&path), enabled)
+                .map_err(|e| FfiError::InvalidInput(format!("{e:#}")))
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
     /// Hosts an SSH key signed in to, from the audit log.

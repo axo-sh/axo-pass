@@ -162,6 +162,21 @@ final class SshModel {
     }
   }
 
+  /// Turn auto-load on or off for a `~/.ssh` key. Turning it off removes the
+  /// key's app grants.
+  @discardableResult
+  func setAutoload(fingerprintSha256: String, path: String, enabled: Bool) async -> Bool {
+    do {
+      try await core.setSshAutoload(
+        fingerprintSha256: fingerprintSha256, path: path, enabled: enabled)
+      await reload()
+      return true
+    } catch {
+      loadError = String(describing: error)
+      return false
+    }
+  }
+
   /// The most recent SSH audit events for one key, newest first. Events name
   /// their key by SHA256 fingerprint, which the reader's query matches against
   /// the subject id.

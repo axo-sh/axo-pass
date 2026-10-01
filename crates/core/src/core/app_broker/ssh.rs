@@ -147,25 +147,29 @@ pub fn request_signature(
     }
 }
 
-/// Ask the app to gate a confirm-on-use signature (`ssh-add -c`) for a key the
-/// agent holds itself. The app draws the prompt and evaluates the biometric
-/// check; the agent does the signing once this returns `Ok`. Blocking, for the
-/// same reason as [`request_signature`].
+/// Ask the app to gate a signature for a key the agent holds itself: one added
+/// with `ssh-add -c`, or an auto-loaded key. The app draws the prompt and
+/// evaluates the biometric check; the agent does the signing once this returns
+/// `Ok`. Blocking, for the same reason as [`request_signature`].
 ///
 /// `Err(BrokerError::Cancelled)` means the user declined. Any other error means
 /// the app could not be reached or the prompt failed, and the caller should
 /// fall back to the system dialog.
+///
+/// With `allow_grants`, an app grant for the key answers without a prompt.
 pub fn request_authorize_key_use(
     fingerprint: Option<&str>,
     comment: Option<&str>,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    allow_grants: bool,
 ) -> Result<(), BrokerError> {
     let request = WireRequest::AuthorizeKeyUse {
         fingerprint: fingerprint.map(String::from),
         comment: comment.map(String::from),
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
+        allow_grants,
     };
     match send_request(&request)? {
         WireResponse::Confirmed { ok: true } => Ok(()),
@@ -236,7 +240,14 @@ async fn find_grant(
         .ok()?
         .inspect_err(|e| log::warn!("Could not read SSH app grants: {e}"))
         .ok()?;
-    app_grants::find_match(&grants, &key.fingerprint, key.policy, caller_chain).cloned()
+    app_grants::find_match(
+        &grants,
+        &key.fingerprint,
+        key.policy,
+        caller_chain,
+        time::OffsetDateTime::now_utc(),
+    )
+    .cloned()
 }
 
 /// Sign without a prompt for an app that holds a grant. `None` when the
@@ -268,6 +279,21 @@ async fn sign_preapproved(
         },
     };
 
+    record_grant_use(authorizer, prompt, peer, grant).await;
+    Some(WireResponse::Signed {
+        algorithm: signature.algorithm().to_string(),
+        signature: b64.encode(signature.as_bytes()),
+    })
+}
+
+/// Record that an app grant authorized a signature, and tell the app so it can
+/// report the use.
+async fn record_grant_use(
+    authorizer: &dyn SignAuthorizer,
+    prompt: &SignPrompt,
+    peer: &audit::Actor,
+    grant: app_grants::AppGrant,
+) {
     let mut subject = audit::Subject::new(audit::SubjectKind::SshKey, grant.fingerprint.clone())
         .fingerprint(grant.fingerprint.clone());
     if let Some(comment) = prompt.comment.as_deref().filter(|c| !c.is_empty()) {
@@ -288,10 +314,6 @@ async fn sign_preapproved(
     authorizer
         .notify_preapproved(prompt.clone(), grant.app)
         .await;
-    Some(WireResponse::Signed {
-        algorithm: signature.algorithm().to_string(),
-        signature: b64.encode(signature.as_bytes()),
-    })
 }
 
 /// Serve a managed-key signature: without a prompt when an app grant covers
@@ -403,11 +425,28 @@ async fn authorize_and_sign(
 
 /// Draw the confirm-on-use prompt and evaluate the biometric check on a
 /// context the app owns. The agent signs once this returns `Confirmed`.
+///
+/// With `allow_grants`, a matching app grant confirms without a prompt, and
+/// otherwise the prompt may offer one. The fingerprint is the agent's: the
+/// agent holds the key and does the signing, so it is trusted to name it.
 pub(super) async fn authorize_key_use(
     authorizer: &dyn SignAuthorizer,
-    prompt: SignPrompt,
+    mut prompt: SignPrompt,
     peer: audit::Actor,
+    allow_grants: bool,
 ) -> WireResponse {
+    if allow_grants && let Some(fingerprint) = prompt.fingerprint.clone() {
+        let key = ResolvedKey {
+            policy: KeyPolicy::Default,
+            fingerprint,
+        };
+        if let Some(grant) = find_grant(&key, &prompt.caller_chain).await {
+            record_grant_use(authorizer, &prompt, &peer, grant).await;
+            return WireResponse::Confirmed { ok: true };
+        }
+        prompt.grant_candidate = app_grants::candidate_app(&prompt.caller_chain);
+    }
+
     let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
         Err(message) => {

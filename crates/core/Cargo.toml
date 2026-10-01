@@ -43,7 +43,7 @@ serde_with = {version = "3.23.0", features = ["base64"]}
 shlex = "2.0.1"
 ssh-agent-lib = "0.6.0"
 ssh-encoding = "0.2"
-ssh-key = {version = "0.6.7", features = ["rsa"]}
+ssh-key = {version = "0.6.7", features = ["rsa", "encryption"]}
 thiserror.workspace = true
 time = {version = "0.3.55", features = ["local-offset", "serde", "serde-well-known"]}
 tokio.workspace = true

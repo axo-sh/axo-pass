@@ -221,6 +221,12 @@ enum WireRequest {
         /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
+
+        /// Whether an app grant may answer this prompt, and the prompt may
+        /// offer one. True for an auto-loaded key. False for a key added with
+        /// `ssh-add -c`, which prompts on every use.
+        #[serde(default)]
+        allow_grants: bool,
     },
 
     /// `ap item list`: unlock a vault and return its item overview, never a
@@ -851,6 +857,7 @@ async fn handle_connection(
             comment,
             caller,
             caller_chain: _,
+            allow_grants,
         } => {
             let prompt = SignPrompt {
                 key_label: String::new(),
@@ -862,8 +869,10 @@ async fn handle_connection(
                 policy: None,
                 grant_candidate: None,
             };
-            log::debug!("App broker request: authorize key use {prompt:?}");
-            ssh::authorize_key_use(&*authorizers.sign, prompt, actor).await
+            log::debug!(
+                "App broker request: authorize key use {prompt:?}, allow grants {allow_grants}"
+            );
+            ssh::authorize_key_use(&*authorizers.sign, prompt, actor, allow_grants).await
         },
         WireRequest::GetPassphrase {
             key_id,

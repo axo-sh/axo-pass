@@ -150,10 +150,11 @@ private struct GeneralSettingsView: View {
         isOn: $reuseApprovals)
       Text(
         """
-        After you approve an SSH, GPG, or `ap` request, the same program can repeat it \
-        on the same key without prompting. That ends \(Self.idle) after its last request, \
-        or \(Self.absolute) after the initial approval, whichever comes first. Reading a secret \
-        always prompts.
+        After you approve a GPG or `ap` request, the same program can repeat it on the \
+        same key without prompting. That ends \(Self.idle) after its last request, or \
+        \(Self.absolute) after the initial approval, whichever comes first. Reading a secret \
+        always prompts. SSH signatures always prompt, except for apps allowed in a key's \
+        details.
         """
       )
       .settingsCaption()

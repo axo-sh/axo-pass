@@ -15,12 +15,19 @@ use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::agent::current_agent_info;
 use crate::cli::commands::ssh_agent::audit;
+use crate::cli::commands::ssh_agent::autoload_credential::{
+    self, LoadError, find_autoload_key, is_autoload_key, list_autoload_keys,
+};
 use crate::cli::commands::ssh_agent::credential::Credential;
 use crate::cli::commands::ssh_agent::managed_credential::list_managed_credentials;
 use crate::cli::commands::ssh_agent::server::StopReason;
 use crate::cli::commands::ssh_agent::session_binding::SessionBinding;
 use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 use crate::cli::commands::ssh_agent::userauth_request::UserauthRequest;
+
+/// Serializes first-use loading of auto-load keys across sessions, so
+/// concurrent requests for one key prompt once.
+static AUTOLOAD_LOCK: Mutex<()> = Mutex::const_new(());
 
 pub struct SshAgentSession {
     caller: Option<String>,
@@ -72,8 +79,18 @@ impl SshAgentSession {
             self.remove_credential(&pubkey_data).await;
         }
 
+        self.store_credential(credential).await;
+    }
+
+    /// Record the `ssh.key_add` event for `credential` and add it to the
+    /// shared state.
+    async fn store_credential(&self, credential: StoredCredential) {
+        let pubkey_data = credential.public_key_data();
         log::debug!("Adding {:?}", credential);
         let mut detail: Vec<(&str, String)> = Vec::new();
+        if credential.autoload {
+            detail.push(("autoload", "true".to_string()));
+        }
         if credential.expires_at.is_some() {
             detail.push(("lifetime_constrained", "true".to_string()));
         }
@@ -112,7 +129,12 @@ impl SshAgentSession {
     }
 
     pub async fn find_credential(&self, pubkey: &KeyData) -> Option<Box<dyn Credential>> {
-        if let Some(cred) = self.find_stored_credential(pubkey).await {
+        if let Some(mut cred) = self.find_stored_credential(pubkey).await {
+            // An auto-load key keeps its per-use check when it was added by
+            // hand. A `-c` constraint on the added copy still takes precedence.
+            if !cred.autoload && is_autoload_key(pubkey) {
+                cred.autoload = true;
+            }
             return Some(Box::new(cred) as _);
         }
 
@@ -130,6 +152,39 @@ impl SshAgentSession {
         }
 
         None
+    }
+
+    /// Load `pubkey` into the shared state if it is an auto-load key that is
+    /// not loaded yet. The signature that caused the load still goes through
+    /// the confirm-on-use check.
+    async fn load_autoload_key(&self, pubkey: &KeyData) -> Result<(), AgentError> {
+        if self.find_stored_credential(pubkey).await.is_some() {
+            return Ok(());
+        }
+        let Some(key) = find_autoload_key(pubkey) else {
+            return Ok(());
+        };
+
+        // Concurrent first uses of one key wait here, then find it loaded.
+        let _guard = AUTOLOAD_LOCK.lock().await;
+        if self.find_stored_credential(pubkey).await.is_some() {
+            return Ok(());
+        }
+
+        let credential =
+            autoload_credential::load(&key, self.caller.as_deref(), self.caller_chain()).map_err(
+                |e| {
+                    match &e {
+                        LoadError::Cancelled(_) => log::debug!("{e}"),
+                        LoadError::Failed(_) => {
+                            log::error!("Failed to load auto-load key {}: {e}", key.fingerprint)
+                        },
+                    }
+                    AgentError::Other(e.into())
+                },
+            )?;
+        self.store_credential(credential).await;
+        Ok(())
     }
 
     pub async fn remove_credential(&mut self, pubkey: &KeyData) -> Option<StoredCredential> {
@@ -261,6 +316,17 @@ impl Session for SshAgentSession {
             }
         }
 
+        // auto-load keys not loaded yet. They carry no destination constraints.
+        for key in list_autoload_keys() {
+            let key_data = key.public_key.key_data();
+            if !creds.iter().any(|c| c.public_key_data() == *key_data) {
+                identities.push(proto::Identity {
+                    credential: proto::PublicCredential::Key(key_data.clone()),
+                    comment: key.public_key.comment().to_string(),
+                });
+            }
+        }
+
         // get managed keys as well
         identities.extend(list_managed_credentials().iter().map(Into::into));
         Ok(identities)
@@ -311,6 +377,10 @@ impl Session for SshAgentSession {
         let pubkey_data = req.credential.key_data().clone();
         let request_data = req.data.clone();
 
+        // An auto-load key is read from disk on first use, before the lookups
+        // below, so they find it.
+        let loaded = self.load_autoload_key(&pubkey_data).await;
+
         // Looked up here for the audit record. `signature_for` does its own
         // lookup, with the checks that gate the signature. The credential is not
         // held across an await: it is not `Send`.
@@ -322,7 +392,10 @@ impl Session for SshAgentSession {
         };
 
         // One `ssh.sign` event is recorded for the request, whatever the outcome.
-        let result = self.signature_for(req, &pubkey_data).await;
+        let result = match loaded {
+            Err(e) => Err(e),
+            Ok(()) => self.signature_for(req, &pubkey_data).await,
+        };
 
         audit::record_sign(
             self.actor.as_ref(),
@@ -477,6 +550,48 @@ mod tests {
                 .iter()
                 .any(|e| e.outcome == axo_pass_core::audit::Outcome::Succeeded),
             "expected a successful ssh.sign audit event"
+        );
+
+        let _ = std::fs::remove_dir_all(&audit_dir);
+    }
+
+    #[tokio::test]
+    async fn test_autoload_key_requires_confirm() {
+        let audit_dir =
+            std::env::temp_dir().join(format!("axo-audit-autoload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&audit_dir);
+        unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", &audit_dir) };
+
+        let data = include_str!("./fixtures/b64_rsa");
+        let private_key = PrivateKey::from_bytes(b64.decode(data).unwrap().as_slice()).unwrap();
+        let public_key = private_key.public_key().clone();
+
+        let mut credential = StoredCredential::from(proto::PrivateCredential::Key {
+            privkey: private_key.key_data().clone(),
+            comment: "autoload-key".to_string(),
+        });
+        credential.autoload = true;
+
+        let state = Arc::new(Mutex::new(Vec::new()));
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let session = SshAgentSession::new(state, None, None, shutdown_tx);
+        session.store_credential(credential).await;
+
+        let stored = session
+            .find_stored_credential(public_key.key_data())
+            .await
+            .expect("credential stored");
+        assert_eq!(stored.confirm_policy(), Some(true));
+
+        let page = axo_pass_core::audit::read(&axo_pass_core::audit::AuditFilter {
+            actions: vec![axo_pass_core::audit::Action::SshKeyAdd],
+            ..Default::default()
+        });
+        assert!(
+            page.events
+                .iter()
+                .any(|e| e.detail.get("autoload").map(String::as_str) == Some("true")),
+            "expected an ssh.key_add event with autoload=true"
         );
 
         let _ = std::fs::remove_dir_all(&audit_dir);

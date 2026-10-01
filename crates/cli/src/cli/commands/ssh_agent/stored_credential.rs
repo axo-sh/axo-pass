@@ -18,8 +18,12 @@ use crate::cli::commands::ssh_agent::managed_credential::call_broker;
 pub struct StoredCredential {
     pub credential: proto::PrivateCredential,
     pub expires_at: Option<UtcDateTime>,
+    /// Added with `ssh-add -c`: every use prompts, and app grants never apply.
     pub requires_auth: bool,
     pub dest_constraints: Vec<extension::DestinationConstraint>,
+    /// Configured for auto-load: every use prompts unless an app grant
+    /// applies. Independent of `requires_auth`, which takes precedence.
+    pub autoload: bool,
 }
 
 impl StoredCredential {
@@ -59,20 +63,33 @@ impl StoredCredential {
             }
         }
 
-        if self.requires_auth {
-            self.confirm_use(caller, caller_chain)?;
+        if let Some(allow_grants) = self.confirm_policy() {
+            self.confirm_use(caller, caller_chain, allow_grants)?;
         }
         Ok(())
     }
 
-    /// Handles a confirm-on-use signature (`ssh-add -c`). Asks the app to
-    /// render the prompt and run authentication, so the user sees the same
-    /// panel as for a managed key. Falls back to the system dialog when no
-    /// app is listening or the prompt fails.
+    /// Whether a use must be confirmed, and if so whether an app grant may
+    /// confirm it. `None` when no confirmation is needed.
+    pub fn confirm_policy(&self) -> Option<bool> {
+        if self.requires_auth {
+            Some(false)
+        } else if self.autoload {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    /// Handles a confirmed signature. Asks the app to render the prompt and
+    /// run authentication, so the user sees the same panel as for a managed
+    /// key. Falls back to the system dialog when no app is listening or the
+    /// prompt fails.
     fn confirm_use(
         &self,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        allow_grants: bool,
     ) -> Result<(), CredentialError> {
         let fingerprint = self
             .public_key_data()
@@ -86,6 +103,7 @@ impl StoredCredential {
                 comment.as_deref(),
                 caller,
                 caller_chain,
+                allow_grants,
             )
         }) {
             Ok(()) => Ok(()),
@@ -104,6 +122,24 @@ impl StoredCredential {
                         log::error!("Authentication failed: {e}");
                         CredentialError::Locked
                     })
+            },
+        }
+    }
+
+    /// Sign once `validate` has passed.
+    fn sign_validated(
+        &self,
+        req: proto::SignRequest,
+    ) -> Result<ssh_key::Signature, CredentialError> {
+        match &self.credential {
+            proto::PrivateCredential::Key { privkey, .. } => {
+                rsa_signing::sign_with_flags(privkey, &req.data, req.flags).map_err(|e| {
+                    log::error!("Failed to sign data with private key: {e:#}");
+                    CredentialError::SigningFailed
+                })
+            },
+            proto::PrivateCredential::Cert { .. } => {
+                todo!("Certificate signing not yet implemented");
             },
         }
     }
@@ -144,17 +180,7 @@ impl Credential for StoredCredential {
         caller_chain: &[ProcessNode],
     ) -> Result<ssh_key::Signature, CredentialError> {
         self.validate(caller, caller_chain)?;
-        match &self.credential {
-            proto::PrivateCredential::Key { privkey, .. } => {
-                rsa_signing::sign_with_flags(privkey, &req.data, req.flags).map_err(|e| {
-                    log::error!("Failed to sign data with private key: {e:#}");
-                    CredentialError::SigningFailed
-                })
-            },
-            proto::PrivateCredential::Cert { .. } => {
-                todo!("Certificate signing not yet implemented");
-            },
-        }
+        self.sign_validated(req)
     }
 
     fn dest_constraints(&self) -> Vec<extension::DestinationConstraint> {
@@ -190,6 +216,7 @@ impl From<proto::PrivateCredential> for StoredCredential {
             expires_at: None,
             requires_auth: false,
             dest_constraints: Vec::new(),
+            autoload: false,
         }
     }
 }
@@ -217,10 +244,43 @@ impl Debug for StoredCredential {
         if self.requires_auth {
             out.push_str(" requires_auth");
         };
+        if self.autoload {
+            out.push_str(" autoload");
+        };
         if let Some(expiry) = self.expires_at {
             out.push_str(&format!(" expires_at={}", expiry));
         }
 
         write!(f, "StoredCredential {{ {} }}", out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
+    use ssh_key::PrivateKey;
+
+    use super::*;
+
+    fn credential(requires_auth: bool, autoload: bool) -> StoredCredential {
+        let data = include_str!("./fixtures/b64_rsa");
+        let private_key = PrivateKey::from_bytes(b64.decode(data).unwrap().as_slice()).unwrap();
+        let mut credential = StoredCredential::from(proto::PrivateCredential::Key {
+            privkey: private_key.key_data().clone(),
+            comment: String::new(),
+        });
+        credential.requires_auth = requires_auth;
+        credential.autoload = autoload;
+        credential
+    }
+
+    #[test]
+    fn confirm_policy() {
+        assert_eq!(credential(false, false).confirm_policy(), None);
+        assert_eq!(credential(false, true).confirm_policy(), Some(true));
+        // `ssh-add -c` prompts every time, even for an auto-load key.
+        assert_eq!(credential(true, false).confirm_policy(), Some(false));
+        assert_eq!(credential(true, true).confirm_policy(), Some(false));
     }
 }

@@ -75,9 +75,9 @@ final class SigningPromptModel {
     active = ActiveRequest(
       key: key, managed: managed, grantCandidate: grantCandidate, grantChoice: grantChoice,
       fingerprint: fingerprint, peer: peer)
-    // Confirm-on-use keys (`ssh-add -c`) prompt every time: the point of the
-    // constraint is that every signature is approved, so no approval is reused.
-    let grant = grants.begin(key, policy: managed ? .standard : .everyUse, peer: peer)
+    // Every SSH signature prompts. An app the user allowed in the key's
+    // details signs without reaching here, for as long as that grant lasts.
+    let grant = grants.begin(key, policy: .everyUse, peer: peer)
     let keyName = comment ?? Self.shortName(keyLabel: keyLabel, fingerprint: fingerprint)
 
     // A context that is still authenticated signs with no prompt at all. Delay
@@ -109,13 +109,15 @@ final class SigningPromptModel {
     let name = key.subject.label ?? Self.shortName(keyLabel: keyLabel, fingerprint: key.subject.id)
     report(name: name, caller: key.caller, managed: active.managed, outcome: outcome)
 
-    if case .succeeded = outcome, active.grantChoice.allowAlways,
+    if case .succeeded = outcome, active.grantChoice.allow,
       let app = active.grantCandidate, let fingerprint = active.fingerprint
     {
       let peer = active.peer
+      let expiresIn = active.grantChoice.expiration.seconds
       Task {
         do {
-          try await core.addSshAppGrant(fingerprintSha256: fingerprint, app: app, peer: peer)
+          try await core.addSshAppGrant(
+            fingerprintSha256: fingerprint, app: app, expiresInSeconds: expiresIn, peer: peer)
         } catch {
           NSLog("SigningPrompt: could not save app grant: %@", String(describing: error))
         }
@@ -129,7 +131,10 @@ final class SigningPromptModel {
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?, app: SshGrantApp
   ) {
     let name = comment ?? Self.shortName(keyLabel: keyLabel, fingerprint: fingerprint)
-    report(name: name, caller: caller ?? app.displayName, managed: true, outcome: .succeeded)
+    // An auto-loaded key held by the agent has no key label.
+    report(
+      name: name, caller: caller ?? app.displayName, managed: !keyLabel.isEmpty,
+      outcome: .succeeded)
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
@@ -207,11 +212,43 @@ final class SigningPromptModel {
   }
 }
 
-/// Whether the user ticked "Always allow" in the panel. A class so the panel
-/// and the model share it.
+/// Whether the user ticked "Allow" in the panel, and for how long. A class so
+/// the panel and the model share it.
 @Observable
 final class GrantChoice {
-  var allowAlways = false
+  var allow = false
+  var expiration: GrantExpiration = .oneHour
+}
+
+/// How long an app grant lasts. The core accepts 30 seconds to 12 hours, or
+/// no expiration.
+enum GrantExpiration: CaseIterable, Hashable {
+  case thirtySeconds
+  case fiveMinutes
+  case oneHour
+  case twelveHours
+  case never
+
+  /// Nil for no expiration.
+  var seconds: UInt32? {
+    switch self {
+    case .thirtySeconds: 30
+    case .fiveMinutes: 5 * 60
+    case .oneHour: 60 * 60
+    case .twelveHours: 12 * 60 * 60
+    case .never: nil
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .thirtySeconds: "30 seconds"
+    case .fiveMinutes: "5 minutes"
+    case .oneHour: "1 hour"
+    case .twelveHours: "12 hours"
+    case .never: "No expiration"
+    }
+  }
 }
 
 private struct SigningPromptView: View {
@@ -240,11 +277,22 @@ private struct SigningPromptView: View {
       CallerChainView(chain: callerChain)
 
       if let grantCandidate {
-        Toggle(
-          "Always allow \(grantCandidate.displayName) to use this key",
-          isOn: $grantChoice.allowAlways
-        )
-        .toggleStyle(.checkbox)
+        HStack(spacing: 6) {
+          Toggle(
+            "Allow \(grantCandidate.displayName) to use this key for",
+            isOn: $grantChoice.allow
+          )
+          .toggleStyle(.checkbox)
+          Picker("Duration", selection: $grantChoice.expiration) {
+            ForEach(GrantExpiration.allCases, id: \.self) { expiration in
+              Text(expiration.label).tag(expiration)
+            }
+          }
+          .labelsHidden()
+          .pickerStyle(.menu)
+          .fixedSize()
+          .disabled(!grantChoice.allow)
+        }
         .help(
           "\(grantCandidate.displayName) and anything it runs, such as git hooks, will sign "
             + "with this key without asking. Remove access in the key's details.")

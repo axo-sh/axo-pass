@@ -4,6 +4,7 @@ use std::path::Path;
 
 use ssh_agent_lib::proto::Identity;
 
+use crate::core::config::APP_CONFIG;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 use crate::ssh::agent_client::{list_axo_agent_identities, list_system_agent_identities};
@@ -46,6 +47,8 @@ pub struct SshKeyOverview {
     /// Set for managed keys only.
     pub policy: Option<KeyPolicy>,
     pub agents: Vec<SshKeyAgentKind>,
+    /// The Axo agent advertises this key and loads it on first use.
+    pub autoload: bool,
 }
 
 /// Read a `.pub` file's single line, ignoring an unreadable or empty file.
@@ -79,6 +82,7 @@ impl From<SystemSshKey> for SshKeyOverview {
             is_managed: false,
             policy: None,
             agents: Vec::new(),
+            autoload: false,
         }
     }
 }
@@ -103,6 +107,7 @@ impl From<ManagedSshKey> for SshKeyOverview {
             is_managed: true,
             policy: Some(managed_key.policy()),
             agents: Vec::new(),
+            autoload: false,
         }
     }
 }
@@ -131,6 +136,7 @@ impl From<Identity> for SshKeyOverview {
             is_managed: false,
             policy: None,
             agents: Vec::new(),
+            autoload: false,
         }
     }
 }
@@ -176,6 +182,15 @@ pub async fn list_all_ssh_keys() -> anyhow::Result<Vec<SshKeyOverview>> {
                 keys_map.insert(fingerprint_sha256, key_entry);
             }
         }
+    }
+
+    let autoload = APP_CONFIG
+        .lock()
+        .map(|config| config.ssh_autoload.clone())
+        .unwrap_or_default();
+    for key_entry in keys_map.values_mut() {
+        key_entry.autoload =
+            autoload.contains_key(&format!("SHA256:{}", key_entry.fingerprint_sha256));
     }
 
     let mut keys: Vec<SshKeyOverview> = keys_map.into_values().collect();
