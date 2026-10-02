@@ -207,8 +207,8 @@ struct PaletteView: View {
       }
       .frame(width: 56, height: 56)
 
-      Text("Unlock Axo Pass")
-        .font(.headline)
+      Text("Unlock Axo Pass to continue")
+        .font(.headline.weight(.semibold))
 
       if let error = model.vaults.unlockError {
         Text(error)
@@ -223,10 +223,6 @@ struct PaletteView: View {
         Button("Use Login Password…", action: model.unlockWithPassword)
           .buttonStyle(.link)
       }
-
-      Text("Option-click the menu bar icon for more options.")
-        .font(.caption)
-        .foregroundStyle(.tertiary)
     }
     .padding(24)
     .frame(maxWidth: .infinity)
