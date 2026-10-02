@@ -139,6 +139,10 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
             // Shared LAContext for the thread; allows reuse.
             let mut thread_la_context = init_shared_la_context();
 
+            // Whether `thread_la_context` has been authenticated, so evaluating a
+            // policy on it returns without showing a prompt.
+            let mut shared_authenticated = false;
+
             // Cache of keyed contexts
             let mut la_cache: LruCache<String, Retained<LAContext>> =
                 LruCache::new(NonZero::new(LA_CONTEXT_CACHE_SIZE).unwrap());
@@ -153,15 +157,19 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                     AuthMessage::Invalidate(reply) => {
                         log::debug!("Invalidating all LAContext instances");
                         thread_la_context = init_shared_la_context();
+                        shared_authenticated = false;
                         la_cache.clear();
                         let _ = reply.send(());
                     },
                     AuthMessage::AdoptContext(context, reply) => {
                         log::debug!("Adopting externally created LAContext as the shared context");
                         thread_la_context = context.context;
+                        // The app evaluated the context before handing it over.
+                        shared_authenticated = true;
                         let _ = reply.send(());
                     },
                     AuthMessage::Work(work) => {
+                        let is_shared = matches!(work.context, AuthContext::SharedThreadLocal);
                         let selected_la_ctx = match work.context {
                             AuthContext::WithContext(ref key) => {
                                 log::debug!("Running auth work with context {key}");
@@ -171,26 +179,32 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                             },
                             AuthContext::SharedThreadLocal => thread_la_context.clone(),
                             AuthContext::OneTime => unsafe { LAContext::new() },
-                            AuthContext::Foreign(ref context) => context.context.clone(),
+                            AuthContext::Foreign(_) => {
+                                unreachable!("foreign contexts run on the caller's thread")
+                            },
                         };
-                        let foreign = match &work.context {
-                            AuthContext::Foreign(context) => Some(context),
-                            _ => None,
+                        // A policy evaluation on the authenticated shared context
+                        // shows no prompt, so it does not wait for the auth lock.
+                        // Another prompt holding that lock, such as a broker
+                        // panel, would otherwise block vault reads until it
+                        // closes.
+                        let lock = if is_shared
+                            && shared_authenticated
+                            && matches!(work.auth, AuthMethod::Policy { .. })
+                        {
+                            AuthLock::Skip
+                        } else {
+                            AuthLock::Wait
                         };
-                        let is_foreign_context = foreign.is_some();
-                        match authenticate(selected_la_ctx.clone(), work.auth, foreign) {
+                        let is_policy = matches!(work.auth, AuthMethod::Policy { .. });
+                        match authenticate(selected_la_ctx.clone(), work.auth, lock) {
                             Ok(_) => {
                                 log::debug!("Authentication successful ({:?})", work.context);
+                                if is_shared && is_policy {
+                                    shared_authenticated = true;
+                                }
                                 let _ = work.auth_reply.send(Ok(()));
                                 (work.work)(selected_la_ctx);
-                            },
-                            // A foreign context becomes invalid because its owner
-                            // invalidated it, i.e. dismissed its prompt.
-                            Err(KeychainError::AuthenticationExpired) if is_foreign_context => {
-                                log::debug!("{:?} was invalidated by its owner", work.context);
-                                let _ = work
-                                    .auth_reply
-                                    .send(Err(KeychainError::AuthenticationExpired));
                             },
                             Err(KeychainError::AuthenticationExpired) => {
                                 log::warn!(
@@ -199,6 +213,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 );
                                 // Replace shared thread-local la context
                                 thread_la_context = init_shared_la_context();
+                                shared_authenticated = false;
                                 la_cache.clear();
                                 let _ = work
                                     .auth_reply
@@ -329,26 +344,36 @@ fn open_auth_lock() -> std::fs::File {
 const AUTH_RETRY_ATTEMPTS: u32 = 50;
 const AUTH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// How [`authenticate`] takes the cross-process auth lock.
+enum AuthLock<'a> {
+    /// Wait for the lock.
+    Wait,
+    /// Evaluate without the lock, for an evaluation that shows no prompt.
+    Skip,
+    /// Wait for the lock unless this foreign context is invalidated first.
+    Foreign(&'a ForeignContext),
+}
+
 // Authenticate the LAContext using the specified method. For a context of our
 // own, a system cancellation is retried up to AUTH_RETRY_ATTEMPTS times.
-// `foreign` is set when `la_context` is a foreign context.
 fn authenticate(
     la_context: Retained<LAContext>,
     method: AuthMethod,
-    foreign: Option<&ForeignContext>,
+    lock: AuthLock,
 ) -> Result<(), KeychainError> {
     // Nothing to evaluate and no prompt to serialize against, so skip the lock.
     if matches!(method, AuthMethod::None) {
         return Ok(());
     }
 
-    let is_foreign_context = foreign.is_some();
-    let _lock = match foreign {
-        Some(context) => match acquire_auth_lock_for(context) {
-            Some(lock) => lock,
+    let is_foreign_context = matches!(lock, AuthLock::Foreign(_));
+    let _lock = match lock {
+        AuthLock::Foreign(context) => match acquire_auth_lock_for(context) {
+            Some(lock) => Some(lock),
             None => return Err(KeychainError::AuthenticationExpired),
         },
-        None => acquire_auth_lock(),
+        AuthLock::Wait => Some(acquire_auth_lock()),
+        AuthLock::Skip => None,
     };
     let mut attempts_left = AUTH_RETRY_ATTEMPTS;
     loop {
@@ -407,6 +432,9 @@ where
     F: FnOnce(Retained<LAContext>) -> R + Send + 'static,
     R: Send + 'static,
 {
+    if let AuthContext::Foreign(context) = auth_context {
+        return run_on_foreign_context(context, auth_method, work_fn);
+    }
     let (reply_tx, reply_rx) = mpsc::channel::<R>();
     let (auth_tx, auth_rx) = mpsc::channel::<Result<(), KeychainError>>();
     let work = AuthWork {
@@ -426,6 +454,43 @@ where
 
     auth_rx.recv().expect("shared-auth thread stopped")?;
     Ok(reply_rx.recv().expect("shared-auth thread stopped"))
+}
+
+/// Run `work_fn` on a foreign context, on the caller's thread. A foreign
+/// context shares nothing with the shared-auth thread, and its prompt can stay
+/// on screen for as long as the user leaves it. Running it there would hold up
+/// every vault operation queued behind it.
+fn run_on_foreign_context<F, R>(
+    context: ForeignContext,
+    auth_method: AuthMethod,
+    work_fn: F,
+) -> Result<R, KeychainError>
+where
+    F: FnOnce(Retained<LAContext>) -> R,
+{
+    autoreleasepool(|_| {
+        let la_context = context.context.clone();
+        match authenticate(la_context.clone(), auth_method, AuthLock::Foreign(&context)) {
+            Ok(()) => {
+                log::debug!("Authentication successful (foreign context)");
+                Ok(work_fn(la_context))
+            },
+            // A foreign context becomes invalid because its owner invalidated
+            // it, i.e. dismissed its prompt.
+            Err(KeychainError::AuthenticationExpired) => {
+                log::debug!("foreign context was invalidated by its owner");
+                Err(KeychainError::AuthenticationExpired)
+            },
+            Err(KeychainError::UserCancelled) => {
+                log::debug!("Authentication cancelled for foreign context");
+                Err(KeychainError::UserCancelled)
+            },
+            Err(e) => {
+                log::error!("Authentication failed for foreign context: {e}");
+                Err(e)
+            },
+        }
+    })
 }
 
 pub fn run_local_onetime<F, R>(work_fn: F) -> R
