@@ -49,9 +49,10 @@ pub async fn run(prompt: String) {
         caller_chain,
     };
 
-    let result = tokio::task::spawn_blocking(move || app_broker::request_ssh_passphrase(&request))
-        .await
-        .unwrap_or_else(|e| Err(BrokerError::Failed(format!("Task failed: {e}"))));
+    let result =
+        tokio::task::spawn_blocking(move || app_broker::request_ssh_passphrase(&request, None))
+            .await
+            .unwrap_or_else(|e| Err(BrokerError::Failed(format!("Task failed: {e}"))));
 
     record_passphrase(key_id.as_deref(), caller.as_deref(), &result);
 

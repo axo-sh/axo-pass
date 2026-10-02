@@ -18,7 +18,7 @@ fn exit_on_broker_err(e: BrokerError) -> ! {
 }
 
 pub async fn cmd_list_managed_keys() {
-    let identities = match app_broker::list_identities() {
+    let identities = match app_broker::list_identities(None) {
         Ok(identities) => identities,
         Err(e) => exit_on_broker_err(e),
     };

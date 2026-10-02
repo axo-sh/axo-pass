@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::os::fd::BorrowedFd;
 
 use axo_pass_core::core::app_broker::{self, BrokerError};
 use axo_pass_core::core::provenance::ProcessNode;
@@ -54,6 +55,7 @@ impl StoredCredential {
         &self,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        requester: Option<BorrowedFd<'_>>,
     ) -> Result<(), CredentialError> {
         if let Some(expiry) = self.expires_at {
             let now = UtcDateTime::now();
@@ -63,7 +65,7 @@ impl StoredCredential {
         }
 
         if let Some(allow_grants) = self.confirm_policy() {
-            self.confirm_use(caller, caller_chain, allow_grants)?;
+            self.confirm_use(caller, caller_chain, allow_grants, requester)?;
         }
         Ok(())
     }
@@ -89,6 +91,7 @@ impl StoredCredential {
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
         allow_grants: bool,
+        requester: Option<BorrowedFd<'_>>,
     ) -> Result<(), CredentialError> {
         let fingerprint = self
             .public_key_data()
@@ -103,11 +106,16 @@ impl StoredCredential {
                 caller,
                 caller_chain,
                 allow_grants,
+                requester,
             )
         }) {
             Ok(()) => Ok(()),
             Err(BrokerError::Cancelled) => {
                 log::debug!("User declined use of ssh key {fingerprint}");
+                Err(CredentialError::Locked)
+            },
+            Err(BrokerError::RequesterDisconnected) => {
+                log::debug!("Client disconnected while confirming use of ssh key {fingerprint}");
                 Err(CredentialError::Locked)
             },
             Err(e) => {
@@ -169,8 +177,9 @@ impl Credential for StoredCredential {
         req: proto::SignRequest,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        requester: Option<BorrowedFd<'_>>,
     ) -> Result<ssh_key::Signature, CredentialError> {
-        self.validate(caller, caller_chain)?;
+        self.validate(caller, caller_chain, requester)?;
         self.sign_validated(req)
     }
 

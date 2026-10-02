@@ -1,3 +1,5 @@
+use std::os::fd::BorrowedFd;
+
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
@@ -33,11 +35,13 @@ pub trait Credential {
 
     // caller, if provided, is displayed in the auth prompt. caller_chain is the
     // full requesting process chain, shown when the prompt is expanded.
+    // requester is the client's socket: a prompt is dropped if it disconnects.
     fn sign(
         &self,
         req: proto::SignRequest,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        requester: Option<BorrowedFd<'_>>,
     ) -> Result<Signature, CredentialError>;
 
     fn public_key_data(&self) -> KeyData;

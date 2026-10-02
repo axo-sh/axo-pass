@@ -3,6 +3,8 @@
 //! side: SSH key passphrases, either unlocked from the keychain behind a
 //! biometric prompt or typed by the user.
 
+use std::os::fd::BorrowedFd;
+
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
@@ -13,7 +15,7 @@ use ssh_key::{Algorithm, Signature};
 
 use super::{
     BrokerError, InFlightRequest, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome,
-    WireRequest, WireResponse, send_request,
+    WireRequest, WireResponse, send_request_for,
 };
 use crate::audit;
 use crate::core::auth::{
@@ -96,8 +98,14 @@ pub struct ManagedIdentity {
 
 /// List the managed keys the app can sign with. Blocking, and starts the app if
 /// it is not already running.
-pub fn list_identities() -> Result<Vec<ManagedIdentity>, BrokerError> {
-    match send_request(&WireRequest::ListIdentities)? {
+///
+/// `requester` is the client this is for, when there is one, such as the `ssh`
+/// process connected to the agent. The request is dropped if it disconnects
+/// first. The same holds for the other requests in this module.
+pub fn list_identities(
+    requester: Option<BorrowedFd<'_>>,
+) -> Result<Vec<ManagedIdentity>, BrokerError> {
+    match send_request_for(&WireRequest::ListIdentities, requester)? {
         WireResponse::Identities { keys } => Ok(keys),
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
         _ => Err(BrokerError::Failed(
@@ -116,6 +124,7 @@ pub fn request_signature(
     flags: u32,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    requester: Option<BorrowedFd<'_>>,
 ) -> Result<Signature, BrokerError> {
     let request = WireRequest::Sign {
         key_label: key_label.to_string(),
@@ -126,7 +135,7 @@ pub fn request_signature(
         data: b64.encode(data),
         flags,
     };
-    match send_request(&request)? {
+    match send_request_for(&request, requester)? {
         WireResponse::Signed {
             algorithm,
             signature,
@@ -162,6 +171,7 @@ pub fn request_authorize_key_use(
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
     allow_grants: bool,
+    requester: Option<BorrowedFd<'_>>,
 ) -> Result<(), BrokerError> {
     let request = WireRequest::AuthorizeKeyUse {
         fingerprint: fingerprint.map(String::from),
@@ -170,7 +180,7 @@ pub fn request_authorize_key_use(
         caller_chain: caller_chain.to_vec(),
         allow_grants,
     };
-    match send_request(&request)? {
+    match send_request_for(&request, requester)? {
         WireResponse::Confirmed { ok: true } => Ok(()),
         WireResponse::Confirmed { ok: false } | WireResponse::Cancelled => {
             Err(BrokerError::Cancelled)
@@ -504,17 +514,20 @@ pub(super) async fn authorize_key_use(
     response
 }
 
-/// Ask the app for an SSH key passphrase, on `ap ssh-askpass`'s behalf.
-/// Blocking, for the same reason as [`request_signature`]: it waits for the
-/// user.
-pub fn request_ssh_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString, BrokerError> {
+/// Ask the app for an SSH key passphrase, on behalf of `ap ssh-askpass` or the
+/// agent loading an auto-load key. Blocking, for the same reason as
+/// [`request_signature`]: it waits for the user.
+pub fn request_ssh_passphrase(
+    prompt: &PassphrasePrompt,
+    requester: Option<BorrowedFd<'_>>,
+) -> Result<SecretString, BrokerError> {
     let request = WireRequest::GetSshPassphrase {
         key_id: prompt.key_id.clone(),
         prompt: prompt.prompt.clone().unwrap_or_default(),
         caller: prompt.caller.clone(),
         caller_chain: prompt.caller_chain.clone(),
     };
-    match send_request(&request)? {
+    match send_request_for(&request, requester)? {
         WireResponse::Passphrase { passphrase } => {
             let bytes = b64
                 .decode(passphrase)

@@ -18,7 +18,7 @@
 
 use std::fs::{self, Permissions};
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -100,6 +100,11 @@ pub enum BrokerError {
 
     #[error("User cancelled the prompt")]
     Cancelled,
+
+    /// The client the request was made for disconnected before the app
+    /// answered, so the request was dropped. See [`send_request_for`].
+    #[error("The requesting client disconnected")]
+    RequesterDisconnected,
 
     #[error("Axo Pass failed: {0}")]
     Failed(String),
@@ -474,6 +479,18 @@ enum WireResponse {
 // Client (the agent).
 
 fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
+    send_request_for(request, None)
+}
+
+/// Send `request` on behalf of `requester`, a client connected to the caller,
+/// such as an `ssh` process talking to the agent. When the requester
+/// disconnects before the app answers, the connection to the broker is closed,
+/// which ends the app's prompt, and this returns
+/// [`BrokerError::RequesterDisconnected`].
+fn send_request_for(
+    request: &WireRequest,
+    requester: Option<BorrowedFd<'_>>,
+) -> Result<WireResponse, BrokerError> {
     let stream = match connect() {
         Ok(stream) => stream,
         Err(_) => {
@@ -495,6 +512,10 @@ fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
         .and_then(|_| (&stream).flush())
         .map_err(|e| BrokerError::Failed(format!("Failed to send request: {e}")))?;
 
+    if let Some(requester) = requester {
+        wait_for_response(&stream, requester)?;
+    }
+
     let mut response_line = String::new();
     BufReader::new(&stream)
         .read_line(&mut response_line)
@@ -512,6 +533,84 @@ fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
 
     serde_json::from_str(&response_line)
         .map_err(|e| BrokerError::Failed(format!("Malformed response: {e}")))
+}
+
+/// Wait until the broker's response can be read, for up to
+/// [`RESPONSE_TIMEOUT`]. Returns early with
+/// [`BrokerError::RequesterDisconnected`] if `requester` closes its end first.
+///
+/// A requester only waits while the request is out, so its socket turning
+/// readable means it disconnected. If it sent data instead, it is left alone
+/// and only the broker is watched.
+fn wait_for_response(
+    stream: &std::os::unix::net::UnixStream,
+    requester: BorrowedFd<'_>,
+) -> Result<(), BrokerError> {
+    let timed_out = || BrokerError::Failed("Timed out waiting for a response".to_string());
+    let deadline = std::time::Instant::now() + RESPONSE_TIMEOUT;
+    let mut watch_requester = true;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(timed_out());
+        }
+        let mut fds = [
+            libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                // poll skips a negative descriptor.
+                fd: if watch_requester {
+                    requester.as_raw_fd()
+                } else {
+                    -1
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
+        if ready < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(BrokerError::Failed(format!(
+                "Failed to wait for a response: {e}"
+            )));
+        }
+        if ready == 0 {
+            return Err(timed_out());
+        }
+        // Readable, closed, or failed: the read that follows reports which.
+        if fds[0].revents != 0 {
+            return Ok(());
+        }
+        if fds[1].revents != 0 {
+            let mut byte = 0u8;
+            let peeked = unsafe {
+                libc::recv(
+                    requester.as_raw_fd(),
+                    (&raw mut byte).cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            match peeked {
+                0 => return Err(BrokerError::RequesterDisconnected),
+                n if n > 0 => watch_requester = false,
+                _ => {
+                    let e = std::io::Error::last_os_error();
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(BrokerError::RequesterDisconnected);
+                    }
+                },
+            }
+        }
+    }
 }
 
 fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
@@ -1493,6 +1592,44 @@ mod tests {
         .await
         .expect("abandoning never returned");
         assert_eq!(result, "dismissed");
+    }
+
+    /// The agent stops waiting on the broker once the client it is serving
+    /// disconnects.
+    #[test]
+    fn stops_waiting_when_the_requester_disconnects() {
+        use std::os::fd::AsFd;
+        use std::os::unix::net::UnixStream;
+
+        let (broker, _broker_peer) = UnixStream::pair().unwrap();
+        let (requester, requester_peer) = UnixStream::pair().unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(requester_peer);
+        });
+
+        let result = wait_for_response(&broker, requester.as_fd());
+        assert!(matches!(result, Err(BrokerError::RequesterDisconnected)));
+    }
+
+    /// Data from the requester is not a disconnect: the wait goes on until the
+    /// broker answers.
+    #[test]
+    fn keeps_waiting_when_the_requester_sends_data() {
+        use std::os::fd::AsFd;
+        use std::os::unix::net::UnixStream;
+
+        let (broker, mut broker_peer) = UnixStream::pair().unwrap();
+        let (requester, mut requester_peer) = UnixStream::pair().unwrap();
+        requester_peer.write_all(b"x").unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            broker_peer.write_all(b"{}\n").unwrap();
+            // Held open until the response is read.
+            std::thread::sleep(Duration::from_millis(500));
+        });
+
+        assert!(wait_for_response(&broker, requester.as_fd()).is_ok());
     }
 
     /// A client that disconnects while its prompt is waiting gets the prompt

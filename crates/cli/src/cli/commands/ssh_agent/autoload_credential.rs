@@ -1,5 +1,7 @@
 //! Loading auto-load keys on first use. See [`axo_pass_core::ssh::autoload`].
 
+use std::os::fd::BorrowedFd;
+
 use axo_pass_core::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
 use axo_pass_core::core::config::AppConfig;
 use axo_pass_core::core::provenance::ProcessNode;
@@ -49,13 +51,14 @@ pub fn load(
     key: &AutoloadKey,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    requester: Option<BorrowedFd<'_>>,
 ) -> Result<StoredCredential, LoadError> {
     let path = key.path.display().to_string();
     let encrypted =
         autoload::is_encrypted(&key.path).map_err(|e| LoadError::Failed(format!("{e:#}")))?;
 
     let passphrase = if encrypted {
-        Some(request_passphrase(key, caller, caller_chain)?)
+        Some(request_passphrase(key, caller, caller_chain, requester)?)
     } else {
         None
     };
@@ -87,6 +90,7 @@ fn request_passphrase(
     key: &AutoloadKey,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    requester: Option<BorrowedFd<'_>>,
 ) -> Result<SecretString, LoadError> {
     let prompt = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
@@ -100,8 +104,10 @@ fn request_passphrase(
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
     };
-    call_broker(|| app_broker::request_ssh_passphrase(&prompt)).map_err(|e| match e {
-        BrokerError::Cancelled => LoadError::Cancelled(key.path.display().to_string()),
+    call_broker(|| app_broker::request_ssh_passphrase(&prompt, requester)).map_err(|e| match e {
+        BrokerError::Cancelled | BrokerError::RequesterDisconnected => {
+            LoadError::Cancelled(key.path.display().to_string())
+        },
         e => LoadError::Failed(format!("Could not get the passphrase: {e}")),
     })
 }

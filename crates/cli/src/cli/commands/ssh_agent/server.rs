@@ -1,5 +1,5 @@
 use std::fs::{self, Permissions};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -181,11 +181,17 @@ impl Agent<UnixListener> for SshAgentServer {
             .inspect(|peer| log::debug!("SSH agent caller: {peer:#?}"));
         let caller = peer.as_ref().and_then(|peer| peer.caller());
         let actor = peer.as_ref().map(Actor::from_peer);
+        let client = socket
+            .as_fd()
+            .try_clone_to_owned()
+            .inspect_err(|e| log::warn!("Could not duplicate the SSH agent client socket: {e}"))
+            .ok();
 
         SshAgentSession::new(
             self.credentials.clone(),
             caller,
             actor,
+            client,
             self.shutdown_sender.clone(),
         )
     }

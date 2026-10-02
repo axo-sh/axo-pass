@@ -1,3 +1,4 @@
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
 
 use axo_pass_core::audit::{Action, Actor, Outcome};
@@ -32,6 +33,11 @@ static AUTOLOAD_LOCK: Mutex<()> = Mutex::const_new(());
 pub struct SshAgentSession {
     caller: Option<String>,
     actor: Option<Actor>,
+    /// A duplicate of the client's socket. Requests to the app watch it, so a
+    /// prompt is dropped when the client disconnects. `ssh_agent_lib` does not
+    /// read the socket while a request is being served, so nothing else would
+    /// notice.
+    client: Option<OwnedFd>,
     state: Arc<Mutex<Vec<StoredCredential>>>,
     pub(crate) sessions: Vec<SessionBinding>,
     pub(crate) session_bind_attempted: bool,
@@ -43,16 +49,22 @@ impl SshAgentSession {
         state: Arc<Mutex<Vec<StoredCredential>>>,
         caller: Option<String>,
         actor: Option<Actor>,
+        client: Option<OwnedFd>,
         shutdown_sender: broadcast::Sender<StopReason>,
     ) -> Self {
         SshAgentSession {
             caller,
             actor,
+            client,
             state,
             sessions: Vec::new(),
             session_bind_attempted: false,
             shutdown_sender,
         }
+    }
+
+    fn requester(&self) -> Option<BorrowedFd<'_>> {
+        self.client.as_ref().map(OwnedFd::as_fd)
     }
 
     /// The requesting process chain, as resolved from the socket peer. Passed
@@ -139,7 +151,7 @@ impl SshAgentSession {
         }
 
         // also look for credential in managed keys
-        if let Some(managed) = list_managed_credentials()
+        if let Some(managed) = list_managed_credentials(self.requester())
             .into_iter()
             .find(|cred| cred.public_key == *pubkey)
         {
@@ -171,18 +183,21 @@ impl SshAgentSession {
             return Ok(());
         }
 
-        let credential =
-            autoload_credential::load(&key, self.caller.as_deref(), self.caller_chain()).map_err(
-                |e| {
-                    match &e {
-                        LoadError::Cancelled(_) => log::debug!("{e}"),
-                        LoadError::Failed(_) => {
-                            log::error!("Failed to load auto-load key {}: {e}", key.fingerprint)
-                        },
-                    }
-                    AgentError::Other(e.into())
+        let credential = autoload_credential::load(
+            &key,
+            self.caller.as_deref(),
+            self.caller_chain(),
+            self.requester(),
+        )
+        .map_err(|e| {
+            match &e {
+                LoadError::Cancelled(_) => log::debug!("{e}"),
+                LoadError::Failed(_) => {
+                    log::error!("Failed to load auto-load key {}: {e}", key.fingerprint)
                 },
-            )?;
+            }
+            AgentError::Other(e.into())
+        })?;
         self.store_credential(credential).await;
         Ok(())
     }
@@ -292,7 +307,12 @@ impl SshAgentSession {
 
         // passed all checks, perform signing
         stored_cred
-            .sign(req, self.caller.as_deref(), self.caller_chain())
+            .sign(
+                req,
+                self.caller.as_deref(),
+                self.caller_chain(),
+                self.requester(),
+            )
             .map_err(|e| AgentError::Other(e.into()))
     }
 }
@@ -328,7 +348,11 @@ impl Session for SshAgentSession {
         }
 
         // get managed keys as well
-        identities.extend(list_managed_credentials().iter().map(Into::into));
+        identities.extend(
+            list_managed_credentials(self.requester())
+                .iter()
+                .map(Into::into),
+        );
         Ok(identities)
     }
 
@@ -522,7 +546,7 @@ mod tests {
         // Setup session
         let state = Arc::new(Mutex::new(Vec::new()));
         let (shutdown_tx, _) = broadcast::channel(1);
-        let mut session = SshAgentSession::new(state, None, None, shutdown_tx);
+        let mut session = SshAgentSession::new(state, None, None, None, shutdown_tx);
 
         // Add identity
         session
@@ -574,7 +598,7 @@ mod tests {
 
         let state = Arc::new(Mutex::new(Vec::new()));
         let (shutdown_tx, _) = broadcast::channel(1);
-        let session = SshAgentSession::new(state, None, None, shutdown_tx);
+        let session = SshAgentSession::new(state, None, None, None, shutdown_tx);
         session.store_credential(credential).await;
 
         let stored = session

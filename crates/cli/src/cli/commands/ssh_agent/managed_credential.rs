@@ -1,3 +1,5 @@
+use std::os::fd::BorrowedFd;
+
 use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
@@ -68,8 +70,8 @@ where
 /// A failure is reported as an empty list rather than an error: the agent still
 /// serves the keys added to it directly, and failing here would break
 /// `ssh-add -l` for those too.
-pub fn list_managed_credentials() -> Vec<ManagedCredential> {
-    let identities = match call_broker(app_broker::list_identities) {
+pub fn list_managed_credentials(requester: Option<BorrowedFd<'_>>) -> Vec<ManagedCredential> {
+    let identities = match call_broker(|| app_broker::list_identities(requester)) {
         Ok(identities) => identities,
         Err(e) => {
             log::warn!("Could not list managed keys: {e}");
@@ -110,6 +112,7 @@ impl Credential for ManagedCredential {
         req: proto::SignRequest,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        requester: Option<BorrowedFd<'_>>,
     ) -> Result<ssh_key::Signature, CredentialError> {
         let fingerprint = self
             .public_key
@@ -125,6 +128,7 @@ impl Credential for ManagedCredential {
                 req.flags,
                 caller,
                 caller_chain,
+                requester,
             )
         });
 
@@ -132,6 +136,9 @@ impl Credential for ManagedCredential {
             match e {
                 BrokerError::Cancelled => {
                     log::debug!("User declined signing with {}", self.key_label)
+                },
+                BrokerError::RequesterDisconnected => {
+                    log::debug!("Client disconnected while signing with {}", self.key_label)
                 },
                 e => log::error!("Failed to sign with managed key {}: {e}", self.key_label),
             }
