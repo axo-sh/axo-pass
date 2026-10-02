@@ -1,7 +1,8 @@
 mod la_context;
 use std::ffi::c_void;
 use std::num::NonZero;
-use std::sync::{LazyLock, Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::thread;
 
 use anyhow::anyhow;
@@ -42,7 +43,13 @@ enum AuthMessage {
 /// `LAAuthenticationView` and draw the biometric prompt inline rather than in
 /// the system dialog.
 #[derive(Clone)]
-pub struct ForeignContext(Retained<LAContext>);
+pub struct ForeignContext {
+    context: Retained<LAContext>,
+    /// Set by [`Self::invalidate`] and shared by clones, so an evaluation still
+    /// waiting on the auth lock can tell it has nothing left to do. The owner
+    /// invalidating the context directly does not set it.
+    invalidated: Arc<AtomicBool>,
+}
 
 impl ForeignContext {
     /// # Safety
@@ -55,13 +62,21 @@ impl ForeignContext {
                     "the app's authentication session was invalid, try again"
                 ))
             })?;
-        Ok(Self(context))
+        Ok(Self {
+            context,
+            invalidated: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     /// Invalidate the context. An evaluation in flight on it fails, and so does
-    /// any later one.
+    /// any later one, including one still waiting on the auth lock.
     pub fn invalidate(&self) {
-        unsafe { self.0.invalidate() }
+        self.invalidated.store(true, Ordering::SeqCst);
+        unsafe { self.context.invalidate() }
+    }
+
+    fn is_invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::SeqCst)
     }
 }
 
@@ -143,7 +158,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                     },
                     AuthMessage::AdoptContext(context, reply) => {
                         log::debug!("Adopting externally created LAContext as the shared context");
-                        thread_la_context = context.0;
+                        thread_la_context = context.context;
                         let _ = reply.send(());
                     },
                     AuthMessage::Work(work) => {
@@ -156,10 +171,14 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                             },
                             AuthContext::SharedThreadLocal => thread_la_context.clone(),
                             AuthContext::OneTime => unsafe { LAContext::new() },
-                            AuthContext::Foreign(ref context) => context.0.clone(),
+                            AuthContext::Foreign(ref context) => context.context.clone(),
                         };
-                        let is_foreign_context = matches!(work.context, AuthContext::Foreign(_));
-                        match authenticate(selected_la_ctx.clone(), work.auth, is_foreign_context) {
+                        let foreign = match &work.context {
+                            AuthContext::Foreign(context) => Some(context),
+                            _ => None,
+                        };
+                        let is_foreign_context = foreign.is_some();
+                        match authenticate(selected_la_ctx.clone(), work.auth, foreign) {
                             Ok(_) => {
                                 log::debug!("Authentication successful ({:?})", work.context);
                                 let _ = work.auth_reply.send(Ok(()));
@@ -263,15 +282,41 @@ pub fn external_auth_lock() -> std::fs::File {
 // concurrent invocations (e.g. `ap inject` run back-to-back) waits their turn
 // instead of repeatedly triggering.
 fn acquire_auth_lock() -> std::fs::File {
+    let file = open_auth_lock();
+    file.lock().expect("failed to acquire auth lock");
+    file
+}
+
+/// How often a wait for the auth lock on a foreign context checks whether the
+/// context has been invalidated.
+const AUTH_LOCK_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// As [`acquire_auth_lock`], for an evaluation on `context`. Gives up with
+/// `None` once the context is invalidated, so a request the app has abandoned
+/// does not wait on another prompt to finish first.
+fn acquire_auth_lock_for(context: &ForeignContext) -> Option<std::fs::File> {
+    let file = open_auth_lock();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) => {},
+            Err(std::fs::TryLockError::Error(e)) => panic!("failed to acquire auth lock: {e}"),
+        }
+        if context.is_invalidated() {
+            return None;
+        }
+        thread::sleep(AUTH_LOCK_POLL_INTERVAL);
+    }
+}
+
+fn open_auth_lock() -> std::fs::File {
     let path = crate::core::dirs::app_data_dir().join("auth.lock");
-    let file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&path)
-        .unwrap_or_else(|e| panic!("failed to open auth lock file {path:?}: {e}"));
-    file.lock().expect("failed to acquire auth lock");
-    file
+        .unwrap_or_else(|e| panic!("failed to open auth lock file {path:?}: {e}"))
 }
 
 // Kept as a defense-in-depth fallback for races with authentication requests
@@ -280,20 +325,27 @@ fn acquire_auth_lock() -> std::fs::File {
 const AUTH_RETRY_ATTEMPTS: u32 = 50;
 const AUTH_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
-// Authenticate the LAContext using the specified method. When
-// `retry_system_cancel` is set, a system cancellation is retried up to
-// AUTH_RETRY_ATTEMPTS times.
+// Authenticate the LAContext using the specified method. For a context of our
+// own, a system cancellation is retried up to AUTH_RETRY_ATTEMPTS times.
+// `foreign` is set when `la_context` is a foreign context.
 fn authenticate(
     la_context: Retained<LAContext>,
     method: AuthMethod,
-    is_foreign_context: bool,
+    foreign: Option<&ForeignContext>,
 ) -> Result<(), KeychainError> {
     // Nothing to evaluate and no prompt to serialize against, so skip the lock.
     if matches!(method, AuthMethod::None) {
         return Ok(());
     }
 
-    let _lock = acquire_auth_lock();
+    let is_foreign_context = foreign.is_some();
+    let _lock = match foreign {
+        Some(context) => match acquire_auth_lock_for(context) {
+            Some(lock) => lock,
+            None => return Err(KeychainError::AuthenticationExpired),
+        },
+        None => acquire_auth_lock(),
+    };
     let mut attempts_left = AUTH_RETRY_ATTEMPTS;
     loop {
         let (callback, rx) = create_la_auth_callback();
