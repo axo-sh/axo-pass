@@ -16,7 +16,8 @@ final class PassphrasePromptModel {
   /// Resumed when the user answers the text field, the confirmation, or the
   /// message. Only one prompt is ever on screen: the broker serves requests
   /// serially.
-  private var pending: CheckedContinuation<PromptAnswer, Never>?
+  private var pending: (id: UInt64, continuation: CheckedContinuation<PromptAnswer, Never>)?
+  private var nextPromptID: UInt64 = 0
 
   /// Where the prompts are drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
@@ -63,12 +64,7 @@ final class PassphrasePromptModel {
     showTask?.cancel()
     showTask = nil
 
-    let answer = await withCheckedContinuation { continuation in
-      pending = continuation
-      showEntryPanel(prompt: prompt)
-    }
-    panel.hide()
-
+    let answer = await ask { showEntryPanel(prompt: prompt) }
     guard case .passphrase(let value, let save) = answer else { return nil }
     // The value crosses to the core as bytes, so the core never holds it as a
     // Swift string it cannot zero.
@@ -76,21 +72,31 @@ final class PassphrasePromptModel {
   }
 
   func confirm(description: String?) async -> Bool {
-    let answer = await withCheckedContinuation { continuation in
-      pending = continuation
-      showMessagePanel(description: description, cancellable: true)
-    }
-    panel.hide()
+    let answer = await ask { showMessagePanel(description: description, cancellable: true) }
     if case .confirmed = answer { return true }
     return false
   }
 
   func message(description: String?) async {
-    _ = await withCheckedContinuation { continuation in
-      pending = continuation
-      showMessagePanel(description: description, cancellable: false)
+    _ = await ask { showMessagePanel(description: description, cancellable: false) }
+  }
+
+  /// Put a panel up with `show` and wait for the user to answer it. The broker
+  /// cancels the task when the requesting process disconnects, which answers the
+  /// panel as dismissed.
+  private func ask(_ show: () -> Void) async -> PromptAnswer {
+    nextPromptID += 1
+    let id = nextPromptID
+    let answer = await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        pending = (id, continuation)
+        show()
+      }
+    } onCancel: {
+      Task { @MainActor [weak self] in self?.answer(.cancelled, id: id) }
     }
     panel.hide()
+    return answer
   }
 
   /// Dismiss the biometric prompt on the user's behalf. Invalidating the
@@ -141,11 +147,12 @@ final class PassphrasePromptModel {
 
   /// Resume whatever the panel is waiting on. Guarded because a continuation
   /// may only be resumed once, and a view can call back twice (the Return key
-  /// and the button, say).
-  private func answer(_ answer: PromptAnswer) {
-    guard let continuation = pending else { return }
-    pending = nil
-    continuation.resume(returning: answer)
+  /// and the button, say). With `id`, only that prompt is answered, so a late
+  /// cancellation cannot answer the prompt that replaced it.
+  private func answer(_ answer: PromptAnswer, id: UInt64? = nil) {
+    guard let pending, id == nil || pending.id == id else { return }
+    self.pending = nil
+    pending.continuation.resume(returning: answer)
   }
 
   /// One grant per key and requesting process. A prompt with no key grip never

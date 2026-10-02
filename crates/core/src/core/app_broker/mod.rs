@@ -66,7 +66,7 @@ pub use vault::{
 };
 
 /// How long a client waits for the user to answer the app's prompt before
-/// giving up. Hanging up ends the prompt, see `Hangup`.
+/// giving up. Disconnecting ends the prompt, see `InFlightRequest`.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long to wait for a cold app launch to start serving.
@@ -796,44 +796,65 @@ fn request_actor(
     actor
 }
 
-/// Ends a request's prompt when the client that sent it hangs up. The broker
-/// serves one connection at a time, so a prompt nobody is waiting on would
-/// otherwise hold up every request behind it.
-#[derive(Default)]
-pub(super) struct Hangup(std::sync::Mutex<HangupState>);
-
-#[derive(Default)]
-struct HangupState {
-    hung_up: bool,
-    context: Option<ForeignContext>,
+/// The request being served. It is abandoned when the client that sent it
+/// disconnects, which ends its prompt. The broker serves one connection at a
+/// time, so this keeps an abandoned prompt from blocking the requests behind
+/// it.
+pub(super) struct InFlightRequest {
+    context: std::sync::Mutex<Option<ForeignContext>>,
+    abandoned: tokio::sync::watch::Sender<bool>,
 }
 
-impl Hangup {
-    /// Invalidate `context` if the client hangs up, which fails the evaluation
-    /// on it and so ends the prompt through the usual path. Invalidates it at
-    /// once if the client is already gone.
-    pub(super) fn watch(&self, context: &ForeignContext) {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if state.hung_up {
+impl Default for InFlightRequest {
+    fn default() -> Self {
+        Self {
+            context: std::sync::Mutex::new(None),
+            abandoned: tokio::sync::watch::Sender::new(false),
+        }
+    }
+}
+
+impl InFlightRequest {
+    /// Attach the context the request's prompt evaluates on. Abandoning the
+    /// request invalidates it, which fails the evaluation and so ends the
+    /// prompt through the usual path. Invalidates it at once if the request is
+    /// already abandoned.
+    pub(super) fn attach(&self, context: &ForeignContext) {
+        let mut slot = self.context.lock().unwrap_or_else(|e| e.into_inner());
+        if *self.abandoned.borrow() {
             context.invalidate();
         } else {
-            state.context = Some(context.clone());
+            *slot = Some(context.clone());
         }
     }
 
-    fn hang_up(&self) {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.hung_up = true;
-        if let Some(context) = state.context.take() {
+    /// Run `prompt` unless the request is abandoned first, in which case
+    /// `None`. For prompts with no context to invalidate: dropping a call into
+    /// the app cancels its task, and the app dismisses a cancelled prompt.
+    pub(super) async fn unless_abandoned<T>(&self, prompt: impl Future<Output = T>) -> Option<T> {
+        let mut abandoned = self.abandoned.subscribe();
+        // Checked first, so a request already abandoned never starts its
+        // prompt.
+        tokio::select! {
+            biased; // poll in order
+            _ = abandoned.wait_for(|abandoned| *abandoned) => None,
+            value = prompt => Some(value),
+        }
+    }
+
+    fn abandon(&self) {
+        let mut slot = self.context.lock().unwrap_or_else(|e| e.into_inner());
+        self.abandoned.send_replace(true);
+        if let Some(context) = slot.take() {
             context.invalidate();
         }
     }
 }
 
 /// Resolves once the client closes its end. A client sends one request line
-/// and then only waits for the response, so any read returning means it is
-/// gone.
-async fn client_gone(reader: &mut (impl tokio::io::AsyncRead + Unpin)) {
+/// and then only waits for the response, so any read returning means it has
+/// disconnected.
+async fn client_disconnected(reader: &mut (impl tokio::io::AsyncRead + Unpin)) {
     let mut buf = [0u8; 64];
     loop {
         match reader.read(&mut buf).await {
@@ -855,304 +876,331 @@ async fn handle_connection(
     let request: WireRequest = serde_json::from_str(&request_line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
+    // A client that gave up while its connection waited to be accepted has
+    // already closed it. Its request is not served at all, so the app shows no
+    // prompt and records nothing for it.
+    let disconnected = tokio::select! {
+        biased;
+        () = client_disconnected(&mut reader) => true,
+        () = std::future::ready(()) => false,
+    };
+    if disconnected {
+        log::debug!("App broker client disconnected before its request was served");
+        return Ok(());
+    }
+
     // Resolved once per connection and handed to whichever authorizer serves
     // the request, so the grant the app hands out is attributed to the process
     // we verified rather than to a caller string alone.
     let actor = request_actor(peer, request.caller(), request.caller_chain());
     let caller_chain = actor.chain_detail.clone();
 
-    let hangup = Hangup::default();
+    let in_flight = InFlightRequest::default();
     let serve = async {
         Ok::<_, std::io::Error>(match request {
-        WireRequest::ListIdentities => {
-            log::debug!("App broker request: list identities");
-            tokio::task::spawn_blocking(ssh::list_identities_locally)
-                .await
-                .unwrap_or_else(|e| Err(format!("Failed to list managed keys: {e}")))
-                .map_or_else(
-                    |message| WireResponse::Failed { message },
-                    |keys| WireResponse::Identities { keys },
-                )
-        },
-        WireRequest::Sign {
-            key_label,
-            fingerprint,
-            comment,
-            caller,
-            caller_chain: _,
-            data,
-            // Secure Enclave keys are ECDSA P-256 and have no flag-selected
-            // hash.
-            flags: _,
-        } => {
-            let data = b64
-                .decode(&data)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let prompt = SignPrompt {
+            WireRequest::ListIdentities => {
+                log::debug!("App broker request: list identities");
+                tokio::task::spawn_blocking(ssh::list_identities_locally)
+                    .await
+                    .unwrap_or_else(|e| Err(format!("Failed to list managed keys: {e}")))
+                    .map_or_else(
+                        |message| WireResponse::Failed { message },
+                        |keys| WireResponse::Identities { keys },
+                    )
+            },
+            WireRequest::Sign {
                 key_label,
                 fingerprint,
                 comment,
                 caller,
-                caller_chain: caller_chain.clone(),
-                managed: true,
-                policy: None,
-                grant_candidate: None,
-            };
-            log::debug!("App broker request: {prompt:?}");
-            ssh::sign_managed(&*authorizers.sign, prompt, actor, data, &hangup).await
-        },
-        WireRequest::AuthorizeKeyUse {
-            fingerprint,
-            comment,
-            caller,
-            caller_chain: _,
-            allow_grants,
-        } => {
-            let prompt = SignPrompt {
-                key_label: String::new(),
+                caller_chain: _,
+                data,
+                // Secure Enclave keys are ECDSA P-256 and have no flag-selected
+                // hash.
+                flags: _,
+            } => {
+                let data = b64
+                    .decode(&data)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let prompt = SignPrompt {
+                    key_label,
+                    fingerprint,
+                    comment,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    managed: true,
+                    policy: None,
+                    grant_candidate: None,
+                };
+                log::debug!("App broker request: {prompt:?}");
+                ssh::sign_managed(&*authorizers.sign, prompt, actor, data, &in_flight).await
+            },
+            WireRequest::AuthorizeKeyUse {
                 fingerprint,
                 comment,
                 caller,
-                caller_chain: caller_chain.clone(),
-                managed: false,
-                policy: None,
-                grant_candidate: None,
-            };
-            log::debug!(
-                "App broker request: authorize key use {prompt:?}, allow grants {allow_grants}"
-            );
-            ssh::authorize_key_use(&*authorizers.sign, prompt, actor, allow_grants, &hangup)
-                .await
-        },
-        WireRequest::GetPassphrase {
-            key_id,
-            description,
-            prompt,
-            error_message,
-            caller,
-            caller_chain: _,
-        } => {
-            let prompt = PassphrasePrompt {
-                kind: PassphraseKind::Gpg,
+                caller_chain: _,
+                allow_grants,
+            } => {
+                let prompt = SignPrompt {
+                    key_label: String::new(),
+                    fingerprint,
+                    comment,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    managed: false,
+                    policy: None,
+                    grant_candidate: None,
+                };
+                log::debug!(
+                    "App broker request: authorize key use {prompt:?}, allow grants {allow_grants}"
+                );
+                ssh::authorize_key_use(&*authorizers.sign, prompt, actor, allow_grants, &in_flight)
+                    .await
+            },
+            WireRequest::GetPassphrase {
                 key_id,
                 description,
                 prompt,
                 error_message,
                 caller,
-                caller_chain: caller_chain.clone(),
-            };
-            log::debug!("App broker request: {prompt:?}");
-            gpg::get_passphrase(&*authorizers.passphrase, prompt, actor).await
-        },
-        WireRequest::GetSshPassphrase {
-            key_id,
-            prompt,
-            caller,
-            caller_chain: _,
-        } => {
-            let prompt = PassphrasePrompt {
-                kind: PassphraseKind::Ssh,
+                caller_chain: _,
+            } => {
+                let prompt = PassphrasePrompt {
+                    kind: PassphraseKind::Gpg,
+                    key_id,
+                    description,
+                    prompt,
+                    error_message,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                };
+                log::debug!("App broker request: {prompt:?}");
+                gpg::get_passphrase(&*authorizers.passphrase, prompt, actor, &in_flight).await
+            },
+            WireRequest::GetSshPassphrase {
                 key_id,
-                description: None,
-                prompt: Some(prompt),
-                error_message: None,
+                prompt,
                 caller,
-                caller_chain: caller_chain.clone(),
-            };
-            log::debug!("App broker request: {prompt:?}");
-            ssh::get_passphrase(&*authorizers.passphrase, prompt, actor).await
-        },
-        WireRequest::ListVaultItems { vault_key, caller } => {
-            let prompt = vault::VaultAccessPrompt {
+                caller_chain: _,
+            } => {
+                let prompt = PassphrasePrompt {
+                    kind: PassphraseKind::Ssh,
+                    key_id,
+                    description: None,
+                    prompt: Some(prompt),
+                    error_message: None,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                };
+                log::debug!("App broker request: {prompt:?}");
+                ssh::get_passphrase(&*authorizers.passphrase, prompt, actor, &in_flight).await
+            },
+            WireRequest::ListVaultItems { vault_key, caller } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ListItems,
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+                    .await
+            },
+            WireRequest::ReadVaultSecret {
                 vault_key,
+                item_key,
+                credential_key,
                 caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::ListItems,
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
-        },
-        WireRequest::ReadVaultSecret {
-            vault_key,
-            item_key,
-            credential_key,
-            caller,
-        } => {
-            let prompt = vault::VaultAccessPrompt {
+            } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ReadSecret {
+                        item_key,
+                        credential_key,
+                    },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+                    .await
+            },
+            WireRequest::ResolveSecrets {
+                refs,
+                purpose,
+                caller,
+            } => {
+                let mut vault_keys: Vec<String> =
+                    refs.iter().map(|r| r.vault_key.clone()).collect();
+                vault_keys.sort();
+                vault_keys.dedup();
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: vault_keys.join(", "),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ResolveSecrets { purpose, refs },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+                    .await
+            },
+            WireRequest::WriteVaultSecret {
                 vault_key,
-                caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::ReadSecret {
-                    item_key,
-                    credential_key,
-                },
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
-        },
-        WireRequest::ResolveSecrets {
-            refs,
-            purpose,
-            caller,
-        } => {
-            let mut vault_keys: Vec<String> = refs.iter().map(|r| r.vault_key.clone()).collect();
-            vault_keys.sort();
-            vault_keys.dedup();
-            let prompt = vault::VaultAccessPrompt {
-                vault_key: vault_keys.join(", "),
-                caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::ResolveSecrets { purpose, refs },
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
-        },
-        WireRequest::WriteVaultSecret {
-            vault_key,
-            item_key,
-            credential_key,
-            title,
-            value,
-            caller,
-        } => {
-            let prompt = vault::VaultAccessPrompt {
-                vault_key,
-                caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::WriteSecret {
-                    item_key,
-                    credential_key,
-                },
-            };
-            let payload = vault::WriteSecretPayload {
+                item_key,
+                credential_key,
                 title,
-                value: secrecy::SecretString::from(value),
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(
-                &*authorizers.vault,
-                prompt,
-                actor,
-                Some(vault::VaultPayload::Write(payload)),
-            )
-            .await
-        },
-        WireRequest::ExportVaults {
-            vault_keys,
-            dest_path,
-            mode,
-            caller,
-        } => {
-            let prompt = vault::VaultAccessPrompt {
-                vault_key: vault_keys.join(", "),
+                value,
                 caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::ExportVaults {
-                    vault_keys: vault_keys.clone(),
-                },
-            };
-            let payload = vault::ExportPayload {
-                dest_path: std::path::PathBuf::from(dest_path),
-                mode: mode.into(),
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(
-                &*authorizers.vault,
-                prompt,
-                actor,
-                Some(vault::VaultPayload::Export(payload)),
-            )
-            .await
-        },
-        WireRequest::ImportVaults {
-            import_path,
-            identity,
-            selection,
-            caller,
-        } => {
-            let prompt = vault::VaultAccessPrompt {
-                vault_key: std::path::Path::new(&import_path)
-                    .file_name()
-                    .map_or_else(|| import_path.clone(), |n| n.to_string_lossy().into_owned()),
+            } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::WriteSecret {
+                        item_key,
+                        credential_key,
+                    },
+                };
+                let payload = vault::WriteSecretPayload {
+                    title,
+                    value: secrecy::SecretString::from(value),
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::Write(payload)),
+                    &in_flight,
+                )
+                .await
+            },
+            WireRequest::ExportVaults {
+                vault_keys,
+                dest_path,
+                mode,
                 caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::ImportVaults {
-                    count: selection.len(),
-                },
-            };
-            let payload = vault::ImportPayload {
-                import_path: std::path::PathBuf::from(import_path),
+            } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: vault_keys.join(", "),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ExportVaults {
+                        vault_keys: vault_keys.clone(),
+                    },
+                };
+                let payload = vault::ExportPayload {
+                    dest_path: std::path::PathBuf::from(dest_path),
+                    mode: mode.into(),
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::Export(payload)),
+                    &in_flight,
+                )
+                .await
+            },
+            WireRequest::ImportVaults {
+                import_path,
                 identity,
                 selection,
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(
-                &*authorizers.vault,
-                prompt,
-                actor,
-                Some(vault::VaultPayload::Import(payload)),
-            )
-            .await
-        },
-        WireRequest::AddExternalVault { path, caller } => {
-            let prompt = vault::VaultAccessPrompt {
-                vault_key: path.clone(),
                 caller,
-                caller_chain: caller_chain.clone(),
-                action: vault::VaultAction::AddVault { path },
-            };
-            log::debug!("App broker request: {prompt:?}");
-            vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None).await
-        },
-        WireRequest::ListAgeKeys { .. } => {
-            log::debug!("App broker request: list age keys");
-            age::list_keys().await
-        },
-        WireRequest::GetAgeIdentity { key_id, caller } => {
-            log::debug!("App broker request: get age identity {key_id}");
-            age::get_identity(&*authorizers.passphrase, key_id, caller, actor).await
-        },
-        WireRequest::CreateAgeKey { key_id, .. } => {
-            log::debug!("App broker request: create age key {key_id}");
-            age::create_key(key_id, actor).await
-        },
-        WireRequest::DeleteAgeKey { key_id, .. } => {
-            log::debug!("App broker request: delete age key {key_id}");
-            age::delete_key(key_id, actor).await
-        },
-        WireRequest::ListKeychainPasswords { .. } => {
-            log::debug!("App broker request: list keychain passwords");
-            keychain::list_passwords().await
-        },
-        WireRequest::DeleteManagedKey { label, .. } => {
-            log::debug!("App broker request: delete managed key {label}");
-            keychain::delete_managed_key(label, actor).await
-        },
-        WireRequest::Confirm { description } => {
-            log::debug!("App broker request: confirm");
-            WireResponse::Confirmed {
-                ok: authorizers.passphrase.confirm(description).await,
-            }
-        },
-        WireRequest::Message { description } => {
-            log::debug!("App broker request: message");
-            authorizers.passphrase.message(description).await;
-            WireResponse::Acknowledged
-        },
+            } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: std::path::Path::new(&import_path)
+                        .file_name()
+                        .map_or_else(|| import_path.clone(), |n| n.to_string_lossy().into_owned()),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::ImportVaults {
+                        count: selection.len(),
+                    },
+                };
+                let payload = vault::ImportPayload {
+                    import_path: std::path::PathBuf::from(import_path),
+                    identity,
+                    selection,
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::Import(payload)),
+                    &in_flight,
+                )
+                .await
+            },
+            WireRequest::AddExternalVault { path, caller } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key: path.clone(),
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    action: vault::VaultAction::AddVault { path },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+                    .await
+            },
+            WireRequest::ListAgeKeys { .. } => {
+                log::debug!("App broker request: list age keys");
+                age::list_keys().await
+            },
+            WireRequest::GetAgeIdentity { key_id, caller } => {
+                log::debug!("App broker request: get age identity {key_id}");
+                age::get_identity(&*authorizers.passphrase, key_id, caller, actor, &in_flight).await
+            },
+            WireRequest::CreateAgeKey { key_id, .. } => {
+                log::debug!("App broker request: create age key {key_id}");
+                age::create_key(key_id, actor).await
+            },
+            WireRequest::DeleteAgeKey { key_id, .. } => {
+                log::debug!("App broker request: delete age key {key_id}");
+                age::delete_key(key_id, actor).await
+            },
+            WireRequest::ListKeychainPasswords { .. } => {
+                log::debug!("App broker request: list keychain passwords");
+                keychain::list_passwords().await
+            },
+            WireRequest::DeleteManagedKey { label, .. } => {
+                log::debug!("App broker request: delete managed key {label}");
+                keychain::delete_managed_key(label, actor).await
+            },
+            WireRequest::Confirm { description } => {
+                log::debug!("App broker request: confirm");
+                let ok = in_flight
+                    .unless_abandoned(authorizers.passphrase.confirm(description))
+                    .await;
+                WireResponse::Confirmed {
+                    ok: ok.unwrap_or(false),
+                }
+            },
+            WireRequest::Message { description } => {
+                log::debug!("App broker request: message");
+                in_flight
+                    .unless_abandoned(authorizers.passphrase.message(description))
+                    .await;
+                WireResponse::Acknowledged
+            },
         })
     };
     tokio::pin!(serve);
 
     let response = tokio::select! {
-        response = &mut serve => response?,
-        () = client_gone(&mut reader) => {
-            log::debug!("App broker client hung up mid-request, ending its prompt");
-            hangup.hang_up();
+        biased; // poll in order
+        () = client_disconnected(&mut reader) => {
+            log::debug!("App broker client disconnected mid-request, ending its prompt");
+            in_flight.abandon();
             // The request still runs to completion so the app's `end` is
             // called, but nobody is left to read the response.
             serve.await?;
             return Ok(());
         },
+        response = &mut serve => response?,
     };
 
     let mut line =
@@ -1185,6 +1233,7 @@ mod tests {
         passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
         peers: Mutex<Vec<audit::Actor>>,
         ended: AtomicUsize,
+        prompts_dropped: AtomicUsize,
     }
 
     #[async_trait]
@@ -1238,7 +1287,19 @@ mod tests {
             self.ended.fetch_add(1, Ordering::SeqCst);
         }
 
-        async fn confirm(&self, _description: Option<String>) -> bool {
+        /// `"hang"` stands for a user who never answers. Its prompt is only
+        /// ever dropped, which is counted.
+        async fn confirm(&self, description: Option<String>) -> bool {
+            if description.as_deref() == Some("hang") {
+                struct Dropped<'a>(&'a AtomicUsize);
+                impl Drop for Dropped<'_> {
+                    fn drop(&mut self) {
+                        self.0.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                let _dropped = Dropped(&self.prompts_dropped);
+                std::future::pending::<()>().await;
+            }
             true
         }
 
@@ -1378,6 +1439,56 @@ mod tests {
         assert_eq!(prompts[0].key_label, "key-1");
         assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// A client that disconnects while its prompt is waiting gets the prompt
+    /// dropped, and the broker moves on to the next connection.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drops_the_prompt_of_a_disconnected_client() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        let stream = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
+        (&stream)
+            .write_all(b"{\"request\":\"confirm\",\"description\":\"hang\"}\n")
+            .unwrap();
+        // Give the broker time to read the request and reach the prompt.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(stream);
+
+        // Times out after five seconds if the broker is still stuck on the
+        // first prompt.
+        let response = broker.request(r#"{"request":"confirm","description":"ok"}"#);
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(response, WireResponse::Confirmed { ok: true }));
+        assert_eq!(broker.authorizer.prompts_dropped.load(Ordering::SeqCst), 1);
+    }
+
+    /// A client that gives up while its connection waits behind another is
+    /// never served: its request reaches no authorizer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn skips_a_client_that_disconnected_while_queued() {
+        let broker = TestBroker::start(accepting_policy()).await;
+
+        // Holds the broker on a prompt nobody answers.
+        let busy = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
+        (&busy)
+            .write_all(b"{\"request\":\"confirm\",\"description\":\"hang\"}\n")
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Queues behind it, then gives up.
+        let queued = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
+        (&queued)
+            .write_all(b"{\"request\":\"sign\",\"key_label\":\"key-1\",\"data\":\"aGk=\"}\n")
+            .unwrap();
+        drop(queued);
+        drop(busy);
+
+        let response = broker.request(r#"{"request":"confirm","description":"ok"}"#);
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(response, WireResponse::Confirmed { ok: true }));
+        assert!(broker.authorizer.prompts.lock().unwrap().is_empty());
+        assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 0);
     }
 
     /// The authorizer is told who asked: the process on the other end of the

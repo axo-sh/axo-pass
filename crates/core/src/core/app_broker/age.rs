@@ -18,8 +18,8 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    BrokerError, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome,
-    WireRequest, WireResponse, send_request,
+    BrokerError, InFlightRequest, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
+    PromptOutcome, WireRequest, WireResponse, send_request,
 };
 use crate::age::key_overview::list_age_keys;
 use crate::age::recipients::{delete_recipient, generate_age_key};
@@ -167,6 +167,7 @@ pub(super) async fn get_identity(
     key_id: String,
     caller: Option<String>,
     peer: audit::Actor,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
     let entry = PasswordEntry::age(&key_id);
 
@@ -198,6 +199,7 @@ pub(super) async fn get_identity(
             return WireResponse::Failed { message };
         },
     };
+    in_flight.attach(&context);
 
     let read_caller = prompt.caller.clone();
     let result = tokio::task::spawn_blocking(move || {

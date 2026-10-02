@@ -8,7 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 
-use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request};
+use super::{BrokerError, InFlightRequest, PromptOutcome, WireRequest, WireResponse, send_request};
 use crate::audit;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::provenance::ProcessNode;
@@ -160,6 +160,7 @@ pub(super) async fn get_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: PassphrasePrompt,
     peer: audit::Actor,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
     let entry = prompt.key_id.as_deref().map(PasswordEntry::gpg);
 
@@ -169,7 +170,7 @@ pub(super) async fn get_passphrase(
         && let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, peer, entry).await {
+        match unlock_saved_passphrase(authorizer, &prompt, peer, entry, in_flight).await {
             SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
             // Dismissing the biometric prompt answers the request: the user was
             // asked and said no. Falling through to a text field instead would
@@ -180,7 +181,10 @@ pub(super) async fn get_passphrase(
         }
     }
 
-    match authorizer.collect(prompt).await {
+    let Some(collected) = in_flight.unless_abandoned(authorizer.collect(prompt)).await else {
+        return WireResponse::Cancelled;
+    };
+    match collected {
         Ok(Some(collected)) => {
             let response = passphrase_response(&collected.value);
             if collected.save_to_keychain
@@ -226,6 +230,7 @@ async fn unlock_saved_passphrase(
     prompt: &PassphrasePrompt,
     peer: audit::Actor,
     entry: PasswordEntry,
+    in_flight: &InFlightRequest,
 ) -> SavedPassphrase {
     let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
@@ -239,6 +244,7 @@ async fn unlock_saved_passphrase(
             return SavedPassphrase::Failed;
         },
     };
+    in_flight.attach(&context);
 
     let caller = prompt.caller.clone();
     let result = tokio::task::spawn_blocking(move || {

@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::{BrokerError, PromptOutcome, WireRequest, WireResponse, send_request};
+use super::{BrokerError, InFlightRequest, PromptOutcome, WireRequest, WireResponse, send_request};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
@@ -410,6 +410,7 @@ pub(super) async fn authorize_and_serve(
     prompt: VaultAccessPrompt,
     actor: Actor,
     payload: Option<VaultPayload>,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
     let context = match authorizer.begin(prompt.clone(), actor.clone()).await {
         Ok(context) => context,
@@ -422,6 +423,11 @@ pub(super) async fn authorize_and_serve(
             return WireResponse::Failed { message };
         },
     };
+    // An import unlocks and writes one vault at a time on this context, so
+    // invalidating it partway would leave some vaults imported and others not.
+    if !matches!(prompt.action, VaultAction::ImportVaults { .. }) {
+        in_flight.attach(&context);
+    }
 
     let job = prompt.clone();
     let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, payload))

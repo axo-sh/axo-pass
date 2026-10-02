@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, Signature};
 
 use super::{
-    BrokerError, Hangup, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, WireRequest,
-    WireResponse, send_request,
+    BrokerError, InFlightRequest, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome,
+    WireRequest, WireResponse, send_request,
 };
 use crate::audit;
 use crate::core::auth::{
@@ -315,11 +315,6 @@ async fn record_grant_use(
         .await;
 }
 
-/// Held from the grant check until the app's prompt has ended, so a request
-/// that arrives while another is being approved waits and then finds the grant
-/// the user gave. The app also keeps one active request at a time.
-static SIGN_REQUESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 /// Serve a managed-key signature: without a prompt when an app grant covers
 /// the request, through the app's prompt otherwise.
 pub(super) async fn sign_managed(
@@ -327,9 +322,8 @@ pub(super) async fn sign_managed(
     mut prompt: SignPrompt,
     peer: audit::Actor,
     data: Vec<u8>,
-    hangup: &Hangup,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
-    let _serial = SIGN_REQUESTS.lock().await;
     let key = resolve_key(prompt.key_label.clone()).await;
     prompt.policy = key.as_ref().map(|k| k.policy);
 
@@ -361,7 +355,7 @@ pub(super) async fn sign_managed(
             .collect::<Vec<_>>(),
     );
 
-    authorize_and_sign(authorizer, prompt, peer, data, hangup).await
+    authorize_and_sign(authorizer, prompt, peer, data, in_flight).await
 }
 
 async fn authorize_and_sign(
@@ -369,7 +363,7 @@ async fn authorize_and_sign(
     prompt: SignPrompt,
     peer: audit::Actor,
     data: Vec<u8>,
-    hangup: &Hangup,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
     let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
@@ -383,7 +377,7 @@ async fn authorize_and_sign(
             return WireResponse::Failed { message };
         },
     };
-    hangup.watch(&context);
+    in_flight.attach(&context);
 
     let key_label = prompt.key_label.clone();
     let caller = prompt.caller.clone();
@@ -442,9 +436,8 @@ pub(super) async fn authorize_key_use(
     mut prompt: SignPrompt,
     peer: audit::Actor,
     allow_grants: bool,
-    hangup: &Hangup,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
-    let _serial = SIGN_REQUESTS.lock().await;
     if allow_grants && let Some(fingerprint) = prompt.fingerprint.clone() {
         let key = ResolvedKey {
             policy: KeyPolicy::Default,
@@ -467,7 +460,7 @@ pub(super) async fn authorize_key_use(
             return WireResponse::Failed { message };
         },
     };
-    hangup.watch(&context);
+    in_flight.attach(&context);
 
     let reason = match prompt.caller.as_deref() {
         Some(caller) => format!("approve use of an SSH key for {caller}"),
@@ -546,13 +539,14 @@ pub(super) async fn get_passphrase(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: PassphrasePrompt,
     peer: audit::Actor,
+    in_flight: &InFlightRequest,
 ) -> WireResponse {
     let entry = prompt.key_id.as_deref().map(PasswordEntry::ssh);
 
     if let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, peer, entry).await {
+        match unlock_saved_passphrase(authorizer, &prompt, peer, entry, in_flight).await {
             SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
             // Dismissing the biometric prompt answers the request: the user
             // was asked and said no. Falling through to a text field instead
@@ -563,7 +557,10 @@ pub(super) async fn get_passphrase(
         }
     }
 
-    match authorizer.collect(prompt).await {
+    let Some(collected) = in_flight.unless_abandoned(authorizer.collect(prompt)).await else {
+        return WireResponse::Cancelled;
+    };
+    match collected {
         Ok(Some(collected)) => {
             let response = passphrase_response(&collected.value);
             if collected.save_to_keychain
@@ -609,6 +606,7 @@ async fn unlock_saved_passphrase(
     prompt: &PassphrasePrompt,
     peer: audit::Actor,
     entry: PasswordEntry,
+    in_flight: &InFlightRequest,
 ) -> SavedPassphrase {
     let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
@@ -620,6 +618,7 @@ async fn unlock_saved_passphrase(
             return SavedPassphrase::Failed;
         },
     };
+    in_flight.attach(&context);
 
     let caller = prompt.caller.clone();
     let result = tokio::task::spawn_blocking(move || {
