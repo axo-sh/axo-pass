@@ -235,9 +235,12 @@ final class AuthorizationGrants {
       if grant.approvedAt == nil { grant.approvedAt = now }
       grant.lastUsedAt = now
     case .cancelled:
-      // Nothing was authorized. Leave the clocks alone; the context is left
-      // unauthenticated, so the next request prompts.
-      break
+      // Nothing was authorized. A cancellation often means the context was
+      // invalidated, either by the broker abandoning the request or by our
+      // Cancel button, and an invalidated context will fail subsequent
+      // evaluations, so we forget the grant and start the next request on a
+      // new one.
+      forget(key)
     case .failed(let message):
       // The context may be invalid or expired; start the next attempt clean.
       log("request failed for \(key): \(message)")
