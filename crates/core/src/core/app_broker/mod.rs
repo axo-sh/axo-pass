@@ -798,8 +798,7 @@ fn request_actor(
 
 /// The request being served. It is abandoned when the client that sent it
 /// disconnects, which ends its prompt. The broker serves one connection at a
-/// time, so this keeps an abandoned prompt from blocking the requests behind
-/// it.
+/// time, and an abandoned prompt would otherwise block the requests behind it.
 pub(super) struct InFlightRequest {
     context: std::sync::Mutex<Option<ForeignContext>>,
     abandoned: tokio::sync::watch::Sender<bool>,
@@ -840,6 +839,29 @@ impl InFlightRequest {
             _ = abandoned.wait_for(|abandoned| *abandoned) => None,
             value = prompt => Some(value),
         }
+    }
+
+    /// Run `prompt` to completion. If the request is abandoned first, `abandon`
+    /// runs while it waits and should make `prompt` finish early. For a prompt
+    /// that must not be dropped partway, because the app would carry on with it
+    /// alongside the next request.
+    pub(super) async fn abandoning<T>(
+        &self,
+        prompt: impl Future<Output = T>,
+        abandon: impl Future<Output = ()>,
+    ) -> T {
+        tokio::pin!(prompt);
+        let mut abandoned = self.abandoned.subscribe();
+        tokio::select! {
+            value = &mut prompt => return value,
+            _ = abandoned.wait_for(|abandoned| *abandoned) => {},
+        }
+        abandon.await;
+        prompt.await
+    }
+
+    pub(super) fn is_abandoned(&self) -> bool {
+        *self.abandoned.borrow()
     }
 
     fn abandon(&self) {
@@ -1317,6 +1339,8 @@ mod tests {
             Err("stub authorizer".to_string())
         }
 
+        async fn abandon(&self) {}
+
         async fn end(&self, _prompt: vault::VaultAccessPrompt, _outcome: PromptOutcome) {
             self.ended.fetch_add(1, Ordering::SeqCst);
         }
@@ -1439,6 +1463,36 @@ mod tests {
         assert_eq!(prompts[0].key_label, "key-1");
         assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
+    }
+
+    /// Abandoning a request runs its `abandon` step and then still waits for
+    /// the prompt to finish, rather than dropping it.
+    #[tokio::test]
+    async fn abandoning_dismisses_the_prompt_and_waits_for_it() {
+        let in_flight = Arc::new(InFlightRequest::default());
+        let (dismiss, dismissed) = tokio::sync::oneshot::channel::<()>();
+
+        let abandoner = in_flight.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            abandoner.abandon();
+        });
+
+        // Stands for a prompt that only returns once it is dismissed.
+        let prompt = async {
+            dismissed.await.unwrap();
+            "dismissed"
+        };
+        let abandon = async {
+            dismiss.send(()).unwrap();
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            in_flight.abandoning(prompt, abandon),
+        )
+        .await
+        .expect("abandoning never returned");
+        assert_eq!(result, "dismissed");
     }
 
     /// A client that disconnects while its prompt is waiting gets the prompt

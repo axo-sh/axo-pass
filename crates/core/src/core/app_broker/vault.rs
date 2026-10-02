@@ -228,6 +228,11 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     async fn begin(&self, prompt: VaultAccessPrompt, peer: Actor)
     -> Result<ForeignContext, String>;
 
+    /// The client disconnected while `begin` was still waiting on the user.
+    /// Dismiss the prompt so `begin` returns early. `begin` is still awaited,
+    /// and `end` still called, afterward.
+    async fn abandon(&self);
+
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
     async fn end(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
@@ -412,7 +417,13 @@ pub(super) async fn authorize_and_serve(
     payload: Option<VaultPayload>,
     in_flight: &InFlightRequest,
 ) -> WireResponse {
-    let context = match authorizer.begin(prompt.clone(), actor.clone()).await {
+    if in_flight.is_abandoned() {
+        return WireResponse::Cancelled;
+    }
+    // The app evaluates inside `begin`, holding the auth lock, so it is
+    // dismissed rather than dropped when the client disconnects.
+    let begin = authorizer.begin(prompt.clone(), actor.clone());
+    let context = match in_flight.abandoning(begin, authorizer.abandon()).await {
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");

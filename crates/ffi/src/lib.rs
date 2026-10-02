@@ -2901,6 +2901,11 @@ pub trait VaultPromptDelegate: Send + Sync {
         peer: RequestActor,
     ) -> Result<u64, FfiError>;
 
+    /// The client disconnected while `begin_authorization` was waiting on the
+    /// user. Dismiss the prompt so it returns. `end_authorization` follows as
+    /// usual.
+    async fn abandon_authorization(&self);
+
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
 }
@@ -2930,6 +2935,10 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
         // `end_authorization`, which the broker calls after the unlock.
         unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
             .map_err(|e| e.to_string())
+    }
+
+    async fn abandon(&self) {
+        self.delegate.abandon_authorization().await;
     }
 
     async fn end(&self, prompt: app_broker::VaultAccessPrompt, outcome: app_broker::PromptOutcome) {

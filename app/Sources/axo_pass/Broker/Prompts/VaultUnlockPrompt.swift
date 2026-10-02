@@ -31,6 +31,10 @@ final class VaultUnlockPromptModel {
   private let grants = AuthorizationGrants(label: "VaultUnlockPrompt")
   private var showTask: Task<Void, Never>?
 
+  /// The prompt `begin` is serving, while it waits on the user. The broker
+  /// serves one request at a time, so there is at most one.
+  private var beginning: VaultAccessPrompt?
+
   /// Holds the cross-process auth lock during an evaluation. Set by
   /// `VaultsModel` when the broker starts.
   var core: AxoPass?
@@ -47,6 +51,8 @@ final class VaultUnlockPromptModel {
   func begin(prompt: VaultAccessPrompt, peer: RequestActor) async -> UInt64 {
     let key = Self.grantKey(prompt)
     let grant = grants.begin(key, policy: Self.policy(for: prompt.action), peer: peer)
+    beginning = prompt
+    defer { beginning = nil }
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
@@ -103,6 +109,14 @@ final class VaultUnlockPromptModel {
   /// the evaluation in flight, which surfaces as a cancellation.
   func cancel(prompt: VaultAccessPrompt) {
     grants.forget(Self.grantKey(prompt))
+  }
+
+  /// The requesting process disconnected. Dismiss the prompt `begin` is waiting
+  /// on, so it returns. Does nothing when `begin` has already returned, or has
+  /// not started yet.
+  func abandon() {
+    guard let beginning else { return }
+    cancel(prompt: beginning)
   }
 
   /// Drop every vault authorization, so the next request prompts again. Called
@@ -256,6 +270,10 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
 
   func beginAuthorization(prompt: VaultAccessPrompt, peer: RequestActor) async throws -> UInt64 {
     await model.begin(prompt: prompt, peer: peer)
+  }
+
+  func abandonAuthorization() async {
+    await model.abandon()
   }
 
   func endAuthorization(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {
