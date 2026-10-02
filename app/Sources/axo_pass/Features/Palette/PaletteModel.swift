@@ -172,7 +172,10 @@ final class PaletteModel {
   }
 
   private func loadSearchData() {
-    Task { await vaults.loadAllItems() }
+    Task {
+      // Shown in the footer, which an action's own result replaces.
+      if let failure = await vaults.loadAllItems() { message = failure }
+    }
     Task { await sshModel.reload() }
     Task { await gpgModel.reload() }
     Task { await ageModel.reload() }

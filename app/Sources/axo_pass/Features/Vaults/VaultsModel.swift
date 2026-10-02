@@ -92,6 +92,9 @@ final class VaultsModel {
 
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
+  // Vaults whose last load failed, with the error. They are not cached, so the
+  // next load of the vault retries them.
+  private(set) var itemLoadFailures: [String: String] = [:]
   var selectedItemRef: ItemRef? = nil
 
   // Surfaces failures from vault/item/credential mutations (create, rename,
@@ -434,6 +437,7 @@ final class VaultsModel {
     selectionTask = nil
     pendingSelection = nil
     itemCache = [:]
+    itemLoadFailures = [:]
     selectedItemRef = nil
     unlockError = nil
     autoPromptPending = true
@@ -515,29 +519,42 @@ final class VaultsModel {
   private func loadItems(for vaultKey: String) async {
     do {
       itemCache[vaultKey] = try await core.listItems(vaultKey: vaultKey)
+      itemLoadFailures.removeValue(forKey: vaultKey)
     } catch let e as FfiError {
       switch e {
       case .AuthExpired, .AuthCancelled:
         lock()
       default:
-        // Record the failure so the pane stops spinning and shows it.
-        itemCache[vaultKey] = []
-        actionError = String(describing: e)
+        recordLoadFailure(vaultKey, String(describing: e))
       }
     } catch {
-      itemCache[vaultKey] = []
-      actionError = String(describing: error)
+      recordLoadFailure(vaultKey, String(describing: error))
     }
   }
 
-  /// Load the items of every vault not yet cached. The palette searches all of
-  /// them.
-  func loadAllItems() async {
-    guard isAppUnlocked else { return }
+  /// Record a failed load so the pane stops spinning and shows it. The vault
+  /// stays out of the cache, so the next load retries it.
+  private func recordLoadFailure(_ vaultKey: String, _ message: String) {
+    itemLoadFailures[vaultKey] = message
+    actionError = message
+  }
+
+  /// Load the items of every vault not yet cached, retrying any whose last load
+  /// failed. The palette searches all of them. Returns a message naming the
+  /// vaults that still failed, or nil when every vault loaded.
+  @discardableResult
+  func loadAllItems() async -> String? {
+    guard isAppUnlocked else { return nil }
     for vault in vaults where itemCache[vault.key] == nil {
       await loadItems(for: vault.key)
-      if !isAppUnlocked { return }
+      if !isAppUnlocked { return nil }
     }
+    let failed = vaults.filter { itemLoadFailures[$0.key] != nil }
+    guard let first = failed.first, let error = itemLoadFailures[first.key] else { return nil }
+    let names = failed.map { $0.name ?? $0.key }.joined(separator: ", ")
+    return failed.count == 1
+      ? "Could not load \(names): \(error)"
+      : "Could not load \(names). \(first.name ?? first.key): \(error)"
   }
 
   /// Every cached item across all vaults, in vault order.
@@ -615,6 +632,7 @@ final class VaultsModel {
     do {
       try await core.deleteVault(vaultKey: vaultKey)
       itemCache.removeValue(forKey: vaultKey)
+      itemLoadFailures.removeValue(forKey: vaultKey)
       if selectedVaultKey == vaultKey { selectSidebarDestination(nil) }
       reload()
       return true
@@ -822,12 +840,16 @@ final class VaultsModel {
 
   /// A selection is active and its items have not finished loading yet. Panes
   /// use this to show a loading state instead of an empty "select" placeholder.
+  /// A vault whose load failed counts as finished.
   var isLoadingSelectedItems: Bool {
     guard isAppUnlocked, selectedVaultKey != nil else { return false }
+    let isPending = { (key: String) in
+      self.itemCache[key] == nil && self.itemLoadFailures[key] == nil
+    }
     if isAllSecrets {
-      return !vaults.isEmpty && vaults.contains { itemCache[$0.key] == nil }
+      return !vaults.isEmpty && vaults.contains { isPending($0.key) }
     }
     guard let key = selectedVaultKey else { return false }
-    return itemCache[key] == nil
+    return isPending(key)
   }
 }
