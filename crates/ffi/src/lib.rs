@@ -2274,8 +2274,8 @@ impl AxoPass {
         Ok(())
     }
 
-    /// Stop serving and remove the socket, so the agent falls back to the
-    /// system dialog and pinentry reports an error rather than hanging.
+    /// Stop serving and remove the socket, so the agent and pinentry report an
+    /// error rather than hanging.
     pub fn stop_app_broker(&self) -> Result<(), FfiError> {
         if let Some(shutdown) = self
             .app_broker

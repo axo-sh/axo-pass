@@ -57,6 +57,12 @@ impl ForeignContext {
             })?;
         Ok(Self(context))
     }
+
+    /// Invalidate the context. An evaluation in flight on it fails, and so does
+    /// any later one.
+    pub fn invalidate(&self) {
+        unsafe { self.0.invalidate() }
+    }
 }
 
 impl std::fmt::Debug for ForeignContext {

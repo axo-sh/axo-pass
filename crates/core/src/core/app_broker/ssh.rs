@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, Signature};
 
 use super::{
-    BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, WireRequest, WireResponse,
-    send_request,
+    BrokerError, Hangup, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, WireRequest,
+    WireResponse, send_request,
 };
 use crate::audit;
 use crate::core::auth::{
@@ -153,8 +153,7 @@ pub fn request_signature(
 /// `Ok`. Blocking, for the same reason as [`request_signature`].
 ///
 /// `Err(BrokerError::Cancelled)` means the user declined. Any other error means
-/// the app could not be reached or the prompt failed, and the caller should
-/// fall back to the system dialog.
+/// the app could not be reached or the prompt failed.
 ///
 /// With `allow_grants`, an app grant for the key answers without a prompt.
 pub fn request_authorize_key_use(
@@ -328,6 +327,7 @@ pub(super) async fn sign_managed(
     mut prompt: SignPrompt,
     peer: audit::Actor,
     data: Vec<u8>,
+    hangup: &Hangup,
 ) -> WireResponse {
     let _serial = SIGN_REQUESTS.lock().await;
     let key = resolve_key(prompt.key_label.clone()).await;
@@ -361,7 +361,7 @@ pub(super) async fn sign_managed(
             .collect::<Vec<_>>(),
     );
 
-    authorize_and_sign(authorizer, prompt, peer, data).await
+    authorize_and_sign(authorizer, prompt, peer, data, hangup).await
 }
 
 async fn authorize_and_sign(
@@ -369,6 +369,7 @@ async fn authorize_and_sign(
     prompt: SignPrompt,
     peer: audit::Actor,
     data: Vec<u8>,
+    hangup: &Hangup,
 ) -> WireResponse {
     let context = match authorizer.begin(prompt.clone(), peer).await {
         Ok(context) => context,
@@ -382,6 +383,7 @@ async fn authorize_and_sign(
             return WireResponse::Failed { message };
         },
     };
+    hangup.watch(&context);
 
     let key_label = prompt.key_label.clone();
     let caller = prompt.caller.clone();
@@ -440,6 +442,7 @@ pub(super) async fn authorize_key_use(
     mut prompt: SignPrompt,
     peer: audit::Actor,
     allow_grants: bool,
+    hangup: &Hangup,
 ) -> WireResponse {
     let _serial = SIGN_REQUESTS.lock().await;
     if allow_grants && let Some(fingerprint) = prompt.fingerprint.clone() {
@@ -464,6 +467,7 @@ pub(super) async fn authorize_key_use(
             return WireResponse::Failed { message };
         },
     };
+    hangup.watch(&context);
 
     let reason = match prompt.caller.as_deref() {
         Some(caller) => format!("approve use of an SSH key for {caller}"),

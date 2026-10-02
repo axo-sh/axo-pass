@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use axo_pass_core::core::app_broker::{self, BrokerError};
-use axo_pass_core::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::rsa_signing;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
@@ -83,8 +82,8 @@ impl StoredCredential {
 
     /// Handles a confirmed signature. Asks the app to render the prompt and
     /// run authentication, so the user sees the same panel as for a managed
-    /// key. Falls back to the system dialog when no app is listening or the
-    /// prompt fails.
+    /// key. Refuses the signature when the app cannot be reached or the prompt
+    /// fails.
     fn confirm_use(
         &self,
         caller: Option<&str>,
@@ -112,16 +111,8 @@ impl StoredCredential {
                 Err(CredentialError::Locked)
             },
             Err(e) => {
-                log::debug!("App broker unavailable for confirm prompt ({e}); using system dialog");
-                let reason = match caller {
-                    Some(c) => format!("approve use of an SSH key for {c}"),
-                    None => "approve use of an SSH key".to_string(),
-                };
-                run_on_auth_thread(AuthContext::OneTime, AuthMethod::Policy { reason }, |_| {})
-                    .map_err(|e| {
-                        log::error!("Authentication failed: {e}");
-                        CredentialError::Locked
-                    })
+                log::error!("Could not confirm use of ssh key {fingerprint}: {e}");
+                Err(CredentialError::Locked)
             },
         }
     }

@@ -31,10 +31,11 @@ use objc2_app_kit::NSRunningApplication;
 use objc2_foundation::{NSBundle, NSString, NSURL};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::audit;
+use crate::core::auth::ForeignContext;
 use crate::core::dirs::app_data_dir;
 use crate::core::provenance::{PeerIdentity, PeerPolicy, ProcessNode};
 
@@ -64,8 +65,8 @@ pub use vault::{
     request_vault_secret, request_write_vault_secret,
 };
 
-/// How long the agent waits for the user to answer the app's prompt before
-/// giving up and falling back to the system dialog.
+/// How long a client waits for the user to answer the app's prompt before
+/// giving up. Hanging up ends the prompt, see `Hangup`.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How long to wait for a cold app launch to start serving.
@@ -203,8 +204,8 @@ enum WireRequest {
 
     /// A confirm-on-use prompt for a key held by the agent, added with
     /// `ssh-add -c`. The agent still signs; the app only draws the prompt and
-    /// evaluates the auth check on a context it owns. Falls back to the
-    /// system dialog when no app is listening.
+    /// evaluates the auth check on a context it owns. The key cannot be used
+    /// when the app does not answer.
     AuthorizeKeyUse {
         /// Canonical `SHA256:...` fingerprint, resolved by the agent.
         #[serde(default)]
@@ -795,16 +796,62 @@ fn request_actor(
     actor
 }
 
+/// Ends a request's prompt when the client that sent it hangs up. The broker
+/// serves one connection at a time, so a prompt nobody is waiting on would
+/// otherwise hold up every request behind it.
+#[derive(Default)]
+pub(super) struct Hangup(std::sync::Mutex<HangupState>);
+
+#[derive(Default)]
+struct HangupState {
+    hung_up: bool,
+    context: Option<ForeignContext>,
+}
+
+impl Hangup {
+    /// Invalidate `context` if the client hangs up, which fails the evaluation
+    /// on it and so ends the prompt through the usual path. Invalidates it at
+    /// once if the client is already gone.
+    pub(super) fn watch(&self, context: &ForeignContext) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.hung_up {
+            context.invalidate();
+        } else {
+            state.context = Some(context.clone());
+        }
+    }
+
+    fn hang_up(&self) {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.hung_up = true;
+        if let Some(context) = state.context.take() {
+            context.invalidate();
+        }
+    }
+}
+
+/// Resolves once the client closes its end. A client sends one request line
+/// and then only waits for the response, so any read returning means it is
+/// gone.
+async fn client_gone(reader: &mut (impl tokio::io::AsyncRead + Unpin)) {
+    let mut buf = [0u8; 64];
+    loop {
+        match reader.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {},
+        }
+    }
+}
+
 async fn handle_connection(
     stream: UnixStream,
     peer: &PeerIdentity,
     authorizers: Authorizers,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
+    let mut reader = AsyncBufReader::new(read_half);
     let mut request_line = String::new();
-    AsyncBufReader::new(read_half)
-        .read_line(&mut request_line)
-        .await?;
+    reader.read_line(&mut request_line).await?;
     let request: WireRequest = serde_json::from_str(&request_line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
@@ -814,7 +861,9 @@ async fn handle_connection(
     let actor = request_actor(peer, request.caller(), request.caller_chain());
     let caller_chain = actor.chain_detail.clone();
 
-    let response = match request {
+    let hangup = Hangup::default();
+    let serve = async {
+        Ok::<_, std::io::Error>(match request {
         WireRequest::ListIdentities => {
             log::debug!("App broker request: list identities");
             tokio::task::spawn_blocking(ssh::list_identities_locally)
@@ -850,7 +899,7 @@ async fn handle_connection(
                 grant_candidate: None,
             };
             log::debug!("App broker request: {prompt:?}");
-            ssh::sign_managed(&*authorizers.sign, prompt, actor, data).await
+            ssh::sign_managed(&*authorizers.sign, prompt, actor, data, &hangup).await
         },
         WireRequest::AuthorizeKeyUse {
             fingerprint,
@@ -872,7 +921,8 @@ async fn handle_connection(
             log::debug!(
                 "App broker request: authorize key use {prompt:?}, allow grants {allow_grants}"
             );
-            ssh::authorize_key_use(&*authorizers.sign, prompt, actor, allow_grants).await
+            ssh::authorize_key_use(&*authorizers.sign, prompt, actor, allow_grants, &hangup)
+                .await
         },
         WireRequest::GetPassphrase {
             key_id,
@@ -1088,6 +1138,20 @@ async fn handle_connection(
             log::debug!("App broker request: message");
             authorizers.passphrase.message(description).await;
             WireResponse::Acknowledged
+        },
+        })
+    };
+    tokio::pin!(serve);
+
+    let response = tokio::select! {
+        response = &mut serve => response?,
+        () = client_gone(&mut reader) => {
+            log::debug!("App broker client hung up mid-request, ending its prompt");
+            hangup.hang_up();
+            // The request still runs to completion so the app's `end` is
+            // called, but nobody is left to read the response.
+            serve.await?;
+            return Ok(());
         },
     };
 

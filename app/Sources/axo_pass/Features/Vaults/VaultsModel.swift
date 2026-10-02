@@ -126,7 +126,7 @@ final class VaultsModel {
   /// Serve the CLI's requests while the app is running: SSH signatures from
   /// the agent, GPG passphrases from `ap pinentry`. Both use their own keychain
   /// items, so this does not wait on the vault being unlocked. With the app
-  /// unavailable the agent falls back to the system dialog.
+  /// unavailable the agent refuses to sign.
   func startBroker() async {
     guard signingBridge == nil else { return }
     let signing = SigningPromptBridge(model: signingPrompt)
