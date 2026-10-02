@@ -165,6 +165,14 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 let _ = work.auth_reply.send(Ok(()));
                                 (work.work)(selected_la_ctx);
                             },
+                            // A foreign context becomes invalid because its owner
+                            // invalidated it, i.e. dismissed its prompt.
+                            Err(KeychainError::AuthenticationExpired) if is_foreign_context => {
+                                log::debug!("{:?} was invalidated by its owner", work.context);
+                                let _ = work
+                                    .auth_reply
+                                    .send(Err(KeychainError::AuthenticationExpired));
+                            },
                             Err(KeychainError::AuthenticationExpired) => {
                                 log::warn!(
                                     "{:?} expired, invalidating all LAContext instances",
