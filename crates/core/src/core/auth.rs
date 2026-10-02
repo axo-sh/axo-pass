@@ -204,6 +204,10 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                     .auth_reply
                                     .send(Err(KeychainError::AuthenticationExpired));
                             },
+                            Err(KeychainError::UserCancelled) => {
+                                log::debug!("Authentication cancelled for context {:?}", work.context);
+                                let _ = work.auth_reply.send(Err(KeychainError::UserCancelled));
+                            },
                             Err(e) => {
                                 log::error!(
                                     "Authentication failed for context {:?}: {e}",

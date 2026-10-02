@@ -32,6 +32,10 @@ pub fn create_la_auth_callback() -> (
             );
             let err = match LAError(err.code()) {
                 LAError::UserCancel => KeychainError::UserCancelled,
+                // cause: the context was invalidated during the evaluation, by
+                // the app's Cancel button or by the broker abandoning the
+                // request.
+                LAError::AppCancel => KeychainError::UserCancelled,
                 // cause: context has been invalidated
                 LAError::InvalidContext => KeychainError::AuthenticationExpired,
                 // cause: another process's concurrent evaluatePolicy call, the
