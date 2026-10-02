@@ -46,10 +46,14 @@ final class PromptPanel {
 
     let host = NSHostingController(rootView: root)
     host.sizingOptions = [.preferredContentSize]
+    // The window frame changes during layout. With a safe area to track, the
+    // hosting view invalidates it mid-layout and AppKit raises an exception.
+    // The panel has no full size content view, so there are no insets to lose.
+    host.safeAreaRegions = []
 
     let panel = NSPanel(
       contentRect: NSRect(x: 0, y: 0, width: Self.standardWidth, height: 200),
-      styleMask: [.titled, .fullSizeContentView, .nonactivatingPanel],
+      styleMask: [.titled, .nonactivatingPanel],
       backing: .buffered,
       defer: false
     )
@@ -66,8 +70,16 @@ final class PromptPanel {
     // Follow the content when a disclosure inside the prompt opens or closes,
     // resizing from the top edge so the title bar stays put.
     sizeObservation = host.observe(\.preferredContentSize) { [weak self] host, _ in
+      // This fires during the window's layout pass. Changing the frame there
+      // invalidates the hosting view's safe area mid-layout, which AppKit
+      // raises as an exception, so the resize runs on the next turn.
       MainActor.assumeIsolated {
-        self?.resize(toContentHeight: host.preferredContentSize.height)
+        let height = host.preferredContentSize.height
+        DispatchQueue.main.async {
+          MainActor.assumeIsolated {
+            self?.resize(toContentHeight: height)
+          }
+        }
       }
     }
 

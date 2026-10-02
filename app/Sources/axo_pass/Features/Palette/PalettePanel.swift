@@ -40,6 +40,11 @@ final class PalettePanel {
 
     let host = NSHostingController(rootView: AnyView(content.frame(width: Self.width)))
     host.sizingOptions = [.preferredContentSize]
+    // The panel is borderless, so there are no safe area insets to track. Without
+    // this, a frame change during the window's layout pass invalidates the
+    // hosting view's safe area and requests a constraint update mid-layout, which
+    // AppKit raises as an exception.
+    host.safeAreaRegions = []
 
     let panel = KeyPanel(
       contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 300),
