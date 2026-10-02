@@ -239,8 +239,6 @@ private struct PassphraseEntryView: View {
 
       PinentryTranscript(prompt: prompt)
 
-      CallerChainView(chain: prompt.callerChain)
-
       VStack(alignment: .leading, spacing: 12) {
         SecureField(prompt.prompt ?? "Passphrase", text: $value)
           .textFieldStyle(.roundedBorder)
@@ -252,6 +250,8 @@ private struct PassphraseEntryView: View {
             .font(.subheadline)
         }
       }
+
+      CallerChainView(chain: prompt.callerChain)
 
       HStack {
         Spacer()
@@ -275,10 +275,21 @@ private struct PinentryTranscript: View {
   let prompt: PassphrasePrompt
 
   var body: some View {
-    ScrollView(.horizontal, showsIndicators: true) {
-      content
-        .padding(14)
+    VStack(alignment: .leading, spacing: 6) {
+      ScrollView(.horizontal, showsIndicators: true) {
+        content
+      }
+
+      Divider()
+        .padding(.vertical, 4)
+
+      Text(prompt.prompt ?? "Passphrase")
+        .font(monoFont)
+        .lineSpacing(4)
+        .foregroundStyle(.primary)
+        .fixedSize(horizontal: false, vertical: true)
     }
+    .padding(14)
     .textSelection(.enabled)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
@@ -319,10 +330,6 @@ private struct PinentryTranscript: View {
           label: "ERROR", text: errorMessage.trimmingCharacters(in: .whitespacesAndNewlines),
           labelColor: .red, textColor: .red)
       }
-
-      Text(prompt.prompt ?? "Passphrase")
-        .font(monoFont.weight(.semibold))
-        .foregroundStyle(Color.accentColor)
     }
     .fixedSize(horizontal: true, vertical: false)
   }

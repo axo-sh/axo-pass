@@ -102,7 +102,8 @@ private struct ProcessRow: View {
           }
         }
         Text(metadata)
-          .font(monoFont)
+          .font(.system(.subheadline, design: .monospaced))
+          .lineSpacing(3)
           .foregroundStyle(.secondary)
       }
     }

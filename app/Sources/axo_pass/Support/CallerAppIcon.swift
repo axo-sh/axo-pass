@@ -25,6 +25,7 @@ struct PromptTitle: View {
         .font(font)
         .foregroundStyle(color)
         .multilineTextAlignment(.center)
+        .lineSpacing(3)
     }
   }
 }
