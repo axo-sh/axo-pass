@@ -674,10 +674,10 @@ fn lock_launch() -> Option<fs::File> {
         .open(launch_lock_path())
         .map_err(|e| log::debug!("Could not open the launch lock: {e}"))
         .ok()?;
-    match unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } {
-        0 => Some(file),
-        _ => None,
-    }
+    file.lock()
+        .map_err(|e| log::debug!("Could not take the launch lock: {e}"))
+        .ok()?;
+    Some(file)
 }
 
 /// Start the app in the background, so a signature request does not pull focus
