@@ -821,6 +821,13 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
             Ok((stream, _)) => {
                 let peer = match PeerIdentity::verify(stream.as_raw_fd(), &policy) {
                     Ok(peer) => peer,
+                    // A client that gave up while its connection waited to be
+                    // accepted. Nothing connected that could be checked, so
+                    // nothing was refused.
+                    Err(e) if e.is_disconnected() => {
+                        log::debug!("App broker client disconnected before it was accepted");
+                        continue;
+                    },
                     Err(e) => {
                         log::warn!("App broker refused a connection: {e}");
                         let mut event = audit::AuditEvent::new(
@@ -1680,6 +1687,14 @@ mod tests {
         assert!(matches!(response, WireResponse::Confirmed { ok: true }));
         assert!(broker.authorizer.prompts.lock().unwrap().is_empty());
         assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 0);
+
+        // The closed connection could not be identified, which is not a
+        // rejected peer.
+        let rejected = audit::read(&audit::AuditFilter {
+            actions: vec![audit::Action::BrokerPeerRejected],
+            ..Default::default()
+        });
+        assert!(rejected.events.is_empty());
     }
 
     /// The authorizer is told who asked: the process on the other end of the

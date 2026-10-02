@@ -96,6 +96,15 @@ pub enum PeerError {
     WrongExecutable { expected: String, actual: String },
 }
 
+impl PeerError {
+    /// The peer closed its end before it could be identified, so there is no
+    /// peer left to describe. A process that exits while its connection waits
+    /// to be accepted ends up here.
+    pub fn is_disconnected(&self) -> bool {
+        matches!(self, Self::AuditToken(e) if e.raw_os_error() == Some(libc::ENOTCONN))
+    }
+}
+
 /// An identified peer: which process connected, and what it is.
 pub struct PeerIdentity {
     pid: u32,
