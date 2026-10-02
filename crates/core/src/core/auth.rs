@@ -183,14 +183,13 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 unreachable!("foreign contexts run on the caller's thread")
                             },
                         };
-                        // A policy evaluation on the authenticated shared context
-                        // shows no prompt, so it does not wait for the auth lock.
-                        // Another prompt holding that lock, such as a broker
-                        // panel, would otherwise block vault reads until it
-                        // closes.
+                        // A shared auth context does not show a prompt, so we skip the
+                        // auth lock. Otherwise an open prompt panel would block vault reads.
+                        // This includes access control evaluations, since the device owner
+                        // auth already satisfies the user presence the items require.
                         let lock = if is_shared
                             && shared_authenticated
-                            && matches!(work.auth, AuthMethod::Policy { .. })
+                            && !matches!(work.auth, AuthMethod::None)
                         {
                             AuthLock::Skip
                         } else {
@@ -220,7 +219,10 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                     .send(Err(KeychainError::AuthenticationExpired));
                             },
                             Err(KeychainError::UserCancelled) => {
-                                log::debug!("Authentication cancelled for context {:?}", work.context);
+                                log::debug!(
+                                    "Authentication cancelled for context {:?}",
+                                    work.context
+                                );
                                 let _ = work.auth_reply.send(Err(KeychainError::UserCancelled));
                             },
                             Err(e) => {
