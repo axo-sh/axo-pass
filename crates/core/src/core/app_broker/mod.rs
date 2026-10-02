@@ -819,6 +819,11 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                // Writes to a closed peer must fail with EPIPE, not raise
+                // SIGPIPE, which would terminate the host process.
+                if let Err(e) = socket2::SockRef::from(&stream).set_nosigpipe(true) {
+                    log::debug!("App broker could not set SO_NOSIGPIPE: {e}");
+                }
                 let peer = match PeerIdentity::verify(stream.as_raw_fd(), &policy) {
                     Ok(peer) => peer,
                     // A client that gave up while its connection waited to be

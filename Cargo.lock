@@ -322,6 +322,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "shlex 2.0.1",
+ "socket2",
  "ssh-agent-lib",
  "ssh-encoding",
  "ssh-key",
