@@ -4,31 +4,27 @@ import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 import SwiftUI
 
-/// Draws the authorization prompt for `ap item list`, `ap item get`, `ap read`
+/// Draws the authorization prompt for `ap item list`, `ap item get`, `ap read`,
 /// and `ap item set`, which the core's broker delegates here.
 ///
-/// `ap` holds no keychain entitlements, so it cannot read or create the vault
-/// encryption key itself. It hands the request to the broker, which calls in
-/// here for a context to unlock the vault on.
+/// `ap` has no keychain entitlements, so the broker calls in here for a context
+/// to unlock the vault on.
 ///
-/// This model evaluates the biometric policy itself, the same way the lock
-/// screen does, rather than letting the core evaluate. `LAAuthenticationView`
-/// draws `evaluatePolicy` in our panel only when the evaluation is driven from
-/// this process while the view is mounted; a `deviceOwnerAuthentication`
-/// evaluation started by the core lands in the system dialog instead. The core
-/// reads the key on the context this call authenticated and evaluates nothing
-/// itself, so one request raises one prompt.
+/// This model authenticates an `LAContext` itself, as the lock screen does,
+/// and passes it to the core. `LAAuthenticationView` draws in our panel only
+/// when this process runs the evaluation while the view is mounted. An
+/// evaluation started by the core appears in the system dialog instead. The
+/// core reads the vault key using the context it receives and does not
+/// authenticate again, so one request raises one prompt.
 ///
-/// A read prompts every time. Nothing is cached for it: the grant is created
-/// for the one request and dropped when it finishes, so a script that reads a
-/// secret in a loop asks for a fingerprint each time round.
+/// Reads prompt every time. The grant lives for one request and is then dropped.
 ///
-/// A listing exposes no secret values, so its approval is reused within the
-/// standard window. Grants are keyed on the action as well as the vault, so a
-/// listing's approval never satisfies a read.
+/// Listing does not read secret values, so its approval is reused within the
+/// standard window. Grants are keyed on the action and the vault, so a listing's
+/// approval never satisfies a read.
 @MainActor
 final class VaultUnlockPromptModel {
-  private let grants = AuthorizationGrants(label: "VaultUnlockPrompt")
+  private let grants = AuthorizationGrants(label: "VaultUnlockPrompt", controlSize: .small)
   private var showTask: Task<Void, Never>?
 
   /// The prompt `begin` is serving, while it waits on the user. The broker
@@ -133,10 +129,30 @@ final class VaultUnlockPromptModel {
       caller: prompt.caller,
       callerChain: prompt.callerChain,
       headline: Self.headline(for: prompt.action),
+      secrets: Self.secrets(for: prompt),
       icon: AuthenticationIcon(view: view),
+      touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
     )
     panel.show(content)
+  }
+
+  /// List of the requested secrets, as `item/credential`. These are shown when the
+  /// user expands the vault card. A secret in another vault is prefixed with
+  /// that vault's key. Empty for actions that do not involve specific secrets.
+  private static func secrets(for prompt: VaultAccessPrompt) -> [String] {
+    switch prompt.action {
+    case .readSecret(let itemKey, let credentialKey),
+      .writeSecret(let itemKey, let credentialKey):
+      return ["\(itemKey)/\(credentialKey)"]
+    case .resolveSecrets(_, let refs):
+      return refs.map { ref in
+        let path = "\(ref.itemKey)/\(ref.credentialKey)"
+        return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
+      }
+    case .listItems, .exportVaults, .importVaults, .addVault:
+      return []
+    }
   }
 
   /// The localized reason `LocalAuthentication` shows in its own chrome.
@@ -145,8 +161,9 @@ final class VaultUnlockPromptModel {
     switch prompt.action {
     case .readSecret:
       what = "read a secret from vault \(prompt.vaultKey)"
-    case .resolveSecrets(let purpose, let count):
+    case .resolveSecrets(let purpose, let refs):
       let verb = purpose == .read ? "read" : "resolve"
+      let count = refs.count
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
@@ -175,7 +192,7 @@ final class VaultUnlockPromptModel {
     }
   }
 
-  /// One grant per vault, action and requesting process, so approving one
+  /// One grant per vault, action and requesting process. Approving one
   /// caller's request does not authorize another's inside the reuse window, and
   /// approving a listing does not authorize a read.
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
@@ -206,8 +223,9 @@ final class VaultUnlockPromptModel {
   private static func headline(for action: VaultAction) -> String {
     switch action {
     case .readSecret: return "read a secret"
-    case .resolveSecrets(let purpose, let count):
+    case .resolveSecrets(let purpose, let refs):
       let verb = purpose == .read ? "read" : "resolve"
+      let count = refs.count
       return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
     case .listItems: return "list a vault"
     case .writeSecret: return "write a secret"
@@ -225,37 +243,36 @@ private struct VaultUnlockView: View {
   let caller: String?
   let callerChain: [ProcessNode]
   let headline: String
+  let secrets: [String]
   let icon: AuthenticationIcon
+  let touchID: Bool
   let onCancel: () -> Void
 
   var body: some View {
     VStack(spacing: 14) {
-      icon
-        .frame(width: 64, height: 64)
+      PromptConnection(callerChain: callerChain, fallbackSystemImage: "lock.fill")
 
-      VStack(spacing: 4) {
-        PromptTitle(text: title, callerChain: callerChain)
+      PromptHeadline(parts: title)
 
-        Text("Vault \(vaultKey)")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+      VStack(spacing: 8) {
+        PromptSubjectCard(
+          systemImage: "lock.fill", title: vaultKey, detail: nil, items: secrets)
+        CallerChainView(
+          chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
       }
 
-      CallerChainView(chain: callerChain)
-
-      Button("Cancel", action: onCancel)
-        .keyboardShortcut(.cancelAction)
+      BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
     }
     .padding(24)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private var title: String {
-    if let caller, !caller.isEmpty {
-      return "\(caller) wants to \(headline)"
+  private var title: [HeadlinePart] {
+    if let who = PromptCaller.appName(caller: caller, chain: callerChain) {
+      return [.bold(who), .plain(" wants to \(headline)")]
     }
     let capitalized = headline.prefix(1).uppercased() + headline.dropFirst()
-    return "Authorize: \(capitalized)"
+    return [.plain("Authorize: \(capitalized)")]
   }
 }
 

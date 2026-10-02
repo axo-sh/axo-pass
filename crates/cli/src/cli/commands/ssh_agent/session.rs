@@ -2,6 +2,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
 
 use axo_pass_core::audit::{Action, Actor, Outcome};
+use axo_pass_core::core::app_broker::SignPurpose;
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::agent_client::{AXO_AGENT_INFO_EXT, AXO_RESTART_EXT, AXO_SHUTDOWN_EXT};
 use axo_pass_core::ssh::utils::compute_short_sha256_fingerprint;
@@ -306,14 +307,34 @@ impl SshAgentSession {
         }
 
         // passed all checks, perform signing
+        let purpose = self.sign_purpose(&req.data);
         stored_cred
             .sign(
                 req,
                 self.caller.as_deref(),
                 self.caller_chain(),
+                purpose.as_ref(),
                 self.requester(),
             )
             .map_err(|e| AgentError::Other(e.into()))
+    }
+
+    /// Describe what `data` is a signature over, for the prompt: an
+    /// `ssh-keygen -Y sign` namespace or an SSH login. `None` for anything
+    /// else.
+    fn sign_purpose(&self, data: &[u8]) -> Option<SignPurpose> {
+        if let Some(purpose) = SignPurpose::sshsig(data) {
+            return Some(purpose);
+        }
+        let req = UserauthRequest::parse(data).ok()?;
+        let host = req.hostkey.as_ref().map(|hostkey| {
+            audit::host_name(hostkey, &self.sessions)
+                .unwrap_or_else(|| compute_short_sha256_fingerprint(hostkey))
+        });
+        Some(SignPurpose::Login {
+            user: req.user,
+            host,
+        })
     }
 }
 

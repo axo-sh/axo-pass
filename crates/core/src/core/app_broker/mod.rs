@@ -55,7 +55,8 @@ pub use gpg::{
 };
 pub use keychain::{BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords};
 pub use ssh::{
-    ManagedIdentity, SignAuthorizer, SignPrompt, list_identities, request_authorize_key_use,
+    ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
+    request_authorize_key_use,
     request_signature, request_ssh_passphrase,
 };
 pub use vault::{
@@ -168,6 +169,12 @@ enum WireRequest {
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
 
+        /// What the signature is for, read by the agent from the request. The
+        /// agent reads it rather than the broker, because only the agent holds
+        /// the session bindings that name the destination host.
+        #[serde(default)]
+        purpose: Option<SignPurpose>,
+
         /// Base64 of the bytes to sign.
         data: String,
 
@@ -227,6 +234,10 @@ enum WireRequest {
         /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
+
+        /// See [`WireRequest::Sign`]'s purpose.
+        #[serde(default)]
+        purpose: Option<SignPurpose>,
 
         /// Whether an app grant may answer this prompt, and the prompt may
         /// offer one. True for an auto-loaded key. False for a key added with
@@ -698,11 +709,11 @@ fn launch_app() -> Result<(), BrokerError> {
     // on screen and takes focus, and drops `--args` on the way. So do not issue
     // one: the app is up and binding the socket, and the caller waits for it.
     if app_is_running(&bundle) {
-        log::debug!("The app is already running; waiting for it to serve");
+        log::info!("The app is already running; waiting for it to serve");
         return Ok(());
     }
 
-    log::debug!("Starting {} for the app broker", bundle.display());
+    log::info!("Starting {} for the app broker", bundle.display());
     let status = std::process::Command::new("/usr/bin/open")
         .arg("-g")
         .arg(&bundle)
@@ -1047,6 +1058,7 @@ async fn handle_connection(
                 comment,
                 caller,
                 caller_chain: _,
+                purpose,
                 data,
                 // Secure Enclave keys are ECDSA P-256 and have no flag-selected
                 // hash.
@@ -1064,6 +1076,7 @@ async fn handle_connection(
                     managed: true,
                     policy: None,
                     grant_candidate: None,
+                    purpose,
                 };
                 log::debug!("App broker request: {prompt:?}");
                 ssh::sign_managed(&*authorizers.sign, prompt, actor, data, &in_flight).await
@@ -1073,6 +1086,7 @@ async fn handle_connection(
                 comment,
                 caller,
                 caller_chain: _,
+                purpose,
                 allow_grants,
             } => {
                 let prompt = SignPrompt {
@@ -1084,6 +1098,7 @@ async fn handle_connection(
                     managed: false,
                     policy: None,
                     grant_candidate: None,
+                    purpose,
                 };
                 log::debug!(
                     "App broker request: authorize key use {prompt:?}, allow grants {allow_grants}"

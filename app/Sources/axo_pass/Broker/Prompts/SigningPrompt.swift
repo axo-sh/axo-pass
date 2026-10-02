@@ -14,7 +14,7 @@ import UserNotifications
 /// broker's evaluation on that same context drives the icon.
 @MainActor
 final class SigningPromptModel {
-  private let grants = AuthorizationGrants(label: "SigningPrompt")
+  private let grants = AuthorizationGrants(label: "SigningPrompt", controlSize: .small)
 
   private var showTask: Task<Void, Never>?
 
@@ -67,7 +67,7 @@ final class SigningPromptModel {
   func begin(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
     callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor,
-    grantCandidate: SshGrantApp?
+    grantCandidate: SshGrantApp?, purpose: SshSignPurpose?
   ) -> UInt64 {
     let subject = GrantSubject(kind: .ssh, id: fingerprint ?? keyLabel, label: comment)
     let key = GrantKey(subject: subject, caller: caller, callerIdentity: callerIdentity)
@@ -87,7 +87,8 @@ final class SigningPromptModel {
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
       self?.showPanel(
-        key: key, keyName: keyName, managed: managed, callerChain: callerChain,
+        key: key, keyName: keyName, keyFingerprint: comment == nil ? nil : fingerprint,
+        managed: managed, callerChain: callerChain, purpose: purpose,
         grantCandidate: grantCandidate, grantChoice: grantChoice, view: grant.view)
     }
 
@@ -179,21 +180,35 @@ final class SigningPromptModel {
 
   // MARK: - Panel
 
+  /// `keyFingerprint` is shown next to `keyName`, and is nil when `keyName`
+  /// is already derived from the fingerprint.
   private func showPanel(
-    key: GrantKey, keyName: String, managed: Bool, callerChain: [ProcessNode],
-    grantCandidate: SshGrantApp?, grantChoice: GrantChoice, view: LAAuthenticationView
+    key: GrantKey, keyName: String, keyFingerprint: String?, managed: Bool,
+    callerChain: [ProcessNode], purpose: SshSignPurpose?, grantCandidate: SshGrantApp?,
+    grantChoice: GrantChoice, view: LAAuthenticationView
   ) {
     let content = SigningPromptView(
       caller: key.caller,
       keyName: keyName,
+      keyFingerprint: keyFingerprint,
       managed: managed,
       callerChain: callerChain,
+      purpose: purpose,
       grantCandidate: grantCandidate,
       grantChoice: grantChoice,
       icon: AuthenticationIcon(view: view),
+      touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(key: key) }
     )
     panel.show(content)
+  }
+
+  /// `SHA256:AbCdEf...` -> `SHA256:AbCdEf12`.
+  fileprivate static func shortFingerprint(_ fingerprint: String) -> String {
+    let body =
+      fingerprint.hasPrefix("SHA256:")
+      ? String(fingerprint.dropFirst("SHA256:".count)) : fingerprint
+    return "SHA256:\(body.prefix(8))"
   }
 
   /// A short display name for a key. Prefers the shortened `ssh-key-<uuid>`
@@ -255,62 +270,92 @@ enum GrantExpiration: CaseIterable, Hashable {
 private struct SigningPromptView: View {
   let caller: String?
   let keyName: String
+  let keyFingerprint: String?
   let managed: Bool
   let callerChain: [ProcessNode]
+  let purpose: SshSignPurpose?
   let grantCandidate: SshGrantApp?
   @Bindable var grantChoice: GrantChoice
   let icon: AuthenticationIcon
+  let touchID: Bool
   let onCancel: () -> Void
 
   var body: some View {
     VStack(spacing: 14) {
-      icon
-        .frame(width: 64, height: 64)
+      PromptConnection(callerChain: callerChain)
 
-      VStack(spacing: 4) {
-        PromptTitle(text: title, callerChain: callerChain)
+      PromptHeadline(parts: title)
 
-        Text("\(managed ? "Secure Enclave key" : "SSH key") \(keyName)")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+      VStack(spacing: 8) {
+        PromptSubjectCard(systemImage: "key.fill", title: keyName, detail: keyDetail)
+        CallerChainView(
+          chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
       }
 
-      CallerChainView(chain: callerChain)
-
       if let grantCandidate {
-        HStack(spacing: 6) {
-          Toggle(
-            "Allow \(grantCandidate.displayName) to use this key for",
-            isOn: $grantChoice.allow
-          )
-          .toggleStyle(.checkbox)
-          Picker("Duration", selection: $grantChoice.expiration) {
-            ForEach(GrantExpiration.allCases, id: \.self) { expiration in
-              Text(expiration.label).tag(expiration)
+        VStack(spacing: 4) {
+          HStack(spacing: 6) {
+            Toggle(
+              "Don't ask \(grantCandidate.displayName) again for",
+              isOn: $grantChoice.allow
+            )
+            .toggleStyle(.checkbox)
+            Picker("Duration", selection: $grantChoice.expiration) {
+              ForEach(GrantExpiration.allCases, id: \.self) { expiration in
+                Text(expiration.label).tag(expiration)
+              }
             }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .disabled(!grantChoice.allow)
           }
-          .labelsHidden()
-          .pickerStyle(.menu)
-          .fixedSize()
-          .disabled(!grantChoice.allow)
+          Text("Applies to this key, and to anything \(grantCandidate.displayName) runs.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .help(
           "\(grantCandidate.displayName) and anything it runs, such as git hooks, will sign "
             + "with this key without asking. Remove access in the key's details.")
       }
 
-      Button("Cancel", action: onCancel)
-        .keyboardShortcut(.cancelAction)
+      BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
     }
     .padding(24)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private var title: String {
-    if let caller, !caller.isEmpty {
-      return "\(caller) wants to sign with an SSH key"
+  private var appName: String? {
+    grantCandidate?.displayName ?? PromptCaller.appName(caller: caller, chain: callerChain)
+  }
+
+  private var keyDetail: String {
+    let kind = managed ? "Secure Enclave key" : "SSH key"
+    guard let keyFingerprint else { return kind }
+    return "\(kind) · \(SigningPromptModel.shortFingerprint(keyFingerprint))"
+  }
+
+  private var title: [HeadlinePart] {
+    let who: HeadlinePart = appName.map { .bold($0) } ?? .plain("An app")
+    switch purpose {
+    case .sshsig(let namespace):
+      switch namespace {
+      case "git": return [who, .plain(" wants to sign a "), .bold("git"), .plain(" commit or tag")]
+      case "file": return [who, .plain(" wants to sign a file")]
+      default: return [who, .plain(" wants to sign data for "), .bold("“\(namespace)”")]
+      }
+    case .login(let user, let host):
+      guard let host else { return [who, .plain(" wants to log in with an SSH key")] }
+      if host.hasPrefix("SHA256:") {
+        return [who, .plain(" wants to log in to an unknown host "), .bold("(\(host))")]
+      }
+      if let user, !user.isEmpty {
+        return [who, .plain(" wants to log in to "), .bold("\(user)@\(host)")]
+      }
+      return [who, .plain(" wants to log in to "), .bold(host)]
+    case nil:
+      return [who, .plain(" wants to use an SSH key")]
     }
-    return "Authorize an SSH signature"
   }
 }
 
@@ -326,12 +371,12 @@ final class SigningPromptBridge: SignPromptDelegate {
   func beginAuthorization(
     keyLabel: String, fingerprint: String?, comment: String?, caller: String?,
     callerChain: [ProcessNode], callerIdentity: String?, managed: Bool, peer: RequestActor,
-    policy: SshKeyPolicy?, grantCandidate: SshGrantApp?
+    policy: SshKeyPolicy?, grantCandidate: SshGrantApp?, purpose: SshSignPurpose?
   ) async throws -> UInt64 {
     await model.begin(
       keyLabel: keyLabel, fingerprint: fingerprint, comment: comment, caller: caller,
       callerChain: callerChain, callerIdentity: callerIdentity, managed: managed, peer: peer,
-      grantCandidate: grantCandidate)
+      grantCandidate: grantCandidate, purpose: purpose)
   }
 
   func endAuthorization(keyLabel: String, outcome: PromptOutcome) async {

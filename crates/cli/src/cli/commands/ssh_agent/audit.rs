@@ -87,7 +87,7 @@ pub fn record_sign(
 
 /// The server's host name, from a session binding for its host key or else
 /// from `known_hosts`. Hashed `known_hosts` entries give no name.
-fn host_name(hostkey: &KeyData, sessions: &[SessionBinding]) -> Option<String> {
+pub(crate) fn host_name(hostkey: &KeyData, sessions: &[SessionBinding]) -> Option<String> {
     if let Some(binding) = sessions.iter().find(|s| s.inner.host_key == *hostkey) {
         // The binding already looked the host key up in `known_hosts`.
         return binding.host_name.clone();

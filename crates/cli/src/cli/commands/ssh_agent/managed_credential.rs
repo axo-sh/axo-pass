@@ -1,6 +1,6 @@
 use std::os::fd::BorrowedFd;
 
-use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity};
+use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity, SignPurpose};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
@@ -112,6 +112,7 @@ impl Credential for ManagedCredential {
         req: proto::SignRequest,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        purpose: Option<&SignPurpose>,
         requester: Option<BorrowedFd<'_>>,
     ) -> Result<ssh_key::Signature, CredentialError> {
         let fingerprint = self
@@ -128,6 +129,7 @@ impl Credential for ManagedCredential {
                 req.flags,
                 caller,
                 caller_chain,
+                purpose,
                 requester,
             )
         });

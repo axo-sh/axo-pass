@@ -271,6 +271,27 @@ impl From<KeyPolicy> for SshKeyPolicy {
     }
 }
 
+/// Mirrors [`app_broker::SignPurpose`].
+#[derive(uniffi::Enum, Clone, PartialEq, Eq)]
+pub enum SshSignPurpose {
+    Login {
+        user: Option<String>,
+        host: Option<String>,
+    },
+    Sshsig {
+        namespace: String,
+    },
+}
+
+impl From<app_broker::SignPurpose> for SshSignPurpose {
+    fn from(p: app_broker::SignPurpose) -> Self {
+        match p {
+            app_broker::SignPurpose::Login { user, host } => SshSignPurpose::Login { user, host },
+            app_broker::SignPurpose::Sshsig { namespace } => SshSignPurpose::Sshsig { namespace },
+        }
+    }
+}
+
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SshKeyAgent {
     SystemAgent,
@@ -2463,6 +2484,10 @@ pub trait SignPromptDelegate: Send + Sync {
         // default-policy key requested through a verified chain with a signed
         // app in it.
         grant_candidate: Option<SshGrantApp>,
+        // The purpose of the signature, parsed by the agent from the request.
+        // The requesting process chooses the data, so this value is not
+        // authenticated.
+        purpose: Option<SshSignPurpose>,
     ) -> Result<u64, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
@@ -2505,6 +2530,7 @@ impl app_broker::SignAuthorizer for DelegatingAuthorizer {
                 peer.into(),
                 prompt.policy.map(SshKeyPolicy::from),
                 prompt.grant_candidate.map(SshGrantApp::from),
+                prompt.purpose.map(SshSignPurpose::from),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -2780,11 +2806,11 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
-    /// `ap exec` / `ap inject`: resolve `count` references, possibly across
-    /// several vaults, behind one prompt.
+    /// `ap exec` / `ap inject`: resolve `refs` behind one prompt. The refs may
+    /// span several vaults.
     ResolveSecrets {
         purpose: ResolvePurpose,
-        count: u32,
+        refs: Vec<VaultSecretRef>,
     },
     /// `ap item set`: write one credential's secret value. The value is not
     /// carried to the app.
@@ -2824,6 +2850,25 @@ impl From<app_broker::ResolvePurpose> for ResolvePurpose {
     }
 }
 
+/// A secret requested by a resolve. The prompt lists it when the user expands
+/// the card. Mirrors [`app_broker::VaultRef`].
+#[derive(uniffi::Record, Clone)]
+pub struct VaultSecretRef {
+    pub vault_key: String,
+    pub item_key: String,
+    pub credential_key: String,
+}
+
+impl From<app_broker::VaultRef> for VaultSecretRef {
+    fn from(r: app_broker::VaultRef) -> Self {
+        Self {
+            vault_key: r.vault_key,
+            item_key: r.item_key,
+            credential_key: r.credential_key,
+        }
+    }
+}
+
 impl From<app_broker::VaultAction> for VaultAction {
     fn from(action: app_broker::VaultAction) -> Self {
         match action {
@@ -2837,7 +2882,7 @@ impl From<app_broker::VaultAction> for VaultAction {
             },
             app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
                 purpose: purpose.into(),
-                count: refs.len() as u32,
+                refs: refs.into_iter().map(Into::into).collect(),
             },
             app_broker::VaultAction::WriteSecret {
                 item_key,

@@ -2,34 +2,6 @@ import AppKit
 import AxoPassFFI
 import SwiftUI
 
-/// A prompt's headline, with the icon of the outermost real app in the caller
-/// chain shown inline before the text (e.g. the terminal emulator that hosts
-/// the shell a command ran from). Falls back to plain text when no chain node
-/// looks like a signed `.app` bundle — a bare CLI tool, a script, or an
-/// unidentified process.
-struct PromptTitle: View {
-  let text: String
-  let callerChain: [ProcessNode]
-  var font: Font = .headline
-  var color: Color = .primary
-  var iconSize: CGFloat = 24
-
-  var body: some View {
-    HStack(spacing: 6) {
-      if let icon = CallerAppIcon.icon(for: callerChain) {
-        Image(nsImage: icon)
-          .resizable()
-          .frame(width: iconSize, height: iconSize)
-      }
-      Text(text)
-        .font(font)
-        .foregroundStyle(color)
-        .multilineTextAlignment(.center)
-        .lineSpacing(3)
-    }
-  }
-}
-
 /// Resolves the icon of the outermost app in a caller chain.
 enum CallerAppIcon {
   /// `chain` is innermost first (the peer process, then its ancestors), so
@@ -41,6 +13,13 @@ enum CallerAppIcon {
   static func icon(for chain: [ProcessNode]) -> NSImage? {
     guard let path = appBundlePath(for: chain) else { return nil }
     return NSWorkspace.shared.icon(forFile: path)
+  }
+
+  /// The display name of the app `icon(for:)` would show, e.g. `Ghostty`.
+  static func name(for chain: [ProcessNode]) -> String? {
+    guard let path = appBundlePath(for: chain) else { return nil }
+    let name = FileManager.default.displayName(atPath: path)
+    return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
   }
 
   /// The icon of an installed app, looked up by bundle identifier. `nil` when

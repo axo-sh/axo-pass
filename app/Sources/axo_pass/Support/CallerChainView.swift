@@ -1,15 +1,15 @@
 import AxoPassFFI
 import SwiftUI
 
-/// An expander under an authorization prompt that shows the full caller chain:
-/// one row per process, innermost first, with the detail needed to recognize an
-/// unexpected caller.
-///
-/// Collapsed by default. The prompt's one-line `caller` already names the ends
-/// of the chain, so this only earns its place when there is more than one
-/// process or a single process carries detail worth seeing.
+/// A card in an authorization prompt whose header names the requesting
+/// process, e.g. `ssh-keygen`. Clicking it expands the full caller chain inside
+/// the card: one row per process, innermost first, with the detail needed to
+/// recognize an unexpected caller.
 struct CallerChainView: View {
   let chain: [ProcessNode]
+
+  /// The header text, usually `PromptCaller.requesterName(chain:)`.
+  let summary: String
 
   @State private var expanded = false
 
@@ -23,37 +23,41 @@ struct CallerChainView: View {
 
   var body: some View {
     if !chain.isEmpty {
-      VStack(alignment: .leading, spacing: 8) {
-        Button {
-          expanded.toggle()
-        } label: {
-          HStack(spacing: 6) {
-            Image(systemName: "chevron.right")
-              .font(.caption.weight(.semibold))
-              .rotationEffect(.degrees(expanded ? 90 : 0))
-              .frame(width: 10, height: 10)
-            Text("Caller details")
-              .font(.body)
-            Spacer()
-          }
-          .foregroundStyle(.secondary)
-          .padding(.vertical, 2)
-          .padding(.horizontal, 8)
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-
-        if expanded {
-          rows
-            .background(
-              RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.quaternary.opacity(0.5))
-            )
-            .textSelection(.enabled)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      card
     }
+  }
+
+  private var card: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button {
+        expanded.toggle()
+      } label: {
+        HStack(spacing: 10) {
+          Image(systemName: "terminal")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .frame(width: 20)
+          Text(summary)
+            .font(.body.weight(.medium))
+          Spacer()
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .frame(width: 10, height: 10)
+        }
+        .padding(12)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+
+      if expanded {
+        Divider()
+        rows
+          .textSelection(.enabled)
+      }
+    }
+    .promptCard()
   }
 
   /// The process rows. A chain longer than `visibleRows` scrolls inside a

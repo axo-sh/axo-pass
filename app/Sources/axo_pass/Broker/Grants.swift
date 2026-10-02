@@ -1,3 +1,4 @@
+import AppKit
 import AxoPassFFI
 import Foundation
 import LocalAuthentication
@@ -164,10 +165,13 @@ final class AuthorizationGrants {
   typealias Key = GrantKey
 
   private let label: String
+  private let controlSize: NSControl.ControlSize
   private var grants: [Key: Grant] = [:]
 
-  init(label: String) {
+  /// `controlSize` sizes the biometric glyph each grant's view draws.
+  init(label: String, controlSize: NSControl.ControlSize = .regular) {
     self.label = label
+    self.controlSize = controlSize
   }
 
   /// The grant to evaluate on, created if there is none and dropped first if
@@ -266,7 +270,7 @@ final class AuthorizationGrants {
     // so it has to exist before the broker evaluates rather than when the panel
     // appears.
     let grant = Grant(
-      context: context, view: LAAuthenticationView(context: context, controlSize: .regular),
+      context: context, view: LAAuthenticationView(context: context, controlSize: controlSize),
       policy: policy)
     grants[key] = grant
     return grant

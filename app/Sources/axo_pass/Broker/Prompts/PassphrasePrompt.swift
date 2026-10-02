@@ -10,7 +10,7 @@ import SwiftUI
 /// Otherwise, or if gpg just rejected the saved passphrase, shows a text field for the passphrase.
 @MainActor
 final class PassphrasePromptModel {
-  private let grants = AuthorizationGrants(label: "PassphrasePrompt")
+  private let grants = AuthorizationGrants(label: "PassphrasePrompt", controlSize: .small)
   private var showTask: Task<Void, Never>?
 
   /// Resumed when the user answers the text field, the confirmation, or the
@@ -117,6 +117,7 @@ final class PassphrasePromptModel {
     let content = PassphraseUnlockView(
       prompt: prompt,
       icon: AuthenticationIcon(view: view),
+      touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) }
     )
     panel.show(content)
@@ -174,38 +175,36 @@ final class PassphrasePromptModel {
 private struct PassphraseUnlockView: View {
   let prompt: PassphrasePrompt
   let icon: AuthenticationIcon
+  let touchID: Bool
   let onCancel: () -> Void
 
-  static func unlockTitle(_ kind: PassphraseKind) -> String {
-    switch kind {
-    case .ssh: "Unlock your SSH key"
-    case .gpg: "Unlock your OpenPGP key"
-    case .age: "Unlock your age key"
+  private var title: [HeadlinePart] {
+    let key =
+      switch prompt.kind {
+      case .ssh: "your SSH key"
+      case .gpg: "your OpenPGP key"
+      case .age: "your age key"
+      }
+    if let who = PromptCaller.appName(caller: prompt.caller, chain: prompt.callerChain) {
+      return [.bold(who), .plain(" wants to unlock \(key)")]
     }
+    return [.plain("Unlock \(key)")]
   }
 
   var body: some View {
-    VStack(spacing: 16) {
-      icon
+    VStack(spacing: 14) {
+      PromptConnection(callerChain: prompt.callerChain)
 
-      VStack(spacing: 4) {
-        Text(Self.unlockTitle(prompt.kind))
-          .font(.headline)
-          .multilineTextAlignment(.center)
+      PromptHeadline(parts: title)
 
-        if let caller = prompt.caller, !caller.isEmpty {
-          PromptTitle(
-            text: "Requested by \(caller)", callerChain: prompt.callerChain, font: .body,
-            color: .secondary, iconSize: 20)
-        }
+      VStack(spacing: 8) {
+        PinentryTranscript(prompt: prompt)
+        CallerChainView(
+          chain: prompt.callerChain,
+          summary: PromptCaller.requesterName(chain: prompt.callerChain))
       }
 
-      PinentryTranscript(prompt: prompt)
-
-      CallerChainView(chain: prompt.callerChain)
-
-      Button("Cancel", action: onCancel)
-        .keyboardShortcut(.cancelAction)
+      BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
     }
     .padding(24)
     .frame(maxWidth: .infinity)
@@ -224,27 +223,17 @@ private struct PassphraseEntryView: View {
   @FocusState private var fieldFocused: Bool
 
   var body: some View {
-    VStack(spacing: 16) {
-      Image(systemName: "key.fill")
-        .font(.system(size: 24))
-        .foregroundStyle(.tint)
-        .frame(width: 40, height: 40)
+    VStack(spacing: 14) {
+      PromptConnection(callerChain: prompt.callerChain)
 
-      VStack(spacing: 4) {
-        Text(
-          prompt.kind == .ssh ? "Enter your SSH key passphrase" : "Enter your OpenPGP passphrase"
-        )
-        .font(.headline)
-        .multilineTextAlignment(.center)
+      PromptHeadline(parts: title)
 
-        if let caller = prompt.caller, !caller.isEmpty {
-          PromptTitle(
-            text: "Requested by \(caller)", callerChain: prompt.callerChain, font: .body,
-            color: .secondary, iconSize: 20)
-        }
+      VStack(spacing: 8) {
+        PinentryTranscript(prompt: prompt)
+        CallerChainView(
+          chain: prompt.callerChain,
+          summary: PromptCaller.requesterName(chain: prompt.callerChain))
       }
-
-      PinentryTranscript(prompt: prompt)
 
       VStack(alignment: .leading, spacing: 12) {
         SecureField(prompt.prompt ?? "Passphrase", text: $value)
@@ -258,20 +247,27 @@ private struct PassphraseEntryView: View {
         }
       }
 
-      CallerChainView(chain: prompt.callerChain)
-
       HStack {
-        Spacer()
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
+        Spacer()
         Button("Unlock") { onSubmit(value, saveToKeychain && canSave) }
           .keyboardShortcut(.defaultAction)
           .disabled(value.isEmpty)
       }
+      .padding(.top, 4)
     }
     .padding(24)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onAppear { fieldFocused = true }
+  }
+
+  private var title: [HeadlinePart] {
+    let passphrase = prompt.kind == .ssh ? "SSH key passphrase" : "OpenPGP passphrase"
+    if let who = PromptCaller.appName(caller: prompt.caller, chain: prompt.callerChain) {
+      return [.bold(who), .plain(" is asking for your \(passphrase)")]
+    }
+    return [.plain("Enter your \(passphrase)")]
   }
 }
 

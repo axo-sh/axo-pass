@@ -62,6 +62,42 @@ pub struct SignPrompt {
     /// Set only for a [`KeyPolicy::Default`] key requested through a fully
     /// verified chain that contains a signed app.
     pub grant_candidate: Option<GrantApp>,
+
+    /// The purpose of the signature, parsed by the agent from the request.
+    /// `None` when the agent cannot determine the purpose.
+    pub purpose: Option<SignPurpose>,
+}
+
+/// The purpose of a signature, parsed by the agent from the data to be signed.
+/// Show in the prompt only. The requesting process chooses the data, so this
+/// value is not authenticated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SignPurpose {
+    /// An SSH login. `host` is the server's name from a session binding or
+    /// `known_hosts`, or the short fingerprint of its host key when no name
+    /// was found. `None` when the request carries no host key.
+    Login {
+        user: Option<String>,
+        host: Option<String>,
+    },
+
+    /// An `ssh-keygen -Y sign` signature in `namespace`, e.g. `git`.
+    Sshsig { namespace: String },
+}
+
+impl SignPurpose {
+    /// The namespace of an SSHSIG signed-data blob: the `SSHSIG` magic
+    /// followed by the namespace as an SSH string. `None` for any other data.
+    pub fn sshsig(data: &[u8]) -> Option<Self> {
+        let rest = data.strip_prefix(b"SSHSIG")?;
+        let len = u32::from_be_bytes(rest.get(..4)?.try_into().ok()?) as usize;
+        let namespace = rest.get(4..4 + len)?;
+        let namespace = std::str::from_utf8(namespace).ok()?;
+        Some(Self::Sshsig {
+            namespace: namespace.to_string(),
+        })
+    }
 }
 
 /// Supplies an `LAContext` to sign on, and learns how the attempt ended so it
@@ -116,6 +152,7 @@ pub fn list_identities(
 
 /// Ask the app to authorize and produce a signature. Blocking: it waits for the
 /// user to answer a prompt, so call it from a thread that can block.
+#[allow(clippy::too_many_arguments)]
 pub fn request_signature(
     key_label: &str,
     fingerprint: Option<&str>,
@@ -124,6 +161,7 @@ pub fn request_signature(
     flags: u32,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    purpose: Option<&SignPurpose>,
     requester: Option<BorrowedFd<'_>>,
 ) -> Result<Signature, BrokerError> {
     let request = WireRequest::Sign {
@@ -132,6 +170,7 @@ pub fn request_signature(
         comment: comment.map(String::from),
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
+        purpose: purpose.cloned(),
         data: b64.encode(data),
         flags,
     };
@@ -170,6 +209,7 @@ pub fn request_authorize_key_use(
     comment: Option<&str>,
     caller: Option<&str>,
     caller_chain: &[ProcessNode],
+    purpose: Option<&SignPurpose>,
     allow_grants: bool,
     requester: Option<BorrowedFd<'_>>,
 ) -> Result<(), BrokerError> {
@@ -178,6 +218,7 @@ pub fn request_authorize_key_use(
         comment: comment.map(String::from),
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
+        purpose: purpose.cloned(),
         allow_grants,
     };
     match send_request_for(&request, requester)? {
@@ -682,5 +723,32 @@ async fn save_passphrase(entry: PasswordEntry, passphrase: SecretString) {
 fn passphrase_response(passphrase: &SecretString) -> WireResponse {
     WireResponse::Passphrase {
         passphrase: b64.encode(passphrase.expose_secret().as_bytes()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sshsig_namespace() {
+        let mut data = b"SSHSIG".to_vec();
+        data.extend_from_slice(&3u32.to_be_bytes());
+        data.extend_from_slice(b"git");
+        data.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            SignPurpose::sshsig(&data),
+            Some(SignPurpose::Sshsig {
+                namespace: "git".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn sshsig_rejects_other_data() {
+        assert_eq!(SignPurpose::sshsig(b""), None);
+        assert_eq!(SignPurpose::sshsig(b"SSHSIG"), None);
+        assert_eq!(SignPurpose::sshsig(b"SSHSIG\0\0\0\x09git"), None);
+        assert_eq!(SignPurpose::sshsig(b"\0\0\0\x20session"), None);
     }
 }

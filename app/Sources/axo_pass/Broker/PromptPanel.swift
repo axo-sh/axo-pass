@@ -36,6 +36,7 @@ final class PromptPanel {
       content
         .frame(width: Self.standardWidth, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: .infinity, alignment: .top)
     )
 
     if let host {

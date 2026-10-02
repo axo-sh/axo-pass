@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::os::fd::BorrowedFd;
 
-use axo_pass_core::core::app_broker::{self, BrokerError};
+use axo_pass_core::core::app_broker::{self, BrokerError, SignPurpose};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::rsa_signing;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
@@ -55,6 +55,7 @@ impl StoredCredential {
         &self,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        purpose: Option<&SignPurpose>,
         requester: Option<BorrowedFd<'_>>,
     ) -> Result<(), CredentialError> {
         if let Some(expiry) = self.expires_at {
@@ -65,7 +66,7 @@ impl StoredCredential {
         }
 
         if let Some(allow_grants) = self.confirm_policy() {
-            self.confirm_use(caller, caller_chain, allow_grants, requester)?;
+            self.confirm_use(caller, caller_chain, purpose, allow_grants, requester)?;
         }
         Ok(())
     }
@@ -90,6 +91,7 @@ impl StoredCredential {
         &self,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        purpose: Option<&SignPurpose>,
         allow_grants: bool,
         requester: Option<BorrowedFd<'_>>,
     ) -> Result<(), CredentialError> {
@@ -105,6 +107,7 @@ impl StoredCredential {
                 comment.as_deref(),
                 caller,
                 caller_chain,
+                purpose,
                 allow_grants,
                 requester,
             )
@@ -177,9 +180,10 @@ impl Credential for StoredCredential {
         req: proto::SignRequest,
         caller: Option<&str>,
         caller_chain: &[ProcessNode],
+        purpose: Option<&SignPurpose>,
         requester: Option<BorrowedFd<'_>>,
     ) -> Result<ssh_key::Signature, CredentialError> {
-        self.validate(caller, caller_chain, requester)?;
+        self.validate(caller, caller_chain, purpose, requester)?;
         self.sign_validated(req)
     }
 
