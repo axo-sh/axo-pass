@@ -242,8 +242,7 @@ private struct PassphraseEntryView: View {
           .onSubmit { onSubmit(value, saveToKeychain && canSave) }
 
         if canSave {
-          Toggle("Save to Keychain and unlock with Touch ID", isOn: $saveToKeychain)
-            .font(.subheadline)
+          Toggle("Save to Axo Pass and unlock with Touch ID", isOn: $saveToKeychain)
         }
       }
 

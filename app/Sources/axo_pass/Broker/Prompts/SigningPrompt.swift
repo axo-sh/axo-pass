@@ -162,7 +162,7 @@ final class SigningPromptModel {
 
     let content = UNMutableNotificationContent()
     content.title = "SSH key used"
-    let kind = managed ? "Secure Enclave key" : "SSH key"
+    let kind = managed ? "Secure Enclave SSH key" : "SSH key"
     if let caller, !caller.isEmpty {
       content.body = "Signed with \(kind) \(name) for \(caller)."
     } else {
@@ -293,30 +293,38 @@ private struct SigningPromptView: View {
       }
 
       if let grantCandidate {
-        VStack(spacing: 4) {
-          HStack(spacing: 6) {
-            Toggle(
-              "Don't ask \(grantCandidate.displayName) again for",
-              isOn: $grantChoice.allow
-            )
-            .toggleStyle(.checkbox)
-            Picker("Duration", selection: $grantChoice.expiration) {
-              ForEach(GrantExpiration.allCases, id: \.self) { expiration in
-                Text(expiration.label).tag(expiration)
+        VStack(alignment: .leading, spacing: 6) {
+          Toggle(
+            "Allow \(grantCandidate.displayName) to use this SSH key without confirmation",
+            isOn: $grantChoice.allow
+          )
+          .toggleStyle(.checkbox)
+
+          if grantChoice.allow {
+            // Indent to line up with the checkbox label.
+            VStack(alignment: .leading, spacing: 4) {
+              Picker("Duration:", selection: $grantChoice.expiration) {
+                ForEach(GrantExpiration.allCases, id: \.self) { expiration in
+                  Text(expiration.label).tag(expiration)
+                }
               }
+              .pickerStyle(.menu)
+              .fixedSize()
+              Text(
+                "Applies to this key and to all processes started by "
+                  + "\(grantCandidate.displayName)."
+              )
+              .font(.caption)
+              .foregroundStyle(.secondary)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .disabled(!grantChoice.allow)
+            .padding(.leading, 20)
           }
-          Text("Applies to this key, and to anything \(grantCandidate.displayName) runs.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .help(
-          "\(grantCandidate.displayName) and anything it runs, such as git hooks, will sign "
-            + "with this key without asking. Remove access in the key's details.")
+          "\(grantCandidate.displayName) and all processes it starts, such as git hooks, can "
+            + "use this SSH key for any signature, including SSH logins, without confirmation. "
+            + "Revoke access in the key's details.")
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
@@ -330,7 +338,7 @@ private struct SigningPromptView: View {
   }
 
   private var keyDetail: String {
-    let kind = managed ? "Secure Enclave key" : "SSH key"
+    let kind = managed ? "Secure Enclave SSH key" : "SSH key"
     guard let keyFingerprint else { return kind }
     return "\(kind) · \(SigningPromptModel.shortFingerprint(keyFingerprint))"
   }
