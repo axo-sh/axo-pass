@@ -2702,6 +2702,25 @@ pub struct CollectedPassphrase {
     pub save_to_keychain: bool,
 }
 
+/// gpg's `CONFIRM` question. Mirrors [`app_broker::ConfirmPrompt`]: `None`
+/// labels mean the defaults, OK and Cancel.
+#[derive(uniffi::Record, Clone)]
+pub struct ConfirmPrompt {
+    pub description: Option<String>,
+    pub ok_label: Option<String>,
+    pub cancel_label: Option<String>,
+}
+
+impl From<app_broker::ConfirmPrompt> for ConfirmPrompt {
+    fn from(prompt: app_broker::ConfirmPrompt) -> Self {
+        Self {
+            description: prompt.description,
+            ok_label: prompt.ok_label,
+            cancel_label: prompt.cancel_label,
+        }
+    }
+}
+
 /// Implemented by the app. `begin_authorization` prepares an `LAContext` with
 /// an `LAAuthenticationView` attached so the saved passphrase can be unlocked
 /// inline; `collect_passphrase` asks the user to type one.
@@ -2728,7 +2747,7 @@ pub trait PassphrasePromptDelegate: Send + Sync {
     async fn end_authorization(&self, prompt: PassphrasePrompt, outcome: PromptOutcome);
 
     /// Put gpg's `CONFIRM` question to the user.
-    async fn confirm(&self, description: Option<String>) -> bool;
+    async fn confirm(&self, prompt: ConfirmPrompt) -> bool;
 
     /// Show gpg's `MESSAGE` and wait for the user to dismiss it.
     async fn message(&self, description: Option<String>);
@@ -2788,8 +2807,8 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
             .await;
     }
 
-    async fn confirm(&self, description: Option<String>) -> bool {
-        self.delegate.confirm(description).await
+    async fn confirm(&self, prompt: app_broker::ConfirmPrompt) -> bool {
+        self.delegate.confirm(prompt.into()).await
     }
 
     async fn message(&self, description: Option<String>) {

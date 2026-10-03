@@ -58,6 +58,16 @@ pub struct PassphrasePrompt {
     pub caller_chain: Vec<ProcessNode>,
 }
 
+/// gpg's `CONFIRM` question. The labels come from `SETOK` and `SETCANCEL`,
+/// with gpg's mnemonic markers removed. gpg-agent relabels the buttons for
+/// some questions, so `None` means the defaults, OK and Cancel, apply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfirmPrompt {
+    pub description: Option<String>,
+    pub ok_label: Option<String>,
+    pub cancel_label: Option<String>,
+}
+
 /// A passphrase the user typed, and what they asked us to do with it.
 #[derive(Debug)]
 pub struct CollectedPassphrase {
@@ -90,7 +100,7 @@ pub trait PassphraseAuthorizer: Send + Sync + 'static {
     async fn end(&self, prompt: PassphrasePrompt, outcome: PromptOutcome);
 
     /// Answer gpg's `CONFIRM`.
-    async fn confirm(&self, description: Option<String>) -> bool;
+    async fn confirm(&self, prompt: ConfirmPrompt) -> bool;
 
     /// Show gpg's `MESSAGE` and wait for the user to dismiss it.
     async fn message(&self, description: Option<String>);
@@ -125,9 +135,11 @@ pub fn request_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString, Bro
 }
 
 /// Put gpg's `CONFIRM` question to the user.
-pub fn request_confirm(description: Option<&str>) -> Result<bool, BrokerError> {
+pub fn request_confirm(prompt: ConfirmPrompt) -> Result<bool, BrokerError> {
     let request = WireRequest::Confirm {
-        description: description.map(String::from),
+        description: prompt.description,
+        ok_label: prompt.ok_label,
+        cancel_label: prompt.cancel_label,
     };
     match send_request(&request)? {
         WireResponse::Confirmed { ok } => Ok(ok),

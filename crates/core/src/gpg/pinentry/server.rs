@@ -25,8 +25,14 @@ pub trait PinentryServerHandler {
         error_message: Option<&str>,
     ) -> impl Future<Output = io::Result<SecretString>>;
 
-    /// CONFIRM handler
-    fn confirm(&mut self, desc: Option<&str>) -> impl Future<Output = io::Result<bool>>;
+    /// CONFIRM handler. The labels are from `SETOK` and `SETCANCEL`, ready to
+    /// show.
+    fn confirm(
+        &mut self,
+        desc: Option<&str>,
+        ok_label: Option<&str>,
+        cancel_label: Option<&str>,
+    ) -> impl Future<Output = io::Result<bool>>;
 
     /// MESSAGE handler
     fn message(&mut self, desc: Option<&str>) -> impl Future<Output = io::Result<()>>;
@@ -50,6 +56,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
         let mut prompt: Option<String> = None;
         let mut keyinfo: Option<String> = None;
         let mut error_message: Option<String> = None;
+        let mut ok_label: Option<String> = None;
+        let mut cancel_label: Option<String> = None;
+        let mut new_passphrase = false;
         let mut _title: Option<String> = None;
 
         let mut buf = String::new();
@@ -76,11 +85,20 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
             let args = parts.get(1).copied();
             match command {
                 "GETPIN" => {
+                    // A new passphrase is not yet accepted by gpg-agent, which
+                    // may still reject it as too weak. Withholding the key info
+                    // keeps it from being saved, and keeps a passphrase saved
+                    // under the same cache ID from being offered in its place.
+                    let keyinfo = if new_passphrase {
+                        None
+                    } else {
+                        keyinfo.as_deref()
+                    };
                     match handler
                         .get_pin(
                             description.as_deref(),
                             prompt.as_deref(),
-                            keyinfo.as_deref(),
+                            keyinfo,
                             error_message.as_deref(),
                         )
                         .await
@@ -97,13 +115,42 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                     }
                 },
 
-                "CONFIRM" => match handler.confirm(description.as_deref()).await {
+                // `--one-button` asks for a notice with nothing to decline, which
+                // is a MESSAGE by another name.
+                "CONFIRM" if args.is_some_and(|a| a.trim() == "--one-button") => {
+                    match handler.message(description.as_deref()).await {
+                        Ok(()) => self.send_ok(None).await?,
+                        Err(e) => {
+                            self.send_error(256, &format!("message failed: {}", e))
+                                .await?
+                        },
+                    }
+                },
+
+                "CONFIRM" => match handler
+                    .confirm(
+                        description.as_deref(),
+                        ok_label.as_deref(),
+                        cancel_label.as_deref(),
+                    )
+                    .await
+                {
                     Ok(true) => self.send_ok(None).await?,
                     Ok(false) => self.send_error(277, "Operation cancelled").await?,
                     Err(e) => {
                         self.send_error(256, &format!("confirm failed: {}", e))
                             .await?
                     },
+                },
+
+                "SETOK" => {
+                    ok_label = args.map(button_label);
+                    self.send_ok(None).await?;
+                },
+
+                "SETCANCEL" => {
+                    cancel_label = args.map(button_label);
+                    self.send_ok(None).await?;
                 },
 
                 "MESSAGE" => match handler.message(description.as_deref()).await {
@@ -150,8 +197,16 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                     self.send_ok(None).await?;
                 },
 
-                "SETOK" | "SETCANCEL" | "SETNOTOK" | "SETTIMEOUT" | "SETQUALITYBAR"
-                | "SETQUALITYBAR_TT" | "SETREPEAT" | "SETGENPIN" | "SETGENPIN_TT" => {
+                // SETNOTOK adds a third button, which the app does not draw.
+                // gpg-agent sends these only when asking for a new passphrase.
+                // The repeat field and the generate button are not drawn.
+                "SETREPEAT" | "SETGENPIN" => {
+                    new_passphrase = true;
+                    self.send_ok(None).await?;
+                },
+
+                "SETNOTOK" | "SETTIMEOUT" | "SETQUALITYBAR" | "SETQUALITYBAR_TT"
+                | "SETGENPIN_TT" => {
                     // Accept but ignore these commands for now
                     self.send_ok(None).await?;
                 },
@@ -167,6 +222,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
                     prompt = None;
                     keyinfo = None;
                     error_message = None;
+                    ok_label = None;
+                    cancel_label = None;
+                    new_passphrase = false;
                     _title = None;
                     self.send_ok(None).await?;
                 },
@@ -229,5 +287,44 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> PinentryServer<R, W> {
         self.writer.write_all(&line).await?;
         self.writer.flush().await?;
         Ok(())
+    }
+}
+
+/// Decode a `SETOK`/`SETCANCEL` argument for display. gpg marks the mnemonic
+/// letter with `_` and writes a literal underscore as `__`.
+fn button_label(raw: &str) -> String {
+    let decoded = percent_decode_str(raw).decode_utf8_lossy();
+    let mut label = String::with_capacity(decoded.len());
+    let mut chars = decoded.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '_' {
+            if chars.peek() == Some(&'_') {
+                chars.next();
+                label.push('_');
+            }
+        } else {
+            label.push(c);
+        }
+    }
+    label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_label_drops_mnemonic_markers() {
+        assert_eq!(button_label("_OK"), "OK");
+        assert_eq!(
+            button_label("Take this one _anyway"),
+            "Take this one anyway"
+        );
+        assert_eq!(
+            button_label("Enter new pass_phrase"),
+            "Enter new passphrase"
+        );
+        assert_eq!(button_label("snake__case"), "snake_case");
+        assert_eq!(button_label("Don%27t ask"), "Don't ask");
     }
 }

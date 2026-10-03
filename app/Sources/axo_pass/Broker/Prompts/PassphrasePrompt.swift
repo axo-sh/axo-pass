@@ -71,14 +71,19 @@ final class PassphrasePromptModel {
     return CollectedPassphrase(value: Data(value.utf8), saveToKeychain: save)
   }
 
-  func confirm(description: String?) async -> Bool {
-    let answer = await ask { showMessagePanel(description: description, cancellable: true) }
+  func confirm(prompt: ConfirmPrompt) async -> Bool {
+    let answer = await ask {
+      showMessagePanel(
+        description: prompt.description,
+        okLabel: prompt.okLabel,
+        cancelLabel: prompt.cancelLabel ?? "Cancel")
+    }
     if case .confirmed = answer { return true }
     return false
   }
 
   func message(description: String?) async {
-    _ = await ask { showMessagePanel(description: description, cancellable: false) }
+    _ = await ask { showMessagePanel(description: description, okLabel: nil, cancelLabel: nil) }
   }
 
   /// Put a panel up with `show` and wait for the user to answer it. The broker
@@ -136,10 +141,12 @@ final class PassphrasePromptModel {
     panel.show(content)
   }
 
-  private func showMessagePanel(description: String?, cancellable: Bool) {
+  /// A nil `cancelLabel` draws the panel with one button.
+  private func showMessagePanel(description: String?, okLabel: String?, cancelLabel: String?) {
     let content = PassphraseMessageView(
       description: description,
-      cancellable: cancellable,
+      okLabel: okLabel ?? "OK",
+      cancelLabel: cancelLabel,
       onConfirm: { [weak self] in self?.answer(.confirmed) },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
@@ -236,10 +243,11 @@ private struct PassphraseEntryView: View {
       }
 
       VStack(alignment: .leading, spacing: 12) {
-        SecureField(prompt.prompt ?? "Passphrase", text: $value)
-          .textFieldStyle(.roundedBorder)
-          .focused($fieldFocused)
-          .onSubmit { onSubmit(value, saveToKeychain && canSave) }
+        RevealableSecureField(
+          title: prompt.prompt ?? "Passphrase",
+          text: $value,
+          focus: $fieldFocused,
+          onSubmit: { onSubmit(value, saveToKeychain && canSave) })
 
         if canSave {
           Toggle("Save to Axo Pass and unlock with Touch ID", isOn: $saveToKeychain)
@@ -350,28 +358,76 @@ private struct PinentryTranscript: View {
 /// gpg's `CONFIRM` and `MESSAGE`, which carry no secret.
 private struct PassphraseMessageView: View {
   let description: String?
-  let cancellable: Bool
+  let okLabel: String
+  /// Nil for a message, which has only the OK button.
+  let cancelLabel: String?
   let onConfirm: () -> Void
   let onCancel: () -> Void
 
+  private static let warningPrefix = "Warning: "
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "GPG needs your answer")
-        .font(.subheadline)
+    VStack(spacing: 14) {
+      Image(systemName: symbol)
+        .font(.system(size: 36))
+        .foregroundStyle(isWarning ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
+        .frame(width: 64, height: 64)
+
+      PromptHeadline(.plain(headline))
         .fixedSize(horizontal: false, vertical: true)
 
+      if let detail {
+        Text(detail)
+          .foregroundStyle(.secondary)
+          .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(12)
+          .promptCard()
+      }
+
       HStack {
-        Spacer()
-        if cancellable {
-          Button("Cancel", action: onCancel)
+        if let cancelLabel {
+          Button(cancelLabel, action: onCancel)
             .keyboardShortcut(.cancelAction)
         }
-        Button("OK", action: onConfirm)
+        Spacer()
+        Button(okLabel, action: onConfirm)
           .keyboardShortcut(.defaultAction)
       }
+      .padding(.top, 4)
     }
-    .padding(20)
+    .padding(24)
     .frame(maxWidth: .infinity)
+  }
+
+  /// gpg's text split on blank lines. The first paragraph is the headline.
+  private var paragraphs: [String] {
+    let text = description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return text.components(separatedBy: "\n\n")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
+
+  private var isWarning: Bool {
+    paragraphs.first?.hasPrefix(Self.warningPrefix) ?? false
+  }
+
+  private var symbol: String {
+    if isWarning { return "exclamationmark.triangle.fill" }
+    return cancelLabel == nil ? "info.circle" : "questionmark.circle"
+  }
+
+  /// The icon marks a warning, so the headline drops gpg's "Warning: " prefix.
+  private var headline: String {
+    guard let first = paragraphs.first else {
+      return cancelLabel == nil ? "Message from GPG" : "GPG needs your answer"
+    }
+    return isWarning ? String(first.dropFirst(Self.warningPrefix.count)) : first
+  }
+
+  private var detail: String? {
+    let rest = paragraphs.dropFirst()
+    return rest.isEmpty ? nil : rest.joined(separator: "\n\n")
   }
 }
 
@@ -396,8 +452,8 @@ final class PassphrasePromptBridge: PassphrasePromptDelegate {
     await model.end(prompt: prompt, outcome: outcome)
   }
 
-  func confirm(description: String?) async -> Bool {
-    await model.confirm(description: description)
+  func confirm(prompt: ConfirmPrompt) async -> Bool {
+    await model.confirm(prompt: prompt)
   }
 
   func message(description: String?) async {

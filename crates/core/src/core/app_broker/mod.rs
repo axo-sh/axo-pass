@@ -50,14 +50,13 @@ pub use age::{
     request_delete_age_key,
 };
 pub use gpg::{
-    CollectedPassphrase, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, request_confirm,
-    request_message, request_passphrase,
+    CollectedPassphrase, ConfirmPrompt, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
+    request_confirm, request_message, request_passphrase,
 };
 pub use keychain::{BrokerPasswordEntry, request_delete_managed_key, request_keychain_passwords};
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
-    request_authorize_key_use,
-    request_signature, request_ssh_passphrase,
+    request_authorize_key_use, request_signature, request_ssh_passphrase,
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
@@ -364,6 +363,10 @@ enum WireRequest {
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
     Confirm {
         description: Option<String>,
+        #[serde(default)]
+        ok_label: Option<String>,
+        #[serde(default)]
+        cancel_label: Option<String>,
     },
 
     /// gpg's `MESSAGE`: something to show and acknowledge.
@@ -1318,10 +1321,19 @@ async fn handle_connection(
                 log::debug!("App broker request: delete managed key {label}");
                 keychain::delete_managed_key(label, actor).await
             },
-            WireRequest::Confirm { description } => {
+            WireRequest::Confirm {
+                description,
+                ok_label,
+                cancel_label,
+            } => {
                 log::debug!("App broker request: confirm");
+                let prompt = ConfirmPrompt {
+                    description,
+                    ok_label,
+                    cancel_label,
+                };
                 let ok = in_flight
-                    .unless_abandoned(authorizers.passphrase.confirm(description))
+                    .unless_abandoned(authorizers.passphrase.confirm(prompt))
                     .await;
                 WireResponse::Confirmed {
                     ok: ok.unwrap_or(false),
@@ -1437,8 +1449,8 @@ mod tests {
 
         /// `"hang"` stands for a user who never answers. Its prompt is only
         /// ever dropped, which is counted.
-        async fn confirm(&self, description: Option<String>) -> bool {
-            if description.as_deref() == Some("hang") {
+        async fn confirm(&self, prompt: ConfirmPrompt) -> bool {
+            if prompt.description.as_deref() == Some("hang") {
                 struct Dropped<'a>(&'a AtomicUsize);
                 impl Drop for Dropped<'_> {
                     fn drop(&mut self) {

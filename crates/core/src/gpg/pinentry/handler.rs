@@ -6,7 +6,7 @@ use std::io;
 use secrecy::SecretString;
 
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Source, Subject, SubjectKind};
-use crate::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
+use crate::core::app_broker::{self, BrokerError, ConfirmPrompt, PassphraseKind, PassphrasePrompt};
 use crate::core::provenance::{ProcessNode, Provenance};
 use crate::gpg::pinentry::server::PinentryServerHandler;
 
@@ -113,13 +113,21 @@ impl PinentryServerHandler for BrokerPinentryHandler {
         result
     }
 
-    async fn confirm(&mut self, desc: Option<&str>) -> io::Result<bool> {
-        let desc = desc.map(String::from);
-        let result =
-            tokio::task::spawn_blocking(move || app_broker::request_confirm(desc.as_deref()))
-                .await
-                .map_err(io::Error::other)?
-                .map_err(to_io_error);
+    async fn confirm(
+        &mut self,
+        desc: Option<&str>,
+        ok_label: Option<&str>,
+        cancel_label: Option<&str>,
+    ) -> io::Result<bool> {
+        let prompt = ConfirmPrompt {
+            description: desc.map(String::from),
+            ok_label: ok_label.map(String::from),
+            cancel_label: cancel_label.map(String::from),
+        };
+        let result = tokio::task::spawn_blocking(move || app_broker::request_confirm(prompt))
+            .await
+            .map_err(io::Error::other)?
+            .map_err(to_io_error);
         self.record(Action::GpgConfirm, None, &result);
         result
     }
