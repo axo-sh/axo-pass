@@ -118,8 +118,8 @@ impl ProcInfo {
         };
 
         // The team identifier comes from an entitlement the binary sets itself,
-        // so a claimed team counts only when an Apple-issued certificate for
-        // that team signed the code.
+        // so a claimed team counts only when Apple signed the code itself (for
+        // example Xcode's git) or an Apple-issued certificate for that team did.
         let team_ok = match signing_info
             .as_ref()
             .map(|s| s.team_identifier.as_str())
@@ -127,8 +127,9 @@ impl ProcInfo {
         {
             None => true,
             Some(team) => {
-                let requirement =
-                    format!(r#"anchor apple generic and certificate leaf[subject.OU] = "{team}""#);
+                let requirement = format!(
+                    r#"anchor apple or (anchor apple generic and certificate leaf[subject.OU] = "{team}")"#
+                );
                 check_requirement(code, &requirement)
                     .inspect_err(|e| log::warn!("ProcInfo::from_sec_code({pid}) team: {e}"))
                     .is_ok()

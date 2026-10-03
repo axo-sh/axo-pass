@@ -297,4 +297,27 @@ mod tests {
         assert!(info.verified());
         assert!(!info.is_system());
     }
+
+    /// Xcode's git claims a team identifier but is signed by Apple's own
+    /// certificate, which has no matching subject OU.
+    #[test]
+    fn apple_signed_xcode_git_is_verified() {
+        use std::process::{Command, Stdio};
+
+        let path = "/Applications/Xcode.app/Contents/Developer/usr/bin/git";
+        if !std::path::Path::new(path).exists() {
+            return;
+        }
+        // Reads stdin, so the process stays alive until stdin closes.
+        let mut child = Command::new(path)
+            .args(["hash-object", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let info = ProcInfo::lookup(child.id());
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        assert!(info.unwrap().verified());
+    }
 }
