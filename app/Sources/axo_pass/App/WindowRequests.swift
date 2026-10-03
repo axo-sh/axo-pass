@@ -13,8 +13,20 @@ final class WindowRequests {
   private(set) var keychainOpens = 0
   private(set) var settingsOpens = 0
 
-  func requestMain() { mainOpens += 1 }
-  func requestAudit() { auditOpens += 1 }
-  func requestKeychain() { keychainOpens += 1 }
-  func requestSettings() { settingsOpens += 1 }
+  func requestMain() {
+    PanelAppVisibility.shared.windowRequested()
+    mainOpens += 1
+  }
+  func requestAudit() {
+    PanelAppVisibility.shared.windowRequested()
+    auditOpens += 1
+  }
+  func requestKeychain() {
+    PanelAppVisibility.shared.windowRequested()
+    keychainOpens += 1
+  }
+  func requestSettings() {
+    PanelAppVisibility.shared.windowRequested()
+    settingsOpens += 1
+  }
 }

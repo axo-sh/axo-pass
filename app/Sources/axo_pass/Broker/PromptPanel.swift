@@ -88,6 +88,7 @@ final class PromptPanel {
     // other apps and takes key for typing without activating axo-pass. Calling
     // `NSApp.activate` or `NSRunningApplication.activate` here would pull every
     // other axo-pass window to the front along with the panel.
+    PanelAppVisibility.shared.panelWillShow()
     panel.orderFrontRegardless()
     panel.makeKey()
 
@@ -122,6 +123,7 @@ final class PromptPanel {
     host = nil
     panel.orderOut(nil)
     self.panel = nil
+    PanelAppVisibility.shared.panelDidHide()
     onVisibleChange?(false)
   }
 }

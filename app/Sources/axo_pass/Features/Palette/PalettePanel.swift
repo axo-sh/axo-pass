@@ -79,6 +79,7 @@ final class PalettePanel {
       }
     }
 
+    PanelAppVisibility.shared.panelWillShow()
     panel.orderFrontRegardless()
     panel.makeKey()
 
@@ -94,6 +95,7 @@ final class PalettePanel {
     host = nil
     self.panel = nil
     panel.orderOut(nil)
+    PanelAppVisibility.shared.panelDidHide()
     onClose?()
   }
 
