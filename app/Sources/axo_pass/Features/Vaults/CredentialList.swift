@@ -48,6 +48,8 @@ struct CredentialList: View {
   @State private var showingNewCredentialSheet = false
   // Credential whose previous values are shown.
   @State private var previousValuesTarget: PreviousValuesTarget? = nil
+  // Key of the passkey the move sheet is open for.
+  @State private var movingPasskey: String? = nil
 
   var body: some View {
     CredentialOutline(
@@ -110,6 +112,23 @@ struct CredentialList: View {
           return nil
         }
         return model.actionError ?? "Failed to create credential."
+      }
+    }
+    .sheet(
+      isPresented: Binding(
+        get: { movingPasskey != nil }, set: { if !$0 { movingPasskey = nil } })
+    ) {
+      if let credKey = movingPasskey {
+        MovePasskeySheet(sourceVaultKey: vaultKey, sourceItemKey: item.key) { destVault, destItem in
+          if await model.movePasskey(
+            vaultKey: vaultKey, itemKey: item.key, credKey: credKey, destVaultKey: destVault,
+            destItemKey: destItem)
+          {
+            secrets.removeValue(forKey: credKey)
+            return nil
+          }
+          return model.actionError ?? "Failed to move the passkey."
+        }
       }
     }
   }
@@ -245,7 +264,9 @@ struct CredentialList: View {
       onCancelRename: { renaming = nil },
       onQuickSaveValue: { newValue in
         Task { await quickSaveValue(cred, newValue: newValue) }
-      }
+      },
+      onDelete: { delete([.credential(cred.key)]) },
+      onMove: { movingPasskey = cred.key }
     )
   }
 

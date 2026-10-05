@@ -477,6 +477,47 @@ fn store_passkey(
     )
 }
 
+/// A stored passkey's raw record and credential title, read so it can move to
+/// another item or vault.
+pub struct PasskeyRecord {
+    pub value: SecretString,
+    pub title: String,
+}
+
+/// Read the passkey at `item_key`/`credential_key`. Fails when the credential
+/// is not a passkey.
+pub fn read_record(
+    vw: &VaultWrapper,
+    item_key: &str,
+    credential_key: &str,
+) -> Result<PasskeyRecord, Error> {
+    let overview = vw
+        .get_secret_overview(item_key, credential_key)?
+        .filter(|cred| matches!(cred.kind, FieldKind::Passkey))
+        .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
+    let title = overview.title.clone();
+    let value = vw
+        .get_secret(item_key, credential_key)?
+        .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
+    Ok(PasskeyRecord {
+        value: SecretString::from(value.expose_secret().clone()),
+        title,
+    })
+}
+
+/// Store a record read by [`read_record`] in `target`. The record must decode,
+/// so a damaged value is refused rather than copied. The caller saves the
+/// vault.
+pub fn write_record(
+    vw: &mut VaultWrapper,
+    record: &PasskeyRecord,
+    target: &PasskeyTarget,
+) -> Result<(), Error> {
+    let value = record.value.expose_secret().to_string();
+    let cred = decode(&value)?;
+    store_passkey(vw, &cred, value, None, &record.title, target)
+}
+
 #[async_trait]
 impl CredentialStore for VaultStore<'_> {
     type PasskeyItem = Passkey;
@@ -822,6 +863,41 @@ mod tests {
         assert_eq!(passkeys.len(), 1);
         assert_eq!(passkeys[0].item_key, "example");
         assert_eq!(vw.list_items().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_passkey_moves_to_another_vault_with_its_record_intact() {
+        let mut source = VaultWrapper::new_for_test("personal");
+        register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&source).unwrap().remove(0);
+        let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
+
+        let mut dest = VaultWrapper::new_for_test("work");
+        write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
+
+        let moved = list(&dest).unwrap().remove(0);
+        assert_eq!(moved.credential_key, stored.credential_key);
+        assert_eq!(moved.passkey.credential_id, stored.passkey.credential_id);
+        assert_eq!(
+            moved.passkey.key.clone().to_vec().unwrap(),
+            stored.passkey.key.clone().to_vec().unwrap()
+        );
+        assert_eq!(dest.list_items().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn only_passkeys_can_be_read_for_a_move() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        vw.add_item("site", "Site").unwrap();
+        vw.add_secret(
+            "site",
+            "password",
+            "Password",
+            FieldKind::default(),
+            SecretString::from("pw"),
+        )
+        .unwrap();
+        assert!(read_record(&vw, "site", "password").is_err());
     }
 
     #[tokio::test]

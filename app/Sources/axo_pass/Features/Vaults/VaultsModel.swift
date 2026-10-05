@@ -1399,6 +1399,35 @@ final class VaultsModel {
     return try result.get()
   }
 
+  // MARK: - Passkeys
+
+  /// The items of a vault, loading them first when they are not cached. For
+  /// choosing where something moves to.
+  func destinationItems(in vaultKey: String) async -> [ItemInfo] {
+    if itemCache[vaultKey] == nil { await loadItems(for: vaultKey) }
+    return itemCache[vaultKey] ?? []
+  }
+
+  /// Move a passkey to another item, which may be in another vault. With no
+  /// `destItemKey` it moves into a new login for its relying party.
+  @discardableResult
+  func movePasskey(
+    vaultKey: String, itemKey: String, credKey: String, destVaultKey: String, destItemKey: String?
+  ) async -> Bool {
+    actionError = nil
+    do {
+      try await core.movePasskey(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, destVaultKey: destVaultKey,
+        destItemKey: destItemKey)
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+    await loadItems(for: vaultKey)
+    if destVaultKey != vaultKey { await loadItems(for: destVaultKey) }
+    return true
+  }
+
   // MARK: - Derived
 
   var selectedVaultKey: String? {

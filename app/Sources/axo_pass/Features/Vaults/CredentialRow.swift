@@ -25,7 +25,12 @@ struct CredentialRow: View {
   let onCancelRename: () -> Void
   /// Save a new value for this credential, keeping its title, key and kind.
   let onQuickSaveValue: (_ value: String) -> Void
+  /// Delete this passkey after confirmation. Only passkey rows offer it.
+  let onDelete: () -> Void
+  /// Move this passkey to another item or vault. Only passkey rows offer it.
+  let onMove: () -> Void
 
+  @State private var confirmingPasskeyDelete: Bool = false
   @State private var hoveringValue: Bool = false
   @State private var justCopied: Bool = false
   @State private var hoveringReference: Bool = false
@@ -278,6 +283,23 @@ struct CredentialRow: View {
       .task(id: cred.key) {
         if secret == nil, !isRevealing { onReveal() }
       }
+
+      HStack(spacing: 8) {
+        Button("Move to…", action: onMove)
+        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+      }
+      .buttonStyle(.bordered)
+      .controlSize(.small)
+    }
+    .confirmationDialog(
+      "Delete this passkey?", isPresented: $confirmingPasskeyDelete, titleVisibility: .visible
+    ) {
+      Button("Delete Passkey", role: .destructive, action: onDelete)
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "\(passkeyRecord?.rpId ?? "The site") still lists this passkey until you remove it there. You will not be able to sign in with it again."
+      )
     }
   }
 

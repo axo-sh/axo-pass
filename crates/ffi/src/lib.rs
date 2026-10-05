@@ -19,6 +19,7 @@ use axo_pass_core::secrets::keychain::generic_password::{
     PasswordEntry, PasswordEntryType as CorePasswordEntryType,
 };
 use axo_pass_core::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
+use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::vault_export::{
     BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity,
     WorkFactor as CoreWorkFactor,
@@ -2250,6 +2251,53 @@ impl AxoPass {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                vw.delete_item_credential(&item_key, &cred_key)
+                    .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Move a passkey to another item, which may be in another vault. With no
+    /// `dest_item_key` it moves into a new login item for its relying party.
+    ///
+    /// The destination is written and saved before the source is deleted, so a
+    /// failure partway leaves the passkey in both places rather than in
+    /// neither.
+    pub async fn move_passkey(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        dest_vault_key: String,
+        dest_item_key: Option<String>,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let target = match dest_item_key {
+                Some(key) => PasskeyTarget::Item(key),
+                None => PasskeyTarget::NewLogin,
+            };
+            if vault_key == dest_vault_key {
+                if target == PasskeyTarget::Item(item_key.clone()) {
+                    return Ok(());
+                }
+                return m.with_unlocked_vault(&vault_key, |vw| {
+                    let record = passkey::read_record(vw, &item_key, &cred_key)?;
+                    passkey::write_record(vw, &record, &target)?;
+                    vw.delete_item_credential(&item_key, &cred_key)?;
+                    Ok::<_, FfiError>(())
+                });
+            }
+            let record = m.with_unlocked_vault(&vault_key, |vw| {
+                passkey::read_record(vw, &item_key, &cred_key).map_err(FfiError::from)
+            })?;
+            m.with_unlocked_vault(&dest_vault_key, |vw| {
+                passkey::write_record(vw, &record, &target).map_err(FfiError::from)
+            })?;
             m.with_unlocked_vault(&vault_key, |vw| {
                 vw.delete_item_credential(&item_key, &cred_key)
                     .map_err(FfiError::from)
