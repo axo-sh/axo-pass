@@ -39,7 +39,7 @@ use crate::core::auth::ForeignContext;
 use crate::core::dirs::{app_data_dir, app_group_identifier};
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
 use crate::secrets::password::PasswordPolicy;
-use crate::secrets::vaults::LoginSummary;
+use crate::secrets::vaults::{LoginSummary, OtherLogin};
 use crate::secrets::vaults::autofill::check_rp_id;
 use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest, PasskeyTarget};
 use crate::secrets::vaults::totp::TotpCode;
@@ -342,6 +342,11 @@ enum WireRequest {
         url: String,
         /// The URL of the frame that holds the form. Matching uses this one.
         frame_url: String,
+        /// Also list the logins that do not match, so the user can still pick
+        /// one. They come back without their websites, and filling one asks
+        /// the user to confirm. See [`WireRequest::FillLogin`]'s `unmatched`.
+        #[serde(default)]
+        all: bool,
         /// The name of the app the request is for, when it is not a browser.
         /// A display hint, like `account` on [`WireRequest::FillLogin`]. Only
         /// the AutoFill extension may send one. A request from any other client
@@ -391,6 +396,12 @@ enum WireRequest {
         /// anything.
         #[serde(default)]
         account: Option<String>,
+        /// The client is filling a login from the list of logins that do not
+        /// match the page. Without it, a record that does not match
+        /// `frame_url` is refused. With it, the broker asks the user to
+        /// confirm before it returns the login.
+        #[serde(default)]
+        unmatched: bool,
         /// See [`WireRequest::ListLogins`].
         #[serde(default)]
         requester: Option<String>,
@@ -721,6 +732,9 @@ enum WireResponse {
     },
     Logins {
         logins: Vec<LoginSummary>,
+        /// The other logins in the vaults, when the request asked for them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        others: Vec<OtherLogin>,
     },
     /// The logins in the app's index that match a page. `indexed` is false when
     /// the app has not indexed since it started, so an empty list means "ask
@@ -1731,6 +1745,7 @@ async fn serve_request(
             WireRequest::ListLogins {
                 url,
                 frame_url,
+                all,
                 requester,
                 caller,
                 client: _,
@@ -1743,7 +1758,7 @@ async fn serve_request(
                         caller: vouched_caller(scope, &client_id, caller),
                         caller_chain: caller_chain.clone(),
                         client: client_id.clone(),
-                        action: vault::VaultAction::ListLogins { page },
+                        action: vault::VaultAction::ListLogins { page, all },
                     };
                     log::debug!("App broker request: {prompt:?}");
                     vault::authorize_and_serve_logins(&authorizers, prompt, actor, None, &in_flight)
@@ -1771,7 +1786,7 @@ async fn serve_request(
                             caller: vouched_caller(scope, &client_id, caller),
                             caller_chain: caller_chain.clone(),
                             client: client_id.clone(),
-                            action: vault::VaultAction::ListLogins { page },
+                            action: vault::VaultAction::ListLogins { page, all: false },
                         };
                         log::debug!("App broker request: locked listing {prompt:?}");
                         vault::list_logins_locked(&prompt, &actor, &authorizers.logins)
@@ -1784,6 +1799,7 @@ async fn serve_request(
                 frame_url,
                 record_id,
                 account,
+                unmatched,
                 requester,
                 caller,
                 client: _,
@@ -1800,6 +1816,7 @@ async fn serve_request(
                             page,
                             record_id,
                             account: account.filter(|a| !a.trim().is_empty()),
+                            unmatched,
                         },
                     };
                     log::debug!("App broker request: {prompt:?}");

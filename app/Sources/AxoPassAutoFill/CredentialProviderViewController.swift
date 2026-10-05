@@ -207,11 +207,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     let requester = model.requester
     model.beginFilling(login.accountName)
+    // A login with no matching website came from the full list. The app asks
+    // the user to confirm it.
+    let unmatched = login.matched == nil
     Task { [weak self] in
       do {
         let fill = try await BrokerClient.fill(
           service: service, recordID: login.recordID, account: login.accountName,
-          requester: requester)
+          unmatched: unmatched, requester: requester)
         self?.complete(user: fill.username ?? login.accountName, password: fill.password)
       } catch {
         self?.model.report(error)
@@ -254,7 +257,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 final class CredentialListModel {
   enum State {
     case loading
-    case list([Login])
+    case list(LoginList)
     case filling(String)
     case appUnavailable
     case configuration(() -> Void)
@@ -263,6 +266,14 @@ final class CredentialListModel {
 
   private(set) var state: State = .loading
   private(set) var service: String?
+
+  /// The site shown in the header and in the group titles: the host of the
+  /// service, which may be a bare domain or a URL.
+  var host: String? {
+    guard let service, !service.isEmpty else { return nil }
+    if service.contains("://"), let host = URLComponents(string: service)?.host { return host }
+    return service
+  }
   /// The name of the app that asked, when the system identifies one. `nil`
   /// means a browser.
   private(set) var requester: String?
@@ -285,8 +296,9 @@ final class CredentialListModel {
     state = .loading
     Task { [weak self] in
       do {
-        let logins = try await BrokerClient.logins(service: service, requester: requester)
-        self?.state = .list(logins)
+        let list = try await BrokerClient.logins(
+          service: service, requester: requester, all: true)
+        self?.state = .list(list)
       } catch {
         self?.report(error)
       }
@@ -304,7 +316,7 @@ final class CredentialListModel {
     }
     let login = Login(
       recordID: recordID, title: user, username: user.isEmpty ? nil : user,
-      matched: Login.Matched(host: service), urlFallback: false)
+      matched: Login.Matched(host: service))
     onSelect?(login)
   }
 

@@ -86,14 +86,21 @@ pub enum VaultAction {
 
     /// The logins that match a page, across every vault, with usernames but no
     /// passwords.
-    ListLogins { page: LoginPage },
+    ///
+    /// With `all`, the logins that do not match come back too, without their
+    /// websites.
+    ListLogins { page: LoginPage, all: bool },
 
     /// The username and password of one login. Prompts every time. `account`
     /// is the client's label for the login, shown in the prompt only.
+    ///
+    /// With `unmatched`, the login may be one that is not stored for the page.
+    /// The user is asked to confirm it.
     FillLogin {
         page: LoginPage,
         record_id: String,
         account: Option<String>,
+        unmatched: bool,
     },
 
     /// The current one-time code of one login. Prompts every time.
@@ -904,7 +911,7 @@ fn record_access(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
-        VaultAction::ListLogins { page } => (
+        VaultAction::ListLogins { page, .. } => (
             Action::VaultItemsListed,
             Subject::new(SubjectKind::Vault, page.host.clone()),
         ),
@@ -978,12 +985,20 @@ fn record_access(
         event = event.detail("secret_count", refs.len().to_string());
     }
     match &prompt.action {
-        VaultAction::ListLogins { page } => {
+        VaultAction::ListLogins { page, all } => {
             event = event.detail("login_request", "list");
+            if *all {
+                event = event.detail("all_logins", "true");
+            }
             event = login_page_details(event, page);
         },
-        VaultAction::FillLogin { page, .. } => {
+        VaultAction::FillLogin {
+            page, unmatched, ..
+        } => {
             event = event.detail("login_request", "fill");
+            if *unmatched {
+                event = event.detail("unmatched", "true");
+            }
             event = login_page_details(event, page);
         },
         VaultAction::GenerateTotp { page, .. } => {
@@ -1005,8 +1020,8 @@ fn record_access(
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
         },
-        Some(WireResponse::Logins { logins }) => {
-            event = event.detail("item_count", logins.len().to_string());
+        Some(WireResponse::Logins { logins, others }) => {
+            event = event.detail("item_count", (logins.len() + others.len()).to_string());
         },
         Some(WireResponse::VaultSecret { value }) => {
             event = event.detail("found", value.is_some().to_string());
@@ -1254,6 +1269,7 @@ fn serve_logins(
     let mut vm = VaultsManager::new();
     let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
     let mut logins = Vec::new();
+    let mut everything = Vec::new();
 
     for vault_key in vault_keys {
         let Some(vw) = vm.get_vault_mut(&vault_key) else {
@@ -1264,10 +1280,16 @@ fn serve_logins(
             continue;
         }
         match &prompt.action {
-            VaultAction::ListLogins { page } => {
+            VaultAction::ListLogins { page, all } => {
                 match autofill::collect_items(vw, Some(&page.frame_url)) {
                     Ok(found) => logins.extend(found),
                     Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+                }
+                if *all {
+                    match autofill::collect_items(vw, None) {
+                        Ok(found) => everything.extend(found),
+                        Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+                    }
                 }
             },
             action => {
@@ -1281,10 +1303,20 @@ fn serve_logins(
     match prompt.action {
         VaultAction::ListLogins { .. } => {
             logins.sort_by_key(autofill::AutofillItem::sort_key);
+            // Only logins set up for AutoFill are listed. An item with a
+            // confidential field but no website is a secret, not a login.
+            everything.retain(|item| {
+                !item.websites.is_empty() && !logins.iter().any(|m| m.record_id == item.record_id)
+            });
+            everything.sort_by_key(|item| item.title.to_lowercase());
             Ok(LoginServed::new(WireResponse::Logins {
                 logins: logins
                     .iter()
                     .filter_map(autofill::AutofillItem::summary)
+                    .collect(),
+                others: everything
+                    .iter()
+                    .map(autofill::AutofillItem::other)
                     .collect(),
             }))
         },
@@ -1298,27 +1330,55 @@ fn serve_logins(
 fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginServed>, String> {
     use secrecy::ExposeSecret;
 
-    let (page, record_id, totp) = match action {
+    let (page, record_id, totp, unmatched) = match action {
         VaultAction::FillLogin {
-            page, record_id, ..
-        } => (page, record_id, false),
-        VaultAction::GenerateTotp { page, record_id } => (page, record_id, true),
+            page,
+            record_id,
+            unmatched,
+            ..
+        } => (page, record_id, false, *unmatched),
+        VaultAction::GenerateTotp { page, record_id } => (page, record_id, true, false),
         _ => return Err("Not a login record request".to_string()),
     };
-    let Some(item) = autofill::find_login(vw, record_id, &page.frame_url)
-        .map_err(|e| format!("Failed to look up the login: {e}"))?
-    else {
-        return Ok(None);
+    let found = autofill::find_login(vw, record_id, &page.frame_url)
+        .map_err(|e| format!("Failed to look up the login: {e}"))?;
+    // A login picked from the list of logins that do not match is filled only
+    // after the user confirms it.
+    let (item, other_site) = match found {
+        Some(item) => (item, false),
+        None if unmatched => {
+            match autofill::find_login_record(vw, record_id)
+                .map_err(|e| format!("Failed to look up the login: {e}"))?
+            {
+                Some(item) => (item, true),
+                None => return Ok(None),
+            }
+        },
+        None => return Ok(None),
     };
 
-    let confirm = item.websites_from_url_fields.then(|| ConfirmPrompt {
-        description: Some(format!(
-            "\"{}\" lists no website. It matches {} only through a URL field.\n\nFill it on {}?",
-            item.title, page.host, page.host
-        )),
-        ok_label: Some("Fill".to_string()),
-        cancel_label: Some("Cancel".to_string()),
-    });
+    let confirm = if other_site {
+        Some(ConfirmPrompt {
+            description: Some(format!(
+                "\"{}\" is saved for {}, not {}.\n\nFill it on {}?",
+                item.title,
+                stored_hosts(&item),
+                page.host,
+                page.host
+            )),
+            ok_label: Some("Fill".to_string()),
+            cancel_label: Some("Cancel".to_string()),
+        })
+    } else {
+        item.websites_from_url_fields.then(|| ConfirmPrompt {
+            description: Some(format!(
+                "\"{}\" lists no website. It matches {} only through a URL field.\n\nFill it on {}?",
+                item.title, page.host, page.host
+            )),
+            ok_label: Some("Fill".to_string()),
+            cancel_label: Some("Cancel".to_string()),
+        })
+    };
 
     let response = if totp {
         let code = autofill::login_totp(vw, &item).map_err(|e| e.to_string())?;
@@ -1337,6 +1397,21 @@ fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginS
         confirm,
         commit: None,
     }))
+}
+
+/// The hosts a login is stored for, as a comma-separated list for a question to
+/// the user.
+fn stored_hosts(item: &autofill::AutofillItem) -> String {
+    let sites: Vec<String> = item
+        .websites
+        .iter()
+        .map(|website| Site::parse(&website.url).map_or(website.url.clone(), |s| s.host))
+        .collect();
+    if sites.is_empty() {
+        "no website".to_string()
+    } else {
+        sites.join(", ")
+    }
 }
 
 /// The vaults and logins a passkey for `rp_id` may be stored in, for the
@@ -1414,16 +1489,7 @@ fn update_login_password(
     };
 
     let confirm = (!autofill::is_stored_for(&item, &page.frame_url)).then(|| {
-        let sites: Vec<String> = item
-            .websites
-            .iter()
-            .map(|website| Site::parse(&website.url).map_or(website.url.clone(), |s| s.host))
-            .collect();
-        let stored = if sites.is_empty() {
-            "no website".to_string()
-        } else {
-            sites.join(", ")
-        };
+        let stored = stored_hosts(&item);
         ConfirmPrompt {
             description: Some(format!(
                 "A form on {host} submitted a new password for \"{title}\", which is saved for \
@@ -1461,7 +1527,7 @@ pub(super) fn list_logins_locked(
     actor: &Actor,
     index: &LoginIndex,
 ) -> WireResponse {
-    let VaultAction::ListLogins { page } = &prompt.action else {
+    let VaultAction::ListLogins { page, .. } = &prompt.action else {
         return WireResponse::Failed {
             message: "Not a login listing".to_string(),
         };
@@ -1478,7 +1544,7 @@ pub(super) fn list_logins_locked(
 /// Record a listing served from the index. It reads no vault, so it is not an
 /// access, but it still tells a client which accounts exist for a site.
 fn record_locked_listing(prompt: &VaultAccessPrompt, actor: &Actor, response: &WireResponse) {
-    let VaultAction::ListLogins { page } = &prompt.action else {
+    let VaultAction::ListLogins { page, .. } = &prompt.action else {
         return;
     };
     let mut event = AuditEvent::new(
@@ -1723,4 +1789,96 @@ fn collect_items(vw: &VaultWrapper) -> Result<Vec<BrokerVaultItem>, String> {
         .collect();
     items.sort_by_key(|a| a.title.to_lowercase());
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vault_with_github() -> (VaultWrapper, String) {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        autofill::write_login(
+            &mut vw,
+            autofill::LoginWrite {
+                item_key: "github",
+                title: "GitHub",
+                password_key: "password",
+                password: SecretString::from("pw"),
+                username: Some("tp"),
+                websites: &["github.com".to_string()],
+                match_kind: MatchKind::Domain,
+            },
+        )
+        .unwrap();
+        let record_id = autofill::collect_items(&vw, None).unwrap()[0]
+            .record_id
+            .clone();
+        (vw, record_id)
+    }
+
+    fn fill(record_id: &str, frame_url: &str, unmatched: bool) -> VaultAction {
+        VaultAction::FillLogin {
+            page: LoginPage::parse(frame_url, frame_url, None).unwrap(),
+            record_id: record_id.to_string(),
+            account: None,
+            unmatched,
+        }
+    }
+
+    #[test]
+    fn a_fill_on_the_matching_site_needs_no_question() {
+        let (vw, record_id) = vault_with_github();
+        let served = serve_record(&vw, &fill(&record_id, "https://gist.github.com", false))
+            .unwrap()
+            .unwrap();
+        assert!(served.confirm.is_none());
+    }
+
+    #[test]
+    fn a_fill_on_another_site_is_refused_unless_the_client_asks_for_it() {
+        let (vw, record_id) = vault_with_github();
+        let page = "https://example.org";
+        assert!(
+            serve_record(&vw, &fill(&record_id, page, false))
+                .unwrap()
+                .is_none()
+        );
+
+        let served = serve_record(&vw, &fill(&record_id, page, true))
+            .unwrap()
+            .unwrap();
+        let question = served.confirm.expect("the user must confirm");
+        let text = question.description.unwrap();
+        assert!(
+            text.contains("github.com") && text.contains("example.org"),
+            "{text}"
+        );
+        assert!(matches!(served.response, WireResponse::LoginFill { .. }));
+    }
+
+    #[test]
+    fn an_unmatched_fill_still_needs_a_record_that_exists() {
+        let (vw, _) = vault_with_github();
+        let missing = format!(
+            "{}/{}/{}",
+            vw.vault_id().unwrap(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
+        );
+        assert!(
+            serve_record(&vw, &fill(&missing, "https://example.org", true))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_one_time_code_is_never_served_for_another_site() {
+        let (vw, record_id) = vault_with_github();
+        let action = VaultAction::GenerateTotp {
+            page: LoginPage::parse("https://example.org", "https://example.org", None).unwrap(),
+            record_id,
+        };
+        assert!(serve_record(&vw, &action).unwrap().is_none());
+    }
 }

@@ -3697,6 +3697,8 @@ pub enum VaultAction {
     /// their passwords.
     ListLogins {
         page: LoginPage,
+        /// The request also lists the logins that do not match the page.
+        all: bool,
     },
     /// The AutoFill extension is filling the username and password of one
     /// login on `page`. `account` is the client's own label for the login. It
@@ -3705,6 +3707,9 @@ pub enum VaultAction {
         page: LoginPage,
         record_id: String,
         account: Option<String>,
+        /// The login is one that does not match the page, picked from the full
+        /// list. The broker asks the user to confirm it.
+        unmatched: bool,
     },
     /// The AutoFill extension is asking for the one-time code of one login on
     /// `page`.
@@ -3898,15 +3903,20 @@ impl From<app_broker::VaultAction> for VaultAction {
                 item_key,
                 credential_key,
             },
-            app_broker::VaultAction::ListLogins { page } => Self::ListLogins { page: page.into() },
+            app_broker::VaultAction::ListLogins { page, all } => Self::ListLogins {
+                page: page.into(),
+                all,
+            },
             app_broker::VaultAction::FillLogin {
                 page,
                 record_id,
                 account,
+                unmatched,
             } => Self::FillLogin {
                 page: page.into(),
                 record_id,
                 account,
+                unmatched,
             },
             app_broker::VaultAction::GenerateTotp { page, record_id } => Self::GenerateTotp {
                 page: page.into(),

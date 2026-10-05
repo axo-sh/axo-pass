@@ -182,7 +182,7 @@ final class VaultUnlockPromptModel {
   /// The app a login request is for, when the AutoFill extension named one.
   private static func appRequester(for action: VaultAction) -> String? {
     switch action {
-    case .listLogins(let page), .fillLogin(let page, _, _), .generateTotp(let page, _):
+    case .listLogins(let page, _), .fillLogin(let page, _, _, _), .generateTotp(let page, _):
       return page.requester
     default:
       return nil
@@ -192,7 +192,7 @@ final class VaultUnlockPromptModel {
   /// The account a request will use, shown in its own card instead of the headline.
   private static func login(for action: VaultAction) -> String? {
     switch action {
-    case .fillLogin(_, _, let account), .updateLoginPassword(_, _, let account): return account
+    case .fillLogin(_, _, let account, _), .updateLoginPassword(_, _, let account): return account
     case .saveLogin(_, let username): return username
     case .createPasskey(_, let userName, _): return userName.isEmpty ? nil : userName
     default: return nil
@@ -203,7 +203,7 @@ final class VaultUnlockPromptModel {
   /// save. A listing has none, since it returns no secret.
   private static func notes(for action: VaultAction) -> [String] {
     switch action {
-    case .fillLogin(let page, _, _), .generateTotp(let page, _), .saveLogin(let page, _),
+    case .fillLogin(let page, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _),
       .updateLoginPassword(let page, _, _):
       var notes: [String] = []
       if !page.secure {
@@ -230,9 +230,9 @@ final class VaultUnlockPromptModel {
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
-    case .listLogins(let page):
+    case .listLogins(let page, _):
       what = "find logins for \(page.host)"
-    case .fillLogin(let page, _, let account):
+    case .fillLogin(let page, _, let account, _):
       what = "fill \(account ?? "a login") on \(page.host)"
     case .generateTotp(let page, _):
       what = "get a one-time code for \(page.host)"
@@ -280,7 +280,7 @@ final class VaultUnlockPromptModel {
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
     let id: String
     switch prompt.action {
-    case .fillLogin(_, let recordId, _), .generateTotp(_, let recordId),
+    case .fillLogin(_, let recordId, _, _), .generateTotp(_, let recordId),
       .updateLoginPassword(_, let recordId, _):
       id = recordId
     case .listLogins: id = "logins"
@@ -300,8 +300,8 @@ final class VaultUnlockPromptModel {
     case .readSecret: return "read"
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
-    case .listLogins(let page): return "list-logins:\(page.domain)"
-    case .fillLogin(let page, _, _): return "fill:\(page.domain)"
+    case .listLogins(let page, _): return "list-logins:\(page.domain)"
+    case .fillLogin(let page, _, _, _): return "fill:\(page.domain)"
     case .generateTotp(let page, _): return "totp:\(page.domain)"
     case .saveLogin(let page, _): return "save:\(page.domain)"
     case .updateLoginPassword(let page, _, _): return "update:\(page.domain)"
@@ -328,8 +328,11 @@ final class VaultUnlockPromptModel {
       let count = refs.count
       return [.plain("\(verb) \(count) \(count == 1 ? "secret" : "secrets")")]
     case .listItems: return [.plain("list a vault")]
-    case .listLogins(let page): return [.plain("find logins for "), .bold(page.host)]
-    case .fillLogin(let page, _, _):
+    case .listLogins(let page, let all):
+      return all
+        ? [.plain("list logins, starting with those for "), .bold(page.host)]
+        : [.plain("find logins for "), .bold(page.host)]
+    case .fillLogin(let page, _, _, _):
       return [.plain("fill a login on "), .bold(page.host)]
     case .generateTotp(let page, _):
       return [.plain("get a one-time code for "), .bold(page.host)]

@@ -23,8 +23,8 @@ struct CredentialListView: View {
       VStack(alignment: .leading, spacing: 1) {
         Text("Axo Pass")
           .font(.headline)
-        if let service = model.service, !service.isEmpty {
-          Text(service)
+        if let host = model.host {
+          Text(host)
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -69,27 +69,58 @@ struct CredentialListView: View {
     }
   }
 
-  private func list(_ items: [Login]) -> some View {
-    let matches = filtered(items)
+  private func list(_ logins: LoginList) -> some View {
+    let matches = filtered(logins.matches)
+    let others = filtered(logins.others)
+    let site = model.host ?? "this site"
     return VStack(spacing: 0) {
-      if items.isEmpty {
+      if logins.matches.isEmpty && logins.others.isEmpty {
         message(
           icon: "key.slash", title: "No matching logins",
-          detail: model.service.map { "Nothing in your vaults matches \($0)." }
+          detail: model.host.map { "Nothing in your vaults matches \($0)." }
             ?? "AutoFill did not say which site this is for.")
       } else {
-        List(matches) { item in
-          Button {
-            model.onSelect?(item)
-          } label: {
-            row(item)
+        List {
+          Section {
+            if logins.matches.isEmpty {
+              Text("No logins saved for \(site).")
+                .font(.callout)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .padding(8)
+                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                  RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.white.opacity(0.3), lineWidth: 1)
+                )
+                .listRowSeparator(.hidden)
+            }
+            ForEach(matches) { item in loginButton(item) }
+          } header: {
+            Text("Matches for \(site)")
           }
-          .buttonStyle(.plain)
+          if !logins.others.isEmpty {
+            Section {
+              ForEach(others) { item in loginButton(item) }
+            } header: {
+              Text("All logins")
+            }
+          }
         }
         .listStyle(.inset)
         .searchable(text: $filter, prompt: "Filter")
       }
     }
+  }
+
+  private func loginButton(_ item: Login) -> some View {
+    Button {
+      model.onSelect?(item)
+    } label: {
+      row(item)
+    }
+    .buttonStyle(.plain)
   }
 
   private func row(_ item: Login) -> some View {
@@ -99,13 +130,9 @@ struct CredentialListView: View {
       Text(item.accountName)
         .font(.caption)
         .foregroundStyle(.secondary)
-      Text(
-        item.urlFallback
-          ? "Matched \(item.matched.host) through a URL field"
-          : "Matched \(item.matched.host)"
-      )
-      .font(.caption2)
-      .foregroundStyle(.tertiary)
+      Text(item.reason)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 3)
@@ -118,7 +145,7 @@ struct CredentialListView: View {
     return items.filter {
       $0.title.lowercased().contains(needle)
         || $0.accountName.lowercased().contains(needle)
-        || $0.matched.host.lowercased().contains(needle)
+        || ($0.matched?.host.lowercased().contains(needle) ?? false)
     }
   }
 

@@ -11,7 +11,7 @@ mod vaults_manager;
 
 pub use autofill::{
     AutofillItem, LoginPlace, LoginSecrets, LoginSummary, LoginWrite, MatchRank, MatchedWebsite,
-    Site, write_login,
+    OtherLogin, Site, write_login,
 };
 pub use errors::Error;
 pub use fields::{FieldKind, TextField};

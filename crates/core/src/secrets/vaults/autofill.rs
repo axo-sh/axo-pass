@@ -91,6 +91,24 @@ impl AutofillItem {
             url_fallback: self.websites_from_url_fields,
         })
     }
+
+    /// What a client may learn about a login that does not match the page.
+    pub fn other(&self) -> OtherLogin {
+        OtherLogin {
+            record_id: self.record_id.clone(),
+            title: self.title.clone(),
+            username: self.username.clone(),
+        }
+    }
+}
+
+/// A login that does not match the page, listed so the user can still choose
+/// it. Filling one needs the user's confirmation. It carries no website.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OtherLogin {
+    pub record_id: String,
+    pub title: String,
+    pub username: Option<String>,
 }
 
 /// One login offered for a page, as a client sees it. It carries no password,

@@ -15,7 +15,8 @@ private func axo_bootstrap_look_up(
 ) -> kern_return_t
 
 /// One login offered for a page, as the broker reports it. Mirrors
-/// `axo_pass_core::secrets::vaults::autofill::LoginSummary`. It carries no
+/// `axo_pass_core::secrets::vaults::autofill::LoginSummary` for a login that
+/// matches the page, and `OtherLogin` for one that does not. It carries no
 /// password and no vault, item, or credential key.
 struct Login: Decodable, Identifiable, Hashable {
   /// `<vault uuid>/<item uuid>/<password credential uuid>`. Handed back to the
@@ -23,14 +24,43 @@ struct Login: Decodable, Identifiable, Hashable {
   let recordID: String
   let title: String
   let username: String?
-  let matched: Matched
+  /// The stored website that made the login match. `nil` for a login that does
+  /// not match the page. The app asks the user to confirm before filling one.
+  let matched: Matched?
   /// The login has no website of its own and matched through a URL field. The
   /// app asks the user to confirm before filling it.
   let urlFallback: Bool
 
-  /// The stored website that made the login match.
+  /// The stored website that made the login match, and how.
   struct Matched: Decodable, Hashable {
     let host: String
+    /// `domain`, `host`, or `starts-with`.
+    let kind: String
+
+    init(host: String, kind: String = "domain") {
+      self.host = host
+      self.kind = kind
+    }
+  }
+
+  init(
+    recordID: String, title: String, username: String?, matched: Matched?,
+    urlFallback: Bool = false
+  ) {
+    self.recordID = recordID
+    self.title = title
+    self.username = username
+    self.matched = matched
+    self.urlFallback = urlFallback
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    recordID = try values.decode(String.self, forKey: .recordID)
+    title = try values.decode(String.self, forKey: .title)
+    username = try values.decodeIfPresent(String.self, forKey: .username)
+    matched = try values.decodeIfPresent(Matched.self, forKey: .matched)
+    urlFallback = try values.decodeIfPresent(Bool.self, forKey: .urlFallback) ?? false
   }
 
   var id: String { recordID }
@@ -42,6 +72,17 @@ struct Login: Decodable, Identifiable, Hashable {
     return username
   }
 
+  /// Why the login is listed, in words for the list.
+  var reason: String {
+    guard let matched else { return "Saved for another site" }
+    if urlFallback { return "Matched \(matched.host) through a URL field" }
+    switch matched.kind {
+    case "host": return "Saved for \(matched.host) only"
+    case "starts-with": return "Saved for pages on \(matched.host)"
+    default: return "Matched \(matched.host)"
+    }
+  }
+
   enum CodingKeys: String, CodingKey {
     case recordID = "record_id"
     case title
@@ -49,6 +90,13 @@ struct Login: Decodable, Identifiable, Hashable {
     case matched
     case urlFallback = "url_fallback"
   }
+}
+
+/// The logins for a page: the ones that match it, and the rest of the vaults
+/// when the request asked for them.
+struct LoginList {
+  var matches: [Login]
+  var others: [Login]
 }
 
 /// The values to fill, as the broker reports them.
@@ -101,30 +149,39 @@ struct BrokerClient {
   /// Ask the app for the logins that match `service`, the domain or URL the
   /// system gave us. The system supplies no separate top-level page, so the
   /// service stands for both. `requester` names the app that asked, and is
-  /// `nil` for a browser.
-  static func logins(service: String, requester: String? = nil) async throws -> [Login] {
+  /// `nil` for a browser. With `all`, the other logins in the vaults come back
+  /// too, so a login that failed to match can still be picked.
+  static func logins(
+    service: String, requester: String? = nil, all: Bool = false
+  ) async throws -> LoginList {
     var request: [String: Any] = [
-      "request": "list_logins", "url": service, "frame_url": service,
+      "request": "list_logins", "url": service, "frame_url": service, "all": all,
     ]
     if let requester { request["requester"] = requester }
     let response = try await send(request)
     guard response["status"] as? String == "logins" else {
       throw error(from: response, fallback: "Unexpected response to the login listing.")
     }
-    let logins = response["logins"] ?? []
-    let data = try JSONSerialization.data(withJSONObject: logins)
-    return try JSONDecoder().decode([Login].self, from: data)
+    let decoder = JSONDecoder()
+    func decode(_ key: String) throws -> [Login] {
+      let data = try JSONSerialization.data(withJSONObject: response[key] ?? [])
+      return try decoder.decode([Login].self, from: data)
+    }
+    return LoginList(matches: try decode("logins"), others: try decode("others"))
   }
 
   /// Ask the app for one login's username and password. The app checks the
   /// record against `service` again and prompts every time. `account` is only
-  /// the label the prompt shows.
+  /// the label the prompt shows. `unmatched` says the login came from the list
+  /// of logins that do not match the page, which the app asks the user to
+  /// confirm.
   static func fill(
-    service: String, recordID: String, account: String, requester: String? = nil
+    service: String, recordID: String, account: String, unmatched: Bool = false,
+    requester: String? = nil
   ) async throws -> LoginFill {
     var request: [String: Any] = [
       "request": "fill_login", "url": service, "frame_url": service, "record_id": recordID,
-      "account": account,
+      "account": account, "unmatched": unmatched,
     ]
     if let requester { request["requester"] = requester }
     let response = try await send(request)
