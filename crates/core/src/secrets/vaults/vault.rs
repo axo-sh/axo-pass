@@ -617,7 +617,10 @@ impl Vault {
                 "one credential cannot be both the username and the password".to_string(),
             ));
         }
-        for slot in [autofill.username, autofill.password].into_iter().flatten() {
+        for slot in [autofill.username, autofill.password, autofill.totp]
+            .into_iter()
+            .flatten()
+        {
             if !item.credentials.contains_key(&slot) {
                 return Err(Error::InvalidAutofill(format!(
                     "credential {slot} is not in item {item_key}"
@@ -1141,7 +1144,10 @@ impl Vault {
         item.credentials.remove(&cred_id);
 
         // clear any role slot pointing at the deleted credential
-        if item.autofill.username == Some(cred_id) || item.autofill.password == Some(cred_id) {
+        if item.autofill.username == Some(cred_id)
+            || item.autofill.password == Some(cred_id)
+            || item.autofill.totp == Some(cred_id)
+        {
             item.autofill.clear_credential(cred_id);
             self.autofill_blobs.remove(&item_id);
         }
@@ -2173,11 +2179,12 @@ mod tests {
     fn autofill_survives_a_save_and_decrypts_with_its_own_aad() {
         use crate::secrets::vaults::item_autofill::{MatchKind, Website};
 
-        let mut vault = vault_with_credentials("item", &["username", "password"]);
+        let mut vault = vault_with_credentials("item", &["username", "password", "totp"]);
         let autofill = ItemAutofill {
             websites: vec![Website::new("github.com", MatchKind::Host)],
             username: Some(cred_id(&vault, "item", "username")),
             password: Some(cred_id(&vault, "item", "password")),
+            totp: Some(cred_id(&vault, "item", "totp")),
         };
         vault.set_item_autofill("item", autofill.clone()).unwrap();
         vault

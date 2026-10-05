@@ -65,6 +65,9 @@ pub struct AutofillItem {
     /// True when `websites` came from the item's `Url` credentials because it
     /// has none of its own.
     pub websites_from_url_fields: bool,
+    /// Whether the item has a `Totp` credential to produce a one-time code
+    /// from.
+    pub has_totp: bool,
     /// The website that matched the requested service. `None` when collected
     /// without a service.
     pub matched: Option<MatchedWebsite>,
@@ -89,6 +92,7 @@ impl AutofillItem {
             username: self.username.clone(),
             matched: self.matched.clone()?,
             url_fallback: self.websites_from_url_fields,
+            has_totp: self.has_totp,
         })
     }
 
@@ -98,6 +102,7 @@ impl AutofillItem {
             record_id: self.record_id.clone(),
             title: self.title.clone(),
             username: self.username.clone(),
+            has_totp: self.has_totp,
         }
     }
 }
@@ -109,6 +114,7 @@ pub struct OtherLogin {
     pub record_id: String,
     pub title: String,
     pub username: Option<String>,
+    pub has_totp: bool,
 }
 
 /// One login offered for a page, as a client sees it. It carries no password,
@@ -123,6 +129,8 @@ pub struct LoginSummary {
     /// True when the item matched through its `Url` field because it lists no
     /// websites. A fill of such a login needs the user's confirmation.
     pub url_fallback: bool,
+    /// Whether the login has a one-time code.
+    pub has_totp: bool,
 }
 
 /// Collect every AutoFill candidate in an unlocked vault. `service`, when
@@ -202,6 +210,7 @@ fn candidate(
         password_key: password.key.clone(),
         websites,
         websites_from_url_fields: from_url_fields,
+        has_totp: overview.autofill.totp_credential(overview).is_some(),
         matched,
     }))
 }
@@ -354,10 +363,7 @@ pub fn login_totp(vw: &VaultWrapper, item: &AutofillItem) -> Result<Option<TotpC
     let Some(overview) = vw.get_item_overview(&item.item_key)? else {
         return Ok(None);
     };
-    let Some(cred) = sorted_credentials(overview)
-        .into_iter()
-        .find(|c| matches!(c.kind, FieldKind::Totp))
-    else {
+    let Some(cred) = overview.autofill.totp_credential(overview) else {
         return Ok(None);
     };
     let Some(value) = vw.get_secret(&item.item_key, &cred.key)? else {
@@ -1206,6 +1212,7 @@ mod tests {
             password_key: "password".to_string(),
             websites: Vec::new(),
             websites_from_url_fields: false,
+            has_totp: false,
             matched: rank.map(|rank| MatchedWebsite {
                 host: "example.com".to_string(),
                 kind: MatchKind::Domain,
@@ -1541,6 +1548,82 @@ mod tests {
         assert!(pick_roles(&item, &credentials).password.is_none());
     }
 
+    /// Point the github test item's totp slot at the credential `cred_key`.
+    fn set_totp_slot(vw: &mut VaultWrapper, cred_key: &str) {
+        let overview = vw.get_item_overview("github").unwrap().unwrap();
+        let mut autofill = overview.autofill.clone();
+        autofill.totp = Some(key_of(overview, cred_key));
+        vw.set_item_autofill("github", autofill).unwrap();
+    }
+
+    #[test]
+    fn a_totp_credential_with_no_slot_gives_no_code() {
+        let item = overview(&[
+            ("password", FieldKind::default()),
+            ("code", FieldKind::Totp),
+        ]);
+        assert!(item.autofill.totp_credential(&item).is_none());
+    }
+
+    #[test]
+    fn the_totp_slot_decides_which_credential_makes_the_code() {
+        let mut item = overview(&[("first", FieldKind::Totp), ("second", FieldKind::Totp)]);
+        item.autofill.totp = Some(key_of(&item, "second"));
+        assert_eq!(item.autofill.totp_credential(&item).unwrap().key, "second");
+    }
+
+    #[test]
+    fn a_totp_slot_that_points_at_nothing_usable_means_no_code() {
+        let mut item = overview(&[
+            ("password", FieldKind::default()),
+            ("code", FieldKind::Totp),
+        ]);
+
+        // A missing credential does not fall back to the `Totp` one.
+        item.autofill.totp = Some(uuid::Uuid::new_v4());
+        assert!(item.autofill.totp_credential(&item).is_none());
+
+        // A credential that is not a one-time code is not used either.
+        item.autofill.totp = Some(key_of(&item, "password"));
+        assert!(item.autofill.totp_credential(&item).is_none());
+    }
+
+    #[test]
+    fn has_totp_follows_the_totp_slot() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let record_id = github_login(&mut vw);
+        let has_totp = |vw: &VaultWrapper| collect_items(vw, None).unwrap()[0].has_totp;
+        assert!(!has_totp(&vw));
+
+        vw.add_secret(
+            "github",
+            "code",
+            "Code",
+            FieldKind::Totp,
+            SecretString::from("JBSWY3DPEHPK3PXP"),
+        )
+        .unwrap();
+        // The credential alone does not make a code. The slot does.
+        assert!(!has_totp(&vw));
+
+        set_totp_slot(&mut vw, "code");
+        assert!(has_totp(&vw));
+
+        // Deleting the credential clears the slot.
+        vw.delete_item_credential("github", "code").unwrap();
+        assert!(!has_totp(&vw));
+        let item = find_login_record(&vw, &record_id).unwrap().unwrap();
+        assert!(login_totp(&vw, &item).unwrap().is_none());
+        assert!(
+            vw.get_item_overview("github")
+                .unwrap()
+                .unwrap()
+                .autofill
+                .totp
+                .is_none()
+        );
+    }
+
     fn github_login(vw: &mut VaultWrapper) -> String {
         let websites = vec!["github.com".to_string()];
         write_login(vw, login(&websites, Some("tp"))).unwrap();
@@ -1671,7 +1754,7 @@ mod tests {
     }
 
     #[test]
-    fn login_totp_uses_the_first_totp_credential() {
+    fn login_totp_uses_the_credential_in_the_totp_slot() {
         let mut vw = VaultWrapper::new_for_test("personal");
         let record_id = github_login(&mut vw);
         let item = find_login(&vw, &record_id, "github.com").unwrap().unwrap();
@@ -1685,9 +1768,6 @@ mod tests {
             SecretString::from("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"),
         )
         .unwrap();
-        let code = login_totp(&vw, &item).unwrap().unwrap();
-        assert_eq!(code.code.len(), 6);
-
         vw.add_secret(
             "github",
             "broken",
@@ -1696,11 +1776,15 @@ mod tests {
             SecretString::from("!!"),
         )
         .unwrap();
-        vw.reorder_credentials(
-            "github",
-            &["broken", "otp", "password", "username"].map(String::from),
-        )
-        .unwrap();
+
+        // Without a slot there is no code, whatever credentials exist.
+        assert!(login_totp(&vw, &item).unwrap().is_none());
+
+        set_totp_slot(&mut vw, "otp");
+        let code = login_totp(&vw, &item).unwrap().unwrap();
+        assert_eq!(code.code.len(), 6);
+
+        set_totp_slot(&mut vw, "broken");
         assert!(matches!(
             login_totp(&vw, &item),
             Err(Error::InvalidOneTimeCode(_))

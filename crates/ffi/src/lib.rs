@@ -371,6 +371,8 @@ pub struct AutofillItemInfo {
     /// the system's subdomain matching for a domain identifier is unconfirmed.
     /// A website that never matches contributes none.
     pub hosts: Vec<String>,
+    /// The item has a one-time code, so it also gets a code identity.
+    pub has_totp: bool,
 }
 
 /// One stored passkey, as the AutoFill identity store needs it. The system
@@ -400,6 +402,7 @@ impl From<autofill::AutofillItem> for AutofillItemInfo {
             username: item.username,
             password_key: item.password_key,
             hosts: autofill::identity_hosts(&item.websites),
+            has_totp: item.has_totp,
         }
     }
 }

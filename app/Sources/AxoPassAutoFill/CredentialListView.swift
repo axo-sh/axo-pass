@@ -73,17 +73,18 @@ struct CredentialListView: View {
     let matches = filtered(logins.matches)
     let others = filtered(logins.others)
     let site = model.host ?? "this site"
+    let noun = model.purpose == .oneTimeCode ? "one-time codes" : "logins"
     return VStack(spacing: 0) {
       if logins.matches.isEmpty && logins.others.isEmpty {
         message(
-          icon: "key.slash", title: "No matching logins",
+          icon: "key.slash", title: "No matching \(noun)",
           detail: model.host.map { "Nothing in your vaults matches \($0)." }
             ?? "AutoFill did not say which site this is for.")
       } else {
         List {
           Section {
             if logins.matches.isEmpty {
-              Text("No logins saved for \(site).")
+              Text("No \(noun) saved for \(site).")
                 .font(.callout)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)

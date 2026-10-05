@@ -3,7 +3,8 @@
     "NSExtensionAttributes": {
       "ASCredentialProviderExtensionCapabilities": {
         "ProvidesPasswords": true,
-        "ProvidesPasskeys": true
+        "ProvidesPasskeys": true,
+        "ProvidesOneTimeCodes": true
       },
       "ASCredentialProviderExtensionShowsConfigurationUI": true
     }

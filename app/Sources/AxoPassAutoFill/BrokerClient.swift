@@ -30,6 +30,8 @@ struct Login: Decodable, Identifiable, Hashable {
   /// The login has no website of its own and matched through a URL field. The
   /// app asks the user to confirm before filling it.
   let urlFallback: Bool
+  /// The login has a one-time code.
+  let hasTotp: Bool
 
   /// The stored website that made the login match, and how.
   struct Matched: Decodable, Hashable {
@@ -45,13 +47,14 @@ struct Login: Decodable, Identifiable, Hashable {
 
   init(
     recordID: String, title: String, username: String?, matched: Matched?,
-    urlFallback: Bool = false
+    urlFallback: Bool = false, hasTotp: Bool = false
   ) {
     self.recordID = recordID
     self.title = title
     self.username = username
     self.matched = matched
     self.urlFallback = urlFallback
+    self.hasTotp = hasTotp
   }
 
   init(from decoder: Decoder) throws {
@@ -61,6 +64,7 @@ struct Login: Decodable, Identifiable, Hashable {
     username = try values.decodeIfPresent(String.self, forKey: .username)
     matched = try values.decodeIfPresent(Matched.self, forKey: .matched)
     urlFallback = try values.decodeIfPresent(Bool.self, forKey: .urlFallback) ?? false
+    hasTotp = try values.decodeIfPresent(Bool.self, forKey: .hasTotp) ?? false
   }
 
   var id: String { recordID }
@@ -89,6 +93,7 @@ struct Login: Decodable, Identifiable, Hashable {
     case username
     case matched
     case urlFallback = "url_fallback"
+    case hasTotp = "has_totp"
   }
 }
 
@@ -192,6 +197,25 @@ struct BrokerClient {
       throw BrokerError.failed("That login no longer has a password.")
     }
     return LoginFill(username: response["username"] as? String, password: password)
+  }
+
+  /// Ask the app for the current one-time code of one login. The app checks the
+  /// record against `service` again and prompts every time.
+  static func totp(
+    service: String, recordID: String, requester: String? = nil
+  ) async throws -> String {
+    var request: [String: Any] = [
+      "request": "generate_totp", "url": service, "frame_url": service, "record_id": recordID,
+    ]
+    if let requester { request["requester"] = requester }
+    let response = try await send(request)
+    guard response["status"] as? String == "totp_code" else {
+      throw error(from: response, fallback: "Unexpected response to the code request.")
+    }
+    guard let code = (response["code"] as? [String: Any])?["code"] as? String else {
+      throw BrokerError.failed("That login has no one-time code.")
+    }
+    return code
   }
 
   /// One registered passkey, as the broker reports it.

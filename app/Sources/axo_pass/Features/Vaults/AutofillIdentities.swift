@@ -42,7 +42,8 @@ enum AutofillIdentities {
     }
 
     let identities: [ASCredentialIdentity] =
-      items.flatMap(passwordIdentities) + passkeys.map(passkeyIdentity)
+      items.flatMap(passwordIdentities) + items.flatMap(oneTimeCodeIdentities)
+      + passkeys.map(passkeyIdentity)
     do {
       try await ASCredentialIdentityStore.shared.replaceCredentialIdentities(identities)
     } catch {
@@ -74,6 +75,21 @@ enum AutofillIdentities {
       ASPasswordCredentialIdentity(
         serviceIdentifier: ASCredentialServiceIdentifier(identifier: host, type: .domain),
         user: user,
+        recordIdentifier: item.recordId)
+    }
+  }
+
+  /// The same hosts for an item with a one-time code, so the code field's
+  /// AutoFill menu offers it.
+  private static func oneTimeCodeIdentities(
+    for item: AutofillItemInfo
+  ) -> [ASOneTimeCodeCredentialIdentity] {
+    guard item.hasTotp else { return [] }
+    let label = item.username?.isEmpty == false ? item.username! : item.title
+    return item.hosts.map { host in
+      ASOneTimeCodeCredentialIdentity(
+        serviceIdentifier: ASCredentialServiceIdentifier(identifier: host, type: .domain),
+        label: label,
         recordIdentifier: item.recordId)
     }
   }

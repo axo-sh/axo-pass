@@ -20,6 +20,9 @@ pub struct ItemAutofill {
     /// Credential filled as the password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Uuid>,
+    /// Credential the one-time code is generated from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp: Option<Uuid>,
 }
 
 impl Zeroize for ItemAutofill {
@@ -27,6 +30,7 @@ impl Zeroize for ItemAutofill {
         self.websites.clear();
         self.username = None;
         self.password = None;
+        self.totp = None;
     }
 }
 
@@ -54,6 +58,17 @@ impl ItemAutofill {
         self.resolve(self.password, item)
     }
 
+    /// The credential the one-time code comes from. A slot that points at a
+    /// missing credential, or at one that is not a one-time code, reads as
+    /// empty.
+    pub fn totp_credential<'a>(
+        &self,
+        item: &'a VaultItemOverview,
+    ) -> Option<&'a VaultItemCredentialOverview> {
+        let cred = item.credentials.get(&self.totp?)?;
+        matches!(cred.kind, FieldKind::Totp).then_some(cred)
+    }
+
     fn resolve<'a>(
         &self,
         slot: Option<Uuid>,
@@ -78,6 +93,9 @@ impl ItemAutofill {
         }
         if self.password == Some(cred_id) {
             self.password = None;
+        }
+        if self.totp == Some(cred_id) {
+            self.totp = None;
         }
     }
 }

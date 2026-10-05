@@ -42,6 +42,20 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   // MARK: - Credential list
 
   override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
+    loadList(for: serviceIdentifiers, purpose: .password)
+  }
+
+  /// A one-time code field. The list is the logins for the site that have a
+  /// code.
+  override func prepareOneTimeCodeCredentialList(
+    for serviceIdentifiers: [ASCredentialServiceIdentifier]
+  ) {
+    loadList(for: serviceIdentifiers, purpose: .oneTimeCode)
+  }
+
+  private func loadList(
+    for serviceIdentifiers: [ASCredentialServiceIdentifier], purpose: CredentialListModel.Purpose
+  ) {
     // An app identifier is not a site, so it only names the requester. The
     // site to match comes from the first domain or URL identifier. App
     // identifiers exist from macOS 26.2.
@@ -49,9 +63,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       let app = serviceIdentifiers.first { $0.type == .app }
       let site = serviceIdentifiers.first { $0.type != .app } ?? serviceIdentifiers.first
       model.load(
-        service: site?.identifier, requester: app.map { $0.displayName ?? $0.identifier })
+        service: site?.identifier, requester: app.map { $0.displayName ?? $0.identifier },
+        purpose: purpose)
     } else {
-      model.load(service: serviceIdentifiers.first?.identifier)
+      model.load(service: serviceIdentifiers.first?.identifier, purpose: purpose)
     }
   }
 
@@ -100,6 +115,19 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       return
     }
 
+    if let identity = request.credentialIdentity as? ASOneTimeCodeCredentialIdentity {
+      guard let recordID = identity.recordIdentifier, !recordID.isEmpty,
+        !identity.serviceIdentifier.identifier.isEmpty
+      else {
+        cancel(.credentialIdentityNotFound)
+        return
+      }
+      model.fillDirectly(
+        recordID: recordID, service: identity.serviceIdentifier.identifier, user: identity.label,
+        purpose: .oneTimeCode)
+      return
+    }
+
     guard let identity = request.credentialIdentity as? ASPasswordCredentialIdentity,
       let recordID = identity.recordIdentifier, !recordID.isEmpty,
       !identity.serviceIdentifier.identifier.isEmpty
@@ -108,7 +136,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       return
     }
     model.fillDirectly(
-      recordID: recordID, service: identity.serviceIdentifier.identifier, user: identity.user)
+      recordID: recordID, service: identity.serviceIdentifier.identifier, user: identity.user,
+      purpose: .password)
   }
 
   // MARK: - Passkeys
@@ -207,17 +236,31 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     let requester = model.requester
     model.beginFilling(login.accountName)
-    // A login with no matching website came from the full list. The app asks
-    // the user to confirm it.
-    let unmatched = login.matched == nil
-    Task { [weak self] in
-      do {
-        let fill = try await BrokerClient.fill(
-          service: service, recordID: login.recordID, account: login.accountName,
-          unmatched: unmatched, requester: requester)
-        self?.complete(user: fill.username ?? login.accountName, password: fill.password)
-      } catch {
-        self?.model.report(error)
+    switch model.purpose {
+    case .password:
+      // A login with no matching website came from the full list. The app asks
+      // the user to confirm it.
+      let unmatched = login.matched == nil
+      Task { [weak self] in
+        do {
+          let fill = try await BrokerClient.fill(
+            service: service, recordID: login.recordID, account: login.accountName,
+            unmatched: unmatched, requester: requester)
+          self?.complete(user: fill.username ?? login.accountName, password: fill.password)
+        } catch {
+          self?.model.report(error)
+        }
+      }
+    case .oneTimeCode:
+      Task { [weak self] in
+        do {
+          let code = try await BrokerClient.totp(
+            service: service, recordID: login.recordID, requester: requester)
+          self?.extensionContext.completeOneTimeCodeRequest(
+            using: ASOneTimeCodeCredential(code: code), completionHandler: nil)
+        } catch {
+          self?.model.report(error)
+        }
       }
     }
   }
@@ -264,7 +307,14 @@ final class CredentialListModel {
     case failed(String)
   }
 
+  /// What the user is being asked for.
+  enum Purpose {
+    case password
+    case oneTimeCode
+  }
+
   private(set) var state: State = .loading
+  private(set) var purpose: Purpose = .password
   private(set) var service: String?
 
   /// The site shown in the header and in the group titles: the host of the
@@ -282,9 +332,10 @@ final class CredentialListModel {
   var onCancel: (() -> Void)?
   var onOpenApp: (() -> Void)?
 
-  func load(service: String?, requester: String? = nil) {
+  func load(service: String?, requester: String? = nil, purpose: Purpose = .password) {
     self.service = service
     self.requester = requester
+    self.purpose = purpose
     guard let service, !service.isEmpty else {
       state = .failed("AutoFill did not say which site this is for.")
       return
@@ -294,10 +345,16 @@ final class CredentialListModel {
       return
     }
     state = .loading
+    // The full list of logins is for filling a password. A one-time code is
+    // only ever released for a login that matches the page.
+    let all = purpose == .password
     Task { [weak self] in
       do {
-        let list = try await BrokerClient.logins(
-          service: service, requester: requester, all: true)
+        var list = try await BrokerClient.logins(
+          service: service, requester: requester, all: all)
+        if self?.purpose == .oneTimeCode {
+          list.matches = list.matches.filter(\.hasTotp)
+        }
         self?.state = .list(list)
       } catch {
         self?.report(error)
@@ -308,8 +365,9 @@ final class CredentialListModel {
   /// The system picked an identity for us; fill it and finish without ever
   /// showing a list. The app checks the record against `service` before it
   /// answers.
-  func fillDirectly(recordID: String, service: String, user: String) {
+  func fillDirectly(recordID: String, service: String, user: String, purpose: Purpose) {
     self.service = service
+    self.purpose = purpose
     guard BrokerClient.isAvailable else {
       state = .appUnavailable
       return
@@ -341,6 +399,6 @@ final class CredentialListModel {
   }
 
   func retry() {
-    load(service: service, requester: requester)
+    load(service: service, requester: requester, purpose: purpose)
   }
 }
