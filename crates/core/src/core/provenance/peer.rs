@@ -141,8 +141,17 @@ impl PeerIdentity {
 
     /// Describe the peer, failing if it does not satisfy `policy`.
     pub fn verify(fd: RawFd, policy: &PeerPolicy) -> Result<Self, PeerError> {
-        let token = AuditToken::for_peer(fd)?;
+        Self::verify_token(AuditToken::for_peer(fd)?, policy)
+    }
 
+    /// Describe the sender of a Mach message from the audit token in its
+    /// trailer, failing if it does not satisfy `policy`. `token` is the eight
+    /// words of an `audit_token_t`.
+    pub fn verify_audit_token(token: [u32; 8], policy: &PeerPolicy) -> Result<Self, PeerError> {
+        Self::verify_token(AuditToken(token), policy)
+    }
+
+    fn verify_token(token: AuditToken, policy: &PeerPolicy) -> Result<Self, PeerError> {
         if policy.same_user {
             let ours = unsafe { libc::geteuid() };
             if token.euid() != ours {

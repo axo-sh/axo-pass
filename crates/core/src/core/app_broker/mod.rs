@@ -36,12 +36,13 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::audit;
 use crate::core::auth::ForeignContext;
-use crate::core::dirs::{app_data_dir, app_group_dir};
-use crate::core::provenance::{PeerIdentity, PeerPolicy, ProcessNode};
+use crate::core::dirs::{app_data_dir, app_group_identifier};
+use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
 
 pub mod age;
 pub mod gpg;
 pub mod keychain;
+mod mach;
 pub mod ssh;
 pub mod vault;
 
@@ -89,10 +90,12 @@ pub fn broker_socket_path() -> PathBuf {
     app_data_dir().join("app-broker.sock")
 }
 
-/// Where the AutoFill extension reaches the broker. `None` for an unsigned
-/// build, which has no team identifier and therefore no App Group container.
-pub fn autofill_socket_path() -> Option<PathBuf> {
-    Some(app_group_dir()?.join("autofill-broker.sock"))
+/// The Mach service the AutoFill extension reaches the broker on. A sandboxed
+/// process may look up a Mach service whose name starts with an App Group it
+/// belongs to. `None` for an unsigned build, which has no team identifier and
+/// therefore no App Group.
+pub fn autofill_service_name() -> Option<String> {
+    Some(format!("{}.broker", app_group_identifier()?))
 }
 
 /// Passed to the app by [`launch_app`] to say the launch is only to serve the
@@ -835,27 +838,30 @@ fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, BrokerError> {
 
 // Server (the app).
 
-/// Serve requests until `shutdown` resolves, then remove the sockets.
+/// Serve requests until `shutdown` resolves, then remove the socket and the
+/// Mach service.
 ///
-/// Two sockets are bound: the one in the app data directory for `ap`, and, when
-/// this build is signed, one in the App Group container for the AutoFill
-/// extension. The extension is sandboxed and the App Group container is the
-/// only path both processes can reach.
+/// `ap` connects to the socket in the app data directory. When this build is
+/// signed, the AutoFill extension reaches the broker through a Mach service
+/// named under the App Group (see [`mach`]). The extension is sandboxed, and a
+/// Mach service lookup is the one path to the app it has that touches no
+/// files.
 pub async fn serve(
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
-    let (autofill_shutdown_tx, autofill_shutdown_rx) = tokio::sync::oneshot::channel();
-    let autofill = match autofill_socket_path() {
-        Some(path) => {
-            let authorizers = authorizers.clone();
-            Some(tokio::spawn(async move {
-                if let Err(e) =
-                    serve_on(path, extension_policy(), authorizers, autofill_shutdown_rx).await
-                {
-                    log::warn!("AutoFill broker failed to start: {e}");
-                }
-            }))
+    let autofill = match autofill_service_name() {
+        Some(name) => match mach::MachService::start(
+            &name,
+            extension_policy(),
+            RequestScope::AutofillExtension,
+            authorizers.clone(),
+        ) {
+            Ok(service) => Some(service),
+            Err(e) => {
+                log::warn!("AutoFill broker failed to start on {name}: {e}");
+                None
+            },
         },
         None => {
             log::debug!("No team identifier: not serving the AutoFill broker");
@@ -863,18 +869,51 @@ pub async fn serve(
         },
     };
 
-    let result = serve_on(broker_socket_path(), agent_policy(), authorizers, shutdown).await;
+    let result = serve_on(
+        broker_socket_path(),
+        agent_policy(),
+        RequestScope::Agent,
+        authorizers,
+        shutdown,
+    )
+    .await;
 
-    let _ = autofill_shutdown_tx.send(());
     if let Some(autofill) = autofill {
-        let _ = autofill.await;
+        autofill.stop();
     }
     result
 }
 
-/// The body of [`serve`], with the socket path and the peer policy supplied
-/// rather than derived, so tests can bind a scratch socket and choose who it
-/// accepts.
+/// Which requests a transport's clients may send. Checked after the peer is
+/// verified and before the request is dispatched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestScope {
+    /// `ap`: every request.
+    Agent,
+    /// The AutoFill extension: the autofill listing, the password read, and the
+    /// passkey requests. `ReadVaultSecret` is allowed because the extension
+    /// reads the password with it.
+    AutofillExtension,
+}
+
+impl RequestScope {
+    fn allows(self, request: &WireRequest) -> bool {
+        match self {
+            RequestScope::Agent => true,
+            RequestScope::AutofillExtension => matches!(
+                request,
+                WireRequest::ListAutofillItems { .. }
+                    | WireRequest::ReadVaultSecret { .. }
+                    | WireRequest::CreatePasskey { .. }
+                    | WireRequest::AssertPasskey { .. }
+            ),
+        }
+    }
+}
+
+/// The body of [`serve`], with the socket path, the peer policy, and the
+/// request scope supplied rather than derived, so tests can bind a scratch
+/// socket and choose who it accepts and what they may ask for.
 ///
 /// Binding replaces a socket left behind by a crashed app: only one app runs at
 /// a time, and a stale file would otherwise keep the broker offline
@@ -882,6 +921,7 @@ pub async fn serve(
 async fn serve_on(
     socket_path: PathBuf,
     policy: PeerPolicy,
+    scope: RequestScope,
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
@@ -911,7 +951,7 @@ async fn serve_on(
     log::debug!("App broker listening on {}", socket_path.display());
 
     tokio::select! {
-        _ = accept_loop(listener, authorizers, policy) => {},
+        _ = accept_loop(listener, authorizers, policy, scope) => {},
         _ = shutdown => log::debug!("App broker shutting down"),
     }
     let _ = fs::remove_file(&socket_path);
@@ -957,7 +997,12 @@ fn extension_policy() -> PeerPolicy {
     policy
 }
 
-async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: PeerPolicy) {
+async fn accept_loop(
+    listener: UnixListener,
+    authorizers: Authorizers,
+    policy: PeerPolicy,
+    scope: RequestScope,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -977,21 +1022,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                     },
                     Err(e) => {
                         log::warn!("App broker refused a connection: {e}");
-                        let mut event = audit::AuditEvent::new(
-                            audit::process_source(),
-                            audit::Action::BrokerPeerRejected,
-                            audit::Outcome::Denied,
-                        )
-                        .message(e.to_string())
-                        .detail("peer_verified", "false");
-                        // Describe the rejected peer with no policy applied. The
-                        // executable and signature here come from code that
-                        // failed the policy, so the event marks them unverified.
-                        if let Ok(peer) = PeerIdentity::identify(stream.as_raw_fd()) {
-                            log::debug!("App broker rejected peer: {peer:#?}");
-                            event = event.actor(peer_actor(&peer));
-                        }
-                        audit::record(event);
+                        record_rejected_peer(&e, PeerIdentity::identify(stream.as_raw_fd()).ok());
                         continue;
                     },
                 };
@@ -1000,7 +1031,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
                 let authorizers = authorizers.clone();
                 // Serially, not spawned: two prompts at once would contend for
                 // the screen and the system's authentication session.
-                if let Err(e) = handle_connection(stream, &peer, authorizers).await {
+                if let Err(e) = handle_connection(stream, &peer, scope, authorizers).await {
                     log::debug!("App broker connection failed: {e}");
                 }
             },
@@ -1010,6 +1041,24 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, policy: P
             },
         }
     }
+}
+
+/// Record a peer that failed its transport's policy. `peer` describes it with no
+/// policy applied. The executable and signature come from code that failed the
+/// policy, so the event marks them unverified.
+fn record_rejected_peer(error: &PeerError, peer: Option<PeerIdentity>) {
+    let mut event = audit::AuditEvent::new(
+        audit::process_source(),
+        audit::Action::BrokerPeerRejected,
+        audit::Outcome::Denied,
+    )
+    .message(error.to_string())
+    .detail("peer_verified", "false");
+    if let Some(peer) = peer {
+        log::debug!("App broker rejected peer: {peer:#?}");
+        event = event.actor(peer_actor(&peer));
+    }
+    audit::record(event);
 }
 
 /// Build an audit actor from a peer. Whether the peer passed the policy is the
@@ -1142,6 +1191,7 @@ async fn client_disconnected(reader: &mut (impl tokio::io::AsyncRead + Unpin)) {
 async fn handle_connection(
     stream: UnixStream,
     peer: &PeerIdentity,
+    scope: RequestScope,
     authorizers: Authorizers,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
@@ -1162,6 +1212,33 @@ async fn handle_connection(
     if disconnected {
         log::debug!("App broker client disconnected before its request was served");
         return Ok(());
+    }
+
+    let response =
+        serve_request(request, peer, scope, authorizers, client_disconnected(&mut reader)).await?;
+    match response {
+        Some(response) => write_response(&mut write_half, &response).await,
+        None => Ok(()),
+    }
+}
+
+/// Serve one request from a verified peer, whichever transport carried it.
+///
+/// `disconnected` resolves when the client goes away. The request is then
+/// abandoned, which ends its prompt, and still runs to completion so the app's
+/// `end` is called. Nobody is left to read the response, so `None` is returned.
+async fn serve_request(
+    request: WireRequest,
+    peer: &PeerIdentity,
+    scope: RequestScope,
+    authorizers: Authorizers,
+    disconnected: impl Future<Output = ()>,
+) -> std::io::Result<Option<WireResponse>> {
+    if !scope.allows(&request) {
+        log::warn!("App broker refused a request outside the {scope:?} scope");
+        return Ok(Some(WireResponse::Failed {
+            message: "This client may not send that request".to_string(),
+        }));
     }
 
     // Resolved once per connection and handed to whichever authorizer serves
@@ -1566,22 +1643,26 @@ async fn handle_connection(
         })
     };
     tokio::pin!(serve);
+    tokio::pin!(disconnected);
 
-    let response = tokio::select! {
+    tokio::select! {
         biased; // poll in order
-        () = client_disconnected(&mut reader) => {
+        () = &mut disconnected => {
             log::debug!("App broker client disconnected mid-request, ending its prompt");
             in_flight.abandon();
-            // The request still runs to completion so the app's `end` is
-            // called, but nobody is left to read the response.
             serve.await?;
-            return Ok(());
+            Ok(None)
         },
-        response = &mut serve => response?,
-    };
+        response = &mut serve => Ok(Some(response?)),
+    }
+}
 
+async fn write_response(
+    write_half: &mut tokio::net::unix::OwnedWriteHalf,
+    response: &WireResponse,
+) -> std::io::Result<()> {
     let mut line =
-        serde_json::to_vec(&response).map_err(|e| std::io::Error::other(e.to_string()))?;
+        serde_json::to_vec(response).map_err(|e| std::io::Error::other(e.to_string()))?;
     line.push(b'\n');
     write_half.write_all(&line).await?;
     write_half.flush().await
@@ -1728,6 +1809,10 @@ mod tests {
 
     impl TestBroker {
         async fn start(policy: PeerPolicy) -> Self {
+            Self::start_with_scope(policy, RequestScope::Agent).await
+        }
+
+        async fn start_with_scope(policy: PeerPolicy, scope: RequestScope) -> Self {
             let audit_dir = crate::audit::test_support::test_dir();
             let dir = tempfile::tempdir().unwrap();
             let socket_path = dir.path().join("app-broker.sock");
@@ -1737,6 +1822,7 @@ mod tests {
             tokio::spawn(serve_on(
                 socket_path.clone(),
                 policy,
+                scope,
                 Authorizers {
                     sign: authorizer.clone(),
                     passphrase: authorizer.clone(),
@@ -2265,6 +2351,106 @@ mod tests {
         );
     }
 
+    /// The AutoFill scope refuses a request outside it. The stub lister
+    /// answers a keychain listing on any other socket, so `Failed` means the
+    /// request never reached it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_autofill_scope_refuses_other_requests() {
+        let broker =
+            TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
+
+        let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"x"}"#);
+
+        let response: WireResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
+            "the autofill scope served a keychain listing",
+        );
+    }
+
+    #[test]
+    fn the_autofill_scope_allows_only_autofill_requests() {
+        let allowed = [
+            r#"{"request":"list_autofill_items"}"#,
+            r#"{"request":"read_vault_secret","vault_key":"v","item_key":"i","credential_key":"c"}"#,
+            r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#,
+        ];
+        let refused = [
+            r#"{"request":"list_identities"}"#,
+            r#"{"request":"list_vault_items","vault_key":"v"}"#,
+            r#"{"request":"list_age_keys"}"#,
+        ];
+        for line in allowed {
+            let request: WireRequest = serde_json::from_str(line).unwrap();
+            assert!(RequestScope::AutofillExtension.allows(&request), "{line}");
+            assert!(RequestScope::Agent.allows(&request), "{line}");
+        }
+        for line in refused {
+            let request: WireRequest = serde_json::from_str(line).unwrap();
+            assert!(!RequestScope::AutofillExtension.allows(&request), "{line}");
+            assert!(RequestScope::Agent.allows(&request), "{line}");
+        }
+    }
+
+    /// A Mach service with a name no other test or process uses.
+    fn start_mach_service(policy: PeerPolicy) -> (String, mach::MachService) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "com.breakfastlabs.frittata.test.{}.{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let authorizer = Arc::new(StubAuthorizer::default());
+        let service = mach::MachService::start(
+            &name,
+            policy,
+            RequestScope::Agent,
+            Authorizers {
+                sign: authorizer.clone(),
+                passphrase: authorizer.clone(),
+                vault: authorizer.clone(),
+                keychain: authorizer,
+            },
+        )
+        .unwrap();
+        (name, service)
+    }
+
+    /// A request over the Mach service is verified from its audit token,
+    /// served, and answered.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn serves_a_request_over_the_mach_service() {
+        let _audit_dir = crate::audit::test_support::test_dir();
+        let (name, service) = start_mach_service(accepting_policy());
+
+        let response = tokio::task::spawn_blocking(move || {
+            mach::send_test_request(&name, br#"{"request":"list_keychain_passwords"}"#)
+        })
+        .await
+        .unwrap()
+        .expect("the Mach service dropped the request");
+
+        let response: WireResponse = serde_json::from_slice(&response).unwrap();
+        assert!(matches!(response, WireResponse::KeychainPasswords { .. }));
+        service.stop();
+    }
+
+    /// A sender that fails the policy gets no reply.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drops_a_mach_request_from_a_rejected_sender() {
+        let _audit_dir = crate::audit::test_support::test_dir();
+        let (name, service) = start_mach_service(rejecting_policy());
+
+        let response = tokio::task::spawn_blocking(move || {
+            mach::send_test_request(&name, br#"{"request":"list_keychain_passwords"}"#)
+        })
+        .await
+        .unwrap();
+
+        assert!(response.is_none(), "the Mach service answered a rejected sender");
+        service.stop();
+    }
+
     /// A socket left behind by a crashed app must not keep the broker offline.
     #[tokio::test(flavor = "multi_thread")]
     async fn replaces_a_stale_socket() {
@@ -2279,6 +2465,7 @@ mod tests {
         tokio::spawn(serve_on(
             socket_path.clone(),
             accepting_policy(),
+            RequestScope::Agent,
             Authorizers {
                 sign: authorizer.clone(),
                 passphrase: authorizer.clone(),

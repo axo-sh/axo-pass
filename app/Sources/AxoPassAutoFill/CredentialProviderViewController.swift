@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// The extension is sandboxed and holds no keychain entitlements, so it never
 /// touches the vault itself. Every request goes to the app's broker over a
-/// socket in the App Group container; the app raises the Touch ID prompt,
+/// Mach service named under the App Group; the app raises the Touch ID prompt,
 /// unlocks the vault on its own context, and records the audit event.
 ///
 /// That means there is no silent fill: the vault is locked behind an

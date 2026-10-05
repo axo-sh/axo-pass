@@ -53,8 +53,8 @@ src      = "app/misc/ap-ssh-askpass"
 dest_dir = "Contents/Resources"
 
 # AutoFill credential provider. Sandboxed, so it cannot read the vault files
-# directly; it talks to the app's broker over a socket in the App Group
-# container. See crates/core/src/core/app_broker/mod.rs.
+# directly; it talks to the app's broker over a Mach service named under the
+# App Group. See crates/core/src/core/app_broker/mach.rs.
 [[extensions]]
 target_name                = "AxoPassAutoFill"
 kind                       = "app_extension"

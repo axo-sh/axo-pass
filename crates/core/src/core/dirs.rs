@@ -20,17 +20,15 @@ pub fn vaults_dir() -> PathBuf {
     app_data_dir().join("vaults")
 }
 
-/// The App Group container both the app and the sandboxed AutoFill extension
-/// can reach: ~/Library/Group Containers/<team>.com.breakfastlabs.frittata.shared
+/// The App Group identifier: `<team>.com.breakfastlabs.frittata.shared`.
 ///
 /// The team identifier comes from our own code signature. An unsigned or ad-hoc
 /// local build has none, and the extension cannot run under one either, so this
-/// returns `None` rather than guessing a path nothing will use.
-pub fn app_group_dir() -> Option<PathBuf> {
+/// returns `None` rather than guessing an identifier nothing will use.
+///
+/// The app never touches the group's container directory. An unsandboxed app
+/// doing so raises the "access data from other apps" consent prompt.
+pub fn app_group_identifier() -> Option<String> {
     let team = team_identifier()?;
-    Some(
-        dirs::home_dir()?
-            .join("Library/Group Containers")
-            .join(format!("{team}.{APP_GROUP_SUFFIX}")),
-    )
+    Some(format!("{team}.{APP_GROUP_SUFFIX}"))
 }

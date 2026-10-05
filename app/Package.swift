@@ -50,8 +50,8 @@ let package = Package(
     // The AutoFill credential provider extension. strudel stages it as
     // Contents/PlugIns/AxoPassAutoFill.appex (see [[extensions]] in
     // strudel.toml). It links no Rust: sandboxed, it cannot reach the vault
-    // files, so it speaks the app broker's protocol over a socket in the
-    // App Group container instead.
+    // files, so it speaks the app broker's protocol over a Mach service named
+    // under the App Group instead.
     .executableTarget(
       name: "AxoPassAutoFill",
       path: "Sources/AxoPassAutoFill",

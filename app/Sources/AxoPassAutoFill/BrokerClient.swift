@@ -1,9 +1,18 @@
+import Darwin
 import Foundation
 
 /// The App Group shared with the host app. Must match
 /// `com.apple.security.application-groups` in both entitlements files, and
 /// `APP_GROUP_SUFFIX` in crates/core/src/core/dirs.rs.
 let appGroupIdentifier = "75J48AQ5LF.com.breakfastlabs.frittata.shared"
+
+/// `bootstrap_look_up` from servers/bootstrap.h, which Swift's Darwin module
+/// does not import.
+@_silgen_name("bootstrap_look_up")
+private func axo_bootstrap_look_up(
+  _ bootstrapPort: mach_port_t, _ serviceName: UnsafePointer<CChar>,
+  _ servicePort: UnsafeMutablePointer<mach_port_t>
+) -> kern_return_t
 
 /// One fillable item, as the broker reports it. Mirrors
 /// `axo_pass_core::secrets::vaults::autofill::AutofillItem`.
@@ -71,27 +80,29 @@ enum BrokerError: Error, LocalizedError {
   }
 }
 
-/// Speaks the app broker's protocol: connect, write one JSON line, read one
-/// JSON line back, close. See crates/core/src/core/app_broker/mod.rs.
+/// Speaks the app broker's protocol over its Mach service: one request message
+/// carrying the request JSON, one reply message carrying the response JSON. See
+/// crates/core/src/core/app_broker/mach.rs for the message layout.
+///
+/// The service is named under the App Group, which is what lets a sandboxed
+/// extension look it up. The lookup touches no files.
 ///
 /// Every request may block on a Touch ID prompt in the app, so calls run off
-/// the main actor and the socket carries a timeout matching the app's own.
+/// the main actor and the reply wait carries a timeout matching the app's own.
 struct BrokerClient {
   /// How long to wait for the app to answer. The app gives the user 120s to
   /// respond to a prompt, so anything shorter would give up mid-prompt.
   private static let timeout: TimeInterval = 130
 
-  static var socketPath: String? {
-    FileManager.default
-      .containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)?
-      .appendingPathComponent("autofill-broker.sock")
-      .path
-  }
+  /// The app's Mach service. Matches `autofill_service_name` in
+  /// crates/core/src/core/app_broker/mod.rs.
+  static let serviceName = "\(appGroupIdentifier).broker"
 
-  /// Whether the app is listening right now.
+  /// Whether the app is serving the broker right now.
   static var isAvailable: Bool {
-    guard let path = socketPath else { return false }
-    return FileManager.default.fileExists(atPath: path)
+    guard let service = lookUpService() else { return false }
+    mach_port_deallocate(mach_task_self_, service)
+    return true
   }
 
   /// Ask the app for the items that can fill `service`. `nil` lists everything.
@@ -220,75 +231,118 @@ struct BrokerClient {
     return response
   }
 
-  /// Write one line, read one line. Blocking, so it runs off the main actor.
+  // Message layout and constants. Must match crates/core/src/core/app_broker/mach.rs
+  // and the kernel's mach/message.h.
+  private static let requestID: Int32 = 0x4158_5001
+  private static let replyID: Int32 = 0x4158_5002
+  /// Header (24 bytes), descriptor count (4), one out-of-line descriptor (16).
+  private static let messageSize = 44
+  /// Room for a reply and its trailer, or a send-once notification.
+  private static let receiveBufferSize = 256
+  private static let msgTypeCopySend: UInt32 = 19
+  private static let msgTypeMakeSendOnce: UInt32 = 21
+  private static let msghBitsComplex: UInt32 = 0x8000_0000
+  private static let oolDescriptor: UInt8 = 1
+  private static let virtualCopy: UInt8 = 1
+  private static let sendMsg: mach_msg_option_t = 0x1
+  private static let rcvMsg: mach_msg_option_t = 0x2
+  private static let sendTimeout: mach_msg_option_t = 0x10
+  private static let rcvTimeout: mach_msg_option_t = 0x100
+  private static let rcvTimedOut: mach_msg_return_t = 0x1000_4003
+  private static let portRightReceive: mach_port_right_t = 1
+
+  /// `TASK_BOOTSTRAP_PORT` from mach/task_special_ports.h.
+  private static let taskBootstrapPort: Int32 = 4
+
+  private static func lookUpService() -> mach_port_t? {
+    var bootstrap: mach_port_t = 0
+    guard task_get_special_port(mach_task_self_, taskBootstrapPort, &bootstrap) == KERN_SUCCESS
+    else { return nil }
+    defer { mach_port_deallocate(mach_task_self_, bootstrap) }
+
+    var service: mach_port_t = 0
+    let kr = serviceName.withCString { name in
+      axo_bootstrap_look_up(bootstrap, name, &service)
+    }
+    return kr == KERN_SUCCESS ? service : nil
+  }
+
+  /// Send one request and wait for its reply. Blocking, so it runs off the main
+  /// actor.
   private static func exchange(_ payload: Data) throws -> Data {
-    guard let path = socketPath else {
-      throw BrokerError.failed("This build has no App Group container.")
+    guard let service = lookUpService() else { throw BrokerError.unavailable }
+    defer { mach_port_deallocate(mach_task_self_, service) }
+
+    var reply: mach_port_t = 0
+    guard mach_port_allocate(mach_task_self_, portRightReceive, &reply) == KERN_SUCCESS else {
+      throw BrokerError.failed("Could not create a reply port.")
     }
+    // Destroying the reply port is also how the app learns we gave up: its
+    // right to the port turns into a dead name, which ends the prompt.
+    defer { mach_port_mod_refs(mach_task_self_, reply, portRightReceive, -1) }
 
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard fd >= 0 else { throw BrokerError.unavailable }
-    defer { close(fd) }
-
-    var address = sockaddr_un()
-    address.sun_family = sa_family_t(AF_UNIX)
-    let pathBytes = Array(path.utf8)
-    // sun_path is a fixed 104-byte buffer and the path must fit with room for
-    // the terminator.
-    guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
-      throw BrokerError.failed("The broker socket path is too long.")
-    }
-    withUnsafeMutableBytes(of: &address.sun_path) { buffer in
-      buffer.copyBytes(from: pathBytes)
-    }
-    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-
-    let connected = withUnsafePointer(to: &address) { pointer in
-      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-        connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
-      }
-    }
-    guard connected == 0 else { throw BrokerError.unavailable }
-
-    var deadline = timeval(
-      tv_sec: Int(timeout), tv_usec: 0)
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &deadline, socklen_t(MemoryLayout<timeval>.size))
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &deadline, socklen_t(MemoryLayout<timeval>.size))
-
-    var line = payload
-    line.append(0x0A)
-    try writeAll(fd, line)
-    return try readLine(fd)
+    try send(payload, to: service, replyTo: reply)
+    return try receiveReply(on: reply)
   }
 
-  private static func writeAll(_ fd: Int32, _ data: Data) throws {
-    try data.withUnsafeBytes { buffer in
-      var offset = 0
-      while offset < buffer.count {
-        let written = write(fd, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
-        guard written > 0 else { throw BrokerError.failed("The app closed the connection.") }
-        offset += written
-      }
+  private static func send(_ payload: Data, to service: mach_port_t, replyTo reply: mach_port_t)
+    throws
+  {
+    let message = UnsafeMutableRawPointer.allocate(byteCount: messageSize, alignment: 8)
+    defer { message.deallocate() }
+    message.initializeMemory(as: UInt8.self, repeating: 0, count: messageSize)
+
+    let kr = payload.withUnsafeBytes { bytes -> kern_return_t in
+      let bits = msgTypeCopySend | (msgTypeMakeSendOnce << 8) | msghBitsComplex
+      message.storeBytes(of: bits, toByteOffset: 0, as: UInt32.self)
+      message.storeBytes(of: UInt32(messageSize), toByteOffset: 4, as: UInt32.self)
+      message.storeBytes(of: service, toByteOffset: 8, as: UInt32.self)
+      message.storeBytes(of: reply, toByteOffset: 12, as: UInt32.self)
+      message.storeBytes(of: requestID, toByteOffset: 20, as: Int32.self)
+      message.storeBytes(of: UInt32(1), toByteOffset: 24, as: UInt32.self)
+      let address = UInt64(UInt(bitPattern: bytes.baseAddress))
+      message.storeBytes(of: address, toByteOffset: 28, as: UInt64.self)
+      message.storeBytes(of: virtualCopy, toByteOffset: 37, as: UInt8.self)
+      message.storeBytes(of: oolDescriptor, toByteOffset: 39, as: UInt8.self)
+      message.storeBytes(of: UInt32(bytes.count), toByteOffset: 40, as: UInt32.self)
+      return mach_msg(
+        message.assumingMemoryBound(to: mach_msg_header_t.self), sendMsg | sendTimeout,
+        mach_msg_size_t(messageSize), 0, mach_port_name_t(MACH_PORT_NULL), 5000,
+        mach_port_name_t(MACH_PORT_NULL))
     }
+    guard kr == KERN_SUCCESS else { throw BrokerError.unavailable }
   }
 
-  /// Read until the newline that terminates the response.
-  private static func readLine(_ fd: Int32) throws -> Data {
-    var out = Data()
-    var chunk = [UInt8](repeating: 0, count: 4096)
-    while true {
-      let count = read(fd, &chunk, chunk.count)
-      guard count > 0 else {
-        // A short read with something buffered is a response without its
-        // trailing newline, which JSON parses fine.
-        if !out.isEmpty { return out }
-        throw BrokerError.failed("The app closed the connection.")
-      }
-      if let newline = chunk[0..<count].firstIndex(of: 0x0A) {
-        out.append(contentsOf: chunk[0..<newline])
-        return out
-      }
-      out.append(contentsOf: chunk[0..<count])
+  private static func receiveReply(on reply: mach_port_t) throws -> Data {
+    let buffer = UnsafeMutableRawPointer.allocate(byteCount: receiveBufferSize, alignment: 8)
+    defer { buffer.deallocate() }
+    buffer.initializeMemory(as: UInt8.self, repeating: 0, count: receiveBufferSize)
+    let header = buffer.assumingMemoryBound(to: mach_msg_header_t.self)
+
+    let kr = mach_msg(
+      header, rcvMsg | rcvTimeout, 0, mach_msg_size_t(receiveBufferSize), reply,
+      mach_msg_timeout_t(timeout * 1000), mach_port_name_t(MACH_PORT_NULL))
+    if kr == rcvTimedOut { throw BrokerError.failed("Axo Pass did not answer in time.") }
+    guard kr == KERN_SUCCESS else { throw BrokerError.failed("The app closed the connection.") }
+
+    let bits = buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
+    let id = buffer.loadUnaligned(fromByteOffset: 20, as: Int32.self)
+    let count = buffer.loadUnaligned(fromByteOffset: 24, as: UInt32.self)
+    let kind = buffer.loadUnaligned(fromByteOffset: 39, as: UInt8.self)
+    guard id == replyID, bits & msghBitsComplex != 0, count == 1, kind == oolDescriptor else {
+      // A send-once notification in place of the reply: the app dropped the
+      // request, because it refused this extension or could not read it.
+      mach_msg_destroy(header)
+      throw BrokerError.failed("Axo Pass refused the request.")
     }
+
+    let address = buffer.loadUnaligned(fromByteOffset: 28, as: UInt64.self)
+    let size = buffer.loadUnaligned(fromByteOffset: 40, as: UInt32.self)
+    guard size > 0, let bytes = UnsafeRawPointer(bitPattern: UInt(address)) else {
+      throw BrokerError.failed("The app sent an empty response.")
+    }
+    let data = Data(bytes: bytes, count: Int(size))
+    vm_deallocate(mach_task_self_, vm_address_t(address), vm_size_t(size))
+    return data
   }
 }
