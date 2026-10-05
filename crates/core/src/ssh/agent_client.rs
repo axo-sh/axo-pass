@@ -9,6 +9,7 @@ use ssh_agent_lib::proto::{Extension, Identity};
 use thiserror::Error;
 use tokio::net::UnixStream;
 
+use crate::core::app_broker::app_bundle_path;
 use crate::core::dirs::app_data_dir;
 use crate::shell_integration::ap_bin_path;
 
@@ -140,7 +141,7 @@ pub enum LaunchdService {
 /// or unregister it, through `SMAppService`, but `launchctl print` can read
 /// its state.
 pub fn launchd_service() -> LaunchdService {
-    if crate::core::app_broker::app_bundle_path().is_none() {
+    if app_bundle_path().is_none() {
         return LaunchdService::NotInBundle;
     }
     let target = format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() });

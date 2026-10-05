@@ -575,6 +575,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::secrets::vaults::vault_wrapper::normalized_key;
 
     /// Keeps whatever the authenticator saves, so a test can inspect a real
     /// credential without needing a vault on disk.
@@ -719,7 +720,7 @@ mod tests {
         for id in ids {
             let key = VaultStore::credential_key(id);
             assert_eq!(
-                crate::secrets::vaults::vault_wrapper::normalized_key(&key).as_deref(),
+                normalized_key(&key).as_deref(),
                 Some(key.as_str()),
                 "{id:?}"
             );

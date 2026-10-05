@@ -21,6 +21,7 @@ use super::{
     BrokerError, InFlightRequest, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
     PromptOutcome, WireRequest, WireResponse, send_request,
 };
+use crate::age::errors::AgeError;
 use crate::age::key_overview::list_age_keys;
 use crate::age::recipients::{delete_recipient, generate_age_key};
 use crate::audit;
@@ -117,7 +118,7 @@ pub fn request_delete_age_key(key_id: &str, caller: Option<&str>) -> Result<(), 
 pub(super) async fn list_keys() -> WireResponse {
     tokio::task::spawn_blocking(list_age_keys)
         .await
-        .unwrap_or_else(|e| Err(crate::age::errors::AgeError::Broker(e.to_string())))
+        .unwrap_or_else(|e| Err(AgeError::Broker(e.to_string())))
         .map_or_else(
             |e| WireResponse::Failed {
                 message: e.to_string(),
@@ -137,7 +138,7 @@ pub(super) async fn list_keys() -> WireResponse {
 pub(super) async fn create_key(key_id: String, actor: audit::Actor) -> WireResponse {
     tokio::task::spawn_blocking(move || generate_age_key(&key_id, Some(actor)))
         .await
-        .unwrap_or_else(|e| Err(crate::age::errors::AgeError::Broker(e.to_string())))
+        .unwrap_or_else(|e| Err(AgeError::Broker(e.to_string())))
         .map_or_else(
             |e| WireResponse::Failed {
                 message: e.to_string(),
@@ -152,7 +153,7 @@ pub(super) async fn create_key(key_id: String, actor: audit::Actor) -> WireRespo
 pub(super) async fn delete_key(key_id: String, actor: audit::Actor) -> WireResponse {
     tokio::task::spawn_blocking(move || delete_recipient(&key_id, Some(actor)))
         .await
-        .unwrap_or_else(|e| Err(crate::age::errors::AgeError::Broker(e.to_string())))
+        .unwrap_or_else(|e| Err(AgeError::Broker(e.to_string())))
         .map_or_else(
             |e| WireResponse::Failed {
                 message: e.to_string(),

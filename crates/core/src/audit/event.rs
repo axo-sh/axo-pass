@@ -13,6 +13,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use crate::core::provenance::ProcessNode;
+
 /// The current schema version. Bump when a field changes meaning.
 pub const SCHEMA_VERSION: u8 = 1;
 
@@ -407,5 +409,5 @@ pub struct Actor {
     /// The same chain with per-process detail. Carried in-process to the prompt
     /// UI, never written to the audit log.
     #[serde(skip)]
-    pub chain_detail: Vec<crate::core::provenance::ProcessNode>,
+    pub chain_detail: Vec<ProcessNode>,
 }

@@ -32,6 +32,7 @@ use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKin
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
+use crate::core::provenance::ProcessNode;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
     DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
@@ -274,14 +275,14 @@ pub struct ImportPayload {
 /// kept out of [`VaultAccessPrompt`].
 #[derive(Clone)]
 pub struct CreatePasskeyPayload {
-    pub request: crate::secrets::vaults::passkey::CreatePasskeyRequest,
+    pub request: passkey::CreatePasskeyRequest,
 }
 
 /// The WebAuthn assertion request for an [`VaultAction::AssertPasskey`], kept
 /// out of [`VaultAccessPrompt`].
 #[derive(Clone)]
 pub struct AssertPasskeyPayload {
-    pub request: crate::secrets::vaults::passkey::AssertPasskeyRequest,
+    pub request: passkey::AssertPasskeyRequest,
 }
 
 /// The password a browser captured for [`VaultAction::SaveLogin`].
@@ -377,7 +378,7 @@ pub struct VaultAccessPrompt {
     /// The full requesting process chain. For a vault access `ap` is the
     /// broker's own peer, so this is the peer's resolved chain rather than a
     /// delegated one. Shown when the user expands the prompt.
-    pub caller_chain: Vec<crate::core::provenance::ProcessNode>,
+    pub caller_chain: Vec<ProcessNode>,
 
     /// How the client is identified for reusing approvals and for audit.
     pub client: ClientIdentity,
@@ -596,9 +597,9 @@ pub fn request_add_external_vault(
 /// Ask the app to register a passkey against an unlocked vault and return the
 /// attestation. Blocking, same as [`request_vault_items`].
 pub fn request_create_passkey(
-    request: crate::secrets::vaults::passkey::CreatePasskeyRequest,
+    request: passkey::CreatePasskeyRequest,
     caller: Option<&str>,
-) -> Result<crate::secrets::vaults::passkey::CreatePasskeyResponse, BrokerError> {
+) -> Result<passkey::CreatePasskeyResponse, BrokerError> {
     let wire = WireRequest::CreatePasskey {
         rp_id: request.rp_id.clone(),
         rp_name: request.rp_name.clone(),
@@ -620,7 +621,7 @@ pub fn request_create_passkey(
         WireResponse::PasskeyRegistered {
             credential_id,
             attestation_object,
-        } => Ok(crate::secrets::vaults::passkey::CreatePasskeyResponse {
+        } => Ok(passkey::CreatePasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             attestation_object: b64_decode(&attestation_object)?,
         }),
@@ -635,9 +636,9 @@ pub fn request_create_passkey(
 /// Ask the app to sign an assertion challenge with a stored passkey. Blocking,
 /// same as [`request_vault_items`].
 pub fn request_assert_passkey(
-    request: crate::secrets::vaults::passkey::AssertPasskeyRequest,
+    request: passkey::AssertPasskeyRequest,
     caller: Option<&str>,
-) -> Result<crate::secrets::vaults::passkey::AssertPasskeyResponse, BrokerError> {
+) -> Result<passkey::AssertPasskeyResponse, BrokerError> {
     let wire = WireRequest::AssertPasskey {
         rp_id: request.rp_id.clone(),
         client_data_hash: b64_encode(&request.client_data_hash),
@@ -656,7 +657,7 @@ pub fn request_assert_passkey(
             user_handle,
             authenticator_data,
             signature,
-        } => Ok(crate::secrets::vaults::passkey::AssertPasskeyResponse {
+        } => Ok(passkey::AssertPasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             user_handle: b64_decode(&user_handle)?,
             authenticator_data: b64_decode(&authenticator_data)?,

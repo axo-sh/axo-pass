@@ -16,6 +16,7 @@ use objc2_local_authentication::{
 use ssh_key::Signature;
 
 use crate::core::auth::la_context::create_la_auth_callback;
+use crate::core::dirs::app_data_dir;
 use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
@@ -331,7 +332,7 @@ fn acquire_auth_lock_for(context: &ForeignContext) -> Option<std::fs::File> {
 }
 
 fn open_auth_lock() -> std::fs::File {
-    let path = crate::core::dirs::app_data_dir().join("auth.lock");
+    let path = app_data_dir().join("auth.lock");
     std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

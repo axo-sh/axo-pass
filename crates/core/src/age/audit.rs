@@ -53,7 +53,7 @@ mod tests {
     use crate::audit::test_support::test_dir;
     use crate::audit::{AuditFilter, read};
 
-    fn events(action: Action) -> Vec<crate::audit::AuditEvent> {
+    fn events(action: Action) -> Vec<AuditEvent> {
         read(&AuditFilter {
             actions: vec![action],
             ..Default::default()

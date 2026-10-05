@@ -2,12 +2,13 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::core::read_input::ReadError;
 use crate::secrets::keychain::errors::KeychainError;
 
 #[derive(Error, Debug)]
 pub enum AgeError {
     #[error("{0}")]
-    InputReadError(#[from] crate::core::read_input::ReadError),
+    InputReadError(#[from] ReadError),
 
     #[error("Failed to parse recipient {0}: {1}")]
     FailedToParseRecipient(String, &'static str),

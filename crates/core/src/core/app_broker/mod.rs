@@ -39,7 +39,10 @@ use crate::core::auth::ForeignContext;
 use crate::core::dirs::{app_data_dir, app_group_identifier};
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
 use crate::secrets::password::PasswordPolicy;
+use crate::secrets::vaults::LoginSummary;
 use crate::secrets::vaults::autofill::check_rp_id;
+use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest};
+use crate::secrets::vaults::totp::TotpCode;
 
 pub mod age;
 pub mod gpg;
@@ -712,13 +715,13 @@ enum WireResponse {
         items: Vec<vault::BrokerVaultItem>,
     },
     Logins {
-        logins: Vec<crate::secrets::vaults::LoginSummary>,
+        logins: Vec<LoginSummary>,
     },
     /// The logins in the app's index that match a page. `indexed` is false when
     /// the app has not indexed since it started, so an empty list means "ask
     /// again with a prompt" rather than "no logins".
     LockedLogins {
-        logins: Vec<crate::secrets::vaults::LoginSummary>,
+        logins: Vec<LoginSummary>,
         indexed: bool,
     },
     /// The record id of the login a save created.
@@ -736,7 +739,7 @@ enum WireResponse {
     },
     /// A one-time code. `None` when the login has no `Totp` credential.
     TotpCode {
-        code: Option<crate::secrets::vaults::totp::TotpCode>,
+        code: Option<TotpCode>,
     },
     /// `None` when the credential does not exist.
     VaultSecret {
@@ -2087,7 +2090,7 @@ async fn serve_request(
                 for c in &excluded_credentials {
                     excluded.push(decode_b64(c)?);
                 }
-                let request = crate::secrets::vaults::passkey::CreatePasskeyRequest {
+                let request = CreatePasskeyRequest {
                     rp_id: rp_id.clone(),
                     rp_name,
                     user_handle: decode_b64(&user_handle)?,
@@ -2132,7 +2135,7 @@ async fn serve_request(
                 for c in &allowed_credentials {
                     allowed.push(decode_b64(c)?);
                 }
-                let request = crate::secrets::vaults::passkey::AssertPasskeyRequest {
+                let request = AssertPasskeyRequest {
                     rp_id: rp_id.clone(),
                     client_data_hash: decode_b64(&client_data_hash)?,
                     allowed_credentials: allowed,
@@ -2237,7 +2240,8 @@ async fn write_response(
 mod tests {
     #[test]
     fn a_frame_on_another_site_is_cross_site() {
-        let page = vault::LoginPage::parse("https://evil.com", "https://example.com", None).unwrap();
+        let page =
+            vault::LoginPage::parse("https://evil.com", "https://example.com", None).unwrap();
         assert!(page.cross_site);
         assert_eq!(page.top_host.as_deref(), Some("evil.com"));
         assert!(page.require_same_site().is_err());
@@ -2258,16 +2262,16 @@ mod tests {
 
     #[test]
     fn a_top_level_page_is_not_cross_site() {
-        let page = vault::LoginPage::parse("https://example.com", "https://example.com", None)
-            .unwrap();
+        let page =
+            vault::LoginPage::parse("https://example.com", "https://example.com", None).unwrap();
         assert!(!page.cross_site);
         assert!(page.require_same_site().is_ok());
     }
 
     #[test]
     fn shared_hosting_domains_are_cross_site() {
-        let page = vault::LoginPage::parse("https://a.github.io", "https://b.github.io", None)
-            .unwrap();
+        let page =
+            vault::LoginPage::parse("https://a.github.io", "https://b.github.io", None).unwrap();
         assert!(page.cross_site);
     }
 
@@ -2280,6 +2284,9 @@ mod tests {
 
     use super::mach::TestRequest;
     use super::*;
+    use crate::audit::test_support::{TestDir, test_dir};
+    use crate::secrets::keychain::generic_password::PasswordEntryType;
+    use crate::ssh::app_grants::GrantApp;
 
     /// The passphrase the stub hands back when asked to collect one.
     const STUB_PASSPHRASE: &str = "hunter2";
@@ -2303,8 +2310,7 @@ mod tests {
     impl KeychainLister for StubAuthorizer {
         async fn list_passwords(&self) -> Result<Vec<BrokerPasswordEntry>, String> {
             Ok(vec![BrokerPasswordEntry {
-                password_type:
-                    crate::secrets::keychain::generic_password::PasswordEntryType::SSHKey,
+                password_type: PasswordEntryType::SSHKey,
                 key_id: "stub".to_string(),
             }])
         }
@@ -2316,7 +2322,7 @@ mod tests {
             &self,
             prompt: SignPrompt,
             peer: audit::Actor,
-        ) -> Result<crate::core::auth::ForeignContext, String> {
+        ) -> Result<ForeignContext, String> {
             self.prompts.lock().unwrap().push(prompt);
             self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
@@ -2326,12 +2332,7 @@ mod tests {
             self.ended.fetch_add(1, Ordering::SeqCst);
         }
 
-        async fn notify_preapproved(
-            &self,
-            _prompt: SignPrompt,
-            _app: crate::ssh::app_grants::GrantApp,
-        ) {
-        }
+        async fn notify_preapproved(&self, _prompt: SignPrompt, _app: GrantApp) {}
     }
 
     #[async_trait]
@@ -2340,7 +2341,7 @@ mod tests {
             &self,
             _prompt: PassphrasePrompt,
             peer: audit::Actor,
-        ) -> Result<crate::core::auth::ForeignContext, String> {
+        ) -> Result<ForeignContext, String> {
             self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
         }
@@ -2386,7 +2387,7 @@ mod tests {
             &self,
             prompt: vault::VaultAccessPrompt,
             peer: audit::Actor,
-        ) -> Result<crate::core::auth::ForeignContext, String> {
+        ) -> Result<ForeignContext, String> {
             self.vault_prompts.lock().unwrap().push(prompt);
             self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
@@ -2408,7 +2409,7 @@ mod tests {
         // Rejecting a peer and serving a vault request both write audit
         // events. Held so they land in a scratch directory instead of the one
         // an audit test is counting.
-        _audit_dir: crate::audit::test_support::TestDir,
+        _audit_dir: TestDir,
         _dir: tempfile::TempDir,
     }
 
@@ -2422,7 +2423,7 @@ mod tests {
         }
 
         async fn start_with_clients(clients: Vec<Client>) -> Self {
-            let audit_dir = crate::audit::test_support::test_dir();
+            let audit_dir = test_dir();
             let dir = tempfile::tempdir().unwrap();
             let socket_path = dir.path().join("app-broker.sock");
             let authorizer = Arc::new(StubAuthorizer::default());
@@ -3464,7 +3465,7 @@ mod tests {
     /// served, and answered.
     #[tokio::test(flavor = "multi_thread")]
     async fn serves_a_request_over_the_mach_service() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(accepting_policy());
 
         let response = tokio::task::spawn_blocking(move || {
@@ -3482,7 +3483,7 @@ mod tests {
     /// A sender that fails the policy gets no reply.
     #[tokio::test(flavor = "multi_thread")]
     async fn drops_a_mach_request_from_a_rejected_sender() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(rejecting_policy());
 
         let response = tokio::task::spawn_blocking(move || {
@@ -3502,7 +3503,7 @@ mod tests {
     /// reply, and the service goes on serving.
     #[tokio::test(flavor = "multi_thread")]
     async fn drops_malformed_mach_messages() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(accepting_policy());
         let valid = br#"{"request":"list_keychain_passwords"}"#;
         let oversize = vec![b' '; (1 << 20) + 1];
@@ -3544,7 +3545,7 @@ mod tests {
     /// A body that is not a request is dropped without a reply.
     #[tokio::test(flavor = "multi_thread")]
     async fn drops_a_mach_request_with_an_unreadable_body() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(accepting_policy());
 
         let (garbage, valid) = tokio::task::spawn_blocking(move || {
@@ -3564,7 +3565,7 @@ mod tests {
     /// A request outside the service's scope is refused with an answer.
     #[tokio::test(flavor = "multi_thread")]
     async fn refuses_a_mach_request_outside_the_scope() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service, authorizer) =
             start_mach_service_with(accepting_policy(), RequestScope::AutofillExtension);
 
@@ -3588,7 +3589,7 @@ mod tests {
     /// dropped, and the service moves on to the next request.
     #[tokio::test(flavor = "multi_thread")]
     async fn drops_the_prompt_of_a_disconnected_mach_client() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service, authorizer) =
             start_mach_service_with(accepting_policy(), RequestScope::Agent);
 
@@ -3618,7 +3619,7 @@ mod tests {
     /// served: its request reaches no authorizer.
     #[tokio::test(flavor = "multi_thread")]
     async fn skips_a_mach_client_that_went_away_while_queued() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service, authorizer) =
             start_mach_service_with(accepting_policy(), RequestScope::Agent);
 
@@ -3657,7 +3658,7 @@ mod tests {
     /// service serving.
     #[tokio::test(flavor = "multi_thread")]
     async fn refuses_a_name_that_is_already_registered() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(accepting_policy());
 
         let authorizer = Arc::new(StubAuthorizer::default());
@@ -3681,7 +3682,7 @@ mod tests {
     /// Stopping the service frees its name for the next one.
     #[tokio::test(flavor = "multi_thread")]
     async fn frees_the_name_when_stopped() {
-        let _audit_dir = crate::audit::test_support::test_dir();
+        let _audit_dir = test_dir();
         let (name, service) = start_mach_service(accepting_policy());
         service.stop();
 
