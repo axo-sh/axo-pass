@@ -454,14 +454,143 @@ fn send_reply(reply: MachPort, response: &WireResponse) {
     }
 }
 
-/// A client for tests, speaking the same protocol as the extension's
-/// `BrokerClient`. Returns the response bytes, or `None` when the service
-/// dropped the request without replying.
+/// A request sent by the test client. [`TestRequest::new`] is a well-formed
+/// request with a reply port. Each field can be changed to make a malformed
+/// one.
 #[cfg(test)]
-pub(super) fn send_test_request(name: &str, body: &[u8]) -> Option<Vec<u8>> {
-    const MACH_MSG_TYPE_COPY_SEND: u32 = 19;
-    const MACH_MSG_TYPE_MAKE_SEND_ONCE: u32 = 21;
+pub(super) struct TestRequest<'a> {
+    pub body: &'a [u8],
+    pub id: i32,
+    pub complex: bool,
+    pub reply_port: bool,
+}
 
+#[cfg(test)]
+impl<'a> TestRequest<'a> {
+    pub(super) fn new(body: &'a [u8]) -> Self {
+        Self {
+            body,
+            id: REQUEST_ID,
+            complex: true,
+            reply_port: true,
+        }
+    }
+}
+
+/// The client's end of one request. Dropping it destroys the reply port, which
+/// the service sees as the client going away.
+#[cfg(test)]
+pub(super) struct TestExchange {
+    reply: MachPort,
+}
+
+#[cfg(test)]
+impl TestExchange {
+    /// Wait for the reply. Returns `None` when the service dropped the request,
+    /// which the client sees as a send-once notification. Panics if nothing
+    /// arrives within `timeout_ms`.
+    pub(super) fn receive(&self, timeout_ms: u32) -> Option<Vec<u8>> {
+        // SAFETY: an all-zero buffer is a valid value for these plain structs.
+        let mut buffer: ReceiveBuffer = unsafe { std::mem::zeroed() };
+        // SAFETY: the buffer is as large as the size passed.
+        let kr = unsafe {
+            mach_msg(
+                addr_of_mut!(buffer).cast(),
+                MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                0,
+                size_of::<ReceiveBuffer>() as u32,
+                self.reply,
+                timeout_ms,
+                0,
+            )
+        };
+        check(kr, "receive").unwrap();
+
+        let message = buffer.message;
+        (message.header.id == REPLY_ID).then(|| {
+            let descriptor = message.descriptor;
+            let address = descriptor.address as usize;
+            let size = descriptor.size as usize;
+            // SAFETY: the kernel mapped `size` bytes at `address` for this
+            // message, and they are ours until deallocated below.
+            let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, size) }.to_vec();
+            unsafe { vm_deallocate(task(), address, size) };
+            bytes
+        })
+    }
+
+    fn send(&mut self, service: MachPort, request: &TestRequest) -> std::io::Result<()> {
+        const MACH_MSG_TYPE_COPY_SEND: u32 = 19;
+        const MACH_MSG_TYPE_MAKE_SEND_ONCE: u32 = 21;
+
+        let mut bits = MACH_MSG_TYPE_COPY_SEND;
+        if request.reply_port {
+            // SAFETY: a plain Mach call with a valid out-pointer.
+            check(
+                unsafe { mach_port_allocate(task(), MACH_PORT_RIGHT_RECEIVE, &mut self.reply) },
+                "mach_port_allocate",
+            )?;
+            bits |= MACH_MSG_TYPE_MAKE_SEND_ONCE << 8;
+        }
+        if request.complex {
+            bits |= MACH_MSGH_BITS_COMPLEX;
+        }
+
+        let mut message = OolMessage {
+            header: Header {
+                bits,
+                size: size_of::<OolMessage>() as u32,
+                remote_port: service,
+                local_port: self.reply,
+                id: request.id,
+                ..Header::default()
+            },
+            descriptor_count: 1,
+            descriptor: OolDescriptor {
+                address: request.body.as_ptr() as u64,
+                deallocate: 0,
+                copy: MACH_MSG_VIRTUAL_COPY,
+                pad1: 0,
+                kind: MACH_MSG_OOL_DESCRIPTOR,
+                size: request.body.len() as u32,
+            },
+        };
+        // SAFETY: the message points at `request.body`, which outlives the
+        // call, and the kernel copies it before returning.
+        check(
+            unsafe {
+                mach_msg(
+                    addr_of_mut!(message).cast(),
+                    MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                    size_of::<OolMessage>() as u32,
+                    0,
+                    0,
+                    1000,
+                    0,
+                )
+            },
+            "send",
+        )
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestExchange {
+    fn drop(&mut self) {
+        if self.reply != 0 {
+            // SAFETY: the receive right is ours and nothing else uses it.
+            unsafe { mach_port_mod_refs(task(), self.reply, MACH_PORT_RIGHT_RECEIVE, -1) };
+        }
+    }
+}
+
+/// Look up the service `name` and send it `request`. Fails if the name is not
+/// registered or the send fails.
+#[cfg(test)]
+pub(super) fn send_test_exchange(
+    name: &str,
+    request: &TestRequest,
+) -> std::io::Result<TestExchange> {
     unsafe extern "C" {
         fn bootstrap_look_up(
             bp: MachPort,
@@ -470,85 +599,28 @@ pub(super) fn send_test_request(name: &str, body: &[u8]) -> Option<Vec<u8>> {
         ) -> KernReturn;
     }
 
-    let c_name = CString::new(name).unwrap();
+    let c_name = CString::new(name).map_err(std::io::Error::other)?;
     let mut service: MachPort = 0;
-    let mut reply: MachPort = 0;
-    // SAFETY: plain Mach calls with valid pointers; `body` outlives the send.
-    unsafe {
-        check(
-            bootstrap_look_up(bootstrap_port, c_name.as_ptr(), &mut service),
-            "look up",
-        )
-        .ok()?;
-        check(
-            mach_port_allocate(task(), MACH_PORT_RIGHT_RECEIVE, &mut reply),
-            "mach_port_allocate",
-        )
-        .unwrap();
+    // SAFETY: plain Mach calls with valid pointers.
+    check(
+        unsafe { bootstrap_look_up(bootstrap_port, c_name.as_ptr(), &mut service) },
+        "bootstrap_look_up",
+    )?;
+    let mut exchange = TestExchange { reply: 0 };
+    let sent = exchange.send(service, request);
+    // SAFETY: the send right is ours and is not used again.
+    unsafe { mach_port_deallocate(task(), service) };
+    sent.map(|()| exchange)
+}
 
-        let mut request = OolMessage {
-            header: Header {
-                bits: MACH_MSG_TYPE_COPY_SEND
-                    | (MACH_MSG_TYPE_MAKE_SEND_ONCE << 8)
-                    | MACH_MSGH_BITS_COMPLEX,
-                size: size_of::<OolMessage>() as u32,
-                remote_port: service,
-                local_port: reply,
-                id: REQUEST_ID,
-                ..Header::default()
-            },
-            descriptor_count: 1,
-            descriptor: OolDescriptor {
-                address: body.as_ptr() as u64,
-                deallocate: 0,
-                copy: MACH_MSG_VIRTUAL_COPY,
-                pad1: 0,
-                kind: MACH_MSG_OOL_DESCRIPTOR,
-                size: body.len() as u32,
-            },
-        };
-        check(
-            mach_msg(
-                addr_of_mut!(request).cast(),
-                MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-                size_of::<OolMessage>() as u32,
-                0,
-                0,
-                1000,
-                0,
-            ),
-            "send",
-        )
-        .unwrap();
-
-        let mut buffer: ReceiveBuffer = std::mem::zeroed();
-        check(
-            mach_msg(
-                addr_of_mut!(buffer).cast(),
-                MACH_RCV_MSG | MACH_RCV_TIMEOUT,
-                0,
-                size_of::<ReceiveBuffer>() as u32,
-                reply,
-                5000,
-                0,
-            ),
-            "receive",
-        )
-        .unwrap();
-
-        let message = buffer.message;
-        let response = (message.header.id == REPLY_ID).then(|| {
-            let descriptor = message.descriptor;
-            let address = descriptor.address as usize;
-            let size = descriptor.size as usize;
-            let bytes = std::slice::from_raw_parts(address as *const u8, size).to_vec();
-            vm_deallocate(task(), address, size);
-            bytes
-        });
-        mach_port_mod_refs(task(), reply, MACH_PORT_RIGHT_RECEIVE, -1);
-        mach_port_deallocate(task(), service);
-        response
-    }
+/// A client for tests, speaking the same protocol as the extension's
+/// `BrokerClient`. Returns the response bytes, or `None` when the service
+/// dropped the request without replying or could not be reached.
+#[cfg(test)]
+pub(super) fn send_test_request(name: &str, body: &[u8]) -> Option<Vec<u8>> {
+    send_test_exchange(name, &TestRequest::new(body))
+        .ok()?
+        .receive(5000)
 }
 
 #[cfg(test)]
