@@ -284,11 +284,10 @@ impl Site {
     /// Parse an http(s) URL or a bare domain. A bare domain counts as secure.
     pub fn parse(value: &str) -> Option<Self> {
         let parsed = ParsedUrl::parse(value)?;
-        let secure = !value.trim().starts_with("http://");
         Some(Self {
             host: parsed.host,
             domain: parsed.domain,
-            secure,
+            secure: parsed.secure,
         })
     }
 }
@@ -469,6 +468,8 @@ struct ParsedUrl {
     /// The registrable domain. The host itself for IP addresses, single-label
     /// hosts, and hosts that are public suffixes.
     domain: String,
+    /// False for `http:`. A bare domain counts as secure.
+    secure: bool,
     /// Path and query. `None` for a bare domain.
     path: Option<String>,
 }
@@ -519,7 +520,14 @@ impl ParsedUrl {
             None => url.path().to_string(),
         });
 
-        Some(Self { host, domain, path })
+        let secure = url.scheme() != "http";
+
+        Some(Self {
+            host,
+            domain,
+            secure,
+            path,
+        })
     }
 }
 
@@ -1109,6 +1117,8 @@ mod tests {
         assert!(!site.secure);
         assert!(Site::parse("https://example.com").unwrap().secure);
         assert!(Site::parse("example.com").unwrap().secure);
+        assert!(!Site::parse("HTTP://example.com").unwrap().secure);
+        assert!(!Site::parse(" http://example.com").unwrap().secure);
         assert!(Site::parse("ftp://example.com").is_none());
     }
 
