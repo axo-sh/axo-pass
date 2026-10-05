@@ -550,12 +550,15 @@ fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite
         return None;
     }
     let same_host = stored.host == target.host;
+    // Host and path matching also compare ports. Domain matching does not.
+    let same_origin_host = same_host && ports_agree(stored.port, target.port);
     let matches = match website.match_kind {
+        MatchKind::Never => false,
         MatchKind::Domain => stored.domain == target.domain,
-        MatchKind::Host => same_host,
+        MatchKind::Host => same_origin_host,
         MatchKind::StartsWith => {
             // A bare domain has no page to compare, so it matches by host.
-            same_host
+            same_origin_host
                 && match &target.path {
                     None => true,
                     Some(path) => path_within(stored.path.as_deref().unwrap_or("/"), path),
@@ -571,6 +574,15 @@ fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite
             MatchRank::Domain
         },
     })
+}
+
+/// Two ports agree when they are equal, or when either side names none. A bare
+/// domain names none.
+fn ports_agree(stored: Option<u16>, target: Option<u16>) -> bool {
+    match (stored, target) {
+        (Some(stored), Some(target)) => stored == target,
+        _ => true,
+    }
 }
 
 /// Whether `target` is `stored` or a page under it. Both are a path with an
@@ -607,13 +619,17 @@ struct ParsedUrl {
     secure: bool,
     /// True when the value names `https:` explicitly. A bare domain does not.
     https_only: bool,
+    /// The port, with the scheme's default filled in, so `https://example.com`
+    /// and `https://example.com:443` agree. `None` for a bare domain with no
+    /// port.
+    port: Option<u16>,
     /// Path and query. `None` for a bare domain.
     path: Option<String>,
 }
 
 impl ParsedUrl {
     /// Parse a bare domain or an http(s) URL. Any other scheme gives `None`.
-    /// Ports are dropped.
+    /// Domain matching ignores ports.
     fn parse(value: &str) -> Option<Self> {
         let value = value.trim();
         if value.is_empty() {
@@ -659,12 +675,16 @@ impl ParsedUrl {
 
         let secure = url.scheme() != "http";
         let https_only = has_scheme && url.scheme() == "https";
+        let port = url
+            .port()
+            .or_else(|| has_scheme.then(|| url.port_or_known_default()).flatten());
 
         Some(Self {
             host,
             domain,
             secure,
             https_only,
+            port,
             path,
         })
     }
@@ -828,11 +848,65 @@ mod tests {
     }
 
     #[test]
-    fn ports_are_ignored() {
+    fn domain_matching_ignores_ports() {
         assert!(matches(
-            &[site("http://example.com:8080", MatchKind::Host)],
+            &domain("http://example.com:8080"),
             "https://example.com:9000/x"
         ));
+        assert!(matches(&domain("localhost:3000"), "http://localhost:8080"));
+    }
+
+    #[test]
+    fn host_matching_compares_ports() {
+        let websites = [site("http://localhost:3000", MatchKind::Host)];
+        assert!(matches(&websites, "http://localhost:3000/login"));
+        assert!(!matches(&websites, "http://localhost:8080"));
+        assert!(!matches(&websites, "http://localhost"));
+    }
+
+    #[test]
+    fn default_ports_agree_with_no_port() {
+        let websites = [site("https://example.com", MatchKind::Host)];
+        assert!(matches(&websites, "https://example.com:443/x"));
+        assert!(!matches(&websites, "https://example.com:8443"));
+        let websites = [site("https://example.com:443", MatchKind::Host)];
+        assert!(matches(&websites, "https://example.com"));
+    }
+
+    #[test]
+    fn a_bare_domain_names_no_port() {
+        assert!(matches(
+            &[site("https://example.com:8443", MatchKind::Host)],
+            "example.com"
+        ));
+        assert!(matches(
+            &[site("example.com", MatchKind::Host)],
+            "https://example.com:8443"
+        ));
+    }
+
+    #[test]
+    fn starts_with_compares_ports() {
+        let websites = [site("https://example.com:8443/app", MatchKind::StartsWith)];
+        assert!(matches(&websites, "https://example.com:8443/app/x"));
+        assert!(!matches(&websites, "https://example.com/app/x"));
+    }
+
+    #[test]
+    fn never_matches_nothing() {
+        let websites = [site("https://example.com", MatchKind::Never)];
+        assert!(!matches(&websites, "https://example.com"));
+        assert!(!matches(&websites, "example.com"));
+        assert!(!matches(&websites, "https://sub.example.com"));
+    }
+
+    #[test]
+    fn never_does_not_block_another_website_on_the_same_login() {
+        let websites = [
+            site("https://example.com/admin", MatchKind::Never),
+            site("https://example.com", MatchKind::Domain),
+        ];
+        assert!(matches(&websites, "https://example.com/admin"));
     }
 
     #[test]

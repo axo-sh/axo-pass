@@ -112,6 +112,8 @@ pub enum MatchKind {
     Host,
     /// The page URL starts with the stored URL.
     StartsWith,
+    /// This website never matches. Other websites on the item still do.
+    Never,
 }
 
 impl MatchKind {
@@ -152,6 +154,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&site).unwrap(),
             serde_json::json!({"url": "github.com", "match": "starts-with"})
+        );
+        let site = Website::new("github.com", MatchKind::Never);
+        assert_eq!(
+            serde_json::to_value(&site).unwrap(),
+            serde_json::json!({"url": "github.com", "match": "never"})
         );
     }
 
