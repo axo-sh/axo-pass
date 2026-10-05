@@ -8,7 +8,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 
-use super::{BrokerError, InFlightRequest, PromptOutcome, WireRequest, WireResponse, send_request};
+use super::client::send_request;
+use super::in_flight::InFlightRequest;
+use super::wire::{WireRequest, WireResponse};
+use super::{BrokerError, PromptOutcome};
 use crate::audit;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::provenance::ProcessNode;

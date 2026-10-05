@@ -13,10 +13,10 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, Signature};
 
-use super::{
-    BrokerError, InFlightRequest, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome,
-    WireRequest, WireResponse, send_request_for,
-};
+use super::client::send_request_for;
+use super::in_flight::InFlightRequest;
+use super::wire::{WireRequest, WireResponse};
+use super::{BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome};
 use crate::audit;
 use crate::core::auth::{
     AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,

@@ -23,12 +23,12 @@ use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use super::client::send_request;
+use super::in_flight::InFlightRequest;
 use super::login_index::LoginIndex;
 use super::placement::{PasskeyChoices, PasskeyPlacement, PlacementVault};
-use super::{
-    Authorizers, BrokerError, BrowserClient, ConfirmPrompt, InFlightRequest, PromptOutcome,
-    WireRequest, WireResponse, send_request,
-};
+use super::wire::{BrowserClient, WireRequest, WireResponse};
+use super::{Authorizers, BrokerError, ConfirmPrompt, PromptOutcome};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;

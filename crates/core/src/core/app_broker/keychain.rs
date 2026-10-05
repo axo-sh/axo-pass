@@ -4,7 +4,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{BrokerError, WireRequest, WireResponse, send_request};
+use super::BrokerError;
+use super::client::send_request;
+use super::wire::{WireRequest, WireResponse};
 use crate::audit;
 use crate::secrets::keychain::generic_password::{PasswordEntry, PasswordEntryType};
 use crate::secrets::keychain::managed_key::ManagedSshKey;

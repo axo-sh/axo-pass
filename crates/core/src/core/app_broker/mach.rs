@@ -34,9 +34,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use super::{
-    Authorizers, RequestScope, WireRequest, WireResponse, record_rejected_peer, serve_request,
-};
+use super::Authorizers;
+use super::access::{RequestScope, record_rejected_peer};
+use super::dispatch::serve_request;
+use super::wire::{WireRequest, WireResponse};
 use crate::core::provenance::{PeerIdentity, PeerPolicy};
 
 /// `msgh_id` of a request. Matches `BrokerClient.requestID`.

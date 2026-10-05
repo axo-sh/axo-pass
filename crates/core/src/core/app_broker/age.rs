@@ -17,10 +17,10 @@ use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    BrokerError, InFlightRequest, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
-    PromptOutcome, WireRequest, WireResponse, send_request,
-};
+use super::client::send_request;
+use super::in_flight::InFlightRequest;
+use super::wire::{WireRequest, WireResponse};
+use super::{BrokerError, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome};
 use crate::age::errors::AgeError;
 use crate::age::key_overview::list_age_keys;
 use crate::age::recipients::{delete_recipient, generate_age_key};
