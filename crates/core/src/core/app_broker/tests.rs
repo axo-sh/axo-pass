@@ -196,6 +196,7 @@ struct TestBroker {
     authorizer: Arc<StubAuthorizer>,
     logins: Arc<LoginIndex>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    server: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     // Rejecting a peer and serving a vault request both write audit
     // events. Held so they land in a scratch directory instead of the one
     // an audit test is counting.
@@ -220,7 +221,7 @@ impl TestBroker {
         let logins = Arc::new(LoginIndex::default());
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-        tokio::spawn(serve_on(
+        let server = tokio::spawn(serve_on(
             socket_path.clone(),
             clients,
             Authorizers {
@@ -239,6 +240,7 @@ impl TestBroker {
             authorizer,
             logins,
             shutdown: Some(shutdown_tx),
+            server: Some(server),
             _audit_dir: audit_dir,
             _dir: dir,
         }
@@ -261,10 +263,17 @@ impl TestBroker {
     }
 }
 
+/// Waits for the serve task to exit so its listener is closed before the
+/// test ends. Requires a multi-thread runtime.
 impl Drop for TestBroker {
     fn drop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
+        }
+        if let Some(server) = self.server.take() {
+            tokio::task::block_in_place(|| {
+                let _ = tokio::runtime::Handle::current().block_on(server);
+            });
         }
     }
 }

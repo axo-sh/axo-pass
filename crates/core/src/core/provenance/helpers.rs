@@ -1,7 +1,6 @@
 use core::ptr::{self, NonNull};
 
 use anyhow::{Context, bail};
-use objc2::Message;
 use objc2::rc::Retained;
 use objc2_core_foundation::{CFData, CFMutableDictionary, CFNumber, CFString, CFType};
 use objc2_security::{
@@ -106,7 +105,10 @@ pub fn get_static_code_for_sec_code(code: &SecCode) -> anyhow::Result<Retained<S
         if status != 0 || static_code_ptr.is_null() {
             bail!("SecCodeCopyStaticCode failed: {status}");
         }
-        Ok(SecStaticCode::retain(&*static_code_ptr))
+        // The Copy function returns an owned reference, so take it over
+        // instead of retaining it a second time.
+        Retained::from_raw(static_code_ptr.cast_mut())
+            .context("SecCodeCopyStaticCode returned nothing")
     }
 }
 
