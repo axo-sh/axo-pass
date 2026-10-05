@@ -381,6 +381,8 @@ pub struct PasskeyIdentityInfo {
     pub vault_key: String,
     pub item_key: String,
     pub credential_key: String,
+    /// `<vault uuid>/<item uuid>/<credential uuid>`.
+    pub record_id: String,
     pub rp_id: String,
     pub credential_id: Vec<u8>,
     pub user_name: String,
@@ -1723,6 +1725,7 @@ impl AxoPass {
                     Ok(found) => identities.extend(found.into_iter().map(|s| {
                         PasskeyIdentityInfo {
                             vault_key: vault_key.clone(),
+                            record_id: s.record_id(),
                             item_key: s.item_key,
                             credential_key: s.credential_key,
                             rp_id: s.passkey.rp_id,

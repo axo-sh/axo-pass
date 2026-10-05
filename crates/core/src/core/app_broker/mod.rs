@@ -39,10 +39,10 @@ use crate::core::auth::ForeignContext;
 use crate::core::dirs::{app_data_dir, app_group_identifier};
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
 use crate::secrets::password::PasswordPolicy;
-use crate::secrets::vaults::{LoginSummary, OtherLogin};
 use crate::secrets::vaults::autofill::check_rp_id;
 use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest, PasskeyTarget};
 use crate::secrets::vaults::totp::TotpCode;
+use crate::secrets::vaults::{LoginSummary, OtherLogin};
 
 pub mod age;
 pub mod gpg;

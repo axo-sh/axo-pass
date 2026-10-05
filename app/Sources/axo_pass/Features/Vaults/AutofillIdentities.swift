@@ -60,7 +60,7 @@ enum AutofillIdentities {
       userName: passkey.userName.isEmpty ? passkey.rpId : passkey.userName,
       credentialID: passkey.credentialId,
       userHandle: passkey.userHandle,
-      recordIdentifier: "\(passkey.vaultKey)/\(passkey.itemKey)/\(passkey.credentialKey)")
+      recordIdentifier: passkey.recordId)
   }
 
   /// One identity per host of the item: the system matches on the service, so

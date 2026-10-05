@@ -38,6 +38,7 @@ use passkey_types::webauthn::{
 use passkey_types::{Bytes, Passkey};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::{Error, FieldKind, VaultWrapper, autofill};
 
@@ -101,9 +102,20 @@ pub async fn assert(
 /// A passkey with the vault coordinates it was read from.
 #[derive(Debug, Clone)]
 pub struct StoredPasskey {
+    pub vault_id: Uuid,
+    pub item_id: Uuid,
+    pub credential_id: Uuid,
     pub item_key: String,
     pub credential_key: String,
     pub passkey: Passkey,
+}
+
+impl StoredPasskey {
+    /// `<vault uuid>/<item uuid>/<credential uuid>`, the record identifier the
+    /// AutoFill index stores for the passkey.
+    pub fn record_id(&self) -> String {
+        format!("{}/{}/{}", self.vault_id, self.item_id, self.credential_id)
+    }
 }
 
 /// List the passkeys in an unlocked vault, for the UI and for registering
@@ -111,6 +123,7 @@ pub struct StoredPasskey {
 /// rather than failing the listing.
 pub fn list(vw: &VaultWrapper) -> Result<Vec<StoredPasskey>, Error> {
     let mut out = Vec::new();
+    let vault_id = vw.vault_id()?;
     for item in vw.list_items()? {
         for cred in item.credentials.values() {
             if !matches!(cred.kind, FieldKind::Passkey) {
@@ -121,6 +134,9 @@ pub fn list(vw: &VaultWrapper) -> Result<Vec<StoredPasskey>, Error> {
             };
             match decode(secret.expose_secret()) {
                 Ok(passkey) => out.push(StoredPasskey {
+                    vault_id,
+                    item_id: item.id,
+                    credential_id: cred.id,
                     item_key: item.key.clone(),
                     credential_key: cred.key.clone(),
                     passkey,
@@ -839,6 +855,7 @@ mod tests {
         assert!(item.autofill.password.is_none());
         let username = item.autofill.username_credential(item).unwrap();
         assert_eq!(username.key, "username");
+        assert_eq!(passkeys[0].record_id().split('/').count(), 3);
     }
 
     #[tokio::test]
