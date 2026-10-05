@@ -2316,7 +2316,24 @@ mod tests {
         vault_prompts: Mutex<Vec<vault::VaultAccessPrompt>>,
         peers: Mutex<Vec<audit::Actor>>,
         ended: AtomicUsize,
+        prompts_hung: AtomicUsize,
         prompts_dropped: AtomicUsize,
+    }
+
+    impl StubAuthorizer {
+        /// Block until a `"hang"` prompt has started. Verifying a peer can take
+        /// hundreds of milliseconds, so a fixed sleep may end before the
+        /// request reaches its prompt.
+        fn wait_for_hung_prompt(&self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while self.prompts_hung.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the hanging request never reached its prompt"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
     }
 
     /// Answers with a fixed entry instead of reading the login keychain, which
@@ -2378,9 +2395,10 @@ mod tests {
         }
 
         /// `"hang"` stands for a user who never answers. Its prompt is only
-        /// ever dropped, which is counted.
+        /// ever dropped. Starting and dropping it are both counted.
         async fn confirm(&self, prompt: ConfirmPrompt) -> bool {
             if prompt.description.as_deref() == Some("hang") {
+                self.prompts_hung.fetch_add(1, Ordering::SeqCst);
                 struct Dropped<'a>(&'a AtomicUsize);
                 impl Drop for Dropped<'_> {
                     fn drop(&mut self) {
@@ -2625,8 +2643,7 @@ mod tests {
         (&stream)
             .write_all(b"{\"request\":\"confirm\",\"description\":\"hang\"}\n")
             .unwrap();
-        // Give the broker time to read the request and reach the prompt.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::task::block_in_place(|| broker.authorizer.wait_for_hung_prompt());
         drop(stream);
 
         // Times out after five seconds if the broker is still stuck on the
@@ -2648,7 +2665,7 @@ mod tests {
         (&busy)
             .write_all(b"{\"request\":\"confirm\",\"description\":\"hang\"}\n")
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::task::block_in_place(|| broker.authorizer.wait_for_hung_prompt());
 
         // Queues behind it, then gives up.
         let queued = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
@@ -3648,14 +3665,14 @@ mod tests {
         let (name, service, authorizer) =
             start_mach_service_with(accepting_policy(), RequestScope::Agent);
 
+        let waiter = authorizer.clone();
         let response = tokio::task::spawn_blocking(move || {
             let hanging = mach::send_test_exchange(
                 &name,
                 &TestRequest::new(br#"{"request":"confirm","description":"hang"}"#),
             )
             .unwrap();
-            // Give the service time to reach the prompt.
-            std::thread::sleep(Duration::from_millis(100));
+            waiter.wait_for_hung_prompt();
             drop(hanging);
 
             mach::send_test_request(&name, br#"{"request":"confirm","description":"ok"}"#)
@@ -3678,6 +3695,7 @@ mod tests {
         let (name, service, authorizer) =
             start_mach_service_with(accepting_policy(), RequestScope::Agent);
 
+        let waiter = authorizer.clone();
         let response = tokio::task::spawn_blocking(move || {
             // Holds the service on a prompt nobody answers.
             let busy = mach::send_test_exchange(
@@ -3685,7 +3703,7 @@ mod tests {
                 &TestRequest::new(br#"{"request":"confirm","description":"hang"}"#),
             )
             .unwrap();
-            std::thread::sleep(Duration::from_millis(100));
+            waiter.wait_for_hung_prompt();
 
             // Queues behind it, then gives up.
             let queued = mach::send_test_exchange(
