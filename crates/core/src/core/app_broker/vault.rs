@@ -171,6 +171,9 @@ pub struct LoginPage {
     pub domain: String,
     /// The top-level host, when the form is in a frame of another host.
     pub top_host: Option<String>,
+    /// True when the top-level page is on a different registrable domain than
+    /// the frame. A frame on a sibling subdomain is not cross-site.
+    pub cross_site: bool,
     /// False when the frame is on `http:`.
     pub secure: bool,
     /// The name of the app that asked, as the AutoFill extension reported it.
@@ -185,9 +188,9 @@ impl LoginPage {
     pub fn parse(url: &str, frame_url: &str, requester: Option<String>) -> Result<Self, String> {
         let frame = Site::parse(frame_url)
             .ok_or_else(|| "AutoFill only fills http and https pages".to_string())?;
-        let top_host = Site::parse(url)
-            .map(|top| top.host)
-            .filter(|host| *host != frame.host);
+        let top = Site::parse(url);
+        let cross_site = top.as_ref().is_some_and(|top| top.domain != frame.domain);
+        let top_host = top.map(|top| top.host).filter(|host| *host != frame.host);
         let frame_origin = url::Url::parse(frame_url.trim())
             .map(|parsed| parsed.origin().ascii_serialization())
             .unwrap_or_else(|_| format!("https://{}", frame.host));
@@ -197,9 +200,24 @@ impl LoginPage {
             host: frame.host,
             domain: frame.domain,
             top_host,
+            cross_site,
             secure: frame.secure,
             requester: requester.filter(|name| !name.trim().is_empty()),
         })
+    }
+
+    /// Refuse a page whose form is in a frame of another site. A fill or a
+    /// one-time code is released only to a form on the site that is visible in
+    /// the top-level page.
+    pub fn require_same_site(self) -> Result<Self, String> {
+        if self.cross_site {
+            let top = self.top_host.as_deref().unwrap_or("another site");
+            return Err(format!(
+                "AutoFill does not fill a form on {} inside a page on {top}",
+                self.host
+            ));
+        }
+        Ok(self)
     }
 }
 

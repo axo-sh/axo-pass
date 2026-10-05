@@ -1779,7 +1779,9 @@ async fn serve_request(
                 requester,
                 caller,
                 client: _,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester))
+                .and_then(vault::LoginPage::require_same_site)
+            {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         vault_key: String::new(),
@@ -1805,7 +1807,9 @@ async fn serve_request(
                 requester,
                 caller,
                 client: _,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester))
+                .and_then(vault::LoginPage::require_same_site)
+            {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         vault_key: String::new(),
@@ -2231,6 +2235,42 @@ async fn write_response(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_frame_on_another_site_is_cross_site() {
+        let page = vault::LoginPage::parse("https://evil.com", "https://example.com", None).unwrap();
+        assert!(page.cross_site);
+        assert_eq!(page.top_host.as_deref(), Some("evil.com"));
+        assert!(page.require_same_site().is_err());
+    }
+
+    #[test]
+    fn a_frame_on_a_sibling_subdomain_is_not_cross_site() {
+        let page = vault::LoginPage::parse(
+            "https://example.com",
+            "https://accounts.example.com/login",
+            None,
+        )
+        .unwrap();
+        assert!(!page.cross_site);
+        assert_eq!(page.top_host.as_deref(), Some("example.com"));
+        assert!(page.require_same_site().is_ok());
+    }
+
+    #[test]
+    fn a_top_level_page_is_not_cross_site() {
+        let page = vault::LoginPage::parse("https://example.com", "https://example.com", None)
+            .unwrap();
+        assert!(!page.cross_site);
+        assert!(page.require_same_site().is_ok());
+    }
+
+    #[test]
+    fn shared_hosting_domains_are_cross_site() {
+        let page = vault::LoginPage::parse("https://a.github.io", "https://b.github.io", None)
+            .unwrap();
+        assert!(page.cross_site);
+    }
+
     use std::os::fd::AsRawFd;
     use std::path::Path;
     use std::sync::Mutex;
