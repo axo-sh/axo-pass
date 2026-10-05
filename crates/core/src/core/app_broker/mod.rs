@@ -1464,7 +1464,7 @@ async fn handle_connection(
                     excluded_credentials: excluded,
                 };
                 let prompt = vault::VaultAccessPrompt {
-                    vault_key: crate::secrets::vaults::DEFAULT_VAULT.to_string(),
+                    vault_key: vault::passkey_vault_key(),
                     caller,
                     caller_chain: caller_chain.clone(),
                     action: vault::VaultAction::CreatePasskey { rp_id },

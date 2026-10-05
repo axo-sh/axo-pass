@@ -735,7 +735,7 @@ fn serve_on_context(
             let Some(VaultPayload::CreatePasskey(p)) = payload else {
                 return Err("Missing passkey registration payload".to_string());
             };
-            return create_passkey(p.request, context, &rt);
+            return create_passkey(&prompt.vault_key, p.request, context, &rt);
         },
         VaultAction::AssertPasskey { .. } => {
             let Some(VaultPayload::AssertPasskey(p)) = payload else {
@@ -851,30 +851,42 @@ fn collect_autofill_items(
     Ok(WireResponse::AutofillItems { items })
 }
 
-/// Register a passkey in the default vault on the app's context. The extension
-/// names no vault, so a new passkey always lands in the default one; the item
-/// detail view moves it afterward if the user wants it elsewhere.
+/// The vault a new passkey is written to: the default vault when it exists or
+/// there are no vaults, otherwise the first one. The broker names this vault in
+/// the prompt, so it is chosen before the prompt rather than after.
+pub(super) fn passkey_vault_key() -> String {
+    let keys: Vec<String> = VaultsManager::new().iter_vault_keys().collect();
+    if keys.is_empty() || keys.iter().any(|k| k == DEFAULT_VAULT) {
+        DEFAULT_VAULT.to_string()
+    } else {
+        keys.into_iter().next().unwrap()
+    }
+}
+
+/// Register a passkey in `vault_key` on the app's context.
 fn create_passkey(
+    vault_key: &str,
     request: passkey::CreatePasskeyRequest,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
 ) -> Result<WireResponse, String> {
-    let vault_key = {
-        let vm = VaultsManager::new();
-        let keys: Vec<String> = vm.iter_vault_keys().collect();
-        if keys.iter().any(|k| k == DEFAULT_VAULT) || keys.is_empty() {
-            DEFAULT_VAULT.to_string()
-        } else {
-            keys.into_iter().next().unwrap()
-        }
+    let mut vm = VaultsManager::new();
+    let mut created;
+    // With no vaults yet, `passkey_vault_key` names the default vault, which
+    // loading creates.
+    let vw = match vm.get_vault_mut(vault_key) {
+        Some(vw) => vw,
+        None => {
+            created = VaultWrapper::load(&vaults_dir(), Some(vault_key.to_string()))
+                .map_err(|e| format!("Failed to load vault {vault_key}: {e}"))?;
+            &mut created
+        },
     };
-    let mut vw = VaultWrapper::load(&vaults_dir(), Some(vault_key.clone()))
-        .map_err(|e| format!("Failed to load vault {vault_key}: {e}"))?;
     vw.unlock_on(AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault {vault_key}: {e}"))?;
 
     let response = rt
-        .block_on(passkey::create_from_wire(&mut vw, request))
+        .block_on(passkey::create_from_wire(vw, request))
         .map_err(|e| format!("Failed to register the passkey: {e}"))?;
     Ok(WireResponse::PasskeyRegistered {
         credential_id: b64_encode(&response.credential_id),

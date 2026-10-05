@@ -408,9 +408,18 @@ impl<'a> VaultStore<'a> {
         format!("{ITEM_KEY_PREFIX}-{}", slug.trim_matches('-').to_lowercase())
     }
 
-    /// Credential ids are opaque bytes, so the key is their base64url form.
+    /// The vault credential key for a passkey: `passkey-` and the lowercase hex
+    /// of the first 8 bytes of the credential id. Vault keys are lowercased and
+    /// must match `normalized_key`, so the id's base64url form cannot be used
+    /// directly. The full id is in the stored record, which is what lookups
+    /// match on.
     fn credential_key(credential_id: &[u8]) -> String {
-        B64URL.encode(credential_id)
+        let prefix: String = credential_id
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("passkey-{prefix}")
     }
 
     /// Write `cred` into the vault, replacing whatever is under the same keys.
@@ -680,6 +689,31 @@ mod tests {
         assert_eq!(
             VaultStore::item_key("login.EXAMPLE.co.uk"),
             "passkey-login-example-co-uk"
+        );
+    }
+
+    /// Credential ids are random bytes. Every one must give a key the vault
+    /// accepts unchanged, including ids whose base64url form starts with a
+    /// digit or ends with `-`.
+    #[test]
+    fn credential_keys_are_valid_vault_keys() {
+        let ids: [&[u8]; 4] = [
+            &[0x00; 16],
+            &[0xff; 16],
+            &[0xd3, 0x4f, 0xb9, 0x01, 0x22, 0x7e, 0x80, 0x11, 0x5a],
+            &[0x01, 0x02],
+        ];
+        for id in ids {
+            let key = VaultStore::credential_key(id);
+            assert_eq!(
+                crate::secrets::vaults::vault_wrapper::normalized_key(&key).as_deref(),
+                Some(key.as_str()),
+                "{id:?}"
+            );
+        }
+        assert_eq!(
+            VaultStore::credential_key(&[0xd3, 0x4f, 0xb9, 0x01, 0x22, 0x7e, 0x80, 0x11, 0x5a]),
+            "passkey-d34fb901227e8011"
         );
     }
 
