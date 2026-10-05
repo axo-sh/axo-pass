@@ -45,12 +45,12 @@ struct CredentialListView: View {
         detail: "Confirm the request in the Axo Pass window to unlock your vaults.",
         showsProgress: true)
 
-    case let .filling(account):
+    case .filling(let account):
       message(
         icon: "touchid", title: "Filling \(account)",
         detail: "Confirm the request in the Axo Pass window.", showsProgress: true)
 
-    case let .list(items):
+    case .list(let items):
       list(items)
 
     case .appUnavailable:
@@ -59,24 +59,24 @@ struct CredentialListView: View {
         detail: "Open Axo Pass, then try again.",
         action: ("Open Axo Pass", { model.onOpenApp?() }))
 
-    case let .failed(detail):
+    case .failed(let detail):
       message(
         icon: "exclamationmark.triangle", title: "Could not reach your vaults",
         detail: detail, action: ("Try Again", { model.retry() }))
 
-    case let .configuration(onDone):
+    case .configuration(let onDone):
       configuration(onDone: onDone)
     }
   }
 
-  private func list(_ items: [AutofillItem]) -> some View {
+  private func list(_ items: [Login]) -> some View {
     let matches = filtered(items)
     return VStack(spacing: 0) {
       if items.isEmpty {
         message(
           icon: "key.slash", title: "No matching logins",
           detail: model.service.map { "Nothing in your vaults matches \($0)." }
-            ?? "No item in your vaults has a password to fill.")
+            ?? "AutoFill did not say which site this is for.")
       } else {
         List(matches) { item in
           Button {
@@ -92,34 +92,33 @@ struct CredentialListView: View {
     }
   }
 
-  private func row(_ item: AutofillItem) -> some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(item.title)
-          .fontWeight(.medium)
-        Text(item.accountName)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      Spacer()
-      Text(item.vaultKey)
-        .font(.caption2)
+  private func row(_ item: Login) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(item.title)
+        .fontWeight(.medium)
+      Text(item.accountName)
+        .font(.caption)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(.quaternary, in: Capsule())
+      Text(
+        item.urlFallback
+          ? "Matched \(item.matched.host) through a URL field"
+          : "Matched \(item.matched.host)"
+      )
+      .font(.caption2)
+      .foregroundStyle(.tertiary)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 3)
     .contentShape(Rectangle())
   }
 
-  private func filtered(_ items: [AutofillItem]) -> [AutofillItem] {
+  private func filtered(_ items: [Login]) -> [Login] {
     let needle = filter.trimmingCharacters(in: .whitespaces).lowercased()
     guard !needle.isEmpty else { return items }
     return items.filter {
       $0.title.lowercased().contains(needle)
         || $0.accountName.lowercased().contains(needle)
-        || $0.urls.contains { $0.lowercased().contains(needle) }
+        || $0.matched.host.lowercased().contains(needle)
     }
   }
 

@@ -66,13 +66,12 @@ enum AutofillIdentities {
     for item: AutofillItemInfo
   ) -> [ASPasswordCredentialIdentity] {
     let user = item.username?.isEmpty == false ? item.username! : item.title
-    let record = "\(item.vaultKey)/\(item.itemKey)/\(item.passwordKey)"
-    return item.urls.compactMap { url in
+    return item.urls.compactMap { url -> ASPasswordCredentialIdentity? in
       guard let host = serviceHost(url) else { return nil }
       return ASPasswordCredentialIdentity(
         serviceIdentifier: ASCredentialServiceIdentifier(identifier: host, type: .domain),
         user: user,
-        recordIdentifier: record)
+        recordIdentifier: item.recordId)
     }
   }
 

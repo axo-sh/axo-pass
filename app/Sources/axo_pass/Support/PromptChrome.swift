@@ -40,9 +40,13 @@ enum PromptCaller {
 struct PromptAppIcon: View {
   let callerChain: [ProcessNode]
   var fallbackSystemImage = "key.fill"
+  /// Shows this installed app instead of the one found in `callerChain`.
+  var appBundleId: String?
 
   var body: some View {
-    if let appIcon = CallerAppIcon.icon(for: callerChain) {
+    if let appIcon = appBundleId.flatMap(CallerAppIcon.icon(bundleId:))
+      ?? CallerAppIcon.icon(for: callerChain)
+    {
       Image(nsImage: appIcon)
         .resizable()
         .frame(width: 64, height: 64)
@@ -60,10 +64,13 @@ struct PromptAppIcon: View {
 struct PromptConnection: View {
   let callerChain: [ProcessNode]
   var fallbackSystemImage = "key.fill"
+  var appBundleId: String?
 
   var body: some View {
     HStack(spacing: 0) {
-      PromptAppIcon(callerChain: callerChain, fallbackSystemImage: fallbackSystemImage)
+      PromptAppIcon(
+        callerChain: callerChain, fallbackSystemImage: fallbackSystemImage,
+        appBundleId: appBundleId)
       connector
       Image(systemName: "checkmark.circle")
         .font(.system(size: 22))

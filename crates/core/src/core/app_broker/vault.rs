@@ -22,14 +22,17 @@ use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::{BrokerError, InFlightRequest, PromptOutcome, WireRequest, WireResponse, send_request};
+use super::{
+    BrokerError, ConfirmPrompt, InFlightRequest, PassphraseAuthorizer, PromptOutcome, WireRequest,
+    WireResponse, send_request,
+};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
-    AutofillItem, DEFAULT_VAULT, FieldKind, VaultWrapper, VaultsManager, autofill, passkey,
+    DEFAULT_VAULT, FieldKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
 };
 
 /// One `axo://` reference to resolve, as it crosses the socket.
@@ -77,9 +80,20 @@ pub enum VaultAction {
         credential_key: String,
     },
 
-    /// The AutoFill extension's credential list: return the fillable items
-    /// across every vault, with usernames and URLs but no passwords.
-    ListAutofillItems { service: Option<String> },
+    /// The logins that match a page, across every vault, with usernames but no
+    /// passwords.
+    ListLogins { page: LoginPage },
+
+    /// The username and password of one login. Prompts every time. `account`
+    /// is the client's label for the login, shown in the prompt only.
+    FillLogin {
+        page: LoginPage,
+        record_id: String,
+        account: Option<String>,
+    },
+
+    /// The current one-time code of one login. Prompts every time.
+    GenerateTotp { page: LoginPage, record_id: String },
 
     /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
     /// possibly across several vaults, behind one prompt.
@@ -120,6 +134,53 @@ pub enum VaultAction {
     /// stored passkey's private key. The request data travels in
     /// [`AssertPasskeyPayload`].
     AssertPasskey { rp_id: String },
+}
+
+/// The page a login request is for, reduced to what the prompt shows and a
+/// grant is keyed on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginPage {
+    /// The frame's URL as the client sent it. Matching uses this.
+    pub frame_url: String,
+    /// The frame's origin, `scheme://host[:port]`. The path and query are left
+    /// out because they can carry tokens, and this is what audit records.
+    pub frame_origin: String,
+    /// The frame's host, with one leading `www.` removed.
+    pub host: String,
+    /// The frame's registrable domain.
+    pub domain: String,
+    /// The top-level host, when the form is in a frame of another host.
+    pub top_host: Option<String>,
+    /// False when the frame is on `http:`.
+    pub secure: bool,
+    /// The name of the app that asked, as the AutoFill extension reported it.
+    /// `None` means a browser. It is a display hint and is never used to
+    /// decide anything.
+    pub requester: Option<String>,
+}
+
+impl LoginPage {
+    /// Describe the page. Fails when the frame is not an http(s) site, since
+    /// nothing matches one.
+    pub fn parse(url: &str, frame_url: &str, requester: Option<String>) -> Result<Self, String> {
+        let frame = Site::parse(frame_url)
+            .ok_or_else(|| "AutoFill only fills http and https pages".to_string())?;
+        let top_host = Site::parse(url)
+            .map(|top| top.host)
+            .filter(|host| *host != frame.host);
+        let frame_origin = url::Url::parse(frame_url.trim())
+            .map(|parsed| parsed.origin().ascii_serialization())
+            .unwrap_or_else(|_| format!("https://{}", frame.host));
+        Ok(Self {
+            frame_url: frame_url.to_string(),
+            frame_origin,
+            host: frame.host,
+            domain: frame.domain,
+            top_host,
+            secure: frame.secure,
+            requester: requester.filter(|name| !name.trim().is_empty()),
+        })
+    }
 }
 
 /// The secret an [`VaultAction::WriteSecret`] writes, kept out of
@@ -304,26 +365,6 @@ pub fn request_vault_items(
     }
 }
 
-/// Ask the app to unlock every vault and return the items that can fill
-/// `service`. Blocking, same as [`request_vault_items`].
-pub fn request_autofill_items(
-    service: Option<&str>,
-    caller: Option<&str>,
-) -> Result<Vec<AutofillItem>, BrokerError> {
-    let request = WireRequest::ListAutofillItems {
-        service: service.map(String::from),
-        caller: caller.map(String::from),
-    };
-    match send_request(&request)? {
-        WireResponse::AutofillItems { items } => Ok(items),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to autofill listing".to_string(),
-        )),
-    }
-}
-
 /// Ask the app to unlock a vault and return one credential's secret. `None`
 /// means the credential does not exist. Blocking, same as
 /// [`request_vault_items`].
@@ -496,6 +537,7 @@ pub fn request_create_passkey(
             .iter()
             .map(|c| b64_encode(c))
             .collect(),
+        origin: None,
         caller: caller.map(String::from),
     };
     match send_request(&wire)? {
@@ -528,6 +570,7 @@ pub fn request_assert_passkey(
             .iter()
             .map(|c| b64_encode(c))
             .collect(),
+        origin: None,
         caller: caller.map(String::from),
     };
     match send_request(&wire)? {
@@ -562,15 +605,16 @@ fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
         .map_err(|e| BrokerError::Failed(format!("Malformed base64 in passkey response: {e}")))
 }
 
-pub(super) async fn authorize_and_serve(
+/// Raise the app's prompt and return the context to unlock on. When the user
+/// declines, the response to send instead.
+async fn authorize(
     authorizer: &dyn VaultAuthorizer,
-    prompt: VaultAccessPrompt,
-    actor: Actor,
-    payload: Option<VaultPayload>,
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
     in_flight: &InFlightRequest,
-) -> WireResponse {
+) -> Result<ForeignContext, WireResponse> {
     if in_flight.is_abandoned() {
-        return WireResponse::Cancelled;
+        return Err(WireResponse::Cancelled);
     }
     // The app evaluates inside `begin`, holding the auth lock, so it is
     // dismissed rather than dropped when the client disconnects.
@@ -579,11 +623,11 @@ pub(super) async fn authorize_and_serve(
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");
-            record_access(&prompt, &actor, Outcome::Denied, None, Some(&message));
+            record_access(prompt, actor, Outcome::Denied, None, Some(&message));
             authorizer
-                .end(prompt, PromptOutcome::Failed(message.clone()))
+                .end(prompt.clone(), PromptOutcome::Failed(message.clone()))
                 .await;
-            return WireResponse::Failed { message };
+            return Err(WireResponse::Failed { message });
         },
     };
     // An import unlocks and writes one vault at a time on this context, so
@@ -591,6 +635,88 @@ pub(super) async fn authorize_and_serve(
     if !matches!(prompt.action, VaultAction::ImportVaults { .. }) {
         in_flight.attach(&context);
     }
+    Ok(context)
+}
+
+/// Serve a fill or a one-time code, or list logins. The same as
+/// [`authorize_and_serve`], plus one step: a login that matches the page only
+/// through its `Url` field is returned only after the user confirms it, once
+/// the vault is open and the broker can tell.
+pub(super) async fn authorize_and_serve_logins(
+    authorizer: &dyn VaultAuthorizer,
+    confirmer: &dyn PassphraseAuthorizer,
+    prompt: VaultAccessPrompt,
+    actor: Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+
+    let job = prompt.clone();
+    let result = tokio::task::spawn_blocking(move || serve_logins(&job, context))
+        .await
+        .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
+
+    let served = match result {
+        Ok(served) => match served.confirm {
+            Some(question) => {
+                let answer = in_flight
+                    .unless_abandoned(confirmer.confirm(question))
+                    .await;
+                if answer == Some(true) {
+                    Ok(served.response)
+                } else {
+                    log::debug!("App broker login fill was not confirmed");
+                    Err(None)
+                }
+            },
+            None => Ok(served.response),
+        },
+        Err(message) => Err(Some(message)),
+    };
+
+    let (response, outcome) = match served {
+        Ok(response) => {
+            record_access(&prompt, &actor, Outcome::Succeeded, Some(&response), None);
+            (response, PromptOutcome::Succeeded)
+        },
+        Err(None) => {
+            record_access(
+                &prompt,
+                &actor,
+                Outcome::Denied,
+                None,
+                Some("Not confirmed"),
+            );
+            (WireResponse::Cancelled, PromptOutcome::Cancelled)
+        },
+        Err(Some(message)) => {
+            record_access(&prompt, &actor, Outcome::Failed, None, Some(&message));
+            (
+                WireResponse::Failed {
+                    message: message.clone(),
+                },
+                PromptOutcome::Failed(message),
+            )
+        },
+    };
+    authorizer.end(prompt, outcome).await;
+    response
+}
+
+pub(super) async fn authorize_and_serve(
+    authorizer: &dyn VaultAuthorizer,
+    prompt: VaultAccessPrompt,
+    actor: Actor,
+    payload: Option<VaultPayload>,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
 
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
@@ -642,12 +768,13 @@ fn record_access(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
-        VaultAction::ListAutofillItems { service } => (
+        VaultAction::ListLogins { page } => (
             Action::VaultItemsListed,
-            Subject::new(
-                SubjectKind::Vault,
-                service.clone().unwrap_or_else(|| "all".to_string()),
-            ),
+            Subject::new(SubjectKind::Vault, page.host.clone()),
+        ),
+        VaultAction::FillLogin { record_id, .. } | VaultAction::GenerateTotp { record_id, .. } => (
+            Action::SecretRead,
+            Subject::new(SubjectKind::Credential, record_id.clone()),
         ),
         VaultAction::ResolveSecrets { purpose, .. } => {
             let action = match purpose {
@@ -706,12 +833,27 @@ fn record_access(
     if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
         event = event.detail("secret_count", refs.len().to_string());
     }
+    match &prompt.action {
+        VaultAction::ListLogins { page } => {
+            event = event.detail("login_request", "list");
+            event = login_page_details(event, page);
+        },
+        VaultAction::FillLogin { page, .. } => {
+            event = event.detail("login_request", "fill");
+            event = login_page_details(event, page);
+        },
+        VaultAction::GenerateTotp { page, .. } => {
+            event = event.detail("login_request", "totp");
+            event = login_page_details(event, page);
+        },
+        _ => {},
+    }
     match response {
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
         },
-        Some(WireResponse::AutofillItems { items }) => {
-            event = event.detail("item_count", items.len().to_string());
+        Some(WireResponse::Logins { logins }) => {
+            event = event.detail("item_count", logins.len().to_string());
         },
         Some(WireResponse::VaultSecret { value }) => {
             event = event.detail("found", value.is_some().to_string());
@@ -737,6 +879,18 @@ fn record_access(
     audit::record(event);
 }
 
+/// The service host, the frame URL, and the top-level host of a login request.
+/// Never a username or a value.
+fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
+    let event = event
+        .detail("service_host", page.host.clone())
+        .detail("frame_origin", page.frame_origin.clone());
+    match &page.top_host {
+        Some(top_host) => event.detail("top_host", top_host.clone()),
+        None => event,
+    }
+}
+
 /// Load the vault from disk and serve the request on the app's context.
 ///
 /// The vault is loaded fresh from disk and, for a write, saved straight back,
@@ -751,8 +905,10 @@ fn serve_on_context(
 ) -> Result<WireResponse, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
-        VaultAction::ListAutofillItems { service } => {
-            return collect_autofill_items(service.as_deref(), context);
+        VaultAction::ListLogins { .. }
+        | VaultAction::FillLogin { .. }
+        | VaultAction::GenerateTotp { .. } => {
+            return Err("Login requests are served by serve_logins".to_string());
         },
         VaultAction::CreatePasskey { .. } => {
             let Some(VaultPayload::CreatePasskey(p)) = payload else {
@@ -854,7 +1010,9 @@ fn serve_on_context(
             Ok(WireResponse::VaultWritten { created })
         },
         VaultAction::ResolveSecrets { .. }
-        | VaultAction::ListAutofillItems { .. }
+        | VaultAction::ListLogins { .. }
+        | VaultAction::FillLogin { .. }
+        | VaultAction::GenerateTotp { .. }
         | VaultAction::ExportVaults { .. }
         | VaultAction::ImportVaults { .. }
         | VaultAction::AddVault { .. }
@@ -863,16 +1021,23 @@ fn serve_on_context(
     }
 }
 
-/// Unlock every vault on the app's context and collect the items that can fill
-/// `service`. A vault that fails to load or unlock is skipped rather than
-/// failing the whole listing, so one broken vault does not take AutoFill down.
-fn collect_autofill_items(
-    service: Option<&str>,
+/// The result of a login request, and the question the user must answer before
+/// it is returned, when there is one.
+struct LoginServed {
+    response: WireResponse,
+    confirm: Option<ConfirmPrompt>,
+}
+
+/// Serve a login request on the app's context. A vault that fails to load or
+/// unlock is skipped rather than failing the request, so one broken vault does
+/// not take AutoFill down.
+fn serve_logins(
+    prompt: &VaultAccessPrompt,
     context: ForeignContext,
-) -> Result<WireResponse, String> {
+) -> Result<LoginServed, String> {
     let mut vm = VaultsManager::new();
     let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
-    let mut items = Vec::new();
+    let mut logins = Vec::new();
 
     for vault_key in vault_keys {
         let Some(vw) = vm.get_vault_mut(&vault_key) else {
@@ -882,14 +1047,79 @@ fn collect_autofill_items(
             log::error!("Failed to unlock vault {vault_key}: {e}");
             continue;
         }
-        match autofill::collect_items(vw, service) {
-            Ok(found) => items.extend(found),
-            Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
+        match &prompt.action {
+            VaultAction::ListLogins { page } => {
+                match autofill::collect_items(vw, Some(&page.frame_url)) {
+                    Ok(found) => logins.extend(found),
+                    Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+                }
+            },
+            action => {
+                if let Some(served) = serve_record(vw, action)? {
+                    return Ok(served);
+                }
+            },
         }
     }
 
-    items.sort_by_key(AutofillItem::sort_key);
-    Ok(WireResponse::AutofillItems { items })
+    match prompt.action {
+        VaultAction::ListLogins { .. } => {
+            logins.sort_by_key(autofill::AutofillItem::sort_key);
+            Ok(LoginServed {
+                response: WireResponse::Logins {
+                    logins: logins
+                        .iter()
+                        .filter_map(autofill::AutofillItem::summary)
+                        .collect(),
+                },
+                confirm: None,
+            })
+        },
+        _ => Err("No login matches that record on this page".to_string()),
+    }
+}
+
+/// Serve a fill or a one-time code from `vw`, when the record is a login in it
+/// that matches the page. The match is decided here, from the vault, whatever
+/// the client believes.
+fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginServed>, String> {
+    use secrecy::ExposeSecret;
+
+    let (page, record_id, totp) = match action {
+        VaultAction::FillLogin {
+            page, record_id, ..
+        } => (page, record_id, false),
+        VaultAction::GenerateTotp { page, record_id } => (page, record_id, true),
+        _ => return Err("Not a login record request".to_string()),
+    };
+    let Some(item) = autofill::find_login(vw, record_id, &page.frame_url)
+        .map_err(|e| format!("Failed to look up the login: {e}"))?
+    else {
+        return Ok(None);
+    };
+
+    let confirm = item.websites_from_url_fields.then(|| ConfirmPrompt {
+        description: Some(format!(
+            "\"{}\" lists no website. It matches {} only through a URL field.\n\nFill it on {}?",
+            item.title, page.host, page.host
+        )),
+        ok_label: Some("Fill".to_string()),
+        cancel_label: Some("Cancel".to_string()),
+    });
+
+    let response = if totp {
+        let code = autofill::login_totp(vw, &item).map_err(|e| e.to_string())?;
+        WireResponse::TotpCode { code }
+    } else {
+        let secrets = autofill::read_login(vw, &item)
+            .map_err(|e| format!("Failed to read the login: {e}"))?
+            .ok_or_else(|| "That login no longer has a password".to_string())?;
+        WireResponse::LoginFill {
+            username: secrets.username,
+            password: secrets.password.expose_secret().to_string(),
+        }
+    };
+    Ok(Some(LoginServed { response, confirm }))
 }
 
 /// The vault a new passkey is written to: the default vault when it exists or

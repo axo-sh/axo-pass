@@ -42,7 +42,17 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   // MARK: - Credential list
 
   override func prepareCredentialList(for serviceIdentifiers: [ASCredentialServiceIdentifier]) {
-    model.load(service: serviceIdentifiers.first?.identifier)
+    // An app identifier is not a site, so it only names the requester. The
+    // site to match comes from the first domain or URL identifier. App
+    // identifiers exist from macOS 26.2.
+    if #available(macOS 26.2, *) {
+      let app = serviceIdentifiers.first { $0.type == .app }
+      let site = serviceIdentifiers.first { $0.type != .app } ?? serviceIdentifiers.first
+      model.load(
+        service: site?.identifier, requester: app.map { $0.displayName ?? $0.identifier })
+    } else {
+      model.load(service: serviceIdentifiers.first?.identifier)
+    }
   }
 
   /// A passkey sign-in where the user picked Axo Pass rather than one of our
@@ -90,19 +100,22 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       return
     }
 
-    guard let ref = CredentialRef(recordIdentifier: request.credentialIdentity.recordIdentifier)
+    guard let identity = request.credentialIdentity as? ASPasswordCredentialIdentity,
+      let recordID = identity.recordIdentifier, !recordID.isEmpty,
+      !identity.serviceIdentifier.identifier.isEmpty
     else {
       cancel(.credentialIdentityNotFound)
       return
     }
-    let user = (request.credentialIdentity as? ASPasswordCredentialIdentity)?.user ?? ""
-    model.fillDirectly(ref: ref, user: user)
+    model.fillDirectly(
+      recordID: recordID, service: identity.serviceIdentifier.identifier, user: identity.user)
   }
 
   // MARK: - Passkeys
 
-  override func prepareInterface(forPasskeyRegistration registrationRequest: any ASCredentialRequest)
-  {
+  override func prepareInterface(
+    forPasskeyRegistration registrationRequest: any ASCredentialRequest
+  ) {
     guard let request = registrationRequest as? ASPasskeyCredentialRequest,
       let identity = registrationRequest.credentialIdentity as? ASPasskeyCredentialIdentity
     else {
@@ -186,17 +199,20 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     extensionContext.completeAssertionRequest(using: credential, completionHandler: nil)
   }
 
-  /// Read the password and hand it back to the system.
-  private func fill(_ item: AutofillItem) {
-    guard let ref = CredentialRef(recordIdentifier: item.recordIdentifier) else {
+  /// Ask the app to fill the login and hand the result back to the system.
+  private func fill(_ login: Login) {
+    guard let service = model.service, !service.isEmpty else {
       cancel(.credentialIdentityNotFound)
       return
     }
-    model.beginFilling(item.accountName)
+    let requester = model.requester
+    model.beginFilling(login.accountName)
     Task { [weak self] in
       do {
-        let password = try await BrokerClient.secret(for: ref)
-        self?.complete(user: item.accountName, password: password)
+        let fill = try await BrokerClient.fill(
+          service: service, recordID: login.recordID, account: login.accountName,
+          requester: requester)
+        self?.complete(user: fill.username ?? login.accountName, password: fill.password)
       } catch {
         self?.model.report(error)
       }
@@ -238,7 +254,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 final class CredentialListModel {
   enum State {
     case loading
-    case list([AutofillItem])
+    case list([Login])
     case filling(String)
     case appUnavailable
     case configuration(() -> Void)
@@ -247,13 +263,21 @@ final class CredentialListModel {
 
   private(set) var state: State = .loading
   private(set) var service: String?
+  /// The name of the app that asked, when the system identifies one. `nil`
+  /// means a browser.
+  private(set) var requester: String?
 
-  var onSelect: ((AutofillItem) -> Void)?
+  var onSelect: ((Login) -> Void)?
   var onCancel: (() -> Void)?
   var onOpenApp: (() -> Void)?
 
-  func load(service: String?) {
+  func load(service: String?, requester: String? = nil) {
     self.service = service
+    self.requester = requester
+    guard let service, !service.isEmpty else {
+      state = .failed("AutoFill did not say which site this is for.")
+      return
+    }
     guard BrokerClient.isAvailable else {
       state = .appUnavailable
       return
@@ -261,25 +285,27 @@ final class CredentialListModel {
     state = .loading
     Task { [weak self] in
       do {
-        let items = try await BrokerClient.autofillItems(service: service)
-        self?.state = .list(items)
+        let logins = try await BrokerClient.logins(service: service, requester: requester)
+        self?.state = .list(logins)
       } catch {
         self?.report(error)
       }
     }
   }
 
-  /// The system picked an identity for us; read it and finish without ever
-  /// showing a list.
-  func fillDirectly(ref: CredentialRef, user: String) {
+  /// The system picked an identity for us; fill it and finish without ever
+  /// showing a list. The app checks the record against `service` before it
+  /// answers.
+  func fillDirectly(recordID: String, service: String, user: String) {
+    self.service = service
     guard BrokerClient.isAvailable else {
       state = .appUnavailable
       return
     }
-    let item = AutofillItem(
-      vaultKey: ref.vaultKey, itemKey: ref.itemKey, title: user,
-      username: user.isEmpty ? nil : user, passwordKey: ref.credentialKey, websites: [])
-    onSelect?(item)
+    let login = Login(
+      recordID: recordID, title: user, username: user.isEmpty ? nil : user,
+      matched: Login.Matched(host: service), urlFallback: false)
+    onSelect?(login)
   }
 
   func beginFilling(_ account: String) {
@@ -303,6 +329,6 @@ final class CredentialListModel {
   }
 
   func retry() {
-    load(service: service)
+    load(service: service, requester: requester)
   }
 }

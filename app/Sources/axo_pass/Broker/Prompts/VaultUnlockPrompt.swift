@@ -128,8 +128,11 @@ final class VaultUnlockPromptModel {
       vaultKey: prompt.vaultKey,
       caller: prompt.caller,
       callerChain: prompt.callerChain,
+      appRequester: Self.appRequester(for: prompt.action),
       headline: Self.headline(for: prompt.action),
+      login: Self.login(for: prompt.action),
       secrets: Self.secrets(for: prompt),
+      notes: Self.notes(for: prompt.action),
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
@@ -150,8 +153,42 @@ final class VaultUnlockPromptModel {
         let path = "\(ref.itemKey)/\(ref.credentialKey)"
         return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
       }
-    case .listItems, .listAutofillItems, .exportVaults, .importVaults, .addVault, .createPasskey,
-      .assertPasskey:
+    case .listItems, .listLogins, .fillLogin, .generateTotp, .exportVaults, .importVaults,
+      .addVault, .createPasskey, .assertPasskey:
+      return []
+    }
+  }
+
+  /// The app a login request is for, when the AutoFill extension named one.
+  private static func appRequester(for action: VaultAction) -> String? {
+    switch action {
+    case .listLogins(let page), .fillLogin(let page, _, _), .generateTotp(let page, _):
+      return page.requester
+    default:
+      return nil
+    }
+  }
+
+  /// The account a fill will use, shown in its own card instead of the headline.
+  private static func login(for action: VaultAction) -> String? {
+    if case .fillLogin(_, _, let account) = action { return account }
+    return nil
+  }
+
+  /// Facts about the page that the user should see before approving a fill. A
+  /// listing has none, since it returns no secret.
+  private static func notes(for action: VaultAction) -> [String] {
+    switch action {
+    case .fillLogin(let page, _, _), .generateTotp(let page, _):
+      var notes: [String] = []
+      if !page.secure {
+        notes.append("This page is not secure (http). Anyone on the network can read the fill.")
+      }
+      if let top = page.topHost {
+        notes.append("The form is in a frame on \(page.host), inside a page on \(top).")
+      }
+      return notes
+    default:
       return []
     }
   }
@@ -168,8 +205,12 @@ final class VaultUnlockPromptModel {
       what = "\(verb) \(count) \(count == 1 ? "secret" : "secrets") from vault \(prompt.vaultKey)"
     case .listItems:
       what = "list items in vault \(prompt.vaultKey)"
-    case .listAutofillItems(let service):
-      what = "find logins for \(service ?? "every site")"
+    case .listLogins(let page):
+      what = "find logins for \(page.host)"
+    case .fillLogin(let page, _, let account):
+      what = "fill \(account ?? "a login") on \(page.host)"
+    case .generateTotp(let page, _):
+      what = "get a one-time code for \(page.host)"
     case .writeSecret(let itemKey, let credentialKey):
       what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
     case .exportVaults(let count):
@@ -178,9 +219,9 @@ final class VaultUnlockPromptModel {
       what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
     case .addVault(let path):
       what = "add the vault at \(path)"
-    case let .createPasskey(rpId):
+    case .createPasskey(let rpId):
       what = "create a passkey for \(rpId)"
-    case let .assertPasskey(rpId):
+    case .assertPasskey(let rpId):
       what = "sign in to \(rpId) with a passkey"
     }
     if let caller = prompt.caller, !caller.isEmpty {
@@ -194,17 +235,27 @@ final class VaultUnlockPromptModel {
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
     case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault,
-      .createPasskey, .assertPasskey:
+      .createPasskey, .assertPasskey, .fillLogin, .generateTotp:
       return true
-    case .listItems, .listAutofillItems: return false
+    case .listItems, .listLogins: return false
     }
   }
 
-  /// One grant per vault, action and requesting process. Approving one
+  /// One grant per action, subject, and requesting process. Approving one
   /// caller's request does not authorize another's inside the reuse window, and
   /// approving a listing does not authorize a read.
+  ///
+  /// A login request is keyed on the record, so approving one login never
+  /// approves another, and on the page's registrable domain, so approving a
+  /// fill on one site never approves it on another.
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
-    let subject = GrantSubject(kind: .vault, id: prompt.vaultKey, label: nil)
+    let id: String
+    switch prompt.action {
+    case .fillLogin(_, let recordId, _), .generateTotp(_, let recordId): id = recordId
+    case .listLogins: id = "logins"
+    default: id = prompt.vaultKey
+    }
+    let subject = GrantSubject(kind: .vault, id: id, label: nil)
     return GrantKey(
       subject: subject, caller: prompt.caller, callerIdentity: prompt.callerIdentity,
       scope: scope(for: prompt.action))
@@ -215,7 +266,9 @@ final class VaultUnlockPromptModel {
     case .readSecret: return "read"
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
-    case .listAutofillItems: return "autofill"
+    case .listLogins(let page): return "list-logins:\(page.domain)"
+    case .fillLogin(let page, _, _): return "fill:\(page.domain)"
+    case .generateTotp(let page, _): return "totp:\(page.domain)"
     case .writeSecret: return "write"
     case .exportVaults: return "export"
     case .importVaults: return "import"
@@ -231,24 +284,27 @@ final class VaultUnlockPromptModel {
     promptsEveryTime(action) ? .everyUse : .standard
   }
 
-  private static func headline(for action: VaultAction) -> String {
+  private static func headline(for action: VaultAction) -> [HeadlinePart] {
     switch action {
-    case .readSecret: return "read a secret"
+    case .readSecret: return [.plain("read a secret")]
     case .resolveSecrets(let purpose, let refs):
       let verb = purpose == .read ? "read" : "resolve"
       let count = refs.count
-      return "\(verb) \(count) \(count == 1 ? "secret" : "secrets")"
-    case .listItems: return "list a vault"
-    case .listAutofillItems(let service):
-      return "find logins for \(service ?? "every site")"
-    case .writeSecret: return "write a secret"
+      return [.plain("\(verb) \(count) \(count == 1 ? "secret" : "secrets")")]
+    case .listItems: return [.plain("list a vault")]
+    case .listLogins(let page): return [.plain("find logins for "), .bold(page.host)]
+    case .fillLogin(let page, _, _):
+      return [.plain("fill a login on "), .bold(page.host)]
+    case .generateTotp(let page, _):
+      return [.plain("get a one-time code for "), .bold(page.host)]
+    case .writeSecret: return [.plain("write a secret")]
     case .exportVaults(let count):
-      return "export \(count) \(count == 1 ? "vault" : "vaults")"
+      return [.plain("export \(count) \(count == 1 ? "vault" : "vaults")")]
     case .importVaults(let count):
-      return "import \(count) \(count == 1 ? "vault" : "vaults")"
-    case .addVault: return "add a vault"
-    case let .createPasskey(rpId): return "create a passkey for \(rpId)"
-    case let .assertPasskey(rpId): return "sign in to \(rpId)"
+      return [.plain("import \(count) \(count == 1 ? "vault" : "vaults")")]
+    case .addVault: return [.plain("add a vault")]
+    case .createPasskey(let rpId): return [.plain("create a passkey for "), .bold(rpId)]
+    case .assertPasskey(let rpId): return [.plain("sign in to "), .bold(rpId)]
     }
   }
 }
@@ -257,26 +313,46 @@ private struct VaultUnlockView: View {
   let vaultKey: String
   let caller: String?
   let callerChain: [ProcessNode]
-  let headline: String
+  /// The app an AutoFill request is for. `nil` means a browser.
+  let appRequester: String?
+  let headline: [HeadlinePart]
+  let login: String?
   let secrets: [String]
+  let notes: [String]
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
 
   var body: some View {
     VStack(spacing: 14) {
-      PromptConnection(callerChain: callerChain, fallbackSystemImage: "lock.fill")
+      PromptConnection(
+        callerChain: callerChain, fallbackSystemImage: "lock.fill",
+        appBundleId: isAutofill && appRequester == nil ? Self.safariBundleId : nil)
 
       PromptHeadline(parts: title)
 
+      ForEach(notes, id: \.self) { note in
+        Label(note, systemImage: "exclamationmark.triangle")
+          .font(.callout)
+          .foregroundStyle(.orange)
+          .multilineTextAlignment(.leading)
+      }
+
       VStack(spacing: 8) {
-        // An AutoFill listing spans every vault, so it carries no vault key.
+        if let login {
+          PromptSubjectCard(systemImage: "person.fill", title: login, detail: nil)
+        }
+        // An AutoFill request spans every vault, so it carries no vault key.
         if !vaultKey.isEmpty {
           PromptSubjectCard(
             systemImage: "lock.fill", title: vaultKey, detail: nil, items: secrets)
         }
-        CallerChainView(
-          chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
+        if !isAutofillExtensionChain {
+          CallerChainView(
+            chain: callerChain,
+            summary: isAutofill
+              ? (requester ?? "Safari") : PromptCaller.requesterName(chain: callerChain))
+        }
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
@@ -285,12 +361,31 @@ private struct VaultUnlockView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  private static let safariBundleId = "com.apple.Safari"
+
+  /// The core names the AutoFill extension as the caller. The extension reports
+  /// the app that asked when the system identifies one, and a browser request
+  /// is shown as coming from Safari.
+  private var isAutofill: Bool { caller == "AutoFill extension" }
+
+  /// Whether the innermost process is the AutoFill extension. The prompt is
+  /// clearly an AutoFill request, so the chain card would only repeat it.
+  private var isAutofillExtensionChain: Bool {
+    PromptCaller.requesterName(chain: callerChain) == "AxoPassAutoFill"
+  }
+
+  private var requester: String? {
+    guard isAutofill else { return PromptCaller.appName(caller: caller, chain: callerChain) }
+    return appRequester ?? "Safari"
+  }
+
   private var title: [HeadlinePart] {
-    if let who = PromptCaller.appName(caller: caller, chain: callerChain) {
-      return [.bold(who), .plain(" wants to \(headline)")]
+    if let who = requester {
+      return [.bold(who), .plain(" wants to ")] + headline
     }
-    let capitalized = headline.prefix(1).uppercased() + headline.dropFirst()
-    return [.plain("Authorize: \(capitalized)")]
+    guard case .plain(let first)? = headline.first else { return headline }
+    let capitalized = first.prefix(1).uppercased() + first.dropFirst()
+    return [.plain("Authorize: \(capitalized)")] + headline.dropFirst()
   }
 }
 

@@ -38,6 +38,7 @@ use crate::audit;
 use crate::core::auth::ForeignContext;
 use crate::core::dirs::{app_data_dir, app_group_identifier};
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
+use crate::secrets::vaults::autofill::check_rp_id;
 
 pub mod age;
 pub mod gpg;
@@ -63,11 +64,11 @@ pub use ssh::{
     request_authorize_key_use, request_signature, request_ssh_passphrase,
 };
 pub use vault::{
-    BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
+    BrokerCredential, BrokerVaultItem, LoginPage, ResolvePurpose, VaultAccessPrompt, VaultAction,
     VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, WireLogin,
-    request_add_external_vault, request_assert_passkey, request_autofill_items,
-    request_create_passkey, request_export_vaults, request_import_vaults, request_resolve_secrets,
-    request_vault_items, request_vault_secret, request_write_vault_secret,
+    request_add_external_vault, request_assert_passkey, request_create_passkey,
+    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
+    request_vault_secret, request_write_vault_secret,
 };
 
 /// How long a client waits for the user to answer the app's prompt before
@@ -84,6 +85,10 @@ const AGENT_EXECUTABLE_NAME: &str = "ap";
 /// The AutoFill credential provider extension, staged under `Contents/PlugIns`.
 /// Matches the `target_name` of the `[[extensions]]` entry in strudel.toml.
 pub const AUTOFILL_EXTENSION_NAME: &str = "AxoPassAutoFill";
+
+/// How prompts, grants, and audit events name a request that arrived through
+/// the AutoFill extension.
+const AUTOFILL_CALLER: &str = "AutoFill extension";
 
 pub fn broker_socket_path() -> PathBuf {
     // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
@@ -285,15 +290,56 @@ enum WireRequest {
         caller: Option<String>,
     },
 
-    /// The AutoFill extension's credential list: unlock every vault and return
-    /// the items that can fill `service`, with their usernames and URLs. The
-    /// password is not included; the extension reads it with
-    /// [`WireRequest::ReadVaultSecret`] once the user picks an account.
-    ListAutofillItems {
-        /// The domain or URL the browser is asking for. `None` lists every
-        /// fillable item, which is what the extension's "show all" path wants.
+    /// The logins that match `frame_url`, across every vault. Each carries its
+    /// record id, username, title, and the stored website that matched. No
+    /// password is included. See [`WireRequest::FillLogin`].
+    ListLogins {
+        /// The page's top-level URL. Shown in the prompt when the form is in a
+        /// frame of another site.
+        url: String,
+        /// The URL of the frame that holds the form. Matching uses this one.
+        frame_url: String,
+        /// The name of the app the request is for, when it is not a browser.
+        /// A display hint, like `account` on [`WireRequest::FillLogin`].
         #[serde(default)]
-        service: Option<String>,
+        requester: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// The username and password of one login. The broker re-checks that the
+    /// record is a login with a website matching `frame_url`, so a client
+    /// cannot fill a record by guessing its id.
+    FillLogin {
+        url: String,
+        frame_url: String,
+        /// `<vault uuid>/<item uuid>/<password credential uuid>`, as returned
+        /// by [`WireRequest::ListLogins`].
+        record_id: String,
+        /// The account name the client showed the user. The prompt displays
+        /// it so the user sees which login is being filled before the vault
+        /// opens. It is a hint from the client and is never used to decide
+        /// anything.
+        #[serde(default)]
+        account: Option<String>,
+        /// See [`WireRequest::ListLogins`].
+        #[serde(default)]
+        requester: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// The current one-time code of one login, checked the same way as
+    /// [`WireRequest::FillLogin`].
+    GenerateTotp {
+        url: String,
+        frame_url: String,
+        record_id: String,
+        /// See [`WireRequest::ListLogins`].
+        #[serde(default)]
+        requester: Option<String>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
@@ -413,6 +459,12 @@ enum WireRequest {
         algorithms: Vec<i64>,
         #[serde(default)]
         excluded_credentials: Vec<String>,
+        /// The page's origin, when the client knows it. A request that
+        /// carries one is refused unless `rp_id` is valid for it. Safari
+        /// sends none: the system has already bound the relying party id to
+        /// the page.
+        #[serde(default)]
+        origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
     },
@@ -424,6 +476,9 @@ enum WireRequest {
         client_data_hash: String,
         #[serde(default)]
         allowed_credentials: Vec<String>,
+        /// See [`WireRequest::CreatePasskey`]'s origin.
+        #[serde(default)]
+        origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
     },
@@ -454,7 +509,9 @@ impl WireRequest {
             | WireRequest::GetPassphrase { caller, .. }
             | WireRequest::GetSshPassphrase { caller, .. }
             | WireRequest::ListVaultItems { caller, .. }
-            | WireRequest::ListAutofillItems { caller, .. }
+            | WireRequest::ListLogins { caller, .. }
+            | WireRequest::FillLogin { caller, .. }
+            | WireRequest::GenerateTotp { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
             | WireRequest::WriteVaultSecret { caller, .. }
@@ -511,8 +568,18 @@ enum WireResponse {
     VaultItems {
         items: Vec<vault::BrokerVaultItem>,
     },
-    AutofillItems {
-        items: Vec<crate::secrets::vaults::AutofillItem>,
+    Logins {
+        logins: Vec<crate::secrets::vaults::LoginSummary>,
+    },
+    /// The role credentials of one login. `username` is `None` when the login
+    /// has no username role.
+    LoginFill {
+        username: Option<String>,
+        password: String,
+    },
+    /// A one-time code. `None` when the login has no `Totp` credential.
+    TotpCode {
+        code: Option<crate::secrets::vaults::totp::TotpCode>,
     },
     /// `None` when the credential does not exist.
     VaultSecret {
@@ -894,9 +961,8 @@ pub async fn serve(
 enum RequestScope {
     /// `ap`: every request.
     Agent,
-    /// The AutoFill extension: the autofill listing, the password read, and the
-    /// passkey requests. `ReadVaultSecret` is allowed because the extension
-    /// reads the password with it.
+    /// The AutoFill extension: the login requests and the passkey requests. It
+    /// cannot read a vault secret by name.
     AutofillExtension,
 }
 
@@ -906,11 +972,23 @@ impl RequestScope {
             RequestScope::Agent => true,
             RequestScope::AutofillExtension => matches!(
                 request,
-                WireRequest::ListAutofillItems { .. }
-                    | WireRequest::ReadVaultSecret { .. }
+                WireRequest::ListLogins { .. }
+                    | WireRequest::FillLogin { .. }
+                    | WireRequest::GenerateTotp { .. }
                     | WireRequest::CreatePasskey { .. }
                     | WireRequest::AssertPasskey { .. }
             ),
+        }
+    }
+
+    /// The caller this transport vouches for. The peer is verified as our own
+    /// extension, so it names the caller itself and the request's own
+    /// `caller` is ignored. `None` for a transport whose clients delegate a
+    /// caller.
+    fn caller(self) -> Option<&'static str> {
+        match self {
+            RequestScope::Agent => None,
+            RequestScope::AutofillExtension => Some(AUTOFILL_CALLER),
         }
     }
 }
@@ -1077,6 +1155,12 @@ fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
         chain: peer.provenance().chain_labels(),
         chain_detail: peer.provenance().chain_nodes(),
     }
+}
+
+/// The caller to put in a prompt: the one the transport vouches for, else the
+/// one the client delegated.
+fn vouched_caller(scope: RequestScope, delegated: Option<String>) -> Option<String> {
+    scope.caller().map(String::from).or(delegated)
 }
 
 /// Describe who a request is for: the peer we verified, named by the caller it
@@ -1254,7 +1338,11 @@ async fn serve_request(
     // Resolved once per connection and handed to whichever authorizer serves
     // the request, so the grant the app hands out is attributed to the process
     // we verified rather than to a caller string alone.
-    let actor = request_actor(peer, request.caller(), request.caller_chain());
+    let actor = request_actor(
+        peer,
+        scope.caller().or(request.caller()),
+        request.caller_chain(),
+    );
     let caller_chain = actor.chain_detail.clone();
 
     let in_flight = InFlightRequest::default();
@@ -1373,18 +1461,89 @@ async fn serve_request(
                 vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
                     .await
             },
-            WireRequest::ListAutofillItems { service, caller } => {
-                let prompt = vault::VaultAccessPrompt {
-                    // The listing spans every vault, so there is no single key to
-                    // name. The prompt describes the service instead.
-                    vault_key: String::new(),
-                    caller,
-                    caller_chain: caller_chain.clone(),
-                    action: vault::VaultAction::ListAutofillItems { service },
-                };
-                log::debug!("App broker request: {prompt:?}");
-                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
+            WireRequest::ListLogins {
+                url,
+                frame_url,
+                requester,
+                caller,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                Ok(page) => {
+                    let prompt = vault::VaultAccessPrompt {
+                        // The listing spans every vault, so there is no single
+                        // key to name. The prompt describes the site instead.
+                        vault_key: String::new(),
+                        caller: vouched_caller(scope, caller),
+                        caller_chain: caller_chain.clone(),
+                        action: vault::VaultAction::ListLogins { page },
+                    };
+                    log::debug!("App broker request: {prompt:?}");
+                    vault::authorize_and_serve_logins(
+                        &*authorizers.vault,
+                        &*authorizers.passphrase,
+                        prompt,
+                        actor,
+                        &in_flight,
+                    )
                     .await
+                },
+                Err(message) => WireResponse::Failed { message },
+            },
+            WireRequest::FillLogin {
+                url,
+                frame_url,
+                record_id,
+                account,
+                requester,
+                caller,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                Ok(page) => {
+                    let prompt = vault::VaultAccessPrompt {
+                        vault_key: String::new(),
+                        caller: vouched_caller(scope, caller),
+                        caller_chain: caller_chain.clone(),
+                        action: vault::VaultAction::FillLogin {
+                            page,
+                            record_id,
+                            account: account.filter(|a| !a.trim().is_empty()),
+                        },
+                    };
+                    log::debug!("App broker request: {prompt:?}");
+                    vault::authorize_and_serve_logins(
+                        &*authorizers.vault,
+                        &*authorizers.passphrase,
+                        prompt,
+                        actor,
+                        &in_flight,
+                    )
+                    .await
+                },
+                Err(message) => WireResponse::Failed { message },
+            },
+            WireRequest::GenerateTotp {
+                url,
+                frame_url,
+                record_id,
+                requester,
+                caller,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                Ok(page) => {
+                    let prompt = vault::VaultAccessPrompt {
+                        vault_key: String::new(),
+                        caller: vouched_caller(scope, caller),
+                        caller_chain: caller_chain.clone(),
+                        action: vault::VaultAction::GenerateTotp { page, record_id },
+                    };
+                    log::debug!("App broker request: {prompt:?}");
+                    vault::authorize_and_serve_logins(
+                        &*authorizers.vault,
+                        &*authorizers.passphrase,
+                        prompt,
+                        actor,
+                        &in_flight,
+                    )
+                    .await
+                },
+                Err(message) => WireResponse::Failed { message },
             },
             WireRequest::ReadVaultSecret {
                 vault_key,
@@ -1536,8 +1695,13 @@ async fn serve_request(
                 client_data_hash,
                 algorithms,
                 excluded_credentials,
+                origin,
                 caller,
             } => {
+                if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
+                    log::warn!("App broker refused a passkey registration: {message}");
+                    return Ok(WireResponse::Failed { message });
+                }
                 let mut excluded = Vec::with_capacity(excluded_credentials.len());
                 for c in &excluded_credentials {
                     excluded.push(decode_b64(c)?);
@@ -1554,7 +1718,7 @@ async fn serve_request(
                 };
                 let prompt = vault::VaultAccessPrompt {
                     vault_key: vault::passkey_vault_key(),
-                    caller,
+                    caller: vouched_caller(scope, caller),
                     caller_chain: caller_chain.clone(),
                     action: vault::VaultAction::CreatePasskey { rp_id },
                 };
@@ -1574,8 +1738,13 @@ async fn serve_request(
                 rp_id,
                 client_data_hash,
                 allowed_credentials,
+                origin,
                 caller,
             } => {
+                if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
+                    log::warn!("App broker refused a passkey assertion: {message}");
+                    return Ok(WireResponse::Failed { message });
+                }
                 let mut allowed = Vec::with_capacity(allowed_credentials.len());
                 for c in &allowed_credentials {
                     allowed.push(decode_b64(c)?);
@@ -1587,7 +1756,7 @@ async fn serve_request(
                 };
                 let prompt = vault::VaultAccessPrompt {
                     vault_key: String::new(),
-                    caller,
+                    caller: vouched_caller(scope, caller),
                     caller_chain: caller_chain.clone(),
                     action: vault::VaultAction::AssertPasskey { rp_id },
                 };
@@ -2384,13 +2553,23 @@ mod tests {
     #[test]
     fn the_autofill_scope_allows_only_autofill_requests() {
         let allowed = [
-            r#"{"request":"list_autofill_items"}"#,
-            r#"{"request":"read_vault_secret","vault_key":"v","item_key":"i","credential_key":"c"}"#,
+            r#"{"request":"list_logins","url":"https://example.com","frame_url":"https://example.com"}"#,
+            r#"{"request":"fill_login","url":"https://example.com","frame_url":"https://example.com","record_id":"r"}"#,
+            r#"{"request":"generate_totp","url":"https://example.com","frame_url":"https://example.com","record_id":"r"}"#,
+            r#"{"request":"create_passkey","rp_id":"example.com","user_handle":"","user_name":"u","user_display_name":"u","client_data_hash":"","algorithms":[-7]}"#,
             r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#,
         ];
         let refused = [
             r#"{"request":"list_identities"}"#,
             r#"{"request":"list_vault_items","vault_key":"v"}"#,
+            r#"{"request":"read_vault_secret","vault_key":"v","item_key":"i","credential_key":"c"}"#,
+            r#"{"request":"resolve_secrets","refs":[],"purpose":"read"}"#,
+            r#"{"request":"write_vault_secret","vault_key":"v","item_key":"i","credential_key":"c","title":"t","value":"x"}"#,
+            r#"{"request":"export_vaults","vault_keys":[],"dest_path":"/tmp/x","mode":{"kind":"recipient","recipient":"age1"}}"#,
+            r#"{"request":"import_vaults","import_path":"/tmp/x","identity":{"kind":"passphrase","passphrase":"p"},"selection":[]}"#,
+            r#"{"request":"add_external_vault","path":"/tmp/v.json"}"#,
+            r#"{"request":"get_age_identity","key_id":"k"}"#,
+            r#"{"request":"list_keychain_passwords"}"#,
             r#"{"request":"list_age_keys"}"#,
         ];
         for line in allowed {
@@ -2402,6 +2581,68 @@ mod tests {
             let request: WireRequest = serde_json::from_str(line).unwrap();
             assert!(!RequestScope::AutofillExtension.allows(&request), "{line}");
             assert!(RequestScope::Agent.allows(&request), "{line}");
+        }
+    }
+
+    /// The AutoFill scope names the caller itself, so a request cannot pick
+    /// the name its prompt, grant, and audit event carry.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_autofill_scope_names_its_own_caller() {
+        for line in [
+            r#"{"request":"list_logins","url":"https://example.com","frame_url":"https://example.com/login","caller":"Chrome"}"#,
+            r#"{"request":"fill_login","url":"https://example.com","frame_url":"https://example.com/login","record_id":"r","caller":"Chrome"}"#,
+            r#"{"request":"generate_totp","url":"https://example.com","frame_url":"https://example.com/login","record_id":"r","caller":"Chrome"}"#,
+            r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":"","caller":"Chrome"}"#,
+        ] {
+            let broker =
+                TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension)
+                    .await;
+            let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
+                "unexpected response to {line}"
+            );
+            let peers = broker.authorizer.peers.lock().unwrap();
+            assert_eq!(peers.len(), 1, "{line}");
+            assert_eq!(peers[0].caller.as_deref(), Some(AUTOFILL_CALLER), "{line}");
+        }
+    }
+
+    /// A page the broker cannot match, and a relying party id that is not a
+    /// registrable domain, are refused before any prompt is raised.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn refuses_unmatchable_pages_and_public_suffix_rp_ids_before_prompting() {
+        for (line, expected) in [
+            (
+                r#"{"request":"list_logins","url":"https://example.com","frame_url":"ftp://example.com"}"#,
+                "http and https",
+            ),
+            (
+                r#"{"request":"fill_login","url":"https://example.com","frame_url":"","record_id":"r"}"#,
+                "http and https",
+            ),
+            (
+                r#"{"request":"assert_passkey","rp_id":"github.io","client_data_hash":""}"#,
+                "public suffix",
+            ),
+            (
+                r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":"","origin":"https://evil.com"}"#,
+                "not a domain of",
+            ),
+            (
+                r#"{"request":"create_passkey","rp_id":"co.uk","user_handle":"","user_name":"u","user_display_name":"u","client_data_hash":"","algorithms":[-7]}"#,
+                "public suffix",
+            ),
+        ] {
+            let broker =
+                TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension)
+                    .await;
+            let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::Failed { message } if message.contains(expected)),
+                "unexpected response to {line}"
+            );
+            assert!(broker.authorizer.peers.lock().unwrap().is_empty(), "{line}");
         }
     }
 

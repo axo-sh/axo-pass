@@ -14,29 +14,26 @@ private func axo_bootstrap_look_up(
   _ servicePort: UnsafeMutablePointer<mach_port_t>
 ) -> kern_return_t
 
-/// One fillable item, as the broker reports it. Mirrors
-/// `axo_pass_core::secrets::vaults::autofill::AutofillItem`.
-struct AutofillItem: Decodable, Identifiable, Hashable {
-  let vaultKey: String
-  let itemKey: String
+/// One login offered for a page, as the broker reports it. Mirrors
+/// `axo_pass_core::secrets::vaults::autofill::LoginSummary`. It carries no
+/// password and no vault, item, or credential key.
+struct Login: Decodable, Identifiable, Hashable {
+  /// `<vault uuid>/<item uuid>/<password credential uuid>`. Handed back to the
+  /// broker to fill, and stored in the system's credential identity.
+  let recordID: String
   let title: String
   let username: String?
-  let passwordKey: String
-  let websites: [Website]
+  let matched: Matched
+  /// The login has no website of its own and matched through a URL field. The
+  /// app asks the user to confirm before filling it.
+  let urlFallback: Bool
 
-  struct Website: Decodable, Hashable {
-    let url: String
+  /// The stored website that made the login match.
+  struct Matched: Decodable, Hashable {
+    let host: String
   }
 
-  var urls: [String] { websites.map(\.url) }
-
-  var id: String { recordIdentifier }
-
-  /// The identifier handed to the system with a credential identity, and handed
-  /// back when the system asks us to fill it. Vault, item and credential keys
-  /// are normalized to lowercase words with no slashes, so joining them is
-  /// unambiguous.
-  var recordIdentifier: String { "\(vaultKey)/\(itemKey)/\(passwordKey)" }
+  var id: String { recordID }
 
   /// The account name the system and our list show. Falls back to the item
   /// title, since a credential identity with an empty user reads as blank.
@@ -46,28 +43,18 @@ struct AutofillItem: Decodable, Identifiable, Hashable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case vaultKey = "vault_key"
-    case itemKey = "item_key"
+    case recordID = "record_id"
     case title
     case username
-    case passwordKey = "password_key"
-    case websites
+    case matched
+    case urlFallback = "url_fallback"
   }
 }
 
-/// Where a fill request points, parsed back out of a record identifier.
-struct CredentialRef {
-  let vaultKey: String
-  let itemKey: String
-  let credentialKey: String
-
-  init?(recordIdentifier: String?) {
-    let parts = (recordIdentifier ?? "").split(separator: "/", omittingEmptySubsequences: false)
-    guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
-    vaultKey = String(parts[0])
-    itemKey = String(parts[1])
-    credentialKey = String(parts[2])
-  }
+/// The values to fill, as the broker reports them.
+struct LoginFill {
+  let username: String?
+  let password: String
 }
 
 enum BrokerError: Error, LocalizedError {
@@ -81,7 +68,7 @@ enum BrokerError: Error, LocalizedError {
     switch self {
     case .unavailable: return "Axo Pass is not running."
     case .cancelled: return "Cancelled."
-    case let .failed(message): return message
+    case .failed(let message): return message
     }
   }
 }
@@ -111,34 +98,43 @@ struct BrokerClient {
     return true
   }
 
-  /// Ask the app for the items that can fill `service`. `nil` lists everything.
-  static func autofillItems(service: String?) async throws -> [AutofillItem] {
-    var request: [String: Any] = ["request": "list_autofill_items"]
-    if let service { request["service"] = service }
+  /// Ask the app for the logins that match `service`, the domain or URL the
+  /// system gave us. The system supplies no separate top-level page, so the
+  /// service stands for both. `requester` names the app that asked, and is
+  /// `nil` for a browser.
+  static func logins(service: String, requester: String? = nil) async throws -> [Login] {
+    var request: [String: Any] = [
+      "request": "list_logins", "url": service, "frame_url": service,
+    ]
+    if let requester { request["requester"] = requester }
     let response = try await send(request)
-    guard response["status"] as? String == "autofill_items" else {
-      throw error(from: response, fallback: "Unexpected response to the autofill listing.")
+    guard response["status"] as? String == "logins" else {
+      throw error(from: response, fallback: "Unexpected response to the login listing.")
     }
-    let items = response["items"] ?? []
-    let data = try JSONSerialization.data(withJSONObject: items)
-    return try JSONDecoder().decode([AutofillItem].self, from: data)
+    let logins = response["logins"] ?? []
+    let data = try JSONSerialization.data(withJSONObject: logins)
+    return try JSONDecoder().decode([Login].self, from: data)
   }
 
-  /// Ask the app for one credential's secret. Prompts every time.
-  static func secret(for ref: CredentialRef) async throws -> String {
-    let response = try await send([
-      "request": "read_vault_secret",
-      "vault_key": ref.vaultKey,
-      "item_key": ref.itemKey,
-      "credential_key": ref.credentialKey,
-    ])
-    guard response["status"] as? String == "vault_secret" else {
-      throw error(from: response, fallback: "Unexpected response to the secret read.")
+  /// Ask the app for one login's username and password. The app checks the
+  /// record against `service` again and prompts every time. `account` is only
+  /// the label the prompt shows.
+  static func fill(
+    service: String, recordID: String, account: String, requester: String? = nil
+  ) async throws -> LoginFill {
+    var request: [String: Any] = [
+      "request": "fill_login", "url": service, "frame_url": service, "record_id": recordID,
+      "account": account,
+    ]
+    if let requester { request["requester"] = requester }
+    let response = try await send(request)
+    guard response["status"] as? String == "login_fill" else {
+      throw error(from: response, fallback: "Unexpected response to the fill.")
     }
-    guard let value = response["value"] as? String else {
-      throw BrokerError.failed("That credential no longer exists.")
+    guard let password = response["password"] as? String else {
+      throw BrokerError.failed("That login no longer has a password.")
     }
-    return value
+    return LoginFill(username: response["username"] as? String, password: password)
   }
 
   /// One registered passkey, as the broker reports it.

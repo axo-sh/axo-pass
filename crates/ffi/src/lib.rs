@@ -358,6 +358,9 @@ pub struct ItemInfo {
 pub struct AutofillItemInfo {
     pub vault_key: String,
     pub item_key: String,
+    /// `<vault uuid>/<item uuid>/<password credential uuid>`. The identifier
+    /// the AutoFill index stores, and the broker's login requests take.
+    pub record_id: String,
     pub title: String,
     pub username: Option<String>,
     /// The credential key holding the password to fill.
@@ -385,6 +388,7 @@ impl From<autofill::AutofillItem> for AutofillItemInfo {
         Self {
             vault_key: item.vault_key,
             item_key: item.item_key,
+            record_id: item.record_id,
             title: item.title,
             username: item.username,
             password_key: item.password_key,
@@ -3620,11 +3624,24 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
-    /// The AutoFill extension's credential list: unlock every vault and return
-    /// the items that can fill `service`, without their passwords. `service` is
-    /// `None` when the extension is listing everything.
-    ListAutofillItems {
-        service: Option<String>,
+    /// The AutoFill extension is listing the logins that match `page`, without
+    /// their passwords.
+    ListLogins {
+        page: LoginPage,
+    },
+    /// The AutoFill extension is filling the username and password of one
+    /// login on `page`. `account` is the client's own label for the login. It
+    /// is not verified, so the prompt may show it but nothing may rely on it.
+    FillLogin {
+        page: LoginPage,
+        record_id: String,
+        account: Option<String>,
+    },
+    /// The AutoFill extension is asking for the one-time code of one login on
+    /// `page`.
+    GenerateTotp {
+        page: LoginPage,
+        record_id: String,
     },
     /// `ap exec` / `ap inject`: resolve `refs` behind one prompt. The refs may
     /// span several vaults.
@@ -3658,6 +3675,34 @@ pub enum VaultAction {
     AssertPasskey {
         rp_id: String,
     },
+}
+
+/// The page a login request is for. Mirrors [`app_broker::LoginPage`], less the
+/// URL.
+#[derive(uniffi::Record, Clone)]
+pub struct LoginPage {
+    /// The frame's host, with one leading `www.` removed.
+    pub host: String,
+    /// The frame's registrable domain. Grants are keyed on it.
+    pub domain: String,
+    /// The top-level host, when the form is in a frame of another host.
+    pub top_host: Option<String>,
+    /// False when the frame is on `http:`.
+    pub secure: bool,
+    /// The name of the app that asked. `None` means a browser.
+    pub requester: Option<String>,
+}
+
+impl From<app_broker::LoginPage> for LoginPage {
+    fn from(page: app_broker::LoginPage) -> Self {
+        Self {
+            host: page.host,
+            domain: page.domain,
+            top_host: page.top_host,
+            secure: page.secure,
+            requester: page.requester,
+        }
+    }
 }
 
 /// Mirrors [`app_broker::ResolvePurpose`].
@@ -3708,8 +3753,19 @@ impl From<app_broker::VaultAction> for VaultAction {
                 item_key,
                 credential_key,
             },
-            app_broker::VaultAction::ListAutofillItems { service } => {
-                Self::ListAutofillItems { service }
+            app_broker::VaultAction::ListLogins { page } => Self::ListLogins { page: page.into() },
+            app_broker::VaultAction::FillLogin {
+                page,
+                record_id,
+                account,
+            } => Self::FillLogin {
+                page: page.into(),
+                record_id,
+                account,
+            },
+            app_broker::VaultAction::GenerateTotp { page, record_id } => Self::GenerateTotp {
+                page: page.into(),
+                record_id,
             },
             app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
                 purpose: purpose.into(),
