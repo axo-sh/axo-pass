@@ -45,6 +45,35 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     model.load(service: serviceIdentifiers.first?.identifier)
   }
 
+  /// A passkey sign-in where the user picked Axo Pass rather than one of our
+  /// registered identities. The broker asserts with any stored passkey for the
+  /// relying party that `allowedCredentials` permits. With several accounts on
+  /// one site and no allow list, the authenticator picks one.
+  override func prepareCredentialList(
+    for serviceIdentifiers: [ASCredentialServiceIdentifier],
+    requestParameters: ASPasskeyCredentialRequestParameters
+  ) {
+    guard BrokerClient.isAvailable else {
+      model.report(BrokerError.unavailable)
+      return
+    }
+    let rpID = requestParameters.relyingPartyIdentifier
+    let clientDataHash = requestParameters.clientDataHash
+    model.beginFilling(rpID)
+    Task { [weak self] in
+      do {
+        let assertion = try await BrokerClient.assertPasskey(
+          rpID: rpID,
+          clientDataHash: clientDataHash,
+          allowedCredentialIDs: requestParameters.allowedCredentials)
+        self?.completeAssertion(
+          rpID: rpID, clientDataHash: clientDataHash, assertion: assertion)
+      } catch {
+        self?.model.report(error)
+      }
+    }
+  }
+
   // MARK: - Filling
 
   override func provideCredentialWithoutUserInteraction(for request: any ASCredentialRequest) {
@@ -97,7 +126,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
           userDisplayName: identity.userName,
           clientDataHash: request.clientDataHash,
           algorithms: request.supportedAlgorithms.map(\.rawValue),
-          excludedCredentials: [])
+          excludedCredentials: (request.excludedCredentials ?? []).map(\.credentialID))
         self?.completeRegistration(
           rpID: identity.relyingPartyIdentifier,
           clientDataHash: request.clientDataHash,

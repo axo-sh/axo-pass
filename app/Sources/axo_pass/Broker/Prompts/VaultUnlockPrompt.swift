@@ -150,8 +150,8 @@ final class VaultUnlockPromptModel {
         let path = "\(ref.itemKey)/\(ref.credentialKey)"
         return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
       }
-    case .listItems, .listAutofillItems, .exportVaults, .importVaults, .addVault,
-      .createPasskey, .assertPasskey:
+    case .listItems, .listAutofillItems, .exportVaults, .importVaults, .addVault, .createPasskey,
+      .assertPasskey:
       return []
     }
   }
