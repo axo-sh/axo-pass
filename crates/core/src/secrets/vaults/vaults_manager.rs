@@ -110,18 +110,21 @@ impl VaultsManager {
     }
 
     /// Export the given vaults into a single bundle file at `path`. Each vault
-    /// is unlocked first.
+    /// is unlocked first. Passkeys are included only when `include_passkeys` is
+    /// set.
     pub fn export_bundle<P: AsRef<Path>>(
         &mut self,
         vault_keys: &[String],
         path: P,
         export_mode: ExportMode,
+        include_passkeys: bool,
         progress: impl FnMut(ExportProgress),
     ) -> Result<(), Error> {
         self.export_bundle_on(
             vault_keys,
             path,
             export_mode,
+            include_passkeys,
             AuthContext::SharedThreadLocal,
             progress,
         )
@@ -137,6 +140,7 @@ impl VaultsManager {
         vault_keys: &[String],
         path: P,
         export_mode: ExportMode,
+        include_passkeys: bool,
         auth_context: AuthContext,
         progress: impl FnMut(ExportProgress),
     ) -> Result<(), Error> {
@@ -151,7 +155,13 @@ impl VaultsManager {
             .iter()
             .map(|k| self.vaults.get(k.as_str()).expect("unlocked above"))
             .collect();
-        export_bundle(&selected, path.as_ref(), export_mode, progress)
+        export_bundle(
+            &selected,
+            path.as_ref(),
+            export_mode,
+            include_passkeys,
+            progress,
+        )
     }
 
     /// Open and decrypt a bundle file so the caller can inspect its vaults and

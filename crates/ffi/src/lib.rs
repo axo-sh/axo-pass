@@ -2450,6 +2450,7 @@ impl AxoPass {
         dest_path: String,
         passphrase: String,
         work_factor: ExportWorkFactor,
+        include_passkeys: bool,
         progress: Option<Arc<dyn VaultExportProgressDelegate>>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
@@ -2463,6 +2464,7 @@ impl AxoPass {
                 &vault_keys,
                 std::path::Path::new(&dest_path),
                 export_mode,
+                include_passkeys,
                 |p| {
                     if let Some(delegate) = &progress {
                         let (stage, index, total) = match p {

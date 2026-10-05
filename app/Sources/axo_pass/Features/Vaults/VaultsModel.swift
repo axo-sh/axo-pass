@@ -774,13 +774,14 @@ final class VaultsModel {
     destination: URL,
     passphrase: String,
     workFactor: ExportWorkFactor,
+    includePasskeys: Bool,
     onStage: @escaping @MainActor (VaultExportStage, UInt32, UInt32) -> Void
   ) async -> String? {
     let delegate = ExportProgressForwarder(onStage)
     do {
       try await core.exportVaultBundle(
         vaultKeys: vaultKeys, destPath: destination.path, passphrase: passphrase,
-        workFactor: workFactor, progress: delegate)
+        workFactor: workFactor, includePasskeys: includePasskeys, progress: delegate)
       return nil
     } catch {
       return String(describing: error)

@@ -499,6 +499,9 @@ enum WireRequest {
         vault_keys: Vec<String>,
         dest_path: String,
         mode: vault::WireExportMode,
+        /// Leave passkeys out of the bundle. They are included by default.
+        #[serde(default)]
+        exclude_passkeys: bool,
         #[serde(default)]
         caller: Option<String>,
     },
@@ -2000,6 +2003,7 @@ async fn serve_request(
                 vault_keys,
                 dest_path,
                 mode,
+                exclude_passkeys,
                 caller,
             } => {
                 let prompt = vault::VaultAccessPrompt {
@@ -2014,6 +2018,7 @@ async fn serve_request(
                 let payload = vault::ExportPayload {
                     dest_path: std::path::PathBuf::from(dest_path),
                     mode: mode.into(),
+                    include_passkeys: !exclude_passkeys,
                 };
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(

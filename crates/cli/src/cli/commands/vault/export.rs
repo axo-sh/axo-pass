@@ -34,6 +34,10 @@ pub struct VaultExportCommand {
     /// for recipient encryption.
     #[arg(long, default_value = "secure")]
     work_factor: String,
+
+    /// Leave passkeys out of the export. They are included by default.
+    #[arg(long)]
+    exclude_passkeys: bool,
 }
 
 impl VaultExportCommand {
@@ -87,12 +91,17 @@ impl VaultExportCommand {
             &vault_keys,
             &export_path_str,
             wire_export_mode(&export_mode),
+            !self.exclude_passkeys,
             caller.as_deref(),
         ) {
             Ok(_) => {},
-            Err(BrokerError::Unavailable) => {
-                Self::export_locally(&mut vm, &vault_keys, &export_path, export_mode)?
-            },
+            Err(BrokerError::Unavailable) => Self::export_locally(
+                &mut vm,
+                &vault_keys,
+                &export_path,
+                export_mode,
+                !self.exclude_passkeys,
+            )?,
             Err(e) => return Err(format!("Failed to export vaults: {e}")),
         }
 
@@ -108,18 +117,25 @@ impl VaultExportCommand {
         vault_keys: &[String],
         export_path: &Path,
         export_mode: ExportMode,
+        include_passkeys: bool,
     ) -> Result<(), String> {
-        vm.export_bundle(vault_keys, export_path, export_mode, |p| match p {
-            ExportProgress::Vault { index, total } => {
-                cprintln!("<dim>Collecting vault {index}/{total}</dim>");
+        vm.export_bundle(
+            vault_keys,
+            export_path,
+            export_mode,
+            include_passkeys,
+            |p| match p {
+                ExportProgress::Vault { index, total } => {
+                    cprintln!("<dim>Collecting vault {index}/{total}</dim>");
+                },
+                ExportProgress::DerivingKey => {
+                    cprintln!("<dim>Deriving key</dim>");
+                },
+                ExportProgress::Writing => {
+                    cprintln!("<dim>Writing bundle</dim>");
+                },
             },
-            ExportProgress::DerivingKey => {
-                cprintln!("<dim>Deriving key</dim>");
-            },
-            ExportProgress::Writing => {
-                cprintln!("<dim>Writing bundle</dim>");
-            },
-        })
+        )
         .map_err(|e| format!("Failed to export vaults: {e}"))
     }
 }

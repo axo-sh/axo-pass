@@ -259,6 +259,8 @@ pub struct WriteSecretPayload {
 pub struct ExportPayload {
     pub dest_path: PathBuf,
     pub mode: ExportMode,
+    /// False leaves passkeys out of the bundle.
+    pub include_passkeys: bool,
 }
 
 /// The bundle an [`VaultAction::ImportVaults`] reads, its decryption identity
@@ -529,12 +531,14 @@ pub fn request_export_vaults(
     vault_keys: &[String],
     dest_path: &str,
     mode: WireExportMode,
+    include_passkeys: bool,
     caller: Option<&str>,
 ) -> Result<u32, BrokerError> {
     let request = WireRequest::ExportVaults {
         vault_keys: vault_keys.to_vec(),
         dest_path: dest_path.to_string(),
         mode,
+        exclude_passkeys: !include_passkeys,
         caller: caller.map(String::from),
     };
     match send_request(&request)? {
@@ -1537,6 +1541,7 @@ fn export_vaults(
         vault_keys,
         &export.dest_path,
         export.mode,
+        export.include_passkeys,
         AuthContext::Foreign(context),
         |_| {},
     )

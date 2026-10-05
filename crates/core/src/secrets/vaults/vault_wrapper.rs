@@ -629,11 +629,13 @@ impl VaultWrapper {
 /// Export one or more unlocked vaults into a single bundle file. A random
 /// bundle key is generated, each vault's file key is wrapped with it, and the
 /// bundle key itself is protected once with `export_mode`. Every vault must be
-/// unlocked.
+/// unlocked. Passkeys are left out of the bundle unless `include_passkeys` is
+/// set.
 pub fn export_bundle(
     vaults: &[&VaultWrapper],
     path: &Path,
     export_mode: ExportMode,
+    include_passkeys: bool,
     mut progress: impl FnMut(ExportProgress),
 ) -> Result<(), Error> {
     if vaults.is_empty() {
@@ -653,7 +655,12 @@ pub fn export_bundle(
         });
         let vault = vw.get_unlocked_vault()?;
         let key = (vw.key != DEFAULT_VAULT).then(|| vw.key.clone());
-        bundled_vaults.push(vault.to_bundled_vault(key, bundle_id, &bundle_cipher)?);
+        bundled_vaults.push(vault.to_bundled_vault(
+            key,
+            bundle_id,
+            &bundle_cipher,
+            include_passkeys,
+        )?);
     }
 
     progress(ExportProgress::DerivingKey);

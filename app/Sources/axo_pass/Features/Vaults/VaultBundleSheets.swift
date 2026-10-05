@@ -59,6 +59,7 @@ struct VaultExportSheet: View {
   @State private var error: String?
   @State private var done = false
   @State private var workFactor: ExportWorkFactor = .secure
+  @State private var includePasskeys = true
   @State private var progressText: String?
 
   init(model: VaultsModel, only: String? = nil) {
@@ -154,6 +155,13 @@ struct VaultExportSheet: View {
         Text(exportWorkFactorCostHint(factor: workFactor))
           .font(.caption)
           .foregroundStyle(.secondary)
+        Toggle("Include passkeys", isOn: $includePasskeys)
+          .padding(.top, 4)
+        if !includePasskeys {
+          Text("Passkeys stay in your vaults and are left out of the file.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
       }
       .disabled(isExporting)
 
@@ -203,7 +211,7 @@ struct VaultExportSheet: View {
       progressText = "Preparing…"
       error = await model.exportBundle(
         vaultKeys: keys, destination: destination, passphrase: passphrase,
-        workFactor: workFactor,
+        workFactor: workFactor, includePasskeys: includePasskeys,
         onStage: { stage, index, total in
           switch stage {
           case .collectingVault:

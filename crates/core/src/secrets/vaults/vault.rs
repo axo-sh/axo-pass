@@ -418,7 +418,8 @@ impl Vault {
     }
 
     /// Build a [`BundledVault`] for export. `key` is the preferred import key,
-    /// `bundle_cipher` wraps the raw file key.
+    /// `bundle_cipher` wraps the raw file key. Passkey credentials are left out
+    /// unless `include_passkeys` is set.
     ///
     /// Deleted items and credentials are not exported.
     ///
@@ -429,8 +430,21 @@ impl Vault {
         key: Option<String>,
         bundle_id: Uuid,
         bundle_cipher: &Aes256Gcm,
+        include_passkeys: bool,
     ) -> Result<BundledVault, Error> {
-        let encrypted_vault = self.to_encrypted(false)?;
+        let mut encrypted_vault = self.to_encrypted(false)?;
+        if !include_passkeys {
+            for item in self.items.values() {
+                let Some(encrypted_item) = encrypted_vault.items.get_mut(&item.id) else {
+                    continue;
+                };
+                for cred in item.credentials.values() {
+                    if matches!(cred.kind, FieldKind::Passkey) {
+                        encrypted_item.credentials.remove(&cred.id);
+                    }
+                }
+            }
+        }
         let wrapped_file_key = self.cipher.wrap_raw_key(
             bundle_cipher,
             ExportedBundle::file_key_aad(bundle_id, self.id),
@@ -1963,6 +1977,35 @@ mod tests {
                 section: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn export_leaves_out_passkeys_unless_asked() {
+        let mut vault = vault_with_credentials("site", &["password"]);
+        vault
+            .add_or_update_item_credential(
+                "site",
+                "passkey-1",
+                "Passkey",
+                FieldKind::Passkey,
+                SecretString::from("{}"),
+            )
+            .unwrap();
+        let cipher = Aes256Gcm::new(&Aes256Gcm::generate_key(OsRng));
+        let item_id = *vault.get_item_id("site").unwrap();
+        let count = |include_passkeys| {
+            vault
+                .to_bundled_vault(None, Uuid::new_v4(), &cipher, include_passkeys)
+                .unwrap()
+                .items[&item_id]
+                .credentials
+                .len()
+        };
+
+        assert_eq!(count(true), 2);
+        assert_eq!(count(false), 1);
+        // The vault itself keeps the passkey.
+        assert_eq!(vault.get_item("site").unwrap().credentials.len(), 2);
     }
 
     fn positions(vault: &Vault, item_key: &str, cred_keys: &[&str]) -> Vec<Option<u32>> {
