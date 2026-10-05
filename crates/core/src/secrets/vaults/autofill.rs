@@ -188,6 +188,59 @@ fn candidate(
     }))
 }
 
+/// A login item that a new passkey may be stored in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoginPlace {
+    pub vault_key: String,
+    pub item_key: String,
+    pub title: String,
+    pub username: Option<String>,
+    pub websites: Vec<Website>,
+}
+
+/// Collect the login items of an unlocked vault that list at least one website.
+/// A login is an item with a password role, a passkey, or the `login` category.
+/// Unlike [`collect_items`] this includes logins with no password, such as the
+/// ones created for a passkey.
+pub fn collect_places(vw: &VaultWrapper) -> Result<Vec<LoginPlace>, Error> {
+    let mut places = Vec::new();
+    for overview in vw.list_items()? {
+        let credentials = sorted_credentials(overview);
+        let Roles { password, username } = pick_roles(overview, &credentials);
+        let has_passkey = credentials
+            .iter()
+            .any(|c| matches!(c.kind, FieldKind::Passkey));
+        let is_login = password.is_some()
+            || has_passkey
+            || overview.category.as_deref() == Some(CATEGORY_LOGIN);
+        if !is_login || overview.autofill.websites.is_empty() {
+            continue;
+        }
+        let username = match username {
+            Some(cred) => read(vw, &overview.key, &cred.key)?,
+            None => None,
+        };
+        places.push(LoginPlace {
+            vault_key: vw.key.clone(),
+            item_key: overview.key.clone(),
+            title: overview.title.clone(),
+            username,
+            websites: overview.autofill.websites.clone(),
+        });
+    }
+    Ok(places)
+}
+
+/// The places with a website that matches the relying party `rp_id`. A relying
+/// party matches under `domain` rules, since an rp id is valid for its
+/// registrable domain.
+pub fn places_for_rp<'a>(places: &'a [LoginPlace], rp_id: &str) -> Vec<&'a LoginPlace> {
+    places
+        .iter()
+        .filter(|place| match_service(&place.websites, rp_id).is_some())
+        .collect()
+}
+
 /// The three ids of a record identifier: vault, item, and password credential.
 pub fn parse_record_id(record_id: &str) -> Option<(Uuid, Uuid, Uuid)> {
     let mut parts = record_id.split('/');
@@ -429,7 +482,7 @@ pub fn names_for_site(site: &Site) -> (String, String) {
 
 /// `base`, or `base-2`, `base-3`, and so on, whichever is the first key no item
 /// in `vw` uses.
-fn unused_item_key(vw: &VaultWrapper, base: &str) -> Result<String, Error> {
+pub(super) fn unused_item_key(vw: &VaultWrapper, base: &str) -> Result<String, Error> {
     let mut key = base.to_string();
     let mut n = 2;
     while vw.get_item_overview(&key)?.is_some() {
@@ -472,6 +525,50 @@ pub fn save_login(
         .get_item_overview(&item_key)?
         .ok_or_else(|| Error::InvalidItemKey(item_key.clone()))?;
     candidate(vw, vault_id, overview, None)?.ok_or_else(|| Error::InvalidItemKey(item_key))
+}
+
+/// Create the login item a new passkey is stored in: titled `title`, with a
+/// website for `rp_id` under `domain` matching and, when `username` is given, a
+/// username credential assigned the username role. It has no password role. The
+/// caller saves the vault. Returns the new item's key.
+pub fn add_passkey_login(
+    vw: &mut VaultWrapper,
+    rp_id: &str,
+    title: Option<&str>,
+    username: Option<&str>,
+) -> Result<String, Error> {
+    let site = Site::parse(rp_id)
+        .ok_or_else(|| Error::InvalidItemKey(format!("{rp_id} is not a relying party domain")))?;
+    let (base_key, derived_title) = names_for_site(&site);
+    let item_key = unused_item_key(vw, &base_key)?;
+    let title = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or(&derived_title);
+    vw.add_item(&item_key, title)?;
+
+    let mut autofill = ItemAutofill::default();
+    if let Some(username) = username.map(str::trim).filter(|name| !name.is_empty()) {
+        let kind = if looks_like_email(username) {
+            FieldKind::Email
+        } else {
+            FieldKind::Text(Default::default())
+        };
+        vw.add_secret(
+            &item_key,
+            USERNAME_KEYS[0],
+            "Username",
+            kind,
+            SecretString::from(username.to_string()),
+        )?;
+        autofill.username = Some(credential_id(vw, &item_key, USERNAME_KEYS[0])?);
+    }
+    autofill
+        .websites
+        .push(Website::new(rp_id, MatchKind::Domain));
+    vw.set_item_autofill(&item_key, autofill)?;
+    vw.set_item_category(&item_key, Some(CATEGORY_LOGIN.to_string()))?;
+    Ok(item_key)
 }
 
 /// The login a record identifier names, wherever it applies. Unlike

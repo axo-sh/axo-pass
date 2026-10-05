@@ -9,12 +9,15 @@
 
 use std::sync::Mutex;
 
-use crate::secrets::vaults::autofill::{self, AutofillItem, LoginSummary};
+use crate::secrets::vaults::autofill::{self, AutofillItem, LoginPlace, LoginSummary};
 
 #[derive(Default)]
 pub struct LoginIndex {
     /// `None` until the first [`LoginIndex::replace`].
     items: Mutex<Option<Vec<AutofillItem>>>,
+    /// The login items a passkey may be stored in. `None` until the first
+    /// [`LoginIndex::replace_places`].
+    places: Mutex<Option<Vec<LoginPlace>>>,
 }
 
 impl LoginIndex {
@@ -52,6 +55,21 @@ impl LoginIndex {
             .collect();
         found.sort_by_key(AutofillItem::sort_key);
         Some(found.iter().filter_map(AutofillItem::summary).collect())
+    }
+
+    /// Replace the login items a passkey may be stored in.
+    pub fn replace_places(&self, places: Vec<LoginPlace>) {
+        *self.places.lock().unwrap_or_else(|e| e.into_inner()) = Some(places);
+    }
+
+    /// The indexed login items, or none before the first
+    /// [`LoginIndex::replace_places`].
+    pub fn places(&self) -> Vec<LoginPlace> {
+        self.places
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_default()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Vec<AutofillItem>>> {

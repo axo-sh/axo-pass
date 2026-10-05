@@ -31,6 +31,11 @@ final class VaultUnlockPromptModel {
   /// serves one request at a time, so there is at most one.
   private var beginning: VaultAccessPrompt?
 
+  /// Where the user is choosing to store the passkey a registration prompt is
+  /// for. Set while that prompt is up, and kept until it ends so the broker can
+  /// read the answer after the evaluation returns.
+  private var placement: PasskeyPlacementState?
+
   /// Holds the cross-process auth lock during an evaluation. Set by
   /// `VaultsModel` when the broker starts.
   var core: AxoPass?
@@ -49,6 +54,12 @@ final class VaultUnlockPromptModel {
     let grant = grants.begin(key, policy: Self.policy(for: prompt.action), peer: peer)
     beginning = prompt
     defer { beginning = nil }
+
+    if case .createPasskey(_, _, let choices) = prompt.action {
+      placement = PasskeyPlacementState(choices: choices)
+    } else {
+      placement = nil
+    }
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
@@ -93,8 +104,15 @@ final class VaultUnlockPromptModel {
     return contextPointer(grant.context)
   }
 
+  /// The vault and item the user chose for a passkey, read once the evaluation
+  /// has returned. `nil` when the prompt is not a registration.
+  func passkeyPlacement() -> PasskeyPlacementInfo? {
+    placement?.answer
+  }
+
   /// The access finished, successfully or not.
   func end(prompt: VaultAccessPrompt, outcome: PromptOutcome) {
+    placement = nil
     showTask?.cancel()
     showTask = nil
     panel.hide()
@@ -125,7 +143,9 @@ final class VaultUnlockPromptModel {
 
   private func showPanel(prompt: VaultAccessPrompt, view: LAAuthenticationView) {
     let content = VaultUnlockView(
-      vaultKey: prompt.vaultKey,
+      // A registration picks its vault in the placement card instead.
+      vaultKey: placement == nil ? prompt.vaultKey : "",
+      placement: placement,
       caller: prompt.caller,
       callerChain: prompt.callerChain,
       appRequester: Self.appRequester(for: prompt.action),
@@ -174,6 +194,7 @@ final class VaultUnlockPromptModel {
     switch action {
     case .fillLogin(_, _, let account), .updateLoginPassword(_, _, let account): return account
     case .saveLogin(_, let username): return username
+    case .createPasskey(_, let userName, _): return userName.isEmpty ? nil : userName
     default: return nil
     }
   }
@@ -227,7 +248,7 @@ final class VaultUnlockPromptModel {
       what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
     case .addVault(let path):
       what = "add the vault at \(path)"
-    case .createPasskey(let rpId):
+    case .createPasskey(let rpId, _, _):
       what = "create a passkey for \(rpId)"
     case .assertPasskey(let rpId):
       what = "sign in to \(rpId) with a passkey"
@@ -263,6 +284,9 @@ final class VaultUnlockPromptModel {
       .updateLoginPassword(_, let recordId, _):
       id = recordId
     case .listLogins: id = "logins"
+    // The vault key changes to the user's choice before the prompt ends, so it
+    // cannot name the grant.
+    case .createPasskey: id = "passkey"
     default: id = prompt.vaultKey
     }
     let subject = GrantSubject(kind: .vault, id: id, label: nil)
@@ -319,14 +343,94 @@ final class VaultUnlockPromptModel {
     case .importVaults(let count):
       return [.plain("import \(count) \(count == 1 ? "vault" : "vaults")")]
     case .addVault: return [.plain("add a vault")]
-    case .createPasskey(let rpId): return [.plain("create a passkey for "), .bold(rpId)]
+    case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId): return [.plain("sign in to "), .bold(rpId)]
     }
   }
 }
 
+/// The choices in a passkey registration prompt: which vault, and which login
+/// in it. Defaults come from the broker, which suggests the login whose
+/// username matches the account.
+@MainActor
+@Observable
+final class PasskeyPlacementState {
+  let vaults: [VaultInfo]
+  let logins: [PasskeyLoginChoice]
+  private let suggested: PasskeyLoginChoice?
+
+  private(set) var vaultKey: String
+  /// The chosen login's item key. `nil` means "New login".
+  var itemKey: String?
+
+  init(choices: PasskeyChoicesInfo) {
+    vaults = choices.vaults
+    logins = choices.logins
+    suggested = choices.suggested.flatMap { index in
+      Int(index) < choices.logins.count ? choices.logins[Int(index)] : nil
+    }
+    vaultKey = choices.defaultVault
+    itemKey = suggested?.itemKey
+  }
+
+  /// The logins of the chosen vault whose websites match the relying party.
+  var loginsInVault: [PasskeyLoginChoice] {
+    logins.filter { $0.vaultKey == vaultKey }
+  }
+
+  /// Switch vaults. The login selection moves with it: the suggested login when
+  /// it is in the new vault, otherwise "New login".
+  func selectVault(_ key: String) {
+    guard key != vaultKey else { return }
+    vaultKey = key
+    itemKey = suggested.flatMap { $0.vaultKey == key ? $0.itemKey : nil }
+  }
+
+  var answer: PasskeyPlacementInfo {
+    PasskeyPlacementInfo(vaultKey: vaultKey, itemKey: itemKey)
+  }
+}
+
+private struct PasskeyPlacementCard: View {
+  @Bindable var state: PasskeyPlacementState
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if state.vaults.count > 1 {
+        Picker(
+          "Vault",
+          selection: Binding(get: { state.vaultKey }, set: { state.selectVault($0) })
+        ) {
+          ForEach(state.vaults, id: \.key) { vault in
+            Text(vault.name ?? vault.key).tag(vault.key)
+          }
+        }
+      } else {
+        LabeledContent("Vault", value: state.vaults.first.map { $0.name ?? $0.key } ?? state.vaultKey)
+      }
+
+      Picker("Save to", selection: $state.itemKey) {
+        Text("New login").tag(String?.none)
+        ForEach(state.loginsInVault, id: \.itemKey) { login in
+          Text(Self.label(login)).tag(String?.some(login.itemKey))
+        }
+      }
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+  }
+
+  private static func label(_ login: PasskeyLoginChoice) -> String {
+    guard let username = login.username, !username.isEmpty else { return login.title }
+    return "\(login.title) (\(username))"
+  }
+}
+
 private struct VaultUnlockView: View {
   let vaultKey: String
+  /// Set for a passkey registration, which asks where to store the passkey.
+  let placement: PasskeyPlacementState?
   let caller: String?
   let callerChain: [ProcessNode]
   /// The app an AutoFill request is for. `nil` means a browser.
@@ -357,6 +461,9 @@ private struct VaultUnlockView: View {
       VStack(spacing: 8) {
         if let login {
           PromptSubjectCard(systemImage: "person.fill", title: login, detail: nil)
+        }
+        if let placement {
+          PasskeyPlacementCard(state: placement)
         }
         // An AutoFill request spans every vault, so it carries no vault key.
         if !vaultKey.isEmpty {
@@ -429,6 +536,10 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
 
   func abandonAuthorization() async {
     await model.abandon()
+  }
+
+  func passkeyPlacement(prompt: VaultAccessPrompt) async -> PasskeyPlacementInfo? {
+    await model.passkeyPlacement()
   }
 
   func endAuthorization(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {

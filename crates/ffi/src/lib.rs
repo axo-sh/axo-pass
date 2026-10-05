@@ -148,7 +148,7 @@ impl From<agent_client::SshAgentClientError> for FfiError {
 // Records
 // ---------------------------------------------------------------------------
 
-#[derive(uniffi::Record)]
+#[derive(uniffi::Record, Clone)]
 pub struct VaultInfo {
     pub key: String,
     pub name: Option<String>,
@@ -1665,6 +1665,7 @@ impl AxoPass {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault_keys: Vec<String> = m.iter_vault_keys().collect();
             let mut found_items = Vec::new();
+            let mut places = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
@@ -1677,8 +1678,13 @@ impl AxoPass {
                     Ok(found) => found_items.extend(found),
                     Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
                 }
+                match autofill::collect_places(vault) {
+                    Ok(found) => places.extend(found),
+                    Err(e) => log::error!("Failed to collect login items in {vault_key}: {e}"),
+                }
             }
             index.replace(found_items.clone());
+            index.replace_places(places);
             Ok(found_items
                 .into_iter()
                 .map(AutofillItemInfo::from)
@@ -3696,14 +3702,76 @@ pub enum VaultAction {
     AddVault {
         path: String,
     },
-    /// The AutoFill extension is registering a passkey for `rp_id`.
+    /// The AutoFill extension is registering a passkey for `rp_id`. The prompt
+    /// offers where to store it.
     CreatePasskey {
         rp_id: String,
+        user_name: String,
+        choices: PasskeyChoicesInfo,
     },
     /// The AutoFill extension is asserting a passkey for `rp_id`.
     AssertPasskey {
         rp_id: String,
     },
+}
+
+/// The vaults and logins a new passkey may be stored in. Mirrors
+/// [`app_broker::PasskeyChoices`].
+#[derive(uniffi::Record, Clone)]
+pub struct PasskeyChoicesInfo {
+    /// Every vault.
+    pub vaults: Vec<VaultInfo>,
+    /// The matching logins in every vault.
+    pub logins: Vec<PasskeyLoginChoice>,
+    /// The vault selected when the prompt opens.
+    pub default_vault: String,
+    /// The login selected when the prompt opens, as an index into `logins`.
+    /// `None` selects "New login".
+    pub suggested: Option<u32>,
+}
+
+/// A login item that matches the relying party.
+#[derive(uniffi::Record, Clone)]
+pub struct PasskeyLoginChoice {
+    pub vault_key: String,
+    pub item_key: String,
+    pub title: String,
+    pub username: Option<String>,
+}
+
+impl From<app_broker::PasskeyChoices> for PasskeyChoicesInfo {
+    fn from(choices: app_broker::PasskeyChoices) -> Self {
+        Self {
+            vaults: choices
+                .vaults
+                .into_iter()
+                .map(|v| VaultInfo {
+                    key: v.key,
+                    name: v.name,
+                })
+                .collect(),
+            logins: choices
+                .logins
+                .into_iter()
+                .map(|l| PasskeyLoginChoice {
+                    vault_key: l.vault_key,
+                    item_key: l.item_key,
+                    title: l.title,
+                    username: l.username,
+                })
+                .collect(),
+            default_vault: choices.default_vault,
+            suggested: choices.suggested.map(|index| index as u32),
+        }
+    }
+}
+
+/// Where the user chose to store a passkey: a vault, and an item in it or a new
+/// login when `item_key` is `None`. Mirrors [`app_broker::PasskeyPlacement`].
+#[derive(uniffi::Record, Clone)]
+pub struct PasskeyPlacementInfo {
+    pub vault_key: String,
+    pub item_key: Option<String>,
 }
 
 /// The page a login request is for. Mirrors [`app_broker::LoginPage`], less the
@@ -3827,7 +3895,15 @@ impl From<app_broker::VaultAction> for VaultAction {
                 count: count as u32,
             },
             app_broker::VaultAction::AddVault { path } => Self::AddVault { path },
-            app_broker::VaultAction::CreatePasskey { rp_id } => Self::CreatePasskey { rp_id },
+            app_broker::VaultAction::CreatePasskey {
+                rp_id,
+                user_name,
+                choices,
+            } => Self::CreatePasskey {
+                rp_id,
+                user_name,
+                choices: choices.into(),
+            },
             app_broker::VaultAction::AssertPasskey { rp_id } => Self::AssertPasskey { rp_id },
         }
     }
@@ -3891,6 +3967,11 @@ pub trait VaultPromptDelegate: Send + Sync {
     /// usual.
     async fn abandon_authorization(&self);
 
+    /// Where the user chose to store the passkey a `CreatePasskey` prompt is
+    /// for. Called after `begin_authorization` returns a context. `None` means
+    /// the user made no choice, and the prompt's default applies.
+    async fn passkey_placement(&self, prompt: VaultAccessPrompt) -> Option<PasskeyPlacementInfo>;
+
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
 
@@ -3917,19 +3998,21 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
             | app_broker::VaultAction::SaveLogin { .. }
             | app_broker::VaultAction::UpdateLoginPassword { .. }
             | app_broker::VaultAction::CreatePasskey { .. }
-            | app_broker::VaultAction::AssertPasskey { .. }
             | app_broker::VaultAction::ImportVaults { .. }
             | app_broker::VaultAction::AddVault { .. }
     )
 }
 
 /// The vault keys a mutating action wrote to, when the prompt names them.
-/// `WriteSecret` and `SaveLogin` carry the real key; the passkey, password
-/// update, import and add actions do not, so they return an empty list and
-/// every vault is relocked.
+/// `WriteSecret`, `SaveLogin`, and `CreatePasskey` carry the real key, which
+/// for a registration is the vault the user chose. The password update, import
+/// and add actions do not, so they return an empty list and every vault is
+/// relocked.
 fn changed_vault_keys(prompt: &app_broker::VaultAccessPrompt) -> Vec<String> {
     match &prompt.action {
-        app_broker::VaultAction::WriteSecret { .. } | app_broker::VaultAction::SaveLogin { .. } => {
+        app_broker::VaultAction::WriteSecret { .. }
+        | app_broker::VaultAction::SaveLogin { .. }
+        | app_broker::VaultAction::CreatePasskey { .. } => {
             vec![prompt.vault_key.clone()]
         },
         _ => Vec::new(),
@@ -3961,6 +4044,20 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
 
     async fn abandon(&self) {
         self.delegate.abandon_authorization().await;
+    }
+
+    async fn passkey_placement(
+        &self,
+        prompt: &app_broker::VaultAccessPrompt,
+    ) -> Option<app_broker::PasskeyPlacement> {
+        let placement = self
+            .delegate
+            .passkey_placement(prompt.clone().into())
+            .await?;
+        Some(app_broker::PasskeyPlacement {
+            vault_key: placement.vault_key,
+            item_key: placement.item_key,
+        })
     }
 
     async fn end(&self, prompt: app_broker::VaultAccessPrompt, outcome: app_broker::PromptOutcome) {

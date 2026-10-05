@@ -10,8 +10,8 @@ mod vault_wrapper;
 mod vaults_manager;
 
 pub use autofill::{
-    AutofillItem, LoginSecrets, LoginSummary, LoginWrite, MatchRank, MatchedWebsite, Site,
-    write_login,
+    AutofillItem, LoginPlace, LoginSecrets, LoginSummary, LoginWrite, MatchRank, MatchedWebsite,
+    Site, write_login,
 };
 pub use errors::Error;
 pub use fields::{FieldKind, TextField};

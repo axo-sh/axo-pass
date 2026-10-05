@@ -39,7 +39,7 @@ use passkey_types::{Bytes, Passkey};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
-use super::{Error, FieldKind, VaultWrapper};
+use super::{Error, FieldKind, VaultWrapper, autofill};
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
 /// random constant, per the WebAuthn spec: it names the model, never the
@@ -48,9 +48,15 @@ const AAGUID: Aaguid = Aaguid([
     0x9a, 0x0c, 0x4e, 0x7b, 0x2d, 0x51, 0x4f, 0x86, 0xb1, 0x63, 0x5c, 0x8d, 0x74, 0x2e, 0x9f, 0x30,
 ]);
 
-/// Prefix of the item every passkey is written under. One item per relying
-/// party keeps the vault list readable.
-const ITEM_KEY_PREFIX: &str = "passkey";
+/// Where a new passkey is stored in the chosen vault.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PasskeyTarget {
+    /// A new login item for the relying party.
+    #[default]
+    NewLogin,
+    /// An existing item, by key.
+    Item(String),
+}
 
 /// Create a passkey in an unlocked vault and return the CTAP2 response. The
 /// caller turns `as_webauthn_bytes()` into the attestation object the browser
@@ -61,8 +67,9 @@ const ITEM_KEY_PREFIX: &str = "passkey";
 pub async fn create(
     vw: &mut VaultWrapper,
     request: make_credential::Request,
+    target: PasskeyTarget,
 ) -> Result<make_credential::Response, Error> {
-    let mut authenticator = Authenticator::new(AAGUID, VaultStore::new(vw), PromptedUser);
+    let mut authenticator = Authenticator::new(AAGUID, VaultStore::new(vw, target), PromptedUser);
     let response = authenticator
         .make_credential(request)
         .await
@@ -73,20 +80,22 @@ pub async fn create(
     Ok(response)
 }
 
-/// Assert an existing passkey in an unlocked vault.
+/// Assert an existing passkey in an unlocked vault. Passkeys are synced, so
+/// their signature counter stays 0 and an assertion writes nothing to the
+/// vault.
 pub async fn assert(
     vw: &mut VaultWrapper,
     request: get_assertion::Request,
 ) -> Result<get_assertion::Response, Error> {
-    let mut authenticator = Authenticator::new(AAGUID, VaultStore::new(vw), PromptedUser);
-    let response = authenticator
+    let mut authenticator = Authenticator::new(
+        AAGUID,
+        VaultStore::new(vw, PasskeyTarget::NewLogin),
+        PromptedUser,
+    );
+    authenticator
         .get_assertion(request)
         .await
-        .map_err(status_error)?;
-    // An assertion bumps the signature counter, which `update_credential` wrote
-    // back into the vault.
-    vw.save()?;
-    Ok(response)
+        .map_err(status_error)
 }
 
 /// A passkey with the vault coordinates it was read from.
@@ -146,6 +155,8 @@ pub struct CreatePasskeyRequest {
     /// Credential ids the relying party already holds for this user. A match
     /// makes the authenticator refuse, so the browser does not double-register.
     pub excluded_credentials: Vec<Vec<u8>>,
+    /// Where in the vault the passkey is stored.
+    pub target: PasskeyTarget,
 }
 
 /// The result of a registration, ready for `ASPasskeyRegistrationCredential`.
@@ -250,7 +261,7 @@ pub async fn create_from_wire(
         pin_protocol: None,
     };
 
-    let response = create(vw, request).await?;
+    let response = create(vw, request, req.target).await?;
     let credential_id = response
         .auth_data
         .attested_credential_data
@@ -391,24 +402,13 @@ fn decode(value: &str) -> Result<Passkey, Error> {
 /// request leaves nothing behind on disk.
 struct VaultStore<'a> {
     vw: &'a mut VaultWrapper,
+    /// Where a new passkey goes. Read by `save_credential` only.
+    target: PasskeyTarget,
 }
 
 impl<'a> VaultStore<'a> {
-    fn new(vw: &'a mut VaultWrapper) -> Self {
-        Self { vw }
-    }
-
-    /// Where a passkey for `rp_id` lives. One item per relying party, with the
-    /// credential id distinguishing several accounts on the same site.
-    fn item_key(rp_id: &str) -> String {
-        let slug: String = rp_id
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        format!(
-            "{ITEM_KEY_PREFIX}-{}",
-            slug.trim_matches('-').to_lowercase()
-        )
+    fn new(vw: &'a mut VaultWrapper, target: PasskeyTarget) -> Self {
+        Self { vw, target }
     }
 
     /// The vault credential key for a passkey: `passkey-` and the lowercase hex
@@ -425,27 +425,56 @@ impl<'a> VaultStore<'a> {
         format!("passkey-{prefix}")
     }
 
-    /// Write `cred` into the vault, replacing whatever is under the same keys.
-    /// Used for both a new credential and a counter update.
+    /// Write a new passkey into the target item, creating a login item for the
+    /// relying party when the target is a new login.
     fn put(
         &mut self,
         cred: &Passkey,
-        item_title: &str,
+        item_title: Option<&str>,
         credential_title: &str,
     ) -> Result<(), Error> {
-        let item_key = Self::item_key(&cred.rp_id);
-        let credential_key = Self::credential_key(&cred.credential_id);
         let value = encode(cred)?;
-        self.vw.add_item(&item_key, item_title)?;
-        self.vw.add_secret(
-            &item_key,
-            &credential_key,
+        store_passkey(
+            self.vw,
+            cred,
+            value,
+            item_title,
             credential_title,
-            FieldKind::Passkey,
-            SecretString::from(value),
-        )?;
-        Ok(())
+            &self.target,
+        )
     }
+}
+
+/// Write a passkey record into `target` in an unlocked vault, creating a login
+/// item for the relying party when the target is a new login. The caller saves
+/// the vault.
+fn store_passkey(
+    vw: &mut VaultWrapper,
+    cred: &Passkey,
+    value: String,
+    item_title: Option<&str>,
+    credential_title: &str,
+    target: &PasskeyTarget,
+) -> Result<(), Error> {
+    let item_key = match target {
+        PasskeyTarget::Item(key) => {
+            if vw.get_item_overview(key)?.is_none() {
+                return Err(Error::InvalidItemKey(key.clone()));
+            }
+            key.clone()
+        },
+        PasskeyTarget::NewLogin => {
+            autofill::add_passkey_login(vw, &cred.rp_id, item_title, cred.username.as_deref())?
+        },
+    };
+    let credential_key = VaultStore::credential_key(&cred.credential_id);
+    vw.add_secret(
+        &item_key,
+        &credential_key,
+        credential_title,
+        FieldKind::Passkey,
+        SecretString::from(value),
+    )
 }
 
 #[async_trait]
@@ -491,11 +520,7 @@ impl CredentialStore for VaultStore<'_> {
         rp: PublicKeyCredentialRpEntity,
         _options: passkey_types::ctap2::get_assertion::Options,
     ) -> Result<(), StatusCode> {
-        let item_title = rp
-            .name
-            .clone()
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| cred.rp_id.clone());
+        let item_title = rp.name.clone().filter(|n| !n.is_empty());
         let credential_title = user
             .display_name
             .clone()
@@ -504,21 +529,15 @@ impl CredentialStore for VaultStore<'_> {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Passkey".to_string());
 
-        self.put(&cred, &item_title, &credential_title)
+        self.put(&cred, item_title.as_deref(), &credential_title)
             .map_err(internal)
     }
 
-    async fn update_credential(&mut self, cred: &Self::PasskeyItem) -> Result<(), StatusCode> {
-        // The titles are already on the stored credential; re-deriving them
-        // from the record keeps an update from renaming anything.
-        let item_title = cred.rp_id.clone();
-        let credential_title = cred
-            .user_display_name
-            .clone()
-            .or_else(|| cred.username.clone())
-            .unwrap_or_else(|| "Passkey".to_string());
-        self.put(cred, &item_title, &credential_title)
-            .map_err(internal)
+    async fn update_credential(&mut self, _cred: &Self::PasskeyItem) -> Result<(), StatusCode> {
+        // Passkeys are synced, so the signature counter is never advanced and a
+        // stored record never changes after registration. An assertion writes
+        // nothing.
+        Ok(())
     }
 
     async fn get_info(&self) -> StoreInfo {
@@ -575,6 +594,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::secrets::vaults::MatchKind;
     use crate::secrets::vaults::vault_wrapper::normalized_key;
 
     /// Keeps whatever the authenticator saves, so a test can inspect a real
@@ -697,15 +717,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn item_keys_are_normalized_per_relying_party() {
-        assert_eq!(VaultStore::item_key("example.com"), "passkey-example-com");
-        assert_eq!(
-            VaultStore::item_key("login.EXAMPLE.co.uk"),
-            "passkey-login-example-co-uk"
-        );
-    }
-
     /// Credential ids are random bytes. Every one must give a key the vault
     /// accepts unchanged, including ids whose base64url form starts with a
     /// digit or ends with `-`.
@@ -729,6 +740,146 @@ mod tests {
             VaultStore::credential_key(&[0xd3, 0x4f, 0xb9, 0x01, 0x22, 0x7e, 0x80, 0x11, 0x5a]),
             "passkey-d34fb901227e8011"
         );
+    }
+
+    fn registration(rp_id: &str, user: &str) -> make_credential::Request {
+        make_credential::Request {
+            client_data_hash: vec![0u8; 32].into(),
+            rp: PublicKeyCredentialRpEntity {
+                id: rp_id.into(),
+                name: Some("Example".into()),
+            },
+            user: WebauthnUserEntity {
+                id: vec![1, 2, 3, 4].into(),
+                name: user.into(),
+                display_name: user.into(),
+            },
+            pub_key_cred_params: vec![PublicKeyCredentialParameters {
+                ty: PublicKeyCredentialType::PublicKey,
+                alg: coset::iana::Algorithm::ES256,
+            }],
+            exclude_list: None,
+            extensions: None,
+            options: get_assertion::Options {
+                rk: true,
+                up: true,
+                uv: true,
+            },
+            pin_auth: None,
+            pin_protocol: None,
+        }
+    }
+
+    /// Register without saving, since a test vault has no path to write to.
+    async fn register(vw: &mut VaultWrapper, target: PasskeyTarget, user: &str) {
+        let mut authenticator =
+            Authenticator::new(AAGUID, VaultStore::new(vw, target), PromptedUser);
+        authenticator
+            .make_credential(registration("example.com", user))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_new_login_target_creates_a_login_item() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
+
+        let passkeys = list(&vw).unwrap();
+        assert_eq!(passkeys.len(), 1);
+        let item = vw
+            .get_item_overview(&passkeys[0].item_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.title, "Example");
+        assert_eq!(item.category.as_deref(), Some("login"));
+        assert_eq!(item.autofill.websites.len(), 1);
+        assert_eq!(item.autofill.websites[0].url, "example.com");
+        assert!(item.autofill.password.is_none());
+        let username = item.autofill.username_credential(item).unwrap();
+        assert_eq!(username.key, "username");
+    }
+
+    #[tokio::test]
+    async fn an_item_target_stores_the_passkey_beside_the_login() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        autofill::write_login(
+            &mut vw,
+            autofill::LoginWrite {
+                item_key: "example",
+                title: "Example",
+                password_key: "password",
+                password: SecretString::from("pw"),
+                username: Some("ada"),
+                websites: &["example.com".to_string()],
+                match_kind: MatchKind::Domain,
+            },
+        )
+        .unwrap();
+        register(&mut vw, PasskeyTarget::Item("example".into()), "ada").await;
+
+        let passkeys = list(&vw).unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert_eq!(passkeys[0].item_key, "example");
+        assert_eq!(vw.list_items().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_missing_item_target_is_an_error() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut authenticator = Authenticator::new(
+            AAGUID,
+            VaultStore::new(&mut vw, PasskeyTarget::Item("gone".into())),
+            PromptedUser,
+        );
+        assert!(
+            authenticator
+                .make_credential(registration("example.com", "ada"))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_assertion_leaves_the_stored_record_unchanged() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let before = list(&vw).unwrap();
+        let item_key = before[0].item_key.clone();
+        let credential_key = before[0].credential_key.clone();
+        let stored = |vw: &VaultWrapper| {
+            vw.get_secret(&item_key, &credential_key)
+                .unwrap()
+                .unwrap()
+                .expose_secret()
+                .clone()
+        };
+        let record = stored(&vw);
+
+        for _ in 0..2 {
+            let response = assert(
+                &mut vw,
+                get_assertion::Request {
+                    rp_id: "example.com".into(),
+                    client_data_hash: vec![7u8; 32].into(),
+                    allow_list: None,
+                    extensions: None,
+                    options: get_assertion::Options {
+                        rk: true,
+                        up: true,
+                        uv: true,
+                    },
+                    pin_auth: None,
+                    pin_protocol: None,
+                },
+            )
+            .await
+            .unwrap();
+            // The counter is the four bytes after the 32 byte rp id hash and the
+            // flags byte.
+            assert_eq!(&response.auth_data.to_vec()[33..37], &[0, 0, 0, 0]);
+        }
+        assert_eq!(stored(&vw), record);
     }
 
     #[test]

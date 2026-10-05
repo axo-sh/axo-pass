@@ -41,7 +41,7 @@ use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
 use crate::secrets::password::PasswordPolicy;
 use crate::secrets::vaults::LoginSummary;
 use crate::secrets::vaults::autofill::check_rp_id;
-use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest};
+use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest, PasskeyTarget};
 use crate::secrets::vaults::totp::TotpCode;
 
 pub mod age;
@@ -49,6 +49,7 @@ pub mod gpg;
 pub mod keychain;
 mod login_index;
 mod mach;
+mod placement;
 pub mod ssh;
 pub mod vault;
 
@@ -65,6 +66,7 @@ pub use keychain::{
     request_keychain_passwords,
 };
 pub use login_index::LoginIndex;
+pub use placement::{PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault};
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
     request_authorize_key_use, request_signature, request_ssh_passphrase,
@@ -2095,22 +2097,30 @@ async fn serve_request(
                 for c in &excluded_credentials {
                     excluded.push(decode_b64(c)?);
                 }
+                let choices = vault::passkey_choices(&rp_id, &user_name, &authorizers.logins);
                 let request = CreatePasskeyRequest {
                     rp_id: rp_id.clone(),
                     rp_name,
                     user_handle: decode_b64(&user_handle)?,
-                    user_name,
+                    user_name: user_name.clone(),
                     user_display_name,
                     client_data_hash: decode_b64(&client_data_hash)?,
                     algorithms,
                     excluded_credentials: excluded,
+                    // Replaced with the user's choice once the prompt is
+                    // answered.
+                    target: PasskeyTarget::NewLogin,
                 };
                 let prompt = vault::VaultAccessPrompt {
-                    vault_key: vault::write_vault_key(),
+                    vault_key: choices.default_vault.clone(),
                     caller: vouched_caller(scope, &client_id, caller),
                     caller_chain: caller_chain.clone(),
                     client: client_id.clone(),
-                    action: vault::VaultAction::CreatePasskey { rp_id },
+                    action: vault::VaultAction::CreatePasskey {
+                        rp_id,
+                        user_name,
+                        choices,
+                    },
                 };
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
@@ -3341,6 +3351,46 @@ mod tests {
             );
         }
         assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+    }
+
+    /// A registration prompt carries the logins the index holds for the
+    /// relying party, and suggests the one with the account's username.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_registration_prompt_carries_the_placement_choices() {
+        use crate::secrets::vaults::{LoginPlace, MatchKind, Website};
+
+        let broker = browser_host_broker().await;
+        let place = |item: &str, user: &str, site: &str| LoginPlace {
+            vault_key: "work".to_string(),
+            item_key: item.to_string(),
+            title: item.to_string(),
+            username: Some(user.to_string()),
+            websites: vec![Website::new(site, MatchKind::Domain)],
+        };
+        broker.logins.replace_places(vec![
+            place("example", "ada", "example.com"),
+            place("other", "ada", "other.com"),
+        ]);
+        broker.request(
+            r#"{"request":"create_passkey","rp_id":"example.com","user_handle":"","user_name":"ada","user_display_name":"ada","client_data_hash":"","algorithms":[-7]}"#,
+        );
+
+        let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        let VaultAction::CreatePasskey {
+            rp_id,
+            user_name,
+            choices,
+        } = &prompts[0].action
+        else {
+            panic!("expected a registration prompt");
+        };
+        assert_eq!((rp_id.as_str(), user_name.as_str()), ("example.com", "ada"));
+        assert_eq!(choices.logins.len(), 1);
+        assert_eq!(choices.logins[0].item_key, "example");
+        assert_eq!(choices.suggested, Some(0));
+        assert_eq!(choices.default_vault, "work");
+        assert_eq!(prompts[0].vault_key, "work");
     }
 
     /// A save names the site and the account in its prompt, and always

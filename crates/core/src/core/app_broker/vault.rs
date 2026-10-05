@@ -24,6 +24,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::login_index::LoginIndex;
+use super::placement::{PasskeyChoices, PasskeyPlacement, PlacementVault};
 use super::{
     Authorizers, BrokerError, BrowserClient, ConfirmPrompt, InFlightRequest, PromptOutcome,
     WireRequest, WireResponse, send_request,
@@ -148,8 +149,15 @@ pub enum VaultAction {
 
     /// The AutoFill extension's passkey registration: run the WebAuthn
     /// authenticator against an unlocked vault and return the attestation. The
-    /// request data travels in [`CreatePasskeyPayload`].
-    CreatePasskey { rp_id: String },
+    /// request data travels in [`CreatePasskeyPayload`]. The prompt offers the
+    /// vault and the login to store the passkey in, and the app returns the
+    /// user's choice through [`VaultAuthorizer::passkey_placement`].
+    CreatePasskey {
+        rp_id: String,
+        /// The account the passkey is for, shown in the prompt.
+        user_name: String,
+        choices: PasskeyChoices,
+    },
 
     /// The AutoFill extension's passkey assertion: sign the challenge with a
     /// stored passkey's private key. The request data travels in
@@ -416,6 +424,14 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// Dismiss the prompt so `begin` returns early. `begin` is still awaited,
     /// and `end` still called, afterward.
     async fn abandon(&self);
+
+    /// Where the user chose to store a passkey, read after `begin` returns for
+    /// a [`VaultAction::CreatePasskey`]. `None` means the user did not choose,
+    /// and the prompt's default placement applies. The broker checks the answer
+    /// against the choices it offered.
+    async fn passkey_placement(&self, _prompt: &VaultAccessPrompt) -> Option<PasskeyPlacement> {
+        None
+    }
 
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
@@ -804,15 +820,39 @@ pub(super) async fn authorize_and_serve_logins(
 
 pub(super) async fn authorize_and_serve(
     authorizer: &dyn VaultAuthorizer,
-    prompt: VaultAccessPrompt,
+    mut prompt: VaultAccessPrompt,
     actor: Actor,
-    payload: Option<VaultPayload>,
+    mut payload: Option<VaultPayload>,
     in_flight: &InFlightRequest,
 ) -> WireResponse {
     let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
         Ok(context) => context,
         Err(response) => return response,
     };
+
+    // A registration is stored where the user chose in the prompt. The choice
+    // is checked against what the prompt offered.
+    if let VaultAction::CreatePasskey { choices, .. } = &prompt.action {
+        let chosen = match authorizer.passkey_placement(&prompt).await {
+            Some(placement) => choices.validate(placement),
+            None => Ok(choices.default_placement()),
+        };
+        match chosen {
+            Ok(placement) => {
+                prompt.vault_key = placement.vault_key.clone();
+                if let Some(VaultPayload::CreatePasskey(create)) = payload.as_mut() {
+                    create.request.target = placement.target();
+                }
+            },
+            Err(message) => {
+                record_access(&prompt, &actor, Outcome::Failed, None, Some(&message));
+                authorizer
+                    .end(prompt, PromptOutcome::Failed(message.clone()))
+                    .await;
+                return WireResponse::Failed { message };
+            },
+        }
+    }
 
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
@@ -910,7 +950,7 @@ fn record_access(
             Action::VaultLinked,
             Subject::new(SubjectKind::Vault, path.clone()),
         ),
-        VaultAction::CreatePasskey { rp_id } => (
+        VaultAction::CreatePasskey { rp_id, .. } => (
             Action::PasskeyRegistered,
             Subject::new(SubjectKind::Credential, rp_id.clone()),
         ),
@@ -1297,6 +1337,21 @@ fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginS
         confirm,
         commit: None,
     }))
+}
+
+/// The vaults and logins a passkey for `rp_id` may be stored in, for the
+/// registration prompt. The logins come from the index, so a cold start offers
+/// only "New login".
+pub(super) fn passkey_choices(rp_id: &str, user_name: &str, index: &LoginIndex) -> PasskeyChoices {
+    let vm = VaultsManager::new();
+    let vaults = vm
+        .iter_vaults()
+        .map(|(key, vw)| PlacementVault {
+            key: key.clone(),
+            name: vw.vault_name().map(String::from),
+        })
+        .collect();
+    PasskeyChoices::build(rp_id, user_name, &index.places(), vaults, write_vault_key())
 }
 
 /// Save a captured login as a new item in the vault the prompt named.

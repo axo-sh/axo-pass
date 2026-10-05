@@ -20,8 +20,9 @@ enum AutofillIdentities {
   /// Replace the whole index with the current contents of the vaults. Called
   /// after an unlock, when every vault can be read on one authentication.
   static func refresh(from core: AxoPass) async {
-    guard await isEnabled() else { return }
-
+    // Listing also replaces the broker's own login index, which answers the
+    // clients that list without a prompt and offers the registration prompt its
+    // logins, so it runs whether or not the system provider is enabled.
     let items: [AutofillItemInfo]
     do {
       items = try await core.listAutofillItems()
@@ -29,6 +30,8 @@ enum AutofillIdentities {
       NSLog("Failed to list autofill items: %@", String(describing: error))
       return
     }
+
+    guard await isEnabled() else { return }
 
     let passkeys: [PasskeyIdentityInfo]
     do {
