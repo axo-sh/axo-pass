@@ -17,14 +17,16 @@
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use super::login_index::LoginIndex;
 use super::{
-    BrokerError, ConfirmPrompt, InFlightRequest, PassphraseAuthorizer, PromptOutcome, WireRequest,
-    WireResponse, send_request,
+    Authorizers, BrokerError, BrowserClient, ConfirmPrompt, InFlightRequest, PromptOutcome,
+    WireRequest, WireResponse, send_request,
 };
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
@@ -32,7 +34,7 @@ use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
-    DEFAULT_VAULT, FieldKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
+    DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
 };
 
 /// One `axo://` reference to resolve, as it crosses the socket.
@@ -94,6 +96,24 @@ pub enum VaultAction {
 
     /// The current one-time code of one login. Prompts every time.
     GenerateTotp { page: LoginPage, record_id: String },
+
+    /// Save a login captured from a form on `page` as a new item. Prompts every
+    /// time. `username` is shown in the prompt. The password travels in
+    /// [`SaveLoginPayload`].
+    SaveLogin {
+        page: LoginPage,
+        username: Option<String>,
+    },
+
+    /// Replace the password of one login with the one a form on `page`
+    /// submitted. Prompts every time. `account` is the client's label for the
+    /// login, shown in the prompt only. The password travels in
+    /// [`UpdateLoginPayload`].
+    UpdateLoginPassword {
+        page: LoginPage,
+        record_id: String,
+        account: Option<String>,
+    },
 
     /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
     /// possibly across several vaults, behind one prompt.
@@ -183,6 +203,26 @@ impl LoginPage {
     }
 }
 
+/// Who a request is for, as far as the broker can tell. It decides whether an
+/// approval may be reused and what the audit event records about the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientIdentity {
+    /// A process the broker verified from its own peer. Its process chain
+    /// identifies it.
+    Process,
+    /// A browser that our browser host verified as its parent. `extension` is
+    /// what the browser passed the host. The host cannot verify it, so it is
+    /// recorded and never used to decide anything.
+    Browser {
+        name: String,
+        team_id: String,
+        extension: Option<String>,
+    },
+    /// A browser host that could not verify its parent. No approval is reused
+    /// for it.
+    Unverified { extension: Option<String> },
+}
+
 /// The secret an [`VaultAction::WriteSecret`] writes, kept out of
 /// [`VaultAccessPrompt`] so it is not handed to the app for the prompt.
 #[derive(Clone)]
@@ -226,11 +266,25 @@ pub struct AssertPasskeyPayload {
     pub request: crate::secrets::vaults::passkey::AssertPasskeyRequest,
 }
 
+/// The password a browser captured for [`VaultAction::SaveLogin`].
+#[derive(Clone)]
+pub struct SaveLoginPayload {
+    pub password: SecretString,
+}
+
+/// The new password for [`VaultAction::UpdateLoginPassword`].
+#[derive(Clone)]
+pub struct UpdateLoginPayload {
+    pub password: SecretString,
+}
+
 /// A payload that does not belong in [`VaultAccessPrompt`] because it carries a
 /// secret or would clutter the prompt.
 #[derive(Clone)]
 pub(super) enum VaultPayload {
     Write(WriteSecretPayload),
+    SaveLogin(SaveLoginPayload),
+    UpdateLogin(UpdateLoginPayload),
     Export(ExportPayload),
     Import(ImportPayload),
     CreatePasskey(CreatePasskeyPayload),
@@ -306,6 +360,9 @@ pub struct VaultAccessPrompt {
     /// broker's own peer, so this is the peer's resolved chain rather than a
     /// delegated one. Shown when the user expands the prompt.
     pub caller_chain: Vec<crate::core::provenance::ProcessNode>,
+
+    /// How the client is identified for reusing approvals and for audit.
+    pub client: ClientIdentity,
 
     pub action: VaultAction,
 }
@@ -539,6 +596,7 @@ pub fn request_create_passkey(
             .collect(),
         origin: None,
         caller: caller.map(String::from),
+        client: BrowserClient::default(),
     };
     match send_request(&wire)? {
         WireResponse::PasskeyRegistered {
@@ -572,6 +630,7 @@ pub fn request_assert_passkey(
             .collect(),
         origin: None,
         caller: caller.map(String::from),
+        client: BrowserClient::default(),
     };
     match send_request(&wire)? {
         WireResponse::PasskeyAsserted {
@@ -638,41 +697,55 @@ async fn authorize(
     Ok(context)
 }
 
-/// Serve a fill or a one-time code, or list logins. The same as
-/// [`authorize_and_serve`], plus one step: a login that matches the page only
-/// through its `Url` field is returned only after the user confirms it, once
-/// the vault is open and the broker can tell.
+/// Serve a login request: a listing, a fill, a one-time code, a save, or a
+/// password update. The same as [`authorize_and_serve`], plus one step: a
+/// request the broker doubts is returned or written only after the user
+/// confirms it, once the vault is open and the broker can tell. A login that
+/// matches the page only through its `Url` field is one such case, and so is a
+/// password update from a page the login is not stored for.
 pub(super) async fn authorize_and_serve_logins(
-    authorizer: &dyn VaultAuthorizer,
-    confirmer: &dyn PassphraseAuthorizer,
+    authorizers: &Authorizers,
     prompt: VaultAccessPrompt,
     actor: Actor,
+    payload: Option<VaultPayload>,
     in_flight: &InFlightRequest,
 ) -> WireResponse {
+    let authorizer = &*authorizers.vault;
+    let confirmer = &*authorizers.passphrase;
     let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
         Ok(context) => context,
         Err(response) => return response,
     };
 
     let job = prompt.clone();
-    let result = tokio::task::spawn_blocking(move || serve_logins(&job, context))
+    let index = Arc::clone(&authorizers.logins);
+    let result = tokio::task::spawn_blocking(move || serve_logins(&job, context, payload, &index))
         .await
         .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
     let served = match result {
-        Ok(served) => match served.confirm {
-            Some(question) => {
-                let answer = in_flight
-                    .unless_abandoned(confirmer.confirm(question))
-                    .await;
-                if answer == Some(true) {
-                    Ok(served.response)
-                } else {
-                    log::debug!("App broker login fill was not confirmed");
-                    Err(None)
+        Ok(served) => {
+            let confirmed = match served.confirm {
+                Some(question) => {
+                    in_flight
+                        .unless_abandoned(confirmer.confirm(question))
+                        .await
+                        == Some(true)
+                },
+                None => true,
+            };
+            if !confirmed {
+                log::debug!("App broker login request was not confirmed");
+                Err(None)
+            } else {
+                match served.commit {
+                    Some(commit) => tokio::task::spawn_blocking(commit)
+                        .await
+                        .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")))
+                        .map_err(Some),
+                    None => Ok(served.response),
                 }
-            },
-            None => Ok(served.response),
+            }
         },
         Err(message) => Err(Some(message)),
     };
@@ -776,6 +849,14 @@ fn record_access(
             Action::SecretRead,
             Subject::new(SubjectKind::Credential, record_id.clone()),
         ),
+        VaultAction::SaveLogin { .. } => (
+            Action::VaultItemCreated,
+            Subject::new(SubjectKind::Vault, vault_key.clone()),
+        ),
+        VaultAction::UpdateLoginPassword { record_id, .. } => (
+            Action::VaultItemUpdated,
+            Subject::new(SubjectKind::Credential, record_id.clone()),
+        ),
         VaultAction::ResolveSecrets { purpose, .. } => {
             let action = match purpose {
                 ResolvePurpose::Exec => Action::SecretExec,
@@ -846,8 +927,17 @@ fn record_access(
             event = event.detail("login_request", "totp");
             event = login_page_details(event, page);
         },
+        VaultAction::SaveLogin { page, .. } => {
+            event = event.detail("login_request", "save");
+            event = login_page_details(event, page);
+        },
+        VaultAction::UpdateLoginPassword { page, .. } => {
+            event = event.detail("login_request", "update");
+            event = login_page_details(event, page);
+        },
         _ => {},
     }
+    event = client_details(event, &prompt.client);
     match response {
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
@@ -879,6 +969,31 @@ fn record_access(
     audit::record(event);
 }
 
+/// The browser's name and signing team, and the extension the browser reported,
+/// for a request that came through the browser host.
+fn client_details(event: AuditEvent, client: &ClientIdentity) -> AuditEvent {
+    let extension = |event: AuditEvent, extension: &Option<String>| match extension {
+        Some(extension) => event.detail("extension", extension.clone()),
+        None => event,
+    };
+    match client {
+        ClientIdentity::Process => event,
+        ClientIdentity::Browser {
+            name,
+            team_id,
+            extension: reported,
+        } => extension(
+            event
+                .detail("browser", name.clone())
+                .detail("browser_team_id", team_id.clone()),
+            reported,
+        ),
+        ClientIdentity::Unverified {
+            extension: reported,
+        } => extension(event.detail("browser", "unverified"), reported),
+    }
+}
+
 /// The service host, the frame URL, and the top-level host of a login request.
 /// Never a username or a value.
 fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
@@ -907,7 +1022,9 @@ fn serve_on_context(
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
         VaultAction::ListLogins { .. }
         | VaultAction::FillLogin { .. }
-        | VaultAction::GenerateTotp { .. } => {
+        | VaultAction::GenerateTotp { .. }
+        | VaultAction::SaveLogin { .. }
+        | VaultAction::UpdateLoginPassword { .. } => {
             return Err("Login requests are served by serve_logins".to_string());
         },
         VaultAction::CreatePasskey { .. } => {
@@ -979,6 +1096,7 @@ fn serve_on_context(
                         password: payload.value,
                         username: login.username.as_deref(),
                         websites: &login.websites,
+                        match_kind: MatchKind::Domain,
                     },
                 )
                 .map_err(|e| format!("Failed to write login: {e}"))?;
@@ -1013,6 +1131,8 @@ fn serve_on_context(
         | VaultAction::ListLogins { .. }
         | VaultAction::FillLogin { .. }
         | VaultAction::GenerateTotp { .. }
+        | VaultAction::SaveLogin { .. }
+        | VaultAction::UpdateLoginPassword { .. }
         | VaultAction::ExportVaults { .. }
         | VaultAction::ImportVaults { .. }
         | VaultAction::AddVault { .. }
@@ -1026,6 +1146,21 @@ fn serve_on_context(
 struct LoginServed {
     response: WireResponse,
     confirm: Option<ConfirmPrompt>,
+    /// Runs once the user has confirmed, for a request that changes a vault. It
+    /// writes nothing before then. Its result replaces `response`.
+    commit: Option<Commit>,
+}
+
+type Commit = Box<dyn FnOnce() -> Result<WireResponse, String> + Send>;
+
+impl LoginServed {
+    fn new(response: WireResponse) -> Self {
+        Self {
+            response,
+            confirm: None,
+            commit: None,
+        }
+    }
 }
 
 /// Serve a login request on the app's context. A vault that fails to load or
@@ -1034,7 +1169,25 @@ struct LoginServed {
 fn serve_logins(
     prompt: &VaultAccessPrompt,
     context: ForeignContext,
+    payload: Option<VaultPayload>,
+    index: &LoginIndex,
 ) -> Result<LoginServed, String> {
+    match (&prompt.action, payload) {
+        (VaultAction::SaveLogin { page, username }, Some(VaultPayload::SaveLogin(save))) => {
+            return save_login(prompt, page, username.as_deref(), save, context, index);
+        },
+        (
+            VaultAction::UpdateLoginPassword {
+                page, record_id, ..
+            },
+            Some(VaultPayload::UpdateLogin(update)),
+        ) => return update_login_password(page, record_id, update, context),
+        (VaultAction::SaveLogin { .. } | VaultAction::UpdateLoginPassword { .. }, _) => {
+            return Err("Missing login payload".to_string());
+        },
+        _ => {},
+    }
+
     let mut vm = VaultsManager::new();
     let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
     let mut logins = Vec::new();
@@ -1065,15 +1218,12 @@ fn serve_logins(
     match prompt.action {
         VaultAction::ListLogins { .. } => {
             logins.sort_by_key(autofill::AutofillItem::sort_key);
-            Ok(LoginServed {
-                response: WireResponse::Logins {
-                    logins: logins
-                        .iter()
-                        .filter_map(autofill::AutofillItem::summary)
-                        .collect(),
-                },
-                confirm: None,
-            })
+            Ok(LoginServed::new(WireResponse::Logins {
+                logins: logins
+                    .iter()
+                    .filter_map(autofill::AutofillItem::summary)
+                    .collect(),
+            }))
         },
         _ => Err("No login matches that record on this page".to_string()),
     }
@@ -1119,13 +1269,164 @@ fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginS
             password: secrets.password.expose_secret().to_string(),
         }
     };
-    Ok(Some(LoginServed { response, confirm }))
+    Ok(Some(LoginServed {
+        response,
+        confirm,
+        commit: None,
+    }))
 }
 
-/// The vault a new passkey is written to: the default vault when it exists or
-/// there are no vaults, otherwise the first one. The broker names this vault in
-/// the prompt, so it is chosen before the prompt rather than after.
-pub(super) fn passkey_vault_key() -> String {
+/// Save a captured login as a new item in the vault the prompt named.
+fn save_login(
+    prompt: &VaultAccessPrompt,
+    page: &LoginPage,
+    username: Option<&str>,
+    save: SaveLoginPayload,
+    context: ForeignContext,
+    index: &LoginIndex,
+) -> Result<LoginServed, String> {
+    let mut vw = VaultWrapper::load(&vaults_dir(), Some(prompt.vault_key.clone()))
+        .map_err(|e| format!("Failed to load vault: {e}"))?;
+    vw.unlock_on(AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to unlock vault: {e}"))?;
+
+    let item = autofill::save_login(&mut vw, &page.frame_origin, username, save.password)
+        .map_err(|e| format!("Failed to write login: {e}"))?;
+    vw.save()
+        .map_err(|e| format!("Failed to save vault: {e}"))?;
+
+    let record_id = item.record_id.clone();
+    index.upsert(item);
+    Ok(LoginServed::new(WireResponse::LoginSaved { record_id }))
+}
+
+/// Find the login `record_id` names in whichever vault holds it and prepare to
+/// replace its password. The login need not be stored for `page`: a password
+/// captured on another site is a reason to ask the user, not to refuse. The
+/// write is returned as a commit, so nothing changes before the user confirms.
+fn update_login_password(
+    page: &LoginPage,
+    record_id: &str,
+    update: UpdateLoginPayload,
+    context: ForeignContext,
+) -> Result<LoginServed, String> {
+    let mut vm = VaultsManager::new();
+    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+
+    let mut found = None;
+    for vault_key in vault_keys {
+        let Some(vw) = vm.get_vault_mut(&vault_key) else {
+            continue;
+        };
+        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
+            log::error!("Failed to unlock vault {vault_key}: {e}");
+            continue;
+        }
+        match autofill::find_login_record(vw, record_id) {
+            Ok(Some(item)) => {
+                found = Some((vault_key, item));
+                break;
+            },
+            Ok(None) => {},
+            Err(e) => log::error!("Failed to look up a login in {vault_key}: {e}"),
+        }
+    }
+    let Some((vault_key, item)) = found else {
+        return Err("No login matches that record".to_string());
+    };
+
+    let confirm = (!autofill::is_stored_for(&item, &page.frame_url)).then(|| {
+        let sites: Vec<String> = item
+            .websites
+            .iter()
+            .map(|website| Site::parse(&website.url).map_or(website.url.clone(), |s| s.host))
+            .collect();
+        let stored = if sites.is_empty() {
+            "no website".to_string()
+        } else {
+            sites.join(", ")
+        };
+        ConfirmPrompt {
+            description: Some(format!(
+                "A form on {host} submitted a new password for \"{title}\", which is saved for \
+                 {stored}, not {host}.\n\nUpdate its password?",
+                host = page.host,
+                title = item.title,
+            )),
+            ok_label: Some("Update".to_string()),
+            cancel_label: Some("Cancel".to_string()),
+        }
+    });
+
+    let commit: Commit = Box::new(move || {
+        let vw = vm
+            .get_vault_mut(&vault_key)
+            .ok_or_else(|| format!("Vault {vault_key} is no longer available"))?;
+        autofill::update_login_password(vw, &item, update.password)
+            .map_err(|e| format!("Failed to update the password: {e}"))?;
+        vw.save()
+            .map_err(|e| format!("Failed to save vault: {e}"))?;
+        Ok(WireResponse::Acknowledged)
+    });
+    Ok(LoginServed {
+        response: WireResponse::Acknowledged,
+        confirm,
+        commit: Some(commit),
+    })
+}
+
+/// The accounts for `page` from the login index, for a client that may list
+/// without a prompt. `indexed` is false when nothing has been indexed since the
+/// app started, so the client knows to ask with a prompt instead.
+pub(super) fn list_logins_locked(
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
+    index: &LoginIndex,
+) -> WireResponse {
+    let VaultAction::ListLogins { page } = &prompt.action else {
+        return WireResponse::Failed {
+            message: "Not a login listing".to_string(),
+        };
+    };
+    let found = index.lookup(&page.frame_url);
+    let response = WireResponse::LockedLogins {
+        indexed: found.is_some(),
+        logins: found.unwrap_or_default(),
+    };
+    record_locked_listing(prompt, actor, &response);
+    response
+}
+
+/// Record a listing served from the index. It reads no vault, so it is not an
+/// access, but it still tells a client which accounts exist for a site.
+fn record_locked_listing(prompt: &VaultAccessPrompt, actor: &Actor, response: &WireResponse) {
+    let VaultAction::ListLogins { page } = &prompt.action else {
+        return;
+    };
+    let mut event = AuditEvent::new(
+        audit::process_source(),
+        Action::VaultItemsListed,
+        Outcome::Succeeded,
+    )
+    .subject(Subject::new(SubjectKind::Vault, page.host.clone()))
+    .actor(actor.clone())
+    .detail("via", "broker")
+    .detail("login_request", "list_locked");
+    event = login_page_details(event, page);
+    event = client_details(event, &prompt.client);
+    if let WireResponse::LockedLogins { logins, indexed } = response {
+        event = event
+            .detail("item_count", logins.len().to_string())
+            .detail("indexed", indexed.to_string());
+    }
+    audit::record(event);
+}
+
+/// The vault a new item from a client is written to: the default vault when it
+/// exists or there are no vaults, otherwise the first one. The broker names
+/// this vault in the prompt, so it is chosen before the prompt rather than
+/// after.
+pub(super) fn write_vault_key() -> String {
     let keys: Vec<String> = VaultsManager::new().iter_vault_keys().collect();
     if keys.is_empty() || keys.iter().any(|k| k == DEFAULT_VAULT) {
         DEFAULT_VAULT.to_string()
@@ -1143,7 +1444,7 @@ fn create_passkey(
 ) -> Result<WireResponse, String> {
     let mut vm = VaultsManager::new();
     let mut created;
-    // With no vaults yet, `passkey_vault_key` names the default vault, which
+    // With no vaults yet, `write_vault_key` names the default vault, which
     // loading creates.
     let vw = match vm.get_vault_mut(vault_key) {
         Some(vw) => vw,

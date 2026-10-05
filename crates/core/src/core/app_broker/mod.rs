@@ -38,11 +38,13 @@ use crate::audit;
 use crate::core::auth::ForeignContext;
 use crate::core::dirs::{app_data_dir, app_group_identifier};
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
+use crate::secrets::password::PasswordPolicy;
 use crate::secrets::vaults::autofill::check_rp_id;
 
 pub mod age;
 pub mod gpg;
 pub mod keychain;
+mod login_index;
 mod mach;
 pub mod ssh;
 pub mod vault;
@@ -59,14 +61,15 @@ pub use keychain::{
     BrokerPasswordEntry, KeychainLister, SystemKeychain, request_delete_managed_key,
     request_keychain_passwords,
 };
+pub use login_index::LoginIndex;
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
     request_authorize_key_use, request_signature, request_ssh_passphrase,
 };
 pub use vault::{
-    BrokerCredential, BrokerVaultItem, LoginPage, ResolvePurpose, VaultAccessPrompt, VaultAction,
-    VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, WireLogin,
-    request_add_external_vault, request_assert_passkey, request_create_passkey,
+    BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, ResolvePurpose,
+    VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity,
+    WireLogin, request_add_external_vault, request_assert_passkey, request_create_passkey,
     request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
     request_vault_secret, request_write_vault_secret,
 };
@@ -89,6 +92,13 @@ pub const AUTOFILL_EXTENSION_NAME: &str = "AxoPassAutoFill";
 /// How prompts, grants, and audit events name a request that arrived through
 /// the AutoFill extension.
 const AUTOFILL_CALLER: &str = "AutoFill extension";
+
+/// What a prompt calls a request from a browser host that could not verify the
+/// browser that started it.
+const UNKNOWN_CLIENT: &str = "Unknown process";
+
+/// The browser native messaging host, staged beside the app's own executable.
+const BROWSER_HOST_EXECUTABLE_NAME: &str = "AxoPassBrowserHost";
 
 pub fn broker_socket_path() -> PathBuf {
     // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
@@ -154,6 +164,34 @@ pub struct Authorizers {
     /// a field so tests can route the request without touching the developer's
     /// own keychain.
     pub keychain: Arc<dyn KeychainLister>,
+    /// The logins the app indexed at its last unlock. The app fills it, and the
+    /// broker lists from it for the clients allowed to list without a prompt.
+    pub logins: Arc<LoginIndex>,
+}
+
+/// What our browser host reports about the browser that started it. The broker
+/// reads it only from a peer it verified as the host, and ignores it from any
+/// other.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct BrowserClient {
+    /// Set only when the host checked its parent's code signature against its
+    /// fixed list of browsers. A host that could not check sends none.
+    #[serde(default)]
+    browser: Option<VerifiedBrowser>,
+
+    /// The extension id or origin the browser passed to the host. The host
+    /// cannot verify it, so it is recorded for audit and never decides
+    /// anything.
+    #[serde(default)]
+    extension: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VerifiedBrowser {
+    /// The browser's display name, for example "Google Chrome".
+    name: String,
+    /// The team identifier of the browser's code signature.
+    team_id: String,
 }
 
 /// The wire format: one JSON line each way, one request per connection.
@@ -300,12 +338,37 @@ enum WireRequest {
         /// The URL of the frame that holds the form. Matching uses this one.
         frame_url: String,
         /// The name of the app the request is for, when it is not a browser.
-        /// A display hint, like `account` on [`WireRequest::FillLogin`].
+        /// A display hint, like `account` on [`WireRequest::FillLogin`]. Only
+        /// the AutoFill extension may send one. A request from any other client
+        /// is for a browser.
         #[serde(default)]
         requester: Option<String>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
+    },
+
+    /// [`WireRequest::ListLogins`] answered from the app's login index, with no
+    /// prompt and no vault access. Only the AutoFill extension and a browser
+    /// host with a verified browser may send it: it tells the client which
+    /// accounts exist for a site without the user's approval, so any other
+    /// client is refused. It never lists logins for a page other than
+    /// `frame_url`.
+    ListLoginsLocked {
+        url: String,
+        frame_url: String,
+        /// See [`WireRequest::ListLogins`].
+        #[serde(default)]
+        requester: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
     },
 
     /// The username and password of one login. The broker re-checks that the
@@ -329,6 +392,9 @@ enum WireRequest {
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
     },
 
     /// The current one-time code of one login, checked the same way as
@@ -343,6 +409,58 @@ enum WireRequest {
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
+    },
+
+    /// A random password from the core generator, for a browser's
+    /// `new-password` field. It reads no vault and saves nothing, so it
+    /// raises no prompt.
+    GeneratePassword {
+        /// The default policy when absent.
+        #[serde(default)]
+        policy: Option<PasswordPolicy>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
+    /// Save a login a browser captured from a form submission as a new item.
+    /// The website is stored with `host` matching. The user is always prompted,
+    /// since script on the page can fake a submission.
+    SaveLogin {
+        url: String,
+        frame_url: String,
+        #[serde(default)]
+        username: Option<String>,
+        password: String,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
+    },
+
+    /// Replace the password of one login with the one a browser captured from a
+    /// form submission. The user is always prompted, and is asked again when
+    /// the login is not stored for `frame_url`.
+    UpdateLoginPassword {
+        url: String,
+        frame_url: String,
+        record_id: String,
+        password: String,
+        /// The account name the client showed the user. The prompt displays
+        /// it. It is never used to decide anything.
+        #[serde(default)]
+        account: Option<String>,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
     },
 
     /// `ap exec` / `ap inject`: resolve many `axo://` references at once,
@@ -467,6 +585,9 @@ enum WireRequest {
         origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
     },
 
     /// The AutoFill extension's passkey assertion: sign the challenge with a
@@ -481,6 +602,9 @@ enum WireRequest {
         origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
+        /// See [`BrowserClient`].
+        #[serde(default)]
+        client: BrowserClient,
     },
 
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
@@ -510,8 +634,12 @@ impl WireRequest {
             | WireRequest::GetSshPassphrase { caller, .. }
             | WireRequest::ListVaultItems { caller, .. }
             | WireRequest::ListLogins { caller, .. }
+            | WireRequest::ListLoginsLocked { caller, .. }
             | WireRequest::FillLogin { caller, .. }
             | WireRequest::GenerateTotp { caller, .. }
+            | WireRequest::GeneratePassword { caller, .. }
+            | WireRequest::SaveLogin { caller, .. }
+            | WireRequest::UpdateLoginPassword { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
             | WireRequest::WriteVaultSecret { caller, .. }
@@ -529,6 +657,21 @@ impl WireRequest {
             WireRequest::ListIdentities
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
+        }
+    }
+
+    /// What the browser host reported, for the requests a browser can make.
+    fn client(&self) -> Option<&BrowserClient> {
+        match self {
+            WireRequest::ListLogins { client, .. }
+            | WireRequest::ListLoginsLocked { client, .. }
+            | WireRequest::FillLogin { client, .. }
+            | WireRequest::GenerateTotp { client, .. }
+            | WireRequest::SaveLogin { client, .. }
+            | WireRequest::UpdateLoginPassword { client, .. }
+            | WireRequest::CreatePasskey { client, .. }
+            | WireRequest::AssertPasskey { client, .. } => Some(client),
+            _ => None,
         }
     }
 
@@ -570,6 +713,20 @@ enum WireResponse {
     },
     Logins {
         logins: Vec<crate::secrets::vaults::LoginSummary>,
+    },
+    /// The logins in the app's index that match a page. `indexed` is false when
+    /// the app has not indexed since it started, so an empty list means "ask
+    /// again with a prompt" rather than "no logins".
+    LockedLogins {
+        logins: Vec<crate::secrets::vaults::LoginSummary>,
+        indexed: bool,
+    },
+    /// The record id of the login a save created.
+    LoginSaved {
+        record_id: String,
+    },
+    GeneratedPassword {
+        password: String,
     },
     /// The role credentials of one login. `username` is `None` when the login
     /// has no username role.
@@ -942,8 +1099,16 @@ pub async fn serve(
 
     let result = serve_on(
         broker_socket_path(),
-        agent_policy(),
-        RequestScope::Agent,
+        vec![
+            Client {
+                policy: agent_policy(),
+                scope: RequestScope::Agent,
+            },
+            Client {
+                policy: browser_host_policy(),
+                scope: RequestScope::BrowserHost,
+            },
+        ],
         authorizers,
         shutdown,
     )
@@ -955,8 +1120,8 @@ pub async fn serve(
     result
 }
 
-/// Which requests a transport's clients may send. Checked after the peer is
-/// verified and before the request is dispatched.
+/// Which requests a client may send. Checked after the peer is verified and
+/// before the request is dispatched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RequestScope {
     /// `ap`: every request.
@@ -964,46 +1129,67 @@ enum RequestScope {
     /// The AutoFill extension: the login requests and the passkey requests. It
     /// cannot read a vault secret by name.
     AutofillExtension,
+    /// The browser host: the same requests as the AutoFill extension, plus
+    /// password generation and saving. It cannot read a vault secret by name.
+    BrowserHost,
 }
 
 impl RequestScope {
     fn allows(self, request: &WireRequest) -> bool {
+        let autofill = matches!(
+            request,
+            WireRequest::ListLogins { .. }
+                | WireRequest::ListLoginsLocked { .. }
+                | WireRequest::FillLogin { .. }
+                | WireRequest::GenerateTotp { .. }
+                | WireRequest::CreatePasskey { .. }
+                | WireRequest::AssertPasskey { .. }
+        );
         match self {
             RequestScope::Agent => true,
-            RequestScope::AutofillExtension => matches!(
-                request,
-                WireRequest::ListLogins { .. }
-                    | WireRequest::FillLogin { .. }
-                    | WireRequest::GenerateTotp { .. }
-                    | WireRequest::CreatePasskey { .. }
-                    | WireRequest::AssertPasskey { .. }
-            ),
+            RequestScope::AutofillExtension => autofill,
+            RequestScope::BrowserHost => {
+                autofill
+                    || matches!(
+                        request,
+                        WireRequest::GeneratePassword { .. }
+                            | WireRequest::SaveLogin { .. }
+                            | WireRequest::UpdateLoginPassword { .. }
+                    )
+            },
         }
     }
 
-    /// The caller this transport vouches for. The peer is verified as our own
-    /// extension, so it names the caller itself and the request's own
-    /// `caller` is ignored. `None` for a transport whose clients delegate a
-    /// caller.
-    fn caller(self) -> Option<&'static str> {
+    /// Whether a client may list logins from the index without a prompt. Any
+    /// other caller could use it to learn the user's sites, so the agent may
+    /// not, and a browser host may only when it verified its browser.
+    fn may_list_locked(self, client: &ClientIdentity) -> bool {
         match self {
-            RequestScope::Agent => None,
-            RequestScope::AutofillExtension => Some(AUTOFILL_CALLER),
+            RequestScope::Agent => false,
+            RequestScope::AutofillExtension => true,
+            RequestScope::BrowserHost => matches!(client, ClientIdentity::Browser { .. }),
         }
     }
 }
 
-/// The body of [`serve`], with the socket path, the peer policy, and the
-/// request scope supplied rather than derived, so tests can bind a scratch
-/// socket and choose who it accepts and what they may ask for.
+/// One kind of client a socket accepts: the peer it must be, and what it may
+/// ask for.
+struct Client {
+    policy: PeerPolicy,
+    scope: RequestScope,
+}
+
+/// The body of [`serve`], with the socket path and the clients supplied rather
+/// than derived, so tests can bind a scratch socket and choose who it accepts
+/// and what they may ask for. A peer is matched against each client's policy in
+/// order, and the first it satisfies gives the scope.
 ///
 /// Binding replaces a socket left behind by a crashed app: only one app runs at
 /// a time, and a stale file would otherwise keep the broker offline
 /// permanently.
 async fn serve_on(
     socket_path: PathBuf,
-    policy: PeerPolicy,
-    scope: RequestScope,
+    clients: Vec<Client>,
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
@@ -1033,7 +1219,7 @@ async fn serve_on(
     log::debug!("App broker listening on {}", socket_path.display());
 
     tokio::select! {
-        _ = accept_loop(listener, authorizers, policy, scope) => {},
+        _ = accept_loop(listener, authorizers, clients) => {},
         _ = shutdown => log::debug!("App broker shutting down"),
     }
     let _ = fs::remove_file(&socket_path);
@@ -1079,12 +1265,41 @@ fn extension_policy() -> PeerPolicy {
     policy
 }
 
-async fn accept_loop(
-    listener: UnixListener,
-    authorizers: Authorizers,
-    policy: PeerPolicy,
-    scope: RequestScope,
-) {
+/// Who the broker takes browser requests from: only the native messaging host
+/// staged beside us in the app bundle, signed by the same team. The host
+/// reports which browser started it, and the broker believes that report only
+/// because it verified the host.
+fn browser_host_policy() -> PeerPolicy {
+    let policy = PeerPolicy::sibling_executable(BROWSER_HOST_EXECUTABLE_NAME);
+    match policy.executable.as_ref() {
+        Some(path) => log::debug!("App broker accepts the browser host {}", path.display()),
+        None => log::warn!("App broker could not resolve the browser host's executable"),
+    }
+    policy
+}
+
+/// Verify `fd`'s peer against each client's policy in turn. The first policy it
+/// satisfies gives the peer and the scope. When none does, the error is the
+/// first policy's, which is the main client's.
+fn verify_client(
+    fd: std::os::fd::RawFd,
+    clients: &[Client],
+) -> Result<(PeerIdentity, RequestScope), PeerError> {
+    let mut first_error = None;
+    for client in clients {
+        match PeerIdentity::verify(fd, &client.policy) {
+            Ok(peer) => return Ok((peer, client.scope)),
+            // Nothing is left to check on a closed connection.
+            Err(e) if e.is_disconnected() => return Err(e),
+            Err(e) => {
+                first_error.get_or_insert(e);
+            },
+        }
+    }
+    Err(first_error.unwrap_or_else(|| PeerError::Unidentified("no client is accepted".to_string())))
+}
+
+async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: Vec<Client>) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -1093,8 +1308,8 @@ async fn accept_loop(
                 if let Err(e) = socket2::SockRef::from(&stream).set_nosigpipe(true) {
                     log::debug!("App broker could not set SO_NOSIGPIPE: {e}");
                 }
-                let peer = match PeerIdentity::verify(stream.as_raw_fd(), &policy) {
-                    Ok(peer) => peer,
+                let (peer, scope) = match verify_client(stream.as_raw_fd(), &clients) {
+                    Ok(verified) => verified,
                     // A client that gave up while its connection waited to be
                     // accepted. Nothing connected that could be checked, so
                     // nothing was refused.
@@ -1157,10 +1372,52 @@ fn peer_actor(peer: &PeerIdentity) -> audit::Actor {
     }
 }
 
-/// The caller to put in a prompt: the one the transport vouches for, else the
-/// one the client delegated.
-fn vouched_caller(scope: RequestScope, delegated: Option<String>) -> Option<String> {
-    scope.caller().map(String::from).or(delegated)
+/// Who a request is for. Only a browser host reports a browser, and the report
+/// counts only from a peer verified as our host, so any other scope ignores
+/// what the request says.
+fn client_identity(scope: RequestScope, reported: Option<&BrowserClient>) -> ClientIdentity {
+    if scope != RequestScope::BrowserHost {
+        return ClientIdentity::Process;
+    }
+    let reported = reported.cloned().unwrap_or_default();
+    match reported.browser {
+        Some(browser) => ClientIdentity::Browser {
+            name: browser.name,
+            team_id: browser.team_id,
+            extension: reported.extension,
+        },
+        None => ClientIdentity::Unverified {
+            extension: reported.extension,
+        },
+    }
+}
+
+/// The caller to put in a prompt. The AutoFill extension and the browser host
+/// are our own verified code, so they name the caller themselves and the
+/// request's `caller` is ignored. Any other client names its own caller, which
+/// is trusted by delegation.
+fn vouched_caller(
+    scope: RequestScope,
+    client: &ClientIdentity,
+    delegated: Option<String>,
+) -> Option<String> {
+    match scope {
+        RequestScope::Agent => delegated,
+        RequestScope::AutofillExtension => Some(AUTOFILL_CALLER.to_string()),
+        RequestScope::BrowserHost => Some(match client {
+            ClientIdentity::Browser { name, .. } => name.clone(),
+            _ => UNKNOWN_CLIENT.to_string(),
+        }),
+    }
+}
+
+/// The name of the app a login request is for. Only the AutoFill extension
+/// names one. For any other client the request is for a browser, and a name it
+/// sent is dropped.
+fn requester_for(scope: RequestScope, requester: Option<String>) -> Option<String> {
+    (scope == RequestScope::AutofillExtension)
+        .then_some(requester)
+        .flatten()
 }
 
 /// Describe who a request is for: the peer we verified, named by the caller it
@@ -1338,9 +1595,10 @@ async fn serve_request(
     // Resolved once per connection and handed to whichever authorizer serves
     // the request, so the grant the app hands out is attributed to the process
     // we verified rather than to a caller string alone.
+    let client_id = client_identity(scope, request.client());
     let actor = request_actor(
         peer,
-        scope.caller().or(request.caller()),
+        vouched_caller(scope, &client_id, request.caller().map(String::from)).as_deref(),
         request.caller_chain(),
     );
     let caller_chain = actor.chain_detail.clone();
@@ -1455,6 +1713,7 @@ async fn serve_request(
                     vault_key,
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::ListItems,
                 };
                 log::debug!("App broker request: {prompt:?}");
@@ -1466,27 +1725,51 @@ async fn serve_request(
                 frame_url,
                 requester,
                 caller,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                client: _,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         // The listing spans every vault, so there is no single
                         // key to name. The prompt describes the site instead.
                         vault_key: String::new(),
-                        caller: vouched_caller(scope, caller),
+                        caller: vouched_caller(scope, &client_id, caller),
                         caller_chain: caller_chain.clone(),
+                        client: client_id.clone(),
                         action: vault::VaultAction::ListLogins { page },
                     };
                     log::debug!("App broker request: {prompt:?}");
-                    vault::authorize_and_serve_logins(
-                        &*authorizers.vault,
-                        &*authorizers.passphrase,
-                        prompt,
-                        actor,
-                        &in_flight,
-                    )
-                    .await
+                    vault::authorize_and_serve_logins(&authorizers, prompt, actor, None, &in_flight)
+                        .await
                 },
                 Err(message) => WireResponse::Failed { message },
+            },
+            WireRequest::ListLoginsLocked {
+                url,
+                frame_url,
+                requester,
+                caller,
+                client: _,
+            } => {
+                if !scope.may_list_locked(&client_id) {
+                    log::warn!("App broker refused a locked listing from {scope:?}");
+                    return Ok(WireResponse::Failed {
+                        message: "This client may not list logins without a prompt".to_string(),
+                    });
+                }
+                match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
+                    Ok(page) => {
+                        let prompt = vault::VaultAccessPrompt {
+                            vault_key: String::new(),
+                            caller: vouched_caller(scope, &client_id, caller),
+                            caller_chain: caller_chain.clone(),
+                            client: client_id.clone(),
+                            action: vault::VaultAction::ListLogins { page },
+                        };
+                        log::debug!("App broker request: locked listing {prompt:?}");
+                        vault::list_logins_locked(&prompt, &actor, &authorizers.logins)
+                    },
+                    Err(message) => WireResponse::Failed { message },
+                }
             },
             WireRequest::FillLogin {
                 url,
@@ -1495,12 +1778,14 @@ async fn serve_request(
                 account,
                 requester,
                 caller,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                client: _,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         vault_key: String::new(),
-                        caller: vouched_caller(scope, caller),
+                        caller: vouched_caller(scope, &client_id, caller),
                         caller_chain: caller_chain.clone(),
+                        client: client_id.clone(),
                         action: vault::VaultAction::FillLogin {
                             page,
                             record_id,
@@ -1508,14 +1793,8 @@ async fn serve_request(
                         },
                     };
                     log::debug!("App broker request: {prompt:?}");
-                    vault::authorize_and_serve_logins(
-                        &*authorizers.vault,
-                        &*authorizers.passphrase,
-                        prompt,
-                        actor,
-                        &in_flight,
-                    )
-                    .await
+                    vault::authorize_and_serve_logins(&authorizers, prompt, actor, None, &in_flight)
+                        .await
                 },
                 Err(message) => WireResponse::Failed { message },
             },
@@ -1525,25 +1804,116 @@ async fn serve_request(
                 record_id,
                 requester,
                 caller,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester) {
+                client: _,
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         vault_key: String::new(),
-                        caller: vouched_caller(scope, caller),
+                        caller: vouched_caller(scope, &client_id, caller),
                         caller_chain: caller_chain.clone(),
+                        client: client_id.clone(),
                         action: vault::VaultAction::GenerateTotp { page, record_id },
                     };
                     log::debug!("App broker request: {prompt:?}");
-                    vault::authorize_and_serve_logins(
-                        &*authorizers.vault,
-                        &*authorizers.passphrase,
-                        prompt,
-                        actor,
-                        &in_flight,
-                    )
-                    .await
+                    vault::authorize_and_serve_logins(&authorizers, prompt, actor, None, &in_flight)
+                        .await
                 },
                 Err(message) => WireResponse::Failed { message },
+            },
+            WireRequest::GeneratePassword { policy, .. } => {
+                log::debug!("App broker request: generate password");
+                match policy.unwrap_or_default().generate() {
+                    Ok(password) => WireResponse::GeneratedPassword {
+                        password: secrecy::ExposeSecret::expose_secret(&password).to_string(),
+                    },
+                    Err(e) => WireResponse::Failed {
+                        message: format!("Failed to generate a password: {e}"),
+                    },
+                }
+            },
+            WireRequest::SaveLogin {
+                url,
+                frame_url,
+                username,
+                password,
+                caller,
+                client: _,
+            } => {
+                if password.is_empty() {
+                    return Ok(WireResponse::Failed {
+                        message: "There is no password to save".to_string(),
+                    });
+                }
+                match vault::LoginPage::parse(&url, &frame_url, None) {
+                    Ok(page) => {
+                        let username = username.filter(|name| !name.trim().is_empty());
+                        let prompt = vault::VaultAccessPrompt {
+                            vault_key: vault::write_vault_key(),
+                            caller: vouched_caller(scope, &client_id, caller),
+                            caller_chain: caller_chain.clone(),
+                            client: client_id.clone(),
+                            action: vault::VaultAction::SaveLogin { page, username },
+                        };
+                        log::debug!("App broker request: {prompt:?}");
+                        let payload = vault::VaultPayload::SaveLogin(vault::SaveLoginPayload {
+                            password: secrecy::SecretString::from(password),
+                        });
+                        vault::authorize_and_serve_logins(
+                            &authorizers,
+                            prompt,
+                            actor,
+                            Some(payload),
+                            &in_flight,
+                        )
+                        .await
+                    },
+                    Err(message) => WireResponse::Failed { message },
+                }
+            },
+            WireRequest::UpdateLoginPassword {
+                url,
+                frame_url,
+                record_id,
+                password,
+                account,
+                caller,
+                client: _,
+            } => {
+                if password.is_empty() {
+                    return Ok(WireResponse::Failed {
+                        message: "There is no password to save".to_string(),
+                    });
+                }
+                match vault::LoginPage::parse(&url, &frame_url, None) {
+                    Ok(page) => {
+                        let prompt = vault::VaultAccessPrompt {
+                            // The login's vault is found by its record id once
+                            // the vault is open.
+                            vault_key: String::new(),
+                            caller: vouched_caller(scope, &client_id, caller),
+                            caller_chain: caller_chain.clone(),
+                            client: client_id.clone(),
+                            action: vault::VaultAction::UpdateLoginPassword {
+                                page,
+                                record_id,
+                                account: account.filter(|a| !a.trim().is_empty()),
+                            },
+                        };
+                        log::debug!("App broker request: {prompt:?}");
+                        let payload = vault::VaultPayload::UpdateLogin(vault::UpdateLoginPayload {
+                            password: secrecy::SecretString::from(password),
+                        });
+                        vault::authorize_and_serve_logins(
+                            &authorizers,
+                            prompt,
+                            actor,
+                            Some(payload),
+                            &in_flight,
+                        )
+                        .await
+                    },
+                    Err(message) => WireResponse::Failed { message },
+                }
             },
             WireRequest::ReadVaultSecret {
                 vault_key,
@@ -1555,6 +1925,7 @@ async fn serve_request(
                     vault_key,
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::ReadSecret {
                         item_key,
                         credential_key,
@@ -1577,6 +1948,7 @@ async fn serve_request(
                     vault_key: vault_keys.join(", "),
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::ResolveSecrets { purpose, refs },
                 };
                 log::debug!("App broker request: {prompt:?}");
@@ -1596,6 +1968,7 @@ async fn serve_request(
                     vault_key,
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::WriteSecret {
                         item_key,
                         credential_key,
@@ -1626,6 +1999,7 @@ async fn serve_request(
                     vault_key: vault_keys.join(", "),
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::ExportVaults {
                         vault_keys: vault_keys.clone(),
                     },
@@ -1656,6 +2030,7 @@ async fn serve_request(
                         .map_or_else(|| import_path.clone(), |n| n.to_string_lossy().into_owned()),
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::ImportVaults {
                         count: selection.len(),
                     },
@@ -1680,6 +2055,7 @@ async fn serve_request(
                     vault_key: path.clone(),
                     caller,
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::AddVault { path },
                 };
                 log::debug!("App broker request: {prompt:?}");
@@ -1697,6 +2073,7 @@ async fn serve_request(
                 excluded_credentials,
                 origin,
                 caller,
+                client: _,
             } => {
                 if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
                     log::warn!("App broker refused a passkey registration: {message}");
@@ -1717,9 +2094,10 @@ async fn serve_request(
                     excluded_credentials: excluded,
                 };
                 let prompt = vault::VaultAccessPrompt {
-                    vault_key: vault::passkey_vault_key(),
-                    caller: vouched_caller(scope, caller),
+                    vault_key: vault::write_vault_key(),
+                    caller: vouched_caller(scope, &client_id, caller),
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::CreatePasskey { rp_id },
                 };
                 log::debug!("App broker request: {prompt:?}");
@@ -1740,6 +2118,7 @@ async fn serve_request(
                 allowed_credentials,
                 origin,
                 caller,
+                client: _,
             } => {
                 if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
                     log::warn!("App broker refused a passkey assertion: {message}");
@@ -1756,8 +2135,9 @@ async fn serve_request(
                 };
                 let prompt = vault::VaultAccessPrompt {
                     vault_key: String::new(),
-                    caller: vouched_caller(scope, caller),
+                    caller: vouched_caller(scope, &client_id, caller),
                     caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
                     action: vault::VaultAction::AssertPasskey { rp_id },
                 };
                 log::debug!("App broker request: {prompt:?}");
@@ -1871,6 +2251,7 @@ mod tests {
     struct StubAuthorizer {
         prompts: Mutex<Vec<SignPrompt>>,
         passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
+        vault_prompts: Mutex<Vec<vault::VaultAccessPrompt>>,
         peers: Mutex<Vec<audit::Actor>>,
         ended: AtomicUsize,
         prompts_dropped: AtomicUsize,
@@ -1963,9 +2344,10 @@ mod tests {
     impl vault::VaultAuthorizer for StubAuthorizer {
         async fn begin(
             &self,
-            _prompt: vault::VaultAccessPrompt,
+            prompt: vault::VaultAccessPrompt,
             peer: audit::Actor,
         ) -> Result<crate::core::auth::ForeignContext, String> {
+            self.vault_prompts.lock().unwrap().push(prompt);
             self.peers.lock().unwrap().push(peer);
             Err("stub authorizer".to_string())
         }
@@ -1981,6 +2363,7 @@ mod tests {
     struct TestBroker {
         socket_path: PathBuf,
         authorizer: Arc<StubAuthorizer>,
+        logins: Arc<LoginIndex>,
         shutdown: Option<tokio::sync::oneshot::Sender<()>>,
         // Rejecting a peer and serving a vault request both write audit
         // events. Held so they land in a scratch directory instead of the one
@@ -1995,21 +2378,26 @@ mod tests {
         }
 
         async fn start_with_scope(policy: PeerPolicy, scope: RequestScope) -> Self {
+            Self::start_with_clients(vec![Client { policy, scope }]).await
+        }
+
+        async fn start_with_clients(clients: Vec<Client>) -> Self {
             let audit_dir = crate::audit::test_support::test_dir();
             let dir = tempfile::tempdir().unwrap();
             let socket_path = dir.path().join("app-broker.sock");
             let authorizer = Arc::new(StubAuthorizer::default());
+            let logins = Arc::new(LoginIndex::default());
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
             tokio::spawn(serve_on(
                 socket_path.clone(),
-                policy,
-                scope,
+                clients,
                 Authorizers {
                     sign: authorizer.clone(),
                     passphrase: authorizer.clone(),
                     vault: authorizer.clone(),
                     keychain: authorizer.clone(),
+                    logins: logins.clone(),
                 },
                 shutdown_rx,
             ));
@@ -2018,6 +2406,7 @@ mod tests {
             TestBroker {
                 socket_path,
                 authorizer,
+                logins,
                 shutdown: Some(shutdown_tx),
                 _audit_dir: audit_dir,
                 _dir: dir,
@@ -2646,6 +3035,359 @@ mod tests {
         }
     }
 
+    const PAGE: &str = r#""url":"https://example.com","frame_url":"https://example.com/login""#;
+    const CHROME: &str = r#""client":{"browser":{"name":"Google Chrome","team_id":"EQHXZ8M8AV"},"extension":"chrome-extension://abc/"}"#;
+
+    async fn browser_host_broker() -> TestBroker {
+        TestBroker::start_with_scope(accepting_policy(), RequestScope::BrowserHost).await
+    }
+
+    fn parse(line: &str) -> WireRequest {
+        serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn the_browser_host_scope_adds_generation_and_saving_to_the_autofill_requests() {
+        let autofill = [
+            format!(r#"{{"request":"list_logins",{PAGE}}}"#),
+            format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#),
+            format!(r#"{{"request":"fill_login",{PAGE},"record_id":"r"}}"#),
+            format!(r#"{{"request":"generate_totp",{PAGE},"record_id":"r"}}"#),
+            r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#
+                .to_string(),
+        ];
+        let browser_only = [
+            r#"{"request":"generate_password"}"#.to_string(),
+            format!(r#"{{"request":"save_login",{PAGE},"password":"pw"}}"#),
+            format!(
+                r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":"pw"}}"#
+            ),
+        ];
+        let refused = [
+            r#"{"request":"list_identities"}"#,
+            r#"{"request":"read_vault_secret","vault_key":"v","item_key":"i","credential_key":"c"}"#,
+            r#"{"request":"resolve_secrets","refs":[],"purpose":"read"}"#,
+            r#"{"request":"write_vault_secret","vault_key":"v","item_key":"i","credential_key":"c","title":"t","value":"x"}"#,
+            r#"{"request":"export_vaults","vault_keys":[],"dest_path":"/tmp/x","mode":{"kind":"recipient","recipient":"age1"}}"#,
+            r#"{"request":"import_vaults","import_path":"/tmp/x","identity":{"kind":"passphrase","passphrase":"p"},"selection":[]}"#,
+            r#"{"request":"add_external_vault","path":"/tmp/v.json"}"#,
+            r#"{"request":"get_age_identity","key_id":"k"}"#,
+            r#"{"request":"list_keychain_passwords"}"#,
+            r#"{"request":"sign","key_label":"k","data":"aGk="}"#,
+            r#"{"request":"get_passphrase","key_id":"k"}"#,
+        ];
+        for line in autofill.iter().chain(&browser_only) {
+            let request = parse(line);
+            assert!(RequestScope::BrowserHost.allows(&request), "{line}");
+            assert!(RequestScope::Agent.allows(&request), "{line}");
+        }
+        for line in &autofill {
+            assert!(
+                RequestScope::AutofillExtension.allows(&parse(line)),
+                "{line}"
+            );
+        }
+        for line in &browser_only {
+            assert!(
+                !RequestScope::AutofillExtension.allows(&parse(line)),
+                "{line}"
+            );
+        }
+        for line in refused {
+            let request = parse(line);
+            assert!(!RequestScope::BrowserHost.allows(&request), "{line}");
+            assert!(RequestScope::Agent.allows(&request), "{line}");
+        }
+    }
+
+    /// The browser host names the caller from the browser it verified, and
+    /// the request's own `caller` and `requester` cannot change that.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_browser_host_scope_names_the_verified_browser() {
+        let broker = browser_host_broker().await;
+        let line = format!(
+            r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"Safari","requester":"Notes",{CHROME}}}"#
+        );
+        broker.request(&line);
+
+        let peers = broker.authorizer.peers.lock().unwrap();
+        assert_eq!(peers[0].caller.as_deref(), Some("Google Chrome"));
+        let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+        assert_eq!(prompts[0].caller.as_deref(), Some("Google Chrome"));
+        assert_eq!(
+            prompts[0].client,
+            ClientIdentity::Browser {
+                name: "Google Chrome".to_string(),
+                team_id: "EQHXZ8M8AV".to_string(),
+                extension: Some("chrome-extension://abc/".to_string()),
+            }
+        );
+        let VaultAction::FillLogin { page, .. } = &prompts[0].action else {
+            panic!("not a fill: {:?}", prompts[0].action);
+        };
+        assert_eq!(page.requester, None);
+    }
+
+    /// A host with no verified browser is "Unknown process" and is never
+    /// identified, so no approval is reused for it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unverified_browser_host_is_unknown_and_never_identified() {
+        for client in [
+            r#""client":{"extension":"chrome-extension://abc/"}"#,
+            r#""client":{}"#,
+        ] {
+            let broker = browser_host_broker().await;
+            broker.request(&format!(
+                r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"Chrome",{client}}}"#
+            ));
+            // No client report at all.
+            broker.request(&format!(
+                r#"{{"request":"list_logins",{PAGE},"caller":"Chrome"}}"#
+            ));
+
+            let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+            assert_eq!(prompts.len(), 2);
+            for prompt in prompts.iter() {
+                assert_eq!(prompt.caller.as_deref(), Some(UNKNOWN_CLIENT));
+                assert!(matches!(prompt.client, ClientIdentity::Unverified { .. }));
+            }
+        }
+    }
+
+    /// Only a verified browser host may report a browser. The same report
+    /// from `ap` or the AutoFill extension is ignored.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn other_scopes_ignore_a_browser_report() {
+        for scope in [RequestScope::Agent, RequestScope::AutofillExtension] {
+            let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
+            broker.request(&format!(
+                r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"git",{CHROME}}}"#
+            ));
+            let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+            assert_eq!(prompts[0].client, ClientIdentity::Process, "{scope:?}");
+            assert_ne!(prompts[0].caller.as_deref(), Some("Google Chrome"));
+        }
+    }
+
+    /// Only the AutoFill extension names the app a request is for. A browser
+    /// host and `ap` are always a browser.
+    #[test]
+    fn only_the_autofill_extension_names_a_requesting_app() {
+        let app = || Some("Notes".to_string());
+        assert_eq!(requester_for(RequestScope::AutofillExtension, app()), app());
+        assert_eq!(requester_for(RequestScope::BrowserHost, app()), None);
+        assert_eq!(requester_for(RequestScope::Agent, app()), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn locked_listing_is_refused_to_the_agent_and_an_unverified_host() {
+        let line = format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#);
+        let verified = format!(r#"{{"request":"list_logins_locked",{PAGE},{CHROME}}}"#);
+        let refused = [
+            (RequestScope::Agent, verified.clone()),
+            (RequestScope::BrowserHost, line.clone()),
+        ];
+        for (scope, line) in refused {
+            let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
+            broker.logins.replace(Vec::new());
+            let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
+                "{scope:?} listed without a prompt"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn locked_listing_answers_from_the_index_without_a_prompt() {
+        use crate::secrets::vaults::autofill::AutofillItem;
+        use crate::secrets::vaults::{MatchKind, Website};
+
+        let item = |record_id: &str, site: &str| AutofillItem {
+            vault_key: "personal".to_string(),
+            item_key: record_id.to_string(),
+            record_id: record_id.to_string(),
+            title: record_id.to_string(),
+            username: Some("tp".to_string()),
+            password_key: "password".to_string(),
+            websites: vec![Website::new(site, MatchKind::Domain)],
+            websites_from_url_fields: false,
+            matched: None,
+        };
+        let verified = format!(r#"{{"request":"list_logins_locked",{PAGE},{CHROME}}}"#);
+        let plain = format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#);
+
+        for (scope, line) in [
+            (RequestScope::BrowserHost, verified),
+            (RequestScope::AutofillExtension, plain),
+        ] {
+            let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
+
+            // Nothing is indexed before the app's first unlock.
+            let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::LockedLogins { logins, indexed: false } if logins.is_empty()),
+                "{scope:?}"
+            );
+
+            broker
+                .logins
+                .replace(vec![item("a", "example.com"), item("b", "other.com")]);
+            let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+            let WireResponse::LockedLogins { logins, indexed } = response else {
+                panic!("{scope:?}: unexpected response");
+            };
+            assert!(indexed);
+            assert_eq!(logins.len(), 1, "{scope:?} listed a login for another site");
+            assert_eq!(logins[0].record_id, "a");
+
+            assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+            assert!(broker.authorizer.peers.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn generates_a_password_without_a_prompt() {
+        let broker = browser_host_broker().await;
+
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(r#"{"request":"generate_password"}"#)).unwrap();
+        let WireResponse::GeneratedPassword { password } = response else {
+            panic!("unexpected response");
+        };
+        assert_eq!(password.len(), 20);
+
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(
+                r#"{"request":"generate_password","policy":{"length":8,"symbols":false}}"#,
+            ))
+            .unwrap();
+        let WireResponse::GeneratedPassword { password } = response else {
+            panic!("unexpected response");
+        };
+        assert_eq!(password.len(), 8);
+        assert!(password.chars().all(|c| c.is_ascii_alphanumeric()));
+
+        let response: WireResponse = serde_json::from_str(
+            &broker.request(r#"{"request":"generate_password","policy":{"length":1}}"#),
+        )
+        .unwrap();
+        assert!(matches!(response, WireResponse::Failed { .. }));
+
+        assert!(broker.authorizer.peers.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_autofill_scope_cannot_generate_or_save() {
+        let broker =
+            TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
+        for line in [
+            r#"{"request":"generate_password"}"#.to_string(),
+            format!(r#"{{"request":"save_login",{PAGE},"password":"pw"}}"#),
+            format!(
+                r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":"pw"}}"#
+            ),
+        ] {
+            let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+            assert!(
+                matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
+                "{line}"
+            );
+        }
+        assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+    }
+
+    /// A save names the site and the account in its prompt, and always
+    /// reaches the prompt. The password is not in what the app sees.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn saving_a_login_always_prompts_and_keeps_the_password_out_of_it() {
+        let broker = browser_host_broker().await;
+        broker.request(&format!(
+            r#"{{"request":"save_login",{PAGE},"username":"tp@example.com","password":"s3cret",{CHROME}}}"#
+        ));
+        broker.request(&format!(
+            r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":"s3cret","account":"tp",{CHROME}}}"#
+        ));
+
+        let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert!(
+            matches!(&prompts[0].action, VaultAction::SaveLogin { page, username }
+                if page.host == "example.com" && username.as_deref() == Some("tp@example.com"))
+        );
+        assert!(
+            matches!(&prompts[1].action, VaultAction::UpdateLoginPassword { page, record_id, account }
+                if page.host == "example.com" && record_id == "r" && account.as_deref() == Some("tp"))
+        );
+        for prompt in prompts.iter() {
+            assert_eq!(prompt.caller.as_deref(), Some("Google Chrome"));
+            assert!(!format!("{prompt:?}").contains("s3cret"));
+        }
+    }
+
+    /// Nothing without a password or an http(s) page reaches the prompt.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn refuses_a_save_with_no_password_or_page_before_prompting() {
+        let broker = browser_host_broker().await;
+        for line in [
+            format!(r#"{{"request":"save_login",{PAGE},"password":""}}"#),
+            format!(r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":""}}"#),
+            r#"{"request":"save_login","url":"https://example.com","frame_url":"ftp://example.com","password":"pw"}"#.to_string(),
+        ] {
+            let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+            assert!(matches!(response, WireResponse::Failed { .. }), "{line}");
+        }
+        assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+    }
+
+    /// A peer is matched against each client's policy in turn, and the first
+    /// it satisfies gives the scope.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_policy_a_peer_satisfies_gives_its_scope() {
+        let broker = TestBroker::start_with_clients(vec![
+            Client {
+                policy: rejecting_policy(),
+                scope: RequestScope::Agent,
+            },
+            Client {
+                policy: accepting_policy(),
+                scope: RequestScope::BrowserHost,
+            },
+        ])
+        .await;
+
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(r#"{"request":"list_keychain_passwords"}"#))
+                .unwrap();
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
+            "the browser host scope served a keychain listing"
+        );
+        let response: WireResponse =
+            serde_json::from_str(&broker.request(r#"{"request":"generate_password"}"#)).unwrap();
+        assert!(matches!(response, WireResponse::GeneratedPassword { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_peer_no_client_accepts_is_refused() {
+        let broker = TestBroker::start_with_clients(vec![
+            Client {
+                policy: rejecting_policy(),
+                scope: RequestScope::Agent,
+            },
+            Client {
+                policy: rejecting_policy(),
+                scope: RequestScope::BrowserHost,
+            },
+        ])
+        .await;
+        assert!(
+            broker
+                .request(r#"{"request":"generate_password"}"#)
+                .is_empty()
+        );
+    }
+
     /// A Mach service with a name no other test or process uses.
     fn start_mach_service(policy: PeerPolicy) -> (String, mach::MachService) {
         let (name, service, _) = start_mach_service_with(policy, RequestScope::Agent);
@@ -2674,6 +3416,7 @@ mod tests {
             passphrase: authorizer.clone(),
             vault: authorizer.clone(),
             keychain: authorizer.clone(),
+            logins: Arc::new(LoginIndex::default()),
         }
     }
 
@@ -2938,13 +3681,16 @@ mod tests {
         let authorizer = Arc::new(StubAuthorizer::default());
         tokio::spawn(serve_on(
             socket_path.clone(),
-            accepting_policy(),
-            RequestScope::Agent,
+            vec![Client {
+                policy: accepting_policy(),
+                scope: RequestScope::Agent,
+            }],
             Authorizers {
                 sign: authorizer.clone(),
                 passphrase: authorizer.clone(),
                 vault: authorizer.clone(),
                 keychain: authorizer,
+                logins: Arc::new(LoginIndex::default()),
             },
             shutdown_rx,
         ));

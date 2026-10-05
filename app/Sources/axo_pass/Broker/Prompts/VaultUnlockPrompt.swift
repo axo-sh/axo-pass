@@ -153,8 +153,8 @@ final class VaultUnlockPromptModel {
         let path = "\(ref.itemKey)/\(ref.credentialKey)"
         return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
       }
-    case .listItems, .listLogins, .fillLogin, .generateTotp, .exportVaults, .importVaults,
-      .addVault, .createPasskey, .assertPasskey:
+    case .listItems, .listLogins, .fillLogin, .generateTotp, .saveLogin, .updateLoginPassword,
+      .exportVaults, .importVaults, .addVault, .createPasskey, .assertPasskey:
       return []
     }
   }
@@ -169,20 +169,24 @@ final class VaultUnlockPromptModel {
     }
   }
 
-  /// The account a fill will use, shown in its own card instead of the headline.
+  /// The account a request will use, shown in its own card instead of the headline.
   private static func login(for action: VaultAction) -> String? {
-    if case .fillLogin(_, _, let account) = action { return account }
-    return nil
+    switch action {
+    case .fillLogin(_, _, let account), .updateLoginPassword(_, _, let account): return account
+    case .saveLogin(_, let username): return username
+    default: return nil
+    }
   }
 
-  /// Facts about the page that the user should see before approving a fill. A
-  /// listing has none, since it returns no secret.
+  /// Facts about the page that the user should see before approving a fill or a
+  /// save. A listing has none, since it returns no secret.
   private static func notes(for action: VaultAction) -> [String] {
     switch action {
-    case .fillLogin(let page, _, _), .generateTotp(let page, _):
+    case .fillLogin(let page, _, _), .generateTotp(let page, _), .saveLogin(let page, _),
+      .updateLoginPassword(let page, _, _):
       var notes: [String] = []
       if !page.secure {
-        notes.append("This page is not secure (http). Anyone on the network can read the fill.")
+        notes.append("This page is not secure (http). Anyone on the network can read the password.")
       }
       if let top = page.topHost {
         notes.append("The form is in a frame on \(page.host), inside a page on \(top).")
@@ -211,6 +215,10 @@ final class VaultUnlockPromptModel {
       what = "fill \(account ?? "a login") on \(page.host)"
     case .generateTotp(let page, _):
       what = "get a one-time code for \(page.host)"
+    case .saveLogin(let page, let username):
+      what = "save \(username ?? "a login") for \(page.host)"
+    case .updateLoginPassword(let page, _, let account):
+      what = "update the password of \(account ?? "a login") from \(page.host)"
     case .writeSecret(let itemKey, let credentialKey):
       what = "write \(itemKey)/\(credentialKey) in vault \(prompt.vaultKey)"
     case .exportVaults(let count):
@@ -235,7 +243,7 @@ final class VaultUnlockPromptModel {
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
     case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault,
-      .createPasskey, .assertPasskey, .fillLogin, .generateTotp:
+      .createPasskey, .assertPasskey, .fillLogin, .generateTotp, .saveLogin, .updateLoginPassword:
       return true
     case .listItems, .listLogins: return false
     }
@@ -251,7 +259,9 @@ final class VaultUnlockPromptModel {
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
     let id: String
     switch prompt.action {
-    case .fillLogin(_, let recordId, _), .generateTotp(_, let recordId): id = recordId
+    case .fillLogin(_, let recordId, _), .generateTotp(_, let recordId),
+      .updateLoginPassword(_, let recordId, _):
+      id = recordId
     case .listLogins: id = "logins"
     default: id = prompt.vaultKey
     }
@@ -269,6 +279,8 @@ final class VaultUnlockPromptModel {
     case .listLogins(let page): return "list-logins:\(page.domain)"
     case .fillLogin(let page, _, _): return "fill:\(page.domain)"
     case .generateTotp(let page, _): return "totp:\(page.domain)"
+    case .saveLogin(let page, _): return "save:\(page.domain)"
+    case .updateLoginPassword(let page, _, _): return "update:\(page.domain)"
     case .writeSecret: return "write"
     case .exportVaults: return "export"
     case .importVaults: return "import"
@@ -297,6 +309,10 @@ final class VaultUnlockPromptModel {
       return [.plain("fill a login on "), .bold(page.host)]
     case .generateTotp(let page, _):
       return [.plain("get a one-time code for "), .bold(page.host)]
+    case .saveLogin(let page, _):
+      return [.plain("save a login for "), .bold(page.host)]
+    case .updateLoginPassword(let page, _, _):
+      return [.plain("update a password from "), .bold(page.host)]
     case .writeSecret: return [.plain("write a secret")]
     case .exportVaults(let count):
       return [.plain("export \(count) \(count == 1 ? "vault" : "vaults")")]

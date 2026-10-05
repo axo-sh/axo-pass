@@ -3,6 +3,7 @@
 use aes_gcm::aead::OsRng;
 use aes_gcm::aead::rand_core::RngCore;
 use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 
 const LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -13,7 +14,9 @@ pub const DEFAULT_LENGTH: usize = 20;
 const MIN_LENGTH: usize = 4;
 const MAX_LENGTH: usize = 256;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Fields left out of a serialized policy take their default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PasswordPolicy {
     pub length: usize,
     pub lowercase: bool,

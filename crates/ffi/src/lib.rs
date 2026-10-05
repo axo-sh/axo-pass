@@ -1386,6 +1386,9 @@ pub struct AxoPass {
     embedded_auth_lock: Mutex<Option<std::fs::File>>,
     /// Shuts the app broker down; `Some` while it is serving.
     app_broker: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// The logins indexed at the last unlock. The broker lists from it for the
+    /// clients that may list without a prompt.
+    login_index: Arc<app_broker::LoginIndex>,
 }
 
 impl AxoPass {
@@ -1468,6 +1471,7 @@ impl AxoPass {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
             embedded_auth_lock: Mutex::new(None),
             app_broker: Mutex::new(None),
+            login_index: Arc::new(app_broker::LoginIndex::default()),
         })
     }
 
@@ -1651,12 +1655,16 @@ impl AxoPass {
     ///
     /// Only the username and URLs are read. The password stays in the vault
     /// until the extension asks for it by name.
+    ///
+    /// The result also replaces the broker's login index, which answers the
+    /// listings that need no prompt.
     pub async fn list_autofill_items(&self) -> Result<Vec<AutofillItemInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
+        let index = Arc::clone(&self.login_index);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault_keys: Vec<String> = m.iter_vault_keys().collect();
-            let mut items = Vec::new();
+            let mut found_items = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
@@ -1666,11 +1674,15 @@ impl AxoPass {
                     continue;
                 }
                 match autofill::collect_items(vault, None) {
-                    Ok(found) => items.extend(found.into_iter().map(AutofillItemInfo::from)),
+                    Ok(found) => found_items.extend(found),
                     Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
                 }
             }
-            Ok(items)
+            index.replace(found_items.clone());
+            Ok(found_items
+                .into_iter()
+                .map(AutofillItemInfo::from)
+                .collect())
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
@@ -3079,6 +3091,7 @@ impl AxoPass {
                 delegate: vault_delegate,
                 manager: Arc::clone(&self.manager),
             }),
+            logins: Arc::clone(&self.login_index),
         };
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
@@ -3643,6 +3656,20 @@ pub enum VaultAction {
         page: LoginPage,
         record_id: String,
     },
+    /// A browser captured a login from a form on `page` and is asking to save
+    /// it as a new item. The password is not carried to the app.
+    SaveLogin {
+        page: LoginPage,
+        username: Option<String>,
+    },
+    /// A browser captured a new password for one login from a form on `page`.
+    /// `account` is the client's own label for the login, like `FillLogin`'s.
+    /// The password is not carried to the app.
+    UpdateLoginPassword {
+        page: LoginPage,
+        record_id: String,
+        account: Option<String>,
+    },
     /// `ap exec` / `ap inject`: resolve `refs` behind one prompt. The refs may
     /// span several vaults.
     ResolveSecrets {
@@ -3767,6 +3794,19 @@ impl From<app_broker::VaultAction> for VaultAction {
                 page: page.into(),
                 record_id,
             },
+            app_broker::VaultAction::SaveLogin { page, username } => Self::SaveLogin {
+                page: page.into(),
+                username,
+            },
+            app_broker::VaultAction::UpdateLoginPassword {
+                page,
+                record_id,
+                account,
+            } => Self::UpdateLoginPassword {
+                page: page.into(),
+                record_id,
+                account,
+            },
             app_broker::VaultAction::ResolveSecrets { purpose, refs } => Self::ResolveSecrets {
                 purpose: purpose.into(),
                 refs: refs.into_iter().map(Into::into).collect(),
@@ -3809,10 +3849,19 @@ pub struct VaultAccessPrompt {
 
 impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
     fn from(prompt: app_broker::VaultAccessPrompt) -> Self {
+        // A browser is identified by its signing identity, not by the host's
+        // process chain, and an unverified browser host is never identified.
+        let caller_identity = match &prompt.client {
+            app_broker::ClientIdentity::Process => provenance::chain_identity(&prompt.caller_chain),
+            app_broker::ClientIdentity::Browser { name, team_id, .. } => {
+                Some(format!("browser:{team_id}:{name}"))
+            },
+            app_broker::ClientIdentity::Unverified { .. } => None,
+        };
         Self {
             vault_key: prompt.vault_key,
             caller: prompt.caller,
-            caller_identity: provenance::chain_identity(&prompt.caller_chain),
+            caller_identity,
             caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
             action: prompt.action.into(),
         }
@@ -3863,6 +3912,8 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
     matches!(
         action,
         app_broker::VaultAction::WriteSecret { .. }
+            | app_broker::VaultAction::SaveLogin { .. }
+            | app_broker::VaultAction::UpdateLoginPassword { .. }
             | app_broker::VaultAction::CreatePasskey { .. }
             | app_broker::VaultAction::AssertPasskey { .. }
             | app_broker::VaultAction::ImportVaults { .. }
@@ -3871,11 +3922,14 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
 }
 
 /// The vault keys a mutating action wrote to, when the prompt names them.
-/// `WriteSecret` carries the real key; the passkey, import and add actions do
-/// not, so they return an empty list and every vault is relocked.
+/// `WriteSecret` and `SaveLogin` carry the real key; the passkey, password
+/// update, import and add actions do not, so they return an empty list and
+/// every vault is relocked.
 fn changed_vault_keys(prompt: &app_broker::VaultAccessPrompt) -> Vec<String> {
     match &prompt.action {
-        app_broker::VaultAction::WriteSecret { .. } => vec![prompt.vault_key.clone()],
+        app_broker::VaultAction::WriteSecret { .. } | app_broker::VaultAction::SaveLogin { .. } => {
+            vec![prompt.vault_key.clone()]
+        },
         _ => Vec::new(),
     }
 }

@@ -17,6 +17,7 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 use super::totp::{self, TotpCode};
+use super::vault_wrapper::validate_key;
 use super::{
     CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultItemCredentialOverview,
     VaultItemOverview, VaultWrapper, Website,
@@ -345,9 +346,10 @@ pub struct LoginWrite<'a> {
     pub password_key: &'a str,
     pub password: SecretString,
     pub username: Option<&'a str>,
-    /// URLs or bare domains, added with `domain` matching unless the item
-    /// already lists them.
+    /// URLs or bare domains, added with `match_kind` unless the item already
+    /// lists them.
     pub websites: &'a [String],
+    pub match_kind: MatchKind,
 }
 
 /// Write a login into an unlocked vault: the item when it is missing, the
@@ -392,7 +394,7 @@ pub fn write_login(vw: &mut VaultWrapper, login: LoginWrite) -> Result<(), Error
     for url in login.websites {
         let url = url.trim();
         if !url.is_empty() && !autofill.websites.iter().any(|w| w.url == url) {
-            autofill.websites.push(Website::new(url, MatchKind::Domain));
+            autofill.websites.push(Website::new(url, login.match_kind));
         }
     }
 
@@ -404,6 +406,113 @@ pub fn write_login(vw: &mut VaultWrapper, login: LoginWrite) -> Result<(), Error
         vw.set_item_category(login.item_key, Some(CATEGORY_LOGIN.to_string()))?;
     }
     Ok(())
+}
+
+/// The item key and title for a login saved from `site`. The key is the
+/// registrable domain's first label, or the whole domain with dashes when that
+/// label is not a valid key. The title is the domain with its first letter
+/// capitalized.
+pub fn names_for_site(site: &Site) -> (String, String) {
+    let label = site.domain.split('.').next().unwrap_or_default();
+    let key = [label.to_string(), site.domain.replace('.', "-")]
+        .into_iter()
+        .find(|candidate| validate_key(candidate))
+        .unwrap_or_else(|| "login".to_string());
+
+    let mut chars = site.domain.chars();
+    let title = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Login".to_string(),
+    };
+    (key, title)
+}
+
+/// `base`, or `base-2`, `base-3`, and so on, whichever is the first key no item
+/// in `vw` uses.
+fn unused_item_key(vw: &VaultWrapper, base: &str) -> Result<String, Error> {
+    let mut key = base.to_string();
+    let mut n = 2;
+    while vw.get_item_overview(&key)?.is_some() {
+        key = format!("{base}-{n}");
+        n += 1;
+    }
+    Ok(key)
+}
+
+/// Save a login captured from a form on `site_origin` as a new item, with the
+/// conventional `username` and `password` keys. The website is stored with
+/// `host` matching, so a capture on one page of a shared host does not offer
+/// the login across its whole registrable domain. The caller saves the vault.
+pub fn save_login(
+    vw: &mut VaultWrapper,
+    site_origin: &str,
+    username: Option<&str>,
+    password: SecretString,
+) -> Result<AutofillItem, Error> {
+    let site = Site::parse(site_origin)
+        .ok_or_else(|| Error::InvalidItemKey(format!("{site_origin} is not an http(s) site")))?;
+    let (base_key, title) = names_for_site(&site);
+    let item_key = unused_item_key(vw, &base_key)?;
+
+    write_login(
+        vw,
+        LoginWrite {
+            item_key: &item_key,
+            title: &title,
+            password_key: "password",
+            password,
+            username: username.filter(|name| !name.trim().is_empty()),
+            websites: &[site_origin.to_string()],
+            match_kind: MatchKind::Host,
+        },
+    )?;
+
+    let vault_id = vw.vault_id()?;
+    let overview = vw
+        .get_item_overview(&item_key)?
+        .ok_or_else(|| Error::InvalidItemKey(item_key.clone()))?;
+    candidate(vw, vault_id, overview, None)?.ok_or_else(|| Error::InvalidItemKey(item_key))
+}
+
+/// The login a record identifier names, wherever it applies. Unlike
+/// [`find_login`] this does not check a page, so the caller decides what an
+/// unmatched page means.
+pub fn find_login_record(
+    vw: &VaultWrapper,
+    record_id: &str,
+) -> Result<Option<AutofillItem>, Error> {
+    let Some((vault_id, item_id, _)) = parse_record_id(record_id) else {
+        return Ok(None);
+    };
+    if vw.vault_id()? != vault_id {
+        return Ok(None);
+    }
+    let Some(overview) = vw.get_item_overview_by_id(item_id)? else {
+        return Ok(None);
+    };
+    Ok(candidate(vw, vault_id, overview, None)?.filter(|item| item.record_id == record_id))
+}
+
+/// Whether `frame_url` is a page the login is stored for. A login that is
+/// offered only through its `Url` fields does not count: it lists no website.
+pub fn is_stored_for(item: &AutofillItem, frame_url: &str) -> bool {
+    !item.websites_from_url_fields && match_service(&item.websites, frame_url).is_some()
+}
+
+/// Replace the password of a login found by [`find_login_record`], keeping the
+/// credential's title and kind. The caller saves the vault.
+pub fn update_login_password(
+    vw: &mut VaultWrapper,
+    item: &AutofillItem,
+    password: SecretString,
+) -> Result<(), Error> {
+    let (title, kind) = vw
+        .get_secret_overview(&item.item_key, &item.password_key)?
+        .map(|credential| (credential.title.clone(), credential.kind.clone()))
+        .ok_or_else(|| {
+            Error::InvalidCredentialKey(format!("{}/{}", item.item_key, item.password_key))
+        })?;
+    vw.add_secret(&item.item_key, &item.password_key, &title, kind, password)
 }
 
 fn credential_id(vw: &VaultWrapper, item_key: &str, cred_key: &str) -> Result<uuid::Uuid, Error> {
@@ -773,7 +882,10 @@ mod tests {
 
     #[test]
     fn starts_with_requires_an_equal_stored_query() {
-        let websites = [site("https://example.com/app?tenant=a", MatchKind::StartsWith)];
+        let websites = [site(
+            "https://example.com/app?tenant=a",
+            MatchKind::StartsWith,
+        )];
         assert!(matches(&websites, "https://example.com/app?tenant=a"));
         assert!(!matches(&websites, "https://example.com/app?tenant=ab"));
         assert!(!matches(&websites, "https://example.com/app"));
@@ -882,6 +994,7 @@ mod tests {
             password: SecretString::from("hunter2"),
             username,
             websites,
+            match_kind: MatchKind::Domain,
         }
     }
 
@@ -941,6 +1054,181 @@ mod tests {
         let item = vw.get_item_overview("github").unwrap().unwrap();
         assert_eq!(item.autofill.websites.len(), 1);
         assert!(item.autofill.username.is_none());
+    }
+
+    fn names(url: &str) -> (String, String) {
+        names_for_site(&Site::parse(url).unwrap())
+    }
+
+    #[test]
+    fn names_come_from_the_registrable_domain() {
+        let pair = |key: &str, title: &str| (key.to_string(), title.to_string());
+        assert_eq!(
+            names("https://accounts.github.com/login"),
+            pair("github", "Github.com")
+        );
+        assert_eq!(
+            names("https://www.example.co.uk"),
+            pair("example", "Example.co.uk")
+        );
+    }
+
+    #[test]
+    fn names_fall_back_when_the_first_label_is_not_a_key() {
+        let pair = |key: &str, title: &str| (key.to_string(), title.to_string());
+        // Keys start with a letter and have at least three characters.
+        assert_eq!(names("https://x.com"), pair("x-com", "X.com"));
+        assert_eq!(names("https://t.co"), pair("t-co", "T.co"));
+        assert_eq!(names("https://123.com"), pair("login", "123.com"));
+    }
+
+    #[test]
+    fn save_login_stores_a_host_website_and_the_conventional_keys() {
+        use secrecy::ExposeSecret;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let item = save_login(
+            &mut vw,
+            "https://login.example.com",
+            Some("tp"),
+            SecretString::from("pw"),
+        )
+        .unwrap();
+
+        assert_eq!(item.item_key, "example");
+        assert_eq!(item.title, "Example.com");
+        assert_eq!(item.username.as_deref(), Some("tp"));
+        assert_eq!(item.password_key, "password");
+
+        let overview = vw.get_item_overview("example").unwrap().unwrap();
+        assert_eq!(overview.category.as_deref(), Some(CATEGORY_LOGIN));
+        assert_eq!(
+            overview.autofill.websites,
+            vec![Website::new("https://login.example.com", MatchKind::Host)]
+        );
+        let password = vw.get_secret("example", "password").unwrap().unwrap();
+        assert_eq!(password.expose_secret(), "pw");
+
+        // `host` matching offers the login on its own host and nowhere else
+        // under the registrable domain.
+        let id = &item.record_id;
+        assert!(
+            find_login(&vw, id, "https://login.example.com/x")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            find_login(&vw, id, "https://www.example.com")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn save_login_leaves_an_existing_item_alone() {
+        use secrecy::ExposeSecret;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let save = |vw: &mut VaultWrapper, password: &str| {
+            save_login(
+                vw,
+                "https://example.com",
+                Some("tp"),
+                SecretString::from(password),
+            )
+            .unwrap()
+        };
+        let first = save(&mut vw, "one");
+        let second = save(&mut vw, "two");
+
+        assert_eq!(first.item_key, "example");
+        assert_eq!(second.item_key, "example-2");
+        assert_ne!(first.record_id, second.record_id);
+        let password = vw.get_secret("example", "password").unwrap().unwrap();
+        assert_eq!(password.expose_secret(), "one");
+    }
+
+    #[test]
+    fn save_login_without_a_username_has_no_username_role() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let item = save_login(
+            &mut vw,
+            "https://example.com",
+            Some("  "),
+            SecretString::from("pw"),
+        )
+        .unwrap();
+        assert!(item.username.is_none());
+        let overview = vw.get_item_overview("example").unwrap().unwrap();
+        assert!(overview.autofill.username.is_none());
+    }
+
+    #[test]
+    fn save_login_refuses_a_page_that_is_not_http() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        assert!(save_login(&mut vw, "ftp://example.com", None, SecretString::from("pw")).is_err());
+    }
+
+    #[test]
+    fn update_login_password_changes_only_the_value() {
+        use secrecy::ExposeSecret;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let websites = vec!["github.com".to_string()];
+        write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
+        let before = vw
+            .get_secret_overview("github", "password")
+            .unwrap()
+            .unwrap()
+            .clone();
+        let item = collect_items(&vw, None).unwrap().remove(0);
+
+        update_login_password(&mut vw, &item, SecretString::from("new")).unwrap();
+
+        let password = vw.get_secret("github", "password").unwrap().unwrap();
+        assert_eq!(password.expose_secret(), "new");
+        let after = vw
+            .get_secret_overview("github", "password")
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.kind, before.kind);
+    }
+
+    #[test]
+    fn find_login_record_ignores_the_page_but_not_the_id() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let websites = vec!["github.com".to_string()];
+        write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
+        let item = collect_items(&vw, None).unwrap().remove(0);
+
+        let found = find_login_record(&vw, &item.record_id).unwrap().unwrap();
+        assert_eq!(found.record_id, item.record_id);
+
+        let (vault, item_id, _) = parse_record_id(&item.record_id).unwrap();
+        let wrong_credential = format!("{vault}/{item_id}/{}", Uuid::new_v4());
+        assert!(find_login_record(&vw, &wrong_credential).unwrap().is_none());
+        assert!(find_login_record(&vw, "not-a-record").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_login_is_stored_for_a_page_only_through_a_listed_website() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let websites = vec!["github.com".to_string()];
+        write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
+        let item = find_login_record(&vw, &collect_items(&vw, None).unwrap()[0].record_id)
+            .unwrap()
+            .unwrap();
+
+        assert!(is_stored_for(&item, "https://gist.github.com/new"));
+        assert!(!is_stored_for(&item, "https://evil.com"));
+
+        let from_url_field = AutofillItem {
+            websites_from_url_fields: true,
+            ..item
+        };
+        assert!(!is_stored_for(&from_url_field, "https://github.com"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::{
-    DEFAULT_VAULT, FieldKind, LoginWrite, VaultWrapper, write_login,
+    DEFAULT_VAULT, FieldKind, LoginWrite, MatchKind, VaultWrapper, write_login,
 };
 use clap::{Parser, Subcommand};
 use clml::{cformat, cprintln};
@@ -583,6 +583,7 @@ impl ItemCommand {
                     password: secret,
                     username: login.username.as_deref(),
                     websites: &login.websites,
+                    match_kind: MatchKind::Domain,
                 },
             )
             .map_err(|e| format!("Failed to write login: {e}"))?;
