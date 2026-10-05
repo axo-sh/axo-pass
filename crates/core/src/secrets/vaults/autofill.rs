@@ -436,6 +436,10 @@ fn best_match(websites: &[Website], target: &ParsedUrl) -> Option<MatchedWebsite
 
 fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite> {
     let stored = ParsedUrl::parse(&website.url)?;
+    // A login stored with an https URL never fills an http page.
+    if stored.https_only && !target.secure {
+        return None;
+    }
     let same_host = stored.host == target.host;
     let matches = match website.match_kind {
         MatchKind::Domain => stored.domain == target.domain,
@@ -445,7 +449,7 @@ fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite
             same_host
                 && match &target.path {
                     None => true,
-                    Some(path) => path.starts_with(stored.path.as_deref().unwrap_or("/")),
+                    Some(path) => path_within(stored.path.as_deref().unwrap_or("/"), path),
                 }
         },
     };
@@ -460,6 +464,28 @@ fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite
     })
 }
 
+/// Whether `target` is `stored` or a page under it. Both are a path with an
+/// optional `?query`. Paths compare by segment, so `/app` covers `/app/login`
+/// but not `/application`, and a trailing slash is ignored. A stored query must
+/// equal the target's.
+fn path_within(stored: &str, target: &str) -> bool {
+    let (stored_path, stored_query) = match stored.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (stored, None),
+    };
+    let (target_path, target_query) = match target.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (target, None),
+    };
+    let stored_path = stored_path.trim_end_matches('/');
+    let target_path = target_path.trim_end_matches('/');
+    let under = target_path == stored_path
+        || target_path
+            .strip_prefix(stored_path)
+            .is_some_and(|rest| rest.starts_with('/'));
+    under && stored_query.is_none_or(|query| target_query == Some(query))
+}
+
 /// A service identifier or stored URL reduced to what matching compares.
 #[derive(Debug, PartialEq, Eq)]
 struct ParsedUrl {
@@ -470,6 +496,8 @@ struct ParsedUrl {
     domain: String,
     /// False for `http:`. A bare domain counts as secure.
     secure: bool,
+    /// True when the value names `https:` explicitly. A bare domain does not.
+    https_only: bool,
     /// Path and query. `None` for a bare domain.
     path: Option<String>,
 }
@@ -521,11 +549,13 @@ impl ParsedUrl {
         });
 
         let secure = url.scheme() != "http";
+        let https_only = has_scheme && url.scheme() == "https";
 
         Some(Self {
             host,
             domain,
             secure,
+            https_only,
             path,
         })
     }
@@ -689,11 +719,27 @@ mod tests {
     }
 
     #[test]
-    fn ports_and_schemes_are_ignored() {
+    fn ports_are_ignored() {
         assert!(matches(
             &[site("http://example.com:8080", MatchKind::Host)],
             "https://example.com:9000/x"
         ));
+    }
+
+    #[test]
+    fn an_https_login_does_not_match_an_http_page() {
+        for kind in [MatchKind::Domain, MatchKind::Host, MatchKind::StartsWith] {
+            let websites = [site("https://example.com", kind)];
+            assert!(matches(&websites, "https://example.com"));
+            assert!(!matches(&websites, "http://example.com"));
+            assert!(!matches(&websites, "HTTP://example.com/login"));
+        }
+    }
+
+    #[test]
+    fn an_http_or_bare_login_matches_an_http_page() {
+        assert!(matches(&domain("http://example.com"), "http://example.com"));
+        assert!(matches(&domain("example.com"), "http://example.com"));
     }
 
     #[test]
@@ -703,6 +749,34 @@ mod tests {
         assert!(matches(&websites, "https://example.com/app"));
         assert!(!matches(&websites, "https://example.com/other"));
         assert!(!matches(&websites, "https://sub.example.com/app"));
+    }
+
+    #[test]
+    fn starts_with_compares_whole_path_segments() {
+        let websites = [site("https://example.com/app", MatchKind::StartsWith)];
+        assert!(!matches(&websites, "https://example.com/application"));
+        assert!(!matches(&websites, "https://example.com/app-evil/login"));
+        assert!(matches(&websites, "https://example.com/app/"));
+        assert!(matches(&websites, "https://example.com/app/a/b?x=1"));
+        let websites = [site("https://example.com/app/", MatchKind::StartsWith)];
+        assert!(matches(&websites, "https://example.com/app"));
+        assert!(matches(&websites, "https://example.com/app/login"));
+        assert!(!matches(&websites, "https://example.com/application"));
+    }
+
+    #[test]
+    fn starts_with_normalizes_dot_segments() {
+        let websites = [site("https://example.com/app", MatchKind::StartsWith)];
+        assert!(!matches(&websites, "https://example.com/app/../admin"));
+        assert!(matches(&websites, "https://example.com/other/../app/login"));
+    }
+
+    #[test]
+    fn starts_with_requires_an_equal_stored_query() {
+        let websites = [site("https://example.com/app?tenant=a", MatchKind::StartsWith)];
+        assert!(matches(&websites, "https://example.com/app?tenant=a"));
+        assert!(!matches(&websites, "https://example.com/app?tenant=ab"));
+        assert!(!matches(&websites, "https://example.com/app"));
     }
 
     #[test]
