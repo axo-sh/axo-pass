@@ -366,7 +366,11 @@ pub struct AutofillItemInfo {
     pub username: Option<String>,
     /// The credential key holding the password to fill.
     pub password_key: String,
-    pub urls: Vec<String>,
+    /// The hosts to register with the system, one identity each. A `domain`
+    /// website contributes its registrable domain as well as its host, since
+    /// the system's subdomain matching for a domain identifier is unconfirmed.
+    /// A website that never matches contributes none.
+    pub hosts: Vec<String>,
 }
 
 /// One stored passkey, as the AutoFill identity store needs it. The system
@@ -393,7 +397,7 @@ impl From<autofill::AutofillItem> for AutofillItemInfo {
             title: item.title,
             username: item.username,
             password_key: item.password_key,
-            urls: item.websites.into_iter().map(|w| w.url).collect(),
+            hosts: autofill::identity_hosts(&item.websites),
         }
     }
 }

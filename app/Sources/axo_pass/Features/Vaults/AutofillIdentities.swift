@@ -63,29 +63,19 @@ enum AutofillIdentities {
       recordIdentifier: "\(passkey.vaultKey)/\(passkey.itemKey)/\(passkey.credentialKey)")
   }
 
-  /// One identity per URL on the item: the system matches on the service, so an
-  /// item with three sites has to be registered three times.
+  /// One identity per host of the item: the system matches on the service, so
+  /// an item with three sites has to be registered three times. The core
+  /// decides the hosts from each website's match kind.
   private static func passwordIdentities(
     for item: AutofillItemInfo
   ) -> [ASPasswordCredentialIdentity] {
     let user = item.username?.isEmpty == false ? item.username! : item.title
-    return item.urls.compactMap { url -> ASPasswordCredentialIdentity? in
-      guard let host = serviceHost(url) else { return nil }
-      return ASPasswordCredentialIdentity(
+    return item.hosts.map { host in
+      ASPasswordCredentialIdentity(
         serviceIdentifier: ASCredentialServiceIdentifier(identifier: host, type: .domain),
         user: user,
         recordIdentifier: item.recordId)
     }
-  }
-
-  /// Reduce a stored URL to the bare host the system matches on. Mirrors
-  /// `service_host` in crates/core/src/secrets/vaults/autofill.rs.
-  private static func serviceHost(_ value: String) -> String? {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    let candidate = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
-    guard let host = URLComponents(string: candidate)?.host?.lowercased() else { return nil }
-    return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
   }
 
   private static func isEnabled() async -> Bool {

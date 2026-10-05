@@ -206,6 +206,33 @@ fn candidate(
     }))
 }
 
+/// The hosts to register with the system's credential identity store for an
+/// item's websites, without duplicates. A `domain` website registers its
+/// registrable domain as well as its host, and the other kinds register the
+/// host. A website that never matches registers nothing.
+pub fn identity_hosts(websites: &[Website]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    let mut add = |host: String| {
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    };
+    for website in websites {
+        let Some(site) = Site::parse(&website.url) else {
+            continue;
+        };
+        match website.match_kind {
+            MatchKind::Never => {},
+            MatchKind::Domain => {
+                add(site.domain);
+                add(site.host);
+            },
+            MatchKind::Host | MatchKind::StartsWith => add(site.host),
+        }
+    }
+    hosts
+}
+
 /// A login item that a new passkey may be stored in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoginPlace {
@@ -899,6 +926,26 @@ mod tests {
 
     fn matches(websites: &[Website], service: &str) -> bool {
         match_service(websites, service).is_some()
+    }
+
+    #[test]
+    fn identity_hosts_follow_the_match_kind() {
+        let websites = [
+            site("https://login.example.com/x", MatchKind::Domain),
+            site("https://www.other.org/app", MatchKind::Host),
+            site("https://pages.test/a", MatchKind::StartsWith),
+            site("https://never.test", MatchKind::Never),
+            site("example.com", MatchKind::Domain),
+        ];
+        assert_eq!(
+            identity_hosts(&websites),
+            [
+                "example.com",
+                "login.example.com",
+                "other.org",
+                "pages.test"
+            ]
+        );
     }
 
     #[test]
