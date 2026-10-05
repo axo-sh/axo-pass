@@ -22,7 +22,13 @@ struct AutofillItem: Decodable, Identifiable, Hashable {
   let title: String
   let username: String?
   let passwordKey: String
-  let urls: [String]
+  let websites: [Website]
+
+  struct Website: Decodable, Hashable {
+    let url: String
+  }
+
+  var urls: [String] { websites.map(\.url) }
 
   var id: String { recordIdentifier }
 
@@ -45,7 +51,7 @@ struct AutofillItem: Decodable, Identifiable, Hashable {
     case title
     case username
     case passwordKey = "password_key"
-    case urls
+    case websites
   }
 }
 

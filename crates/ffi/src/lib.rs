@@ -388,7 +388,7 @@ impl From<autofill::AutofillItem> for AutofillItemInfo {
             title: item.title,
             username: item.username,
             password_key: item.password_key,
-            urls: item.urls,
+            urls: item.websites.into_iter().map(|w| w.url).collect(),
         }
     }
 }
@@ -1693,18 +1693,20 @@ impl AxoPass {
                     continue;
                 }
                 match passkey::list(vault) {
-                    Ok(found) => identities.extend(found.into_iter().map(|s| PasskeyIdentityInfo {
-                        vault_key: vault_key.clone(),
-                        item_key: s.item_key,
-                        credential_key: s.credential_key,
-                        rp_id: s.passkey.rp_id,
-                        credential_id: s.passkey.credential_id.as_slice().to_vec(),
-                        user_name: s.passkey.username.unwrap_or_default(),
-                        user_handle: s
-                            .passkey
-                            .user_handle
-                            .map(|h| h.as_slice().to_vec())
-                            .unwrap_or_default(),
+                    Ok(found) => identities.extend(found.into_iter().map(|s| {
+                        PasskeyIdentityInfo {
+                            vault_key: vault_key.clone(),
+                            item_key: s.item_key,
+                            credential_key: s.credential_key,
+                            rp_id: s.passkey.rp_id,
+                            credential_id: s.passkey.credential_id.as_slice().to_vec(),
+                            user_name: s.passkey.username.unwrap_or_default(),
+                            user_handle: s
+                                .passkey
+                                .user_handle
+                                .map(|h| h.as_slice().to_vec())
+                                .unwrap_or_default(),
+                        }
                     })),
                     Err(e) => log::error!("Failed to list passkeys in {vault_key}: {e}"),
                 }

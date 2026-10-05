@@ -18,6 +18,7 @@ use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
+use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
@@ -114,6 +115,18 @@ impl VaultWrapper {
         };
         vault_wrapper.save()?;
         Ok(vault_wrapper)
+    }
+
+    /// An unlocked, empty vault that is never written to disk.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(vault_key: &str) -> Self {
+        Self {
+            key: vault_key.to_string(),
+            path: PathBuf::from(format!("/nonexistent/{vault_key}.json")),
+            state: VaultState::Unlocked {
+                vault: Box::new(Vault::new_for_test()),
+            },
+        }
     }
 
     pub fn load(vault_dir: &Path, vault_key: Option<String>) -> Result<Self, Error> {
@@ -455,6 +468,54 @@ impl VaultWrapper {
     pub fn purge_deleted(&mut self, older_than: i64) -> Result<usize, Error> {
         let vault = self.get_unlocked_vault_mut()?;
         Ok(vault.purge_deleted(older_than))
+    }
+
+    pub fn set_item_category(
+        &mut self,
+        item_key: &str,
+        category: Option<String>,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.set_item_category(item_key, category)
+    }
+
+    pub fn set_item_autofill(
+        &mut self,
+        item_key: &str,
+        autofill: ItemAutofill,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.set_item_autofill(item_key, autofill)
+    }
+
+    pub fn get_item_overview_by_id(
+        &self,
+        item_id: Uuid,
+    ) -> Result<Option<&VaultItemOverview>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        match vault.get_item_by_id(item_id) {
+            Ok(item) => Ok(Some(item)),
+            Err(Error::InvalidItemKey(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn get_secret_by_id(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+    ) -> Result<Option<SecretBox<String>>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        match vault.get_item_credential_secret_by_id(item_id, cred_id) {
+            Ok(secret) => Ok(secret),
+            Err(Error::InvalidCredentialKey(_)) | Err(Error::InvalidItemKey(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// This vault's id, the first segment of a record identifier.
+    pub fn vault_id(&self) -> Result<Uuid, Error> {
+        Ok(self.get_unlocked_vault()?.id())
     }
 
     /// Reorder an item's credentials, keeping each in its current section.

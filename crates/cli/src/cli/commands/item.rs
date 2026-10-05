@@ -1,10 +1,13 @@
 use std::io::{IsTerminal, Read, Write};
 use std::str::FromStr;
 
-use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef};
+use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef, WireLogin};
 use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, FieldKind, VaultWrapper};
+use axo_pass_core::secrets::password::PasswordPolicy;
+use axo_pass_core::secrets::vaults::{
+    DEFAULT_VAULT, FieldKind, LoginWrite, VaultWrapper, write_login,
+};
 use clap::{Parser, Subcommand};
 use clml::{cformat, cprintln};
 use inquire::Password;
@@ -71,7 +74,7 @@ impl FromStr for ItemReference {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let axo_url_re =
-        Regex::new(r"^(?:axo://(?P<vault>[a-zA-Z0-9-_]+)/)?(?P<item>[a-zA-Z0-9-_]+)(?:/(?P<credential>[a-zA-Z0-9-_]+)?)").unwrap();
+        Regex::new(r"^(?:axo://(?P<vault>[a-zA-Z0-9-_]+)/)?(?P<item>[a-zA-Z0-9-_]+)(?:/(?P<credential>[a-zA-Z0-9-_]+)?)?").unwrap();
         if let Some(captures) = axo_url_re.captures(s) {
             let vault = captures.name("vault").map(|m| m.as_str().to_string());
             let item = captures
@@ -88,6 +91,20 @@ impl FromStr for ItemReference {
         } else {
             Err(format!("Invalid item reference: {s}"))
         }
+    }
+}
+
+/// The login flags of `ap item set`.
+struct LoginOptions {
+    websites: Vec<String>,
+    username: Option<String>,
+    generate_password: bool,
+    title: Option<String>,
+}
+
+impl LoginOptions {
+    fn is_login(&self) -> bool {
+        !self.websites.is_empty() || self.username.is_some() || self.generate_password
     }
 }
 
@@ -110,10 +127,31 @@ enum ItemSubcommand {
         delimiter: String,
     },
 
-    /// Set secret value by reference or {item_key}/{credential_key}
+    /// Set secret value by reference or {item_key}/{credential_key}.
+    ///
+    /// With --website, --username, or --generate-password the item is written
+    /// as a login: the credential keys `password` and `username` are written
+    /// with the password and username roles assigned. The credential key in
+    /// the reference is optional and names the password credential.
     Set {
         item_reference: ItemReference,
         secret_value: Option<SecretString>,
+
+        /// Website the login applies to, a URL or a bare domain. Repeatable.
+        #[arg(long = "website")]
+        websites: Vec<String>,
+
+        /// Username to store with the login
+        #[arg(long)]
+        username: Option<String>,
+
+        /// Generate the password instead of reading one
+        #[arg(long, conflicts_with = "secret_value")]
+        generate_password: bool,
+
+        /// Title for a newly created item. Defaults to the item key
+        #[arg(long)]
+        title: Option<String>,
     },
 }
 
@@ -129,7 +167,20 @@ impl ItemCommand {
             ItemSubcommand::Set {
                 item_reference,
                 secret_value,
-            } => self.cmd_set_item(item_reference, secret_value.clone()),
+                websites,
+                username,
+                generate_password,
+                title,
+            } => self.cmd_set_item(
+                item_reference,
+                secret_value.clone(),
+                LoginOptions {
+                    websites: websites.clone(),
+                    username: username.clone(),
+                    generate_password: *generate_password,
+                    title: title.clone(),
+                },
+            ),
         };
         // A dismissed prompt and a vault that will not open are both ordinary
         // outcomes, so they exit with a message rather than a panic.
@@ -441,6 +492,7 @@ impl ItemCommand {
         &self,
         item_reference: &ItemReference,
         secret_value: Option<SecretString>,
+        login: LoginOptions,
     ) -> Result<(), String> {
         let item_reference = item_reference.clone();
         let vault_key = item_reference
@@ -449,12 +501,17 @@ impl ItemCommand {
             .unwrap_or_else(|| DEFAULT_VAULT.to_string());
 
         let item_key = item_reference.item;
-        let Some(credential_key) = item_reference.credential else {
-            return Err("Credential key must be specified".to_string());
+        let credential_key = match item_reference.credential {
+            Some(credential_key) => credential_key,
+            None if login.is_login() => "password".to_string(),
+            None => return Err("Credential key must be specified".to_string()),
         };
 
         let secret = match secret_value {
             Some(value) => value,
+            None if login.generate_password => PasswordPolicy::default()
+                .generate()
+                .map_err(|e| format!("Failed to generate password: {e}"))?,
             None if std::io::stdin().is_terminal() => Password::new("Enter secret value:")
                 .prompt()
                 .map_err(|e| format!("Failed to read secret value: {e}"))?
@@ -474,17 +531,31 @@ impl ItemCommand {
             .inspect(|provenance| log::debug!("item set caller: {provenance:#?}"))
             .and_then(|provenance| provenance.caller());
 
+        let title = login.title.clone().unwrap_or_else(|| item_key.clone());
+        let wire_login = login.is_login().then(|| WireLogin {
+            username: login.username.clone(),
+            websites: login.websites.clone(),
+        });
+        // A login's credential title is set by the app; a plain write titles
+        // the credential by its key.
+        let credential_title = if wire_login.is_some() {
+            title.as_str()
+        } else {
+            credential_key.as_str()
+        };
+
         match app_broker::request_write_vault_secret(
             &vault_key,
             &item_key,
             &credential_key,
-            &credential_key,
+            credential_title,
             &secret,
+            wire_login,
             caller.as_deref(),
         ) {
             Ok(_) => {},
             Err(BrokerError::Unavailable) => {
-                Self::set_item_locally(&vault_key, &item_key, &credential_key, secret)?
+                Self::set_item_locally(&vault_key, &item_key, &credential_key, secret, &login)?
             },
             Err(e) => return Err(format!("Failed to set secret: {e}")),
         }
@@ -498,8 +569,27 @@ impl ItemCommand {
         item_key: &str,
         credential_key: &str,
         secret: SecretString,
+        login: &LoginOptions,
     ) -> Result<(), String> {
         let mut vw = Self::unlock_vault(Some(vault_key.to_string()))?;
+        if login.is_login() {
+            let title = login.title.as_deref().unwrap_or(item_key);
+            write_login(
+                &mut vw,
+                LoginWrite {
+                    item_key,
+                    title,
+                    password_key: credential_key,
+                    password: secret,
+                    username: login.username.as_deref(),
+                    websites: &login.websites,
+                },
+            )
+            .map_err(|e| format!("Failed to write login: {e}"))?;
+            vw.save()
+                .map_err(|e| format!("Failed to save vault: {e}"))?;
+            return Ok(());
+        }
         vw.add_secret(
             item_key,
             credential_key,

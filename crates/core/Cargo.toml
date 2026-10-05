@@ -37,6 +37,7 @@ p256 = "0.13"
 passkey-authenticator = "0.5.0"
 passkey-types = "0.5.0"
 percent-encoding = "2.3.2"
+psl = "2.1.239"
 regex = "1.13.1"
 rsa = "0.9.10"
 secrecy = {version = "0.10.3", features = ["serde"]}

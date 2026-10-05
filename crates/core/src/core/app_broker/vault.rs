@@ -40,6 +40,16 @@ pub struct VaultRef {
     pub credential_key: String,
 }
 
+/// The login fields a write carries beyond the password, as they cross the
+/// socket. The app writes them with the password and assigns the role slots.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WireLogin {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub websites: Vec<String>,
+}
+
 /// Which command asked for a batch resolve, so the app records the matching
 /// audit action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +128,9 @@ pub enum VaultAction {
 pub struct WriteSecretPayload {
     pub title: String,
     pub value: SecretString,
+    /// When set, the written credential is the item's password and the item
+    /// is written as a login.
+    pub login: Option<WireLogin>,
 }
 
 /// Where an [`VaultAction::ExportVaults`] writes and how the bundle key is
@@ -371,6 +384,7 @@ pub fn request_write_vault_secret(
     credential_key: &str,
     title: &str,
     value: &SecretString,
+    login: Option<WireLogin>,
     caller: Option<&str>,
 ) -> Result<bool, BrokerError> {
     let request = WireRequest::WriteVaultSecret {
@@ -379,6 +393,7 @@ pub fn request_write_vault_secret(
         credential_key: credential_key.to_string(),
         title: title.to_string(),
         value: value.expose_secret().to_string(),
+        login,
         caller: caller.map(String::from),
     };
     match send_request(&request)? {
@@ -476,7 +491,11 @@ pub fn request_create_passkey(
         user_display_name: request.user_display_name.clone(),
         client_data_hash: b64_encode(&request.client_data_hash),
         algorithms: request.algorithms.clone(),
-        excluded_credentials: request.excluded_credentials.iter().map(|c| b64_encode(c)).collect(),
+        excluded_credentials: request
+            .excluded_credentials
+            .iter()
+            .map(|c| b64_encode(c))
+            .collect(),
         caller: caller.map(String::from),
     };
     match send_request(&wire)? {
@@ -504,7 +523,11 @@ pub fn request_assert_passkey(
     let wire = WireRequest::AssertPasskey {
         rp_id: request.rp_id.clone(),
         client_data_hash: b64_encode(&request.client_data_hash),
-        allowed_credentials: request.allowed_credentials.iter().map(|c| b64_encode(c)).collect(),
+        allowed_credentials: request
+            .allowed_credentials
+            .iter()
+            .map(|c| b64_encode(c))
+            .collect(),
         caller: caller.map(String::from),
     };
     match send_request(&wire)? {
@@ -789,6 +812,24 @@ fn serve_on_context(
             credential_key,
         } => {
             let payload = write.ok_or("Missing write payload")?;
+            if let Some(login) = payload.login {
+                let created = vw.get_item_overview(&item_key).ok().flatten().is_none();
+                autofill::write_login(
+                    &mut vw,
+                    autofill::LoginWrite {
+                        item_key: &item_key,
+                        title: &payload.title,
+                        password_key: &credential_key,
+                        password: payload.value,
+                        username: login.username.as_deref(),
+                        websites: &login.websites,
+                    },
+                )
+                .map_err(|e| format!("Failed to write login: {e}"))?;
+                vw.save()
+                    .map_err(|e| format!("Failed to save vault: {e}"))?;
+                return Ok(WireResponse::VaultWritten { created });
+            }
             // Keep an existing credential's kind so a value-only update does
             // not reset it; a new credential falls back to the default.
             let existing = vw
@@ -847,7 +888,7 @@ fn collect_autofill_items(
         }
     }
 
-    items.sort_by_key(|item| item.title.to_lowercase());
+    items.sort_by_key(AutofillItem::sort_key);
     Ok(WireResponse::AutofillItems { items })
 }
 

@@ -35,7 +35,7 @@ use passkey_types::webauthn::{
     PublicKeyCredentialDescriptor, PublicKeyCredentialParameters, PublicKeyCredentialType,
     PublicKeyCredentialUserEntity as WebauthnUserEntity,
 };
-use passkey_types::{Passkey, Bytes};
+use passkey_types::{Bytes, Passkey};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
@@ -405,7 +405,10 @@ impl<'a> VaultStore<'a> {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect();
-        format!("{ITEM_KEY_PREFIX}-{}", slug.trim_matches('-').to_lowercase())
+        format!(
+            "{ITEM_KEY_PREFIX}-{}",
+            slug.trim_matches('-').to_lowercase()
+        )
     }
 
     /// The vault credential key for a passkey: `passkey-` and the lowercase hex
@@ -424,7 +427,12 @@ impl<'a> VaultStore<'a> {
 
     /// Write `cred` into the vault, replacing whatever is under the same keys.
     /// Used for both a new credential and a counter update.
-    fn put(&mut self, cred: &Passkey, item_title: &str, credential_title: &str) -> Result<(), Error> {
+    fn put(
+        &mut self,
+        cred: &Passkey,
+        item_title: &str,
+        credential_title: &str,
+    ) -> Result<(), Error> {
         let item_key = Self::item_key(&cred.rp_id);
         let credential_key = Self::credential_key(&cred.credential_id);
         let value = encode(cred)?;
@@ -459,7 +467,9 @@ impl CredentialStore for VaultStore<'_> {
             .filter(|p| match ids {
                 // An allow list names the acceptable credentials. An empty one
                 // is not the same as absent: it must match nothing.
-                Some(ids) => ids.iter().any(|id| id.id.as_slice() == p.credential_id.as_slice()),
+                Some(ids) => ids
+                    .iter()
+                    .any(|id| id.id.as_slice() == p.credential_id.as_slice()),
                 None => true,
             })
             .filter(|p| match user_handle {
@@ -680,7 +690,10 @@ mod tests {
         // base64url ids must never carry the characters that would need
         // escaping in a URL.
         let id = value["credential_id"].as_str().unwrap();
-        assert!(!id.contains('+') && !id.contains('/') && !id.contains('='), "{id}");
+        assert!(
+            !id.contains('+') && !id.contains('/') && !id.contains('='),
+            "{id}"
+        );
     }
 
     #[test]

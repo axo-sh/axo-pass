@@ -98,6 +98,9 @@ pub enum Error {
     #[error("Reorder must list every section of item {0} exactly once")]
     InvalidSectionOrder(String),
 
+    #[error("Invalid autofill settings: {0}")]
+    InvalidAutofill(String),
+
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
 

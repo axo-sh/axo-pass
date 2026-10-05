@@ -278,7 +278,7 @@ final class CredentialListModel {
     }
     let item = AutofillItem(
       vaultKey: ref.vaultKey, itemKey: ref.itemKey, title: user,
-      username: user.isEmpty ? nil : user, passwordKey: ref.credentialKey, urls: [])
+      username: user.isEmpty ? nil : user, passwordKey: ref.credentialKey, websites: [])
     onSelect?(item)
   }
 

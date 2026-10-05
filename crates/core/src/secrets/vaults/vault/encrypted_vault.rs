@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{
@@ -94,12 +95,18 @@ impl EncryptedVault {
         &mut self,
         vault_cipher: &VaultCipher,
         metadata: Option<&EncryptedBlob<VaultItemMetadata>>,
+        autofill: Option<&EncryptedBlob<ItemAutofill>>,
         item: &VaultItemOverview,
     ) -> Result<&EncryptedVaultItem, Error> {
         let encrypted_item = EncryptedVaultItem {
             metadata: match metadata {
                 Some(existing) => existing.clone(),
                 None => vault_cipher.encrypt_item_metadata(item.id, &item.to_metadata())?,
+            },
+            autofill: match autofill {
+                Some(existing) => Some(existing.clone()),
+                None if item.autofill.is_empty() => None,
+                None => Some(vault_cipher.encrypt_item_autofill(item.id, &item.autofill)?),
             },
             credentials: BTreeMap::new(),
             deleted: BTreeMap::new(),
@@ -177,6 +184,8 @@ pub struct VaultMember {
 #[derive(Serialize, Deserialize)]
 pub struct EncryptedVaultItem {
     pub metadata: EncryptedBlob<VaultItemMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autofill: Option<EncryptedBlob<ItemAutofill>>,
     pub credentials: BTreeMap<Uuid, EncryptedVaultItemCredential>,
     /// Deleted credentials that can still be restored. Absent if empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -246,8 +255,8 @@ mod tests {
         let cipher = VaultCipher::new(vault.id);
         let item_a = VaultItemOverview::try_new("Item A", "item-a").unwrap();
         let item_b = VaultItemOverview::try_new("Item B", "item-b").unwrap();
-        vault.add_item(&cipher, None, &item_a).unwrap();
-        vault.add_item(&cipher, None, &item_b).unwrap();
+        vault.add_item(&cipher, None, None, &item_a).unwrap();
+        vault.add_item(&cipher, None, None, &item_b).unwrap();
 
         assert_eq!(vault.items.len(), 2);
         assert!(vault.items.contains_key(&item_a.id));
@@ -280,7 +289,7 @@ mod tests {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
-        vault.add_item(&cipher, None, &item).unwrap();
+        vault.add_item(&cipher, None, None, &item).unwrap();
 
         let cred =
             VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default())
@@ -320,7 +329,7 @@ mod tests {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
-        vault.add_item(&cipher, None, &item).unwrap();
+        vault.add_item(&cipher, None, None, &item).unwrap();
 
         let mut cred =
             VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default())

@@ -3,6 +3,7 @@ use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
@@ -95,6 +96,37 @@ impl VaultCipher {
         blob: &EncryptedBlob<VaultItemMetadata>,
     ) -> Result<SecretBox<VaultItemMetadata>, Error> {
         blob.decrypt(&self.cipher, self.item_metadata_aad(item_id))
+    }
+
+    pub fn encrypt_item_autofill(
+        &self,
+        item_id: Uuid,
+        value: &ItemAutofill,
+    ) -> Result<EncryptedBlob<ItemAutofill>, Error> {
+        EncryptedBlob::encrypt(
+            value,
+            &self.cipher,
+            vec![
+                self.vault_id.to_string(),
+                item_id.to_string(),
+                "autofill".to_string(),
+            ],
+        )
+    }
+
+    pub fn decrypt_item_autofill(
+        &self,
+        item_id: Uuid,
+        blob: &EncryptedBlob<ItemAutofill>,
+    ) -> Result<SecretBox<ItemAutofill>, Error> {
+        blob.decrypt(
+            &self.cipher,
+            vec![
+                self.vault_id.to_string(),
+                item_id.to_string(),
+                "autofill".to_string(),
+            ],
+        )
     }
 
     pub fn encrypt_cred_metadata(

@@ -306,7 +306,9 @@ fn take_request(buffer: &mut ReceiveBuffer) -> Option<(Vec<u8>, MachPort, [u32; 
         && trailer.kind == 0
         && trailer.size as usize >= size_of::<AuditTrailer>();
     if !well_formed {
-        log::warn!("AutoFill broker dropped a malformed message (id {:#x})", { header.id });
+        log::warn!("AutoFill broker dropped a malformed message (id {:#x})", {
+            header.id
+        });
         // SAFETY: the buffer holds the message the kernel just delivered.
         unsafe { mach_msg_destroy(addr_of_mut!(*buffer).cast()) };
         return None;
@@ -473,7 +475,11 @@ pub(super) fn send_test_request(name: &str, body: &[u8]) -> Option<Vec<u8>> {
     let mut reply: MachPort = 0;
     // SAFETY: plain Mach calls with valid pointers; `body` outlives the send.
     unsafe {
-        check(bootstrap_look_up(bootstrap_port, c_name.as_ptr(), &mut service), "look up").ok()?;
+        check(
+            bootstrap_look_up(bootstrap_port, c_name.as_ptr(), &mut service),
+            "look up",
+        )
+        .ok()?;
         check(
             mach_port_allocate(task(), MACH_PORT_RIGHT_RECEIVE, &mut reply),
             "mach_port_allocate",

@@ -15,6 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
+use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
@@ -58,11 +59,12 @@ pub struct Vault {
     // deleted credentials. The key of a deleted item is not in `item_index`.
     deleted_items: BTreeMap<ItemId, DeletedItemEntry>,
 
-    // Cached encrypted metadata blobs. The vault blob holds the folders. An
-    // entry is dropped when its metadata changes so that to_encrypted() only
-    // re-encrypts what is necessary.
+    // Cached encrypted blobs. The vault blob holds the folders. An entry is
+    // dropped when its data changes so that to_encrypted() only re-encrypts
+    // what is necessary.
     metadata_blob: Option<EncryptedBlob<VaultMetadata>>,
     item_blobs: BTreeMap<ItemId, EncryptedBlob<VaultItemMetadata>>,
+    autofill_blobs: BTreeMap<ItemId, EncryptedBlob<ItemAutofill>>,
     cred_blobs: BTreeMap<CredentialId, EncryptedBlob<VaultCredentialMetadata>>,
 }
 
@@ -101,8 +103,21 @@ impl Vault {
             deleted_items: BTreeMap::new(),
             metadata_blob: None,
             item_blobs: BTreeMap::new(),
+            autofill_blobs: BTreeMap::new(),
             cred_blobs: BTreeMap::new(),
         }
+    }
+
+    /// An empty vault with a random file key and no keychain involvement.
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        let id = Uuid::new_v4();
+        Self::empty(
+            id,
+            None,
+            VaultFileKey::Personal(vec![0u8; 32]),
+            VaultCipher::new(id),
+        )
     }
 
     // This converts an EncryptedVault into a Vault by decrypting all
@@ -175,6 +190,13 @@ impl Vault {
             metadata_current = false;
         }
 
+        if let Some(blob) = &encrypted_item.autofill {
+            overview.autofill = cipher
+                .decrypt_item_autofill(item_id, blob)?
+                .expose_secret()
+                .clone();
+        }
+
         let mut credentials = BTreeMap::new();
         for (cred_id, encrypted_cred) in encrypted_item.credentials {
             let mut cred_overview = cipher
@@ -226,6 +248,7 @@ impl Vault {
             overview,
             metadata: encrypted_item.metadata,
             metadata_current,
+            autofill: encrypted_item.autofill,
             credentials,
             deleted,
         })
@@ -238,6 +261,7 @@ impl Vault {
             overview,
             metadata,
             metadata_current,
+            autofill,
             credentials,
             deleted,
         } = item;
@@ -245,6 +269,9 @@ impl Vault {
 
         if metadata_current {
             self.item_blobs.insert(item_id, metadata);
+        }
+        if let Some(blob) = autofill {
+            self.autofill_blobs.insert(item_id, blob);
         }
         for (cred_id, cred) in credentials {
             if cred.metadata_current {
@@ -274,6 +301,14 @@ impl Vault {
             self.cipher
                 .encrypt_item_metadata(item_id, &item.overview.to_metadata())?
         };
+        let autofill = match &item.autofill {
+            Some(blob) => Some(blob.clone()),
+            None if item.overview.autofill.is_empty() => None,
+            None => Some(
+                self.cipher
+                    .encrypt_item_autofill(item_id, &item.overview.autofill)?,
+            ),
+        };
 
         let mut credentials = BTreeMap::new();
         for (cred_id, cred) in &item.credentials {
@@ -301,6 +336,7 @@ impl Vault {
             .collect();
         Ok(EncryptedVaultItem {
             metadata,
+            autofill,
             credentials,
             deleted,
         })
@@ -329,7 +365,13 @@ impl Vault {
 
         for item_overview in self.items.values() {
             let existing_metadata = self.item_blobs.get(&item_overview.id);
-            vault.add_item(&self.cipher, existing_metadata, item_overview)?;
+            let existing_autofill = self.autofill_blobs.get(&item_overview.id);
+            vault.add_item(
+                &self.cipher,
+                existing_metadata,
+                existing_autofill,
+                item_overview,
+            )?;
 
             for (cred_id, cred_overview) in &item_overview.credentials {
                 let existing_metadata = self.cred_blobs.get(cred_id);
@@ -401,6 +443,10 @@ impl Vault {
             metadata: encrypted_vault.metadata,
             items: encrypted_vault.items,
         })
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.id
     }
 
     pub fn list_folders(&self) -> Vec<&VaultFolder> {
@@ -528,6 +574,79 @@ impl Vault {
         Ok(item_overview_ref)
     }
 
+    /// Set the display category of an item, such as `login`.
+    pub fn set_item_category(
+        &mut self,
+        item_key: &str,
+        category: Option<String>,
+    ) -> Result<(), Error> {
+        self.edit_item(item_key, |item| {
+            item.category = category;
+            Ok(())
+        })
+    }
+
+    /// Replace an item's autofill data. Rejects a role slot that points at a
+    /// credential outside the item, and one credential in both slots.
+    pub fn set_item_autofill(
+        &mut self,
+        item_key: &str,
+        autofill: ItemAutofill,
+    ) -> Result<(), Error> {
+        let item_id = *self.get_item_id(item_key)?;
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+        if autofill.has_shared_slot() {
+            return Err(Error::InvalidAutofill(
+                "one credential cannot be both the username and the password".to_string(),
+            ));
+        }
+        for slot in [autofill.username, autofill.password].into_iter().flatten() {
+            if !item.credentials.contains_key(&slot) {
+                return Err(Error::InvalidAutofill(format!(
+                    "credential {slot} is not in item {item_key}"
+                )));
+            }
+        }
+        item.autofill = autofill;
+        self.autofill_blobs.remove(&item_id);
+        Ok(())
+    }
+
+    pub fn get_item_by_id(&self, item_id: Uuid) -> Result<&VaultItemOverview, Error> {
+        self.items
+            .get(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_id.to_string()))
+    }
+
+    pub fn get_item_credential_by_id(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
+        self.get_item_by_id(item_id)?
+            .credentials
+            .get(&cred_id)
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_id}/{cred_id}")))
+    }
+
+    pub fn get_item_credential_secret_by_id(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+    ) -> Result<Option<SecretBox<String>>, Error> {
+        self.get_item_credential_by_id(item_id, cred_id)?;
+        let Some(encrypted_secret) = self.secrets.get(&cred_id) else {
+            return Ok(None);
+        };
+        let plaintext = self
+            .cipher
+            .decrypt_cred_value(item_id, cred_id, encrypted_secret)?;
+        Ok(Some(plaintext))
+    }
+
     /// Mark an item as deleted. Its key is free for reuse. Its credentials,
     /// with their encrypted values, and its deleted credentials go with it.
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
@@ -545,6 +664,7 @@ impl Vault {
                 .cipher
                 .encrypt_item_metadata(item_id, &overview.to_metadata())?,
         };
+        let autofill = self.autofill_blobs.get(&item_id).cloned();
         let mut credentials = BTreeMap::new();
         for cred in overview.credentials.values() {
             let blobs = self.live_credential_blobs(item_id, cred)?;
@@ -590,6 +710,7 @@ impl Vault {
         self.item_index.remove(item_key);
         self.items.remove(&item_id);
         self.item_blobs.remove(&item_id);
+        self.autofill_blobs.remove(&item_id);
 
         self.deleted_items.insert(
             item_id,
@@ -598,6 +719,7 @@ impl Vault {
                     overview,
                     metadata,
                     metadata_current: true,
+                    autofill,
                     credentials,
                     deleted,
                 },
@@ -1003,6 +1125,12 @@ impl Vault {
             .get_mut(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
         item.credentials.remove(&cred_id);
+
+        // clear any role slot pointing at the deleted credential
+        if item.autofill.username == Some(cred_id) || item.autofill.password == Some(cred_id) {
+            item.autofill.clear_credential(cred_id);
+            self.autofill_blobs.remove(&item_id);
+        }
 
         // remove from indices and secrets map
         self.item_credential_index
@@ -1505,6 +1633,9 @@ pub struct VaultItemOverview {
     /// Folder the item is filed in. `None` for an unfiled item.
     pub folder: Option<Uuid>,
     pub sections: BTreeMap<Uuid, VaultItemSection>,
+    /// Display hint, such as `login`. Nothing branches on it.
+    pub category: Option<String>,
+    pub autofill: ItemAutofill,
     pub credentials: BTreeMap<Uuid, VaultItemCredentialOverview>,
 }
 
@@ -1517,6 +1648,8 @@ impl VaultItemOverview {
             key: item_key,
             folder: None,
             sections: BTreeMap::new(),
+            category: None,
+            autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
         })
     }
@@ -1540,6 +1673,8 @@ impl VaultItemOverview {
             key: metadata.key.clone(),
             folder: metadata.folder,
             sections,
+            category: metadata.category.clone(),
+            autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
         }
     }
@@ -1558,6 +1693,7 @@ impl VaultItemOverview {
                     position: s.position,
                 })
                 .collect(),
+            category: self.category.clone(),
         }
     }
 }
@@ -1656,6 +1792,8 @@ struct DecryptedItem {
     metadata: EncryptedBlob<VaultItemMetadata>,
     /// Whether `metadata` matches `overview`.
     metadata_current: bool,
+    /// Autofill blob matching `overview`. `None` if absent or not current.
+    autofill: Option<EncryptedBlob<ItemAutofill>>,
     credentials: BTreeMap<CredentialId, DecryptedCredential>,
     deleted: BTreeMap<CredentialId, DeletedEntry>,
 }
@@ -1734,6 +1872,8 @@ pub struct VaultItemMetadata {
     pub folder: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<VaultSectionMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Zeroize)]
@@ -1980,6 +2120,174 @@ mod tests {
             vault.get_item_credential("item", "alpha").unwrap().kind,
             new_kind
         );
+    }
+
+    fn cred_id(vault: &Vault, item_key: &str, cred_key: &str) -> Uuid {
+        vault.get_item_credential(item_key, cred_key).unwrap().id
+    }
+
+    #[test]
+    fn autofill_survives_a_save_and_decrypts_with_its_own_aad() {
+        use crate::secrets::vaults::item_autofill::{MatchKind, Website};
+
+        let mut vault = vault_with_credentials("item", &["username", "password"]);
+        let autofill = ItemAutofill {
+            websites: vec![Website::new("github.com", MatchKind::Host)],
+            username: Some(cred_id(&vault, "item", "username")),
+            password: Some(cred_id(&vault, "item", "password")),
+        };
+        vault.set_item_autofill("item", autofill.clone()).unwrap();
+        vault
+            .set_item_category("item", Some("login".to_string()))
+            .unwrap();
+
+        let encrypted = vault.to_encrypted(true).unwrap();
+        let item_id = *vault.get_item_id("item").unwrap();
+        let enc_item = encrypted.items.get(&item_id).unwrap();
+        let blob = enc_item.autofill.as_ref().unwrap();
+
+        let decrypted = vault.cipher.decrypt_item_autofill(item_id, blob).unwrap();
+        assert_eq!(*decrypted.expose_secret(), autofill);
+
+        // The blob is bound to its item and role.
+        assert!(
+            vault
+                .cipher
+                .decrypt_item_autofill(Uuid::new_v4(), blob)
+                .is_err()
+        );
+        let meta = vault
+            .cipher
+            .decrypt_item_metadata(item_id, &enc_item.metadata)
+            .unwrap();
+        assert_eq!(meta.expose_secret().category.as_deref(), Some("login"));
+    }
+
+    #[test]
+    fn items_without_autofill_store_no_blob() {
+        let vault = vault_with_credentials("item", &["password"]);
+        let encrypted = vault.to_encrypted(true).unwrap();
+        assert!(encrypted.items.values().all(|item| item.autofill.is_none()));
+    }
+
+    #[test]
+    fn autofill_and_category_survive_delete_and_restore() {
+        let mut vault = vault_with_credentials("item", &["username", "password"]);
+        let autofill = ItemAutofill {
+            username: Some(cred_id(&vault, "item", "username")),
+            password: Some(cred_id(&vault, "item", "password")),
+            ..Default::default()
+        };
+        vault.set_item_autofill("item", autofill.clone()).unwrap();
+        vault
+            .set_item_category("item", Some("login".to_string()))
+            .unwrap();
+        let item_id = *vault.get_item_id("item").unwrap();
+
+        vault.delete_item("item").unwrap();
+        let mut vault = reload(&vault);
+        vault.restore_item(item_id, None).unwrap();
+        let vault = reload(&vault);
+
+        let item = vault.get_item("item").unwrap();
+        assert_eq!(item.autofill, autofill);
+        assert_eq!(item.category.as_deref(), Some("login"));
+    }
+
+    #[test]
+    fn deleting_a_credential_clears_its_role_slot() {
+        let mut vault = vault_with_credentials("item", &["username", "password"]);
+        vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    username: Some(cred_id(&vault, "item", "username")),
+                    password: Some(cred_id(&vault, "item", "password")),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        vault.delete_item_credential("item", "password").unwrap();
+
+        let item = vault.get_item("item").unwrap();
+        assert!(item.autofill.password.is_none());
+        assert!(item.autofill.username.is_some());
+    }
+
+    #[test]
+    fn one_credential_cannot_fill_both_roles() {
+        let mut vault = vault_with_credentials("item", &["password"]);
+        let id = cred_id(&vault, "item", "password");
+        let err = vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    username: Some(id),
+                    password: Some(id),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidAutofill(_)));
+    }
+
+    #[test]
+    fn a_role_slot_must_point_into_the_item() {
+        let mut vault = vault_with_credentials("item", &["password"]);
+        let elsewhere = cred_id(&vault, "other-item", "elsewhere");
+        let err = vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    password: Some(elsewhere),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidAutofill(_)));
+    }
+
+    #[test]
+    fn records_resolve_by_id_after_a_credential_is_renamed() {
+        let mut vault = vault_with_credentials("item", &["password"]);
+        let item_id = *vault.get_item_id("item").unwrap();
+        let id = cred_id(&vault, "item", "password");
+
+        vault
+            .add_or_update_item_credential(
+                "item",
+                "password",
+                "Renamed",
+                FieldKind::default(),
+                SecretString::from("new-secret"),
+            )
+            .unwrap();
+
+        let secret = vault
+            .get_item_credential_secret_by_id(item_id, id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(secret.expose_secret(), "new-secret");
+        assert_eq!(
+            vault.get_item_credential_by_id(item_id, id).unwrap().title,
+            "Renamed"
+        );
+        assert!(vault.get_item_by_id(Uuid::new_v4()).is_err());
+        assert!(
+            vault
+                .get_item_credential_by_id(item_id, Uuid::new_v4())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_item_metadata_without_category_loads() {
+        let meta: VaultItemMetadata =
+            serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
+        assert_eq!(meta.category, None);
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(json.get("category").is_none());
     }
 
     #[test]

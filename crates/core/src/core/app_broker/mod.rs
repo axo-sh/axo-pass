@@ -64,10 +64,10 @@ pub use ssh::{
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ResolvePurpose, VaultAccessPrompt, VaultAction,
-    VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, request_add_external_vault,
-    request_assert_passkey, request_autofill_items, request_create_passkey, request_export_vaults,
-    request_import_vaults, request_resolve_secrets, request_vault_items, request_vault_secret,
-    request_write_vault_secret,
+    VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity, WireLogin,
+    request_add_external_vault, request_assert_passkey, request_autofill_items,
+    request_create_passkey, request_export_vaults, request_import_vaults, request_resolve_secrets,
+    request_vault_items, request_vault_secret, request_write_vault_secret,
 };
 
 /// How long a client waits for the user to answer the app's prompt before
@@ -317,6 +317,10 @@ enum WireRequest {
         credential_key: String,
         title: String,
         value: String,
+        /// Present when the value is a login's password and the item is
+        /// written as a login.
+        #[serde(default)]
+        login: Option<vault::WireLogin>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         #[serde(default)]
         caller: Option<String>,
@@ -1043,9 +1047,9 @@ async fn accept_loop(
     }
 }
 
-/// Record a peer that failed its transport's policy. `peer` describes it with no
-/// policy applied. The executable and signature come from code that failed the
-/// policy, so the event marks them unverified.
+/// Record a peer that failed its transport's policy. `peer` describes it with
+/// no policy applied. The executable and signature come from code that failed
+/// the policy, so the event marks them unverified.
 fn record_rejected_peer(error: &PeerError, peer: Option<PeerIdentity>) {
     let mut event = audit::AuditEvent::new(
         audit::process_source(),
@@ -1214,8 +1218,14 @@ async fn handle_connection(
         return Ok(());
     }
 
-    let response =
-        serve_request(request, peer, scope, authorizers, client_disconnected(&mut reader)).await?;
+    let response = serve_request(
+        request,
+        peer,
+        scope,
+        authorizers,
+        client_disconnected(&mut reader),
+    )
+    .await?;
     match response {
         Some(response) => write_response(&mut write_half, &response).await,
         None => Ok(()),
@@ -1420,6 +1430,7 @@ async fn serve_request(
                 credential_key,
                 title,
                 value,
+                login,
                 caller,
             } => {
                 let prompt = vault::VaultAccessPrompt {
@@ -1434,6 +1445,7 @@ async fn serve_request(
                 let payload = vault::WriteSecretPayload {
                     title,
                     value: secrecy::SecretString::from(value),
+                    login,
                 };
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
@@ -2447,7 +2459,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(response.is_none(), "the Mach service answered a rejected sender");
+        assert!(
+            response.is_none(),
+            "the Mach service answered a rejected sender"
+        );
         service.stop();
     }
 
