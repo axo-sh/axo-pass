@@ -4,7 +4,6 @@ mod shared;
 mod utils;
 
 use std::fmt::Debug;
-use std::ptr;
 
 use anyhow::bail;
 use base64::Engine;
@@ -12,7 +11,7 @@ use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
 pub use managed_ssh_key::ManagedSshKey;
 use objc2::rc::Retained;
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFData, CFDictionary, CFError, CFMutableDictionary, CFString, CFType,
+    CFArray, CFBoolean, CFData, CFDictionary, CFMutableDictionary, CFString, CFType,
 };
 use objc2_local_authentication::LAContext;
 use objc2_security::{
@@ -28,7 +27,7 @@ use ssh_key::public::KeyData;
 use zeroize::Zeroizing;
 
 use crate::secrets::keychain::access_control::AccessControl;
-use crate::secrets::keychain::errors::KeychainError;
+use crate::secrets::keychain::errors::{CFErrorOut, KeychainError};
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 use crate::secrets::keychain::managed_key::utils::sec1_to_ssh_ecdsa;
 
@@ -140,11 +139,10 @@ impl ManagedKey {
                 &CFData::from_bytes(label.as_bytes()),
             );
 
-            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let mut cf_error = CFErrorOut::new();
             log::debug!("Calling SecKey::new_random_key...");
-            let sec_key = SecKey::new_random_key(query.as_opaque(), &mut cf_error_ptr);
-            if !cf_error_ptr.is_null() {
-                let cf_error = &*cf_error_ptr;
+            let sec_key = SecKey::new_random_key(query.as_opaque(), cf_error.out());
+            if let Some(cf_error) = cf_error.get() {
                 // todo: may need to handle error codes
                 log::error!("Error creating new managed key with label {label}: {cf_error:?}");
                 return Err(KeychainError::Generic(anyhow::anyhow!(
@@ -201,16 +199,16 @@ impl ManagedKey {
         // note SecKeyCopyExternalRepresentation returns public key in
         // ANSI X9.63 format (04 || X || Y [ || K])
         unsafe {
-            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let mut cf_error = CFErrorOut::new();
             let Some(pub_key) = self.sec_key.public_key() else {
                 return Err(KeychainError::PublicKeyUnavailable(
                     "No public key".to_string(),
                 ));
             };
-            let pub_key_ext = pub_key.external_representation(&mut cf_error_ptr);
-            if !cf_error_ptr.is_null() {
+            let pub_key_ext = pub_key.external_representation(cf_error.out());
+            if let Some(cf_error) = cf_error.get() {
                 return Err(KeychainError::PublicKeyUnavailable(format!(
-                    "Error getting public key: {cf_error_ptr:?}"
+                    "Error getting public key: {cf_error:?}"
                 )));
             }
             let Some(pub_key_ext) = pub_key_ext else {
@@ -244,7 +242,7 @@ impl ManagedKey {
 
     pub fn encrypt(&self, plaintext: &[u8]) -> Option<String> {
         unsafe {
-            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let mut cf_error = CFErrorOut::new();
 
             log::debug!(
                 "Encrypting data size={} with allowed block size {}",
@@ -258,10 +256,9 @@ impl ManagedKey {
             };
 
             let res = public_key
-                .encrypted_data(alg(), &CFData::from_bytes(plaintext), &mut cf_error_ptr)
+                .encrypted_data(alg(), &CFData::from_bytes(plaintext), cf_error.out())
                 .map(|enc| b64.encode(enc.as_bytes_unchecked()));
-            if !cf_error_ptr.is_null() {
-                let cf_error = cf_error_ptr.as_ref().unwrap();
+            if let Some(cf_error) = cf_error.get() {
                 log::debug!(
                     "Error encrypting data (size={}) with key {self:?}: {:?}",
                     plaintext.len(),
@@ -277,30 +274,29 @@ impl ManagedKey {
         unsafe {
             let ciphertext = b64.decode(b64_ciphertext).ok()?;
             let ciphertext = &CFData::from_bytes(&ciphertext);
-            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let mut cf_error = CFErrorOut::new();
             let res = self
                 .sec_key
-                .decrypted_data(alg(), ciphertext, &mut cf_error_ptr)
+                .decrypted_data(alg(), ciphertext, cf_error.out())
                 .map(|data| Zeroizing::new(data.as_bytes_unchecked().to_vec()));
-            if cf_error_ptr.is_null() {
-                res
-            } else {
-                let cf_error = cf_error_ptr.as_ref().unwrap();
-                log::debug!("Error decrypting data with key {self:?}: {:?}", cf_error);
-                None
+            match cf_error.get() {
+                None => res,
+                Some(cf_error) => {
+                    log::debug!("Error decrypting data with key {self:?}: {:?}", cf_error);
+                    None
+                },
             }
         }
     }
 
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, KeychainError> {
         unsafe {
-            let mut cf_error_ptr: *mut CFError = ptr::null_mut();
+            let mut cf_error = CFErrorOut::new();
             let res = self
                 .sec_key
-                .signature(sign_alg(), &CFData::from_bytes(data), &mut cf_error_ptr)
+                .signature(sign_alg(), &CFData::from_bytes(data), cf_error.out())
                 .map(|sig| sig.as_bytes_unchecked().to_vec());
-            if !cf_error_ptr.is_null() {
-                let cf_error = cf_error_ptr.as_ref().unwrap();
+            if let Some(cf_error) = cf_error.get() {
                 return Err(KeychainError::SigningFailed(cf_error.to_string()));
             }
             res.ok_or(KeychainError::SigningFailed(
