@@ -101,6 +101,9 @@ pub enum Error {
     #[error("Invalid autofill settings: {0}")]
     InvalidAutofill(String),
 
+    #[error("Invalid one-time code: {0}")]
+    InvalidOneTimeCode(String),
+
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
 

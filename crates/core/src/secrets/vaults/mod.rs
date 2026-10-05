@@ -3,6 +3,7 @@ mod errors;
 mod fields;
 mod item_autofill;
 pub mod passkey;
+pub mod totp;
 mod vault;
 pub mod vault_export;
 mod vault_wrapper;

@@ -53,6 +53,7 @@ thiserror.workspace = true
 time = {version = "0.3.55", features = ["local-offset", "serde", "serde-well-known"]}
 tokio.workspace = true
 toml = "1.1.5"
+totp-rs = {version = "5.7", features = ["otpauth"]}
 tracing-appender = "0.2"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 url = "2.5.8"
