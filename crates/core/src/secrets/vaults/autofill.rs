@@ -1,12 +1,15 @@
 //! Picks the vault items an AutoFill credential provider can offer, and matches
 //! them against the service identifier the system supplies.
 //!
-//! An item is a login when its autofill data names a password credential.
-//! Items with no role slots fall back to a heuristic: the first confidential
-//! credential is the password, and their `Url` credentials are the websites.
-//! The username and the fallback URLs are credential values, so collecting
-//! them needs an unlocked vault; the password is never collected here, it is
-//! read separately once the user picks an account.
+//! An item is a login when its autofill data names a password credential, and
+//! it applies to the websites in its autofill data. The username is a
+//! credential value, so collecting it needs an unlocked vault; the password is
+//! never collected here, it is read separately once the user picks an account.
+//!
+//! Items that predate autofill data have no roles or websites. They are not
+//! offered until the user converts them: [`suggest_conversion`] proposes roles
+//! and websites from the item's credentials, and [`convert_to_login`] applies
+//! them.
 //!
 //! Websites match through the Public Suffix List, including its private
 //! section, so `a.github.io` and `b.github.io` are different sites.
@@ -23,8 +26,9 @@ use super::{
     VaultItemOverview, VaultWrapper, Website,
 };
 
-/// Credential keys treated as the account name when no `Email` field is
-/// present, in preference order.
+/// Credential keys treated as the account name when a conversion finds no
+/// `Email` field, in preference order. The first is also the key new logins
+/// write.
 const USERNAME_KEYS: &[&str] = &["username", "user", "login", "email", "account"];
 
 /// How closely a stored website matched. Lower sorts first.
@@ -62,9 +66,6 @@ pub struct AutofillItem {
     pub password_key: String,
     /// The websites the item applies to.
     pub websites: Vec<Website>,
-    /// True when `websites` came from the item's `Url` credentials because it
-    /// has none of its own.
-    pub websites_from_url_fields: bool,
     /// Whether the item has a `Totp` credential to produce a one-time code
     /// from.
     pub has_totp: bool,
@@ -91,7 +92,6 @@ impl AutofillItem {
             title: self.title.clone(),
             username: self.username.clone(),
             matched: self.matched.clone()?,
-            url_fallback: self.websites_from_url_fields,
             has_totp: self.has_totp,
         })
     }
@@ -126,9 +126,6 @@ pub struct LoginSummary {
     pub username: Option<String>,
     /// The stored website that matched, and how.
     pub matched: MatchedWebsite,
-    /// True when the item matched through its `Url` field because it lists no
-    /// websites. A fill of such a login needs the user's confirmation.
-    pub url_fallback: bool,
     /// Whether the login has a one-time code.
     pub has_totp: bool,
 }
@@ -164,29 +161,10 @@ fn candidate(
     overview: &VaultItemOverview,
     target: Option<&ParsedUrl>,
 ) -> Result<Option<AutofillItem>, Error> {
-    let credentials = sorted_credentials(overview);
-    let Roles { password, username } = pick_roles(overview, &credentials);
-    let Some(password) = password else {
+    let Some(password) = overview.autofill.password_credential(overview) else {
         return Ok(None);
     };
-
-    let mut websites = overview.autofill.websites.clone();
-    let mut from_url_fields = false;
-    if websites.is_empty() {
-        from_url_fields = true;
-        for cred in credentials
-            .iter()
-            .filter(|c| matches!(c.kind, FieldKind::Url))
-        {
-            if let Some(value) = read(vw, &overview.key, &cred.key)? {
-                // Only http and https sites are logins. Other schemes would
-                // offer database and API items as logins.
-                if ParsedUrl::parse(&value).is_some() {
-                    websites.push(Website::new(value, MatchKind::Domain));
-                }
-            }
-        }
-    }
+    let websites = overview.autofill.websites.clone();
 
     let matched = match target {
         Some(target) => match best_match(&websites, target) {
@@ -196,7 +174,7 @@ fn candidate(
         None => None,
     };
 
-    let username = match username {
+    let username = match overview.autofill.username_credential(overview) {
         Some(cred) => read(vw, &overview.key, &cred.key)?,
         None => None,
     };
@@ -209,7 +187,6 @@ fn candidate(
         username,
         password_key: password.key.clone(),
         websites,
-        websites_from_url_fields: from_url_fields,
         has_totp: overview.autofill.totp_credential(overview).is_some(),
         matched,
     }))
@@ -259,18 +236,17 @@ pub struct LoginPlace {
 pub fn collect_places(vw: &VaultWrapper) -> Result<Vec<LoginPlace>, Error> {
     let mut places = Vec::new();
     for overview in vw.list_items()? {
-        let credentials = sorted_credentials(overview);
-        let Roles { password, username } = pick_roles(overview, &credentials);
-        let has_passkey = credentials
-            .iter()
+        let has_passkey = overview
+            .credentials
+            .values()
             .any(|c| matches!(c.kind, FieldKind::Passkey));
-        let is_login = password.is_some()
+        let is_login = overview.autofill.password_credential(overview).is_some()
             || has_passkey
             || overview.category.as_deref() == Some(CATEGORY_LOGIN);
         if !is_login || overview.autofill.websites.is_empty() {
             continue;
         }
-        let username = match username {
+        let username = match overview.autofill.username_credential(overview) {
             Some(cred) => read(vw, &overview.key, &cred.key)?,
             None => None,
         };
@@ -578,6 +554,135 @@ pub fn save_login(
     candidate(vw, vault_id, overview, None)?.ok_or_else(|| Error::InvalidItemKey(item_key))
 }
 
+/// Create a login from a website, an optional username, and a password, the way
+/// the New Login sheet does. The item key and title come from the website's
+/// registrable domain unless given. A key that is already taken gets a numeric
+/// suffix. The website matches by `domain`. The caller saves the vault. Returns
+/// the item's key.
+pub fn create_login(
+    vw: &mut VaultWrapper,
+    website: &str,
+    username: Option<&str>,
+    password: SecretString,
+    item_key: Option<&str>,
+    title: Option<&str>,
+) -> Result<String, Error> {
+    let website = website.trim();
+    let site = Site::parse(website)
+        .ok_or_else(|| Error::InvalidItemKey(format!("{website} is not an http(s) site")))?;
+    let (derived_key, derived_title) = names_for_site(&site);
+
+    let base_key = non_empty(item_key).unwrap_or(&derived_key);
+    if !validate_key(base_key) {
+        return Err(Error::InvalidItemKey(base_key.to_string()));
+    }
+    let item_key = unused_item_key(vw, base_key)?;
+
+    write_login(
+        vw,
+        LoginWrite {
+            item_key: &item_key,
+            title: non_empty(title).unwrap_or(&derived_title),
+            password_key: "password",
+            password,
+            username: non_empty(username),
+            websites: &[website.to_string()],
+            match_kind: MatchKind::Domain,
+        },
+    )?;
+    Ok(item_key)
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// A credential's part in autofill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Username,
+    Password,
+    /// The credential the one-time code comes from.
+    Totp,
+}
+
+/// Assign `role` to the credential `cred_key`, or clear the role with `None`. A
+/// credential has one role, so it leaves any it had before. Assigning the
+/// password role to an item with no category makes it a login. The caller saves
+/// the vault.
+pub fn set_role(
+    vw: &mut VaultWrapper,
+    item_key: &str,
+    role: Role,
+    cred_key: Option<&str>,
+) -> Result<(), Error> {
+    let overview = vw
+        .get_item_overview(item_key)?
+        .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+    let mut autofill = overview.autofill.clone();
+    let has_category = overview.category.is_some();
+
+    let cred_id = match cred_key {
+        Some(cred_key) => {
+            let cred = vw
+                .get_secret_overview(item_key, cred_key)?
+                .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+            let usable = match role {
+                Role::Totp => matches!(cred.kind, FieldKind::Totp),
+                Role::Username | Role::Password => !matches!(
+                    cred.kind,
+                    FieldKind::Passkey | FieldKind::Totp | FieldKind::Unknown(_)
+                ),
+            };
+            if !usable {
+                return Err(Error::InvalidAutofill(format!(
+                    "{cred_key} cannot be used as the {role:?} credential"
+                )));
+            }
+            autofill.clear_credential(cred.id);
+            Some(cred.id)
+        },
+        None => None,
+    };
+    match role {
+        Role::Username => autofill.username = cred_id,
+        Role::Password => autofill.password = cred_id,
+        Role::Totp => autofill.totp = cred_id,
+    }
+
+    vw.set_item_autofill(item_key, autofill)?;
+    if role == Role::Password && cred_id.is_some() && !has_category {
+        vw.set_item_category(item_key, Some(CATEGORY_LOGIN.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Replace the websites an item applies to. Every URL must be an `http` or
+/// `https` site or a bare domain. The caller saves the vault.
+pub fn set_websites(
+    vw: &mut VaultWrapper,
+    item_key: &str,
+    websites: Vec<Website>,
+) -> Result<(), Error> {
+    let overview = vw
+        .get_item_overview(item_key)?
+        .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+    let mut autofill = overview.autofill.clone();
+    autofill.websites = websites
+        .into_iter()
+        .map(|website| {
+            let url = website.url.trim();
+            if Site::parse(url).is_none() {
+                return Err(Error::InvalidAutofill(format!(
+                    "{url:?} is not an http(s) site"
+                )));
+            }
+            Ok(Website::new(url, website.match_kind))
+        })
+        .collect::<Result<_, _>>()?;
+    vw.set_item_autofill(item_key, autofill)
+}
+
 /// Create the login item a new passkey is stored in: titled `title`, with a
 /// website for `rp_id` under `domain` matching and, when `username` is given, a
 /// username credential assigned the username role. It has no password role. The
@@ -641,10 +746,9 @@ pub fn find_login_record(
     Ok(candidate(vw, vault_id, overview, None)?.filter(|item| item.record_id == record_id))
 }
 
-/// Whether `frame_url` is a page the login is stored for. A login that is
-/// offered only through its `Url` fields does not count: it lists no website.
+/// Whether `frame_url` is a page the login is stored for.
 pub fn is_stored_for(item: &AutofillItem, frame_url: &str) -> bool {
-    !item.websites_from_url_fields && match_service(&item.websites, frame_url).is_some()
+    match_service(&item.websites, frame_url).is_some()
 }
 
 /// Replace the password of a login found by [`find_login_record`], keeping the
@@ -857,28 +961,88 @@ fn sorted_credentials(overview: &VaultItemOverview) -> Vec<&VaultItemCredentialO
     credentials
 }
 
-struct Roles<'a> {
-    password: Option<&'a VaultItemCredentialOverview>,
-    username: Option<&'a VaultItemCredentialOverview>,
+/// The roles and websites that would turn an item with no autofill data into a
+/// login.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoginConversion {
+    pub password: Uuid,
+    pub username: Option<Uuid>,
+    pub totp: Option<Uuid>,
+    pub websites: Vec<Website>,
 }
 
-/// The credentials to fill. Role slots decide when the item has any; an item
-/// with none uses the heuristic.
-fn pick_roles<'a>(
-    overview: &'a VaultItemOverview,
-    credentials: &[&'a VaultItemCredentialOverview],
-) -> Roles<'a> {
-    let autofill: &ItemAutofill = &overview.autofill;
-    if autofill.password.is_some() || autofill.username.is_some() {
-        return Roles {
-            password: autofill.password_credential(overview),
-            username: autofill.username_credential(overview),
+/// What converting `overview` to a login would assign, or `None` when the item
+/// already has roles or websites, or lacks a confidential credential or an
+/// `http` or `https` `Url` credential.
+///
+/// The password is the first confidential credential, preferring one whose key
+/// or title contains "password". The username is the first `Email` credential,
+/// else the first credential keyed `username`, `user`, `login`, `email`, or
+/// `account`. The websites are the item's `Url` credentials with an `http` or
+/// `https` scheme, matched by `domain`; other schemes would turn database and
+/// API items into logins. The one-time code is the first `Totp` credential.
+pub fn suggest_conversion(
+    vw: &VaultWrapper,
+    overview: &VaultItemOverview,
+) -> Result<Option<LoginConversion>, Error> {
+    let autofill = &overview.autofill;
+    if autofill.password.is_some() || autofill.username.is_some() || !autofill.websites.is_empty() {
+        return Ok(None);
+    }
+    let credentials = sorted_credentials(overview);
+    let Some(password) = pick_password(&credentials) else {
+        return Ok(None);
+    };
+
+    let mut websites: Vec<Website> = Vec::new();
+    for cred in credentials
+        .iter()
+        .filter(|c| matches!(c.kind, FieldKind::Url))
+    {
+        let Some(value) = read(vw, &overview.key, &cred.key)? else {
+            continue;
         };
+        let value = value.trim();
+        if ParsedUrl::parse(value).is_some() && !websites.iter().any(|w| w.url == value) {
+            websites.push(Website::new(value, MatchKind::Domain));
+        }
     }
-    Roles {
-        password: pick_password(credentials),
-        username: pick_username(credentials),
+    if websites.is_empty() {
+        return Ok(None);
     }
+
+    Ok(Some(LoginConversion {
+        password: password.id,
+        username: pick_username(&credentials).map(|cred| cred.id),
+        totp: credentials
+            .iter()
+            .find(|c| matches!(c.kind, FieldKind::Totp))
+            .map(|cred| cred.id),
+        websites,
+    }))
+}
+
+/// Apply [`suggest_conversion`] to an item and mark it as a login. Credential
+/// keys are not renamed. Returns false when there was nothing to convert. The
+/// caller saves the vault.
+pub fn convert_to_login(vw: &mut VaultWrapper, item_key: &str) -> Result<bool, Error> {
+    let Some(overview) = vw.get_item_overview(item_key)? else {
+        return Err(Error::InvalidItemKey(item_key.to_string()));
+    };
+    let Some(conversion) = suggest_conversion(vw, overview)? else {
+        return Ok(false);
+    };
+    let mut autofill = overview.autofill.clone();
+    autofill.password = Some(conversion.password);
+    autofill.username = conversion.username;
+    autofill.totp = autofill.totp.or(conversion.totp);
+    autofill.websites = conversion.websites;
+    let has_category = overview.category.is_some();
+    vw.set_item_autofill(item_key, autofill)?;
+    if !has_category {
+        vw.set_item_category(item_key, Some(CATEGORY_LOGIN.to_string()))?;
+    }
+    Ok(true)
 }
 
 /// The credential to fill: a confidential field, preferring one named
@@ -1211,7 +1375,6 @@ mod tests {
             username: None,
             password_key: "password".to_string(),
             websites: Vec::new(),
-            websites_from_url_fields: false,
             has_totp: false,
             matched: rank.map(|rank| MatchedWebsite {
                 host: "example.com".to_string(),
@@ -1273,7 +1436,6 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].username.as_deref(), Some("tp"));
         assert_eq!(found[0].matched.as_ref().unwrap().host, "github.com");
-        assert!(!found[0].websites_from_url_fields);
         assert!(collect_items(&vw, Some("github.io")).unwrap().is_empty());
     }
 
@@ -1466,50 +1628,123 @@ mod tests {
 
         assert!(is_stored_for(&item, "https://gist.github.com/new"));
         assert!(!is_stored_for(&item, "https://evil.com"));
+    }
 
-        let from_url_field = AutofillItem {
-            websites_from_url_fields: true,
-            ..item
-        };
-        assert!(!is_stored_for(&from_url_field, "https://github.com"));
+    /// An item the way an older build stored it: credentials only, with no
+    /// roles or websites.
+    fn legacy_item(vw: &mut VaultWrapper, key: &str, creds: &[(&str, FieldKind, &str)]) {
+        vw.add_item(key, key).unwrap();
+        for (cred_key, kind, value) in creds {
+            vw.add_secret(
+                key,
+                cred_key,
+                cred_key,
+                kind.clone(),
+                SecretString::from(*value),
+            )
+            .unwrap();
+        }
     }
 
     #[test]
-    fn url_field_fallback_is_limited_to_http_sites() {
+    fn an_item_without_autofill_data_is_not_offered() {
         let mut vw = VaultWrapper::new_for_test("personal");
-        vw.add_item("database", "Database").unwrap();
-        for (key, value) in [("password", "pw"), ("url", "postgres://example.com/db")] {
-            let kind = if key == "url" {
-                FieldKind::Url
-            } else {
-                FieldKind::default()
-            };
-            vw.add_secret("database", key, key, kind, SecretString::from(value))
-                .unwrap();
-        }
+        legacy_item(
+            &mut vw,
+            "blog",
+            &[
+                ("password", FieldKind::default(), "pw"),
+                ("site", FieldKind::Url, "https://blog.example.com/login"),
+            ],
+        );
+        assert!(collect_items(&vw, None).unwrap().is_empty());
         assert!(collect_items(&vw, Some("example.com")).unwrap().is_empty());
+        assert!(collect_places(&vw).unwrap().is_empty());
+    }
 
-        vw.add_item("blog", "Blog").unwrap();
-        vw.add_secret(
+    #[test]
+    fn conversion_assigns_roles_and_websites_from_the_credentials() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(
+            &mut vw,
             "blog",
-            "password",
-            "Password",
-            FieldKind::default(),
-            SecretString::from("pw"),
-        )
-        .unwrap();
+            &[
+                ("api-token", FieldKind::default(), "token"),
+                ("password", FieldKind::default(), "pw"),
+                ("email", FieldKind::Email, "tp@example.com"),
+                ("code", FieldKind::Totp, "JBSWY3DPEHPK3PXP"),
+                ("site", FieldKind::Url, "https://blog.example.com/login"),
+            ],
+        );
+        let overview = vw.get_item_overview("blog").unwrap().unwrap();
+        let conversion = suggest_conversion(&vw, overview).unwrap().unwrap();
+        assert_eq!(conversion.password, key_of(overview, "password"));
+        assert_eq!(conversion.username, Some(key_of(overview, "email")));
+        assert_eq!(conversion.totp, Some(key_of(overview, "code")));
+
+        assert!(convert_to_login(&mut vw, "blog").unwrap());
+        let item = vw.get_item_overview("blog").unwrap().unwrap();
+        assert_eq!(item.category.as_deref(), Some(CATEGORY_LOGIN));
+        assert_eq!(
+            item.autofill.websites,
+            vec![Website::new(
+                "https://blog.example.com/login",
+                MatchKind::Domain
+            )]
+        );
+        let found = collect_items(&vw, Some("example.com")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].username.as_deref(), Some("tp@example.com"));
+        assert!(found[0].has_totp);
+        // Keys are not renamed.
+        assert!(vw.get_secret("blog", "email").unwrap().is_some());
+
+        // A converted item has nothing left to convert.
+        assert!(!convert_to_login(&mut vw, "blog").unwrap());
+    }
+
+    #[test]
+    fn conversion_is_limited_to_http_sites() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(
+            &mut vw,
+            "database",
+            &[
+                ("password", FieldKind::default(), "pw"),
+                ("url", FieldKind::Url, "postgres://example.com/db"),
+            ],
+        );
+        let overview = vw.get_item_overview("database").unwrap().unwrap();
+        assert!(suggest_conversion(&vw, overview).unwrap().is_none());
+        assert!(!convert_to_login(&mut vw, "database").unwrap());
+    }
+
+    #[test]
+    fn conversion_needs_a_confidential_credential() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(
+            &mut vw,
+            "notes",
+            &[("site", FieldKind::Url, "https://example.com")],
+        );
+        assert!(!convert_to_login(&mut vw, "notes").unwrap());
+    }
+
+    #[test]
+    fn conversion_leaves_an_item_with_roles_alone() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
         vw.add_secret(
-            "blog",
+            "github",
             "site",
             "Site",
             FieldKind::Url,
-            SecretString::from("https://blog.example.com/login"),
+            SecretString::from("https://other.example.com"),
         )
         .unwrap();
-        let found = collect_items(&vw, Some("example.com")).unwrap();
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].item_key, "blog");
-        assert!(found[0].websites_from_url_fields);
+        assert!(!convert_to_login(&mut vw, "github").unwrap());
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(item.autofill.websites.len(), 1);
     }
 
     fn overview(creds: &[(&str, FieldKind)]) -> VaultItemOverview {
@@ -1526,7 +1761,7 @@ mod tests {
     }
 
     #[test]
-    fn roles_take_precedence_over_the_heuristic() {
+    fn roles_decide_the_credentials_to_fill() {
         let mut item = overview(&[
             ("password", FieldKind::default()),
             ("pin", FieldKind::default()),
@@ -1534,18 +1769,18 @@ mod tests {
         ]);
         item.autofill.password = Some(key_of(&item, "pin"));
         item.autofill.username = Some(key_of(&item, "handle"));
-        let credentials = sorted_credentials(&item);
-        let roles = pick_roles(&item, &credentials);
-        assert_eq!(roles.password.unwrap().key, "pin");
-        assert_eq!(roles.username.unwrap().key, "handle");
+        assert_eq!(item.autofill.password_credential(&item).unwrap().key, "pin");
+        assert_eq!(
+            item.autofill.username_credential(&item).unwrap().key,
+            "handle"
+        );
     }
 
     #[test]
     fn a_dangling_password_role_is_not_a_login() {
         let mut item = overview(&[("password", FieldKind::default())]);
         item.autofill.password = Some(uuid::Uuid::new_v4());
-        let credentials = sorted_credentials(&item);
-        assert!(pick_roles(&item, &credentials).password.is_none());
+        assert!(item.autofill.password_credential(&item).is_none());
     }
 
     /// Point the github test item's totp slot at the credential `cred_key`.
@@ -1716,41 +1951,10 @@ mod tests {
         assert_eq!(summary.title, "GitHub");
         assert_eq!(summary.username.as_deref(), Some("tp"));
         assert_eq!(summary.matched.host, "github.com");
-        assert!(!summary.url_fallback);
         let json = serde_json::to_string(&summary).unwrap();
         assert!(!json.contains("hunter2"));
         assert!(!json.contains("password"));
         assert!(collect_items(&vw, None).unwrap()[0].summary().is_none());
-    }
-
-    #[test]
-    fn a_login_matched_through_a_url_field_is_flagged() {
-        let mut vw = VaultWrapper::new_for_test("personal");
-        vw.add_item("blog", "Blog").unwrap();
-        vw.add_secret(
-            "blog",
-            "password",
-            "Password",
-            FieldKind::default(),
-            SecretString::from("pw"),
-        )
-        .unwrap();
-        vw.add_secret(
-            "blog",
-            "site",
-            "Site",
-            FieldKind::Url,
-            SecretString::from("https://blog.example.com"),
-        )
-        .unwrap();
-        let record_id = collect_items(&vw, Some("example.com")).unwrap()[0]
-            .record_id
-            .clone();
-        let found = find_login(&vw, &record_id, "https://example.com")
-            .unwrap()
-            .unwrap();
-        assert!(found.websites_from_url_fields);
-        assert!(found.summary().unwrap().url_fallback);
     }
 
     #[test]
@@ -1845,15 +2049,154 @@ mod tests {
     }
 
     #[test]
-    fn items_without_roles_use_the_heuristic() {
+    fn create_login_derives_the_key_and_title_from_the_website() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let key = create_login(
+            &mut vw,
+            " github.com ",
+            Some("tp"),
+            SecretString::from("pw"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(key, "github");
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(item.title, "Github.com");
+        assert_eq!(item.category.as_deref(), Some(CATEGORY_LOGIN));
+        assert_eq!(
+            item.autofill.websites,
+            vec![Website::new("github.com", MatchKind::Domain)]
+        );
+
+        // A second login for the same site gets a numbered key.
+        let key = create_login(
+            &mut vw,
+            "https://github.com/login",
+            None,
+            SecretString::from("pw2"),
+            None,
+            Some("Work GitHub"),
+        )
+        .unwrap();
+        assert_eq!(key, "github-2");
+        let item = vw.get_item_overview("github-2").unwrap().unwrap();
+        assert_eq!(item.title, "Work GitHub");
+        assert!(item.autofill.username.is_none());
+    }
+
+    #[test]
+    fn create_login_rejects_a_bad_website_or_key() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let create = |vw: &mut VaultWrapper, website: &str, key: Option<&str>| {
+            create_login(vw, website, None, SecretString::from("pw"), key, None)
+        };
+        assert!(create(&mut vw, "ftp://example.com", None).is_err());
+        assert!(create(&mut vw, "", None).is_err());
+        assert!(create(&mut vw, "example.com", Some("Not A Key")).is_err());
+        assert!(vw.list_items().unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_role_moves_a_credential_between_roles() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
+        set_role(&mut vw, "github", Role::Password, Some("username")).unwrap();
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(
+            item.autofill.password_credential(item).unwrap().key,
+            "username"
+        );
+        // The credential left the username role.
+        assert!(item.autofill.username.is_none());
+
+        set_role(&mut vw, "github", Role::Password, None).unwrap();
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert!(item.autofill.password.is_none());
+    }
+
+    #[test]
+    fn set_role_rejects_a_credential_of_the_wrong_kind() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
+        vw.add_secret(
+            "github",
+            "code",
+            "Code",
+            FieldKind::Totp,
+            SecretString::from("JBSWY3DPEHPK3PXP"),
+        )
+        .unwrap();
+        assert!(set_role(&mut vw, "github", Role::Password, Some("code")).is_err());
+        assert!(set_role(&mut vw, "github", Role::Totp, Some("password")).is_err());
+        assert!(set_role(&mut vw, "github", Role::Totp, Some("missing")).is_err());
+        set_role(&mut vw, "github", Role::Totp, Some("code")).unwrap();
+        assert!(collect_items(&vw, None).unwrap()[0].has_totp);
+    }
+
+    #[test]
+    fn set_role_makes_an_uncategorized_item_a_login() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(&mut vw, "blog", &[("secret", FieldKind::default(), "pw")]);
+        set_role(&mut vw, "blog", Role::Password, Some("secret")).unwrap();
+        let item = vw.get_item_overview("blog").unwrap().unwrap();
+        assert_eq!(item.category.as_deref(), Some(CATEGORY_LOGIN));
+    }
+
+    #[test]
+    fn set_websites_replaces_the_list_and_checks_each_url() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
+        set_websites(
+            &mut vw,
+            "github",
+            vec![
+                Website::new(" gist.github.com ", MatchKind::Host),
+                Website::new("github.com", MatchKind::Never),
+            ],
+        )
+        .unwrap();
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(
+            item.autofill.websites,
+            vec![
+                Website::new("gist.github.com", MatchKind::Host),
+                Website::new("github.com", MatchKind::Never),
+            ]
+        );
+        assert!(
+            set_websites(
+                &mut vw,
+                "github",
+                vec![Website::new("ftp://x.com", MatchKind::Domain)]
+            )
+            .is_err()
+        );
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(item.autofill.websites.len(), 2);
+    }
+
+    #[test]
+    fn conversion_prefers_the_credential_named_password_and_an_email_username() {
         let item = overview(&[
             ("api-token", FieldKind::default()),
             ("password", FieldKind::default()),
+            ("login", FieldKind::Text(Default::default())),
             ("email", FieldKind::Email),
         ]);
         let credentials = sorted_credentials(&item);
-        let roles = pick_roles(&item, &credentials);
-        assert_eq!(roles.password.unwrap().key, "password");
-        assert_eq!(roles.username.unwrap().key, "email");
+        assert_eq!(pick_password(&credentials).unwrap().key, "password");
+        assert_eq!(pick_username(&credentials).unwrap().key, "email");
+    }
+
+    #[test]
+    fn conversion_falls_back_to_a_conventional_username_key() {
+        let item = overview(&[
+            ("pass", FieldKind::default()),
+            ("account", FieldKind::Text(Default::default())),
+        ]);
+        let credentials = sorted_credentials(&item);
+        assert_eq!(pick_password(&credentials).unwrap().key, "pass");
+        assert_eq!(pick_username(&credentials).unwrap().key, "account");
     }
 }

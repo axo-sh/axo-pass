@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::{
-    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, TextField,
+    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, TextField,
     VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, VaultWrapper,
-    autofill, display_order, passkey,
+    Website, autofill, display_order, passkey, totp,
 };
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
@@ -32,6 +33,10 @@ pub struct CredentialInfo {
     /// `id` of the item section the credential is in. `None` for a credential
     /// outside any section.
     pub section_id: Option<String>,
+    /// The part the credential plays in autofill: "username", "password",
+    /// "totp", or none. The password role decides the credential is concealed,
+    /// whatever its kind.
+    pub role: Option<String>,
 }
 
 /// A previous value of a credential. The value is not included. Read it with
@@ -202,6 +207,58 @@ impl TryFrom<FieldKindInfo> for FieldKind {
     }
 }
 
+/// A website a login applies to. `match_kind` is "domain", "host",
+/// "starts-with", or "never".
+#[derive(uniffi::Record, Clone)]
+pub struct WebsiteInfo {
+    pub url: String,
+    pub match_kind: String,
+}
+
+impl From<&Website> for WebsiteInfo {
+    fn from(website: &Website) -> Self {
+        let match_kind = match website.match_kind {
+            MatchKind::Domain => "domain",
+            MatchKind::Host => "host",
+            MatchKind::StartsWith => "starts-with",
+            MatchKind::Never => "never",
+        };
+        Self {
+            url: website.url.clone(),
+            match_kind: match_kind.to_string(),
+        }
+    }
+}
+
+impl TryFrom<WebsiteInfo> for Website {
+    type Error = FfiError;
+
+    fn try_from(info: WebsiteInfo) -> Result<Self, Self::Error> {
+        let match_kind = match info.match_kind.as_str() {
+            "domain" => MatchKind::Domain,
+            "host" => MatchKind::Host,
+            "starts-with" => MatchKind::StartsWith,
+            "never" => MatchKind::Never,
+            other => {
+                return Err(FfiError::InvalidInput(format!(
+                    "unknown match kind {other:?}"
+                )));
+            },
+        };
+        Ok(Website::new(info.url, match_kind))
+    }
+}
+
+/// A credential's part in autofill: "username", "password", or "totp".
+fn parse_role(role: &str) -> Result<autofill::Role, FfiError> {
+    match role {
+        "username" => Ok(autofill::Role::Username),
+        "password" => Ok(autofill::Role::Password),
+        "totp" => Ok(autofill::Role::Totp),
+        other => Err(FfiError::InvalidInput(format!("unknown role {other:?}"))),
+    }
+}
+
 #[derive(uniffi::Record)]
 pub struct ItemInfo {
     /// Item id as a UUID string. It does not change when the key does.
@@ -214,6 +271,24 @@ pub struct ItemInfo {
     /// Credentials outside any section first, then each section's
     /// credentials in section order.
     pub credentials: Vec<CredentialInfo>,
+    /// The item's display category, such as "login".
+    pub category: Option<String>,
+    /// The value of the username credential, when the item has one.
+    pub username: Option<String>,
+    /// The websites the item applies to.
+    pub websites: Vec<WebsiteInfo>,
+    /// The item has no autofill data but its credentials look like a login, so
+    /// the app can offer to convert it.
+    pub can_convert_to_login: bool,
+    /// The item names a password credential that is missing or cannot be one.
+    pub password_role_broken: bool,
+}
+
+/// A one-time code and how long it stays valid.
+#[derive(uniffi::Record)]
+pub struct TotpCodeInfo {
+    pub code: String,
+    pub seconds_remaining: u64,
 }
 
 /// One fillable item, as the AutoFill identity store needs it. Mirrors
@@ -377,23 +452,59 @@ impl AxoPass {
                     let mut credentials: Vec<_> = item.credentials.values().collect();
                     credentials.sort_by(|a, b| credential_order(a, b));
 
+                    let roles = &item.autofill;
+                    let role_of = |id| {
+                        if roles.password_credential(item).map(|c| c.id) == Some(id) {
+                            Some("password")
+                        } else if roles.username_credential(item).map(|c| c.id) == Some(id) {
+                            Some("username")
+                        } else if roles.totp_credential(item).map(|c| c.id) == Some(id) {
+                            Some("totp")
+                        } else {
+                            None
+                        }
+                    };
+                    let credentials: Vec<CredentialInfo> = credentials
+                        .into_iter()
+                        .map(|c| {
+                            let role = role_of(c.id);
+                            let mut kind = FieldKindInfo::from(&c.kind);
+                            if role == Some("password") {
+                                kind.concealed = true;
+                            }
+                            CredentialInfo {
+                                id: c.id.to_string(),
+                                key: c.key.clone(),
+                                title: c.title.clone(),
+                                kind,
+                                position: c.position,
+                                section_id: c.section.map(|id| id.to_string()),
+                                role: role.map(str::to_string),
+                            }
+                        })
+                        .collect();
+                    let username = roles
+                        .username_credential(item)
+                        .and_then(|cred| vault.get_secret(&item.key, &cred.key).ok().flatten())
+                        .map(|secret| secret.expose_secret().clone())
+                        .filter(|value| !value.trim().is_empty());
+                    let can_convert_to_login = autofill::suggest_conversion(vault, item)
+                        .ok()
+                        .flatten()
+                        .is_some();
                     ItemInfo {
                         id: item.id.to_string(),
                         key: item.key.clone(),
                         title: item.title.clone(),
                         folder_id: item.folder.map(|id| id.to_string()),
                         sections: sections.into_iter().map(SectionInfo::from).collect(),
-                        credentials: credentials
-                            .into_iter()
-                            .map(|c| CredentialInfo {
-                                id: c.id.to_string(),
-                                key: c.key.clone(),
-                                title: c.title.clone(),
-                                kind: FieldKindInfo::from(&c.kind),
-                                position: c.position,
-                                section_id: c.section.map(|id| id.to_string()),
-                            })
-                            .collect(),
+                        credentials,
+                        category: item.category.clone(),
+                        username,
+                        websites: roles.websites.iter().map(WebsiteInfo::from).collect(),
+                        can_convert_to_login,
+                        password_role_broken: roles.password.is_some()
+                            && roles.password_credential(item).is_none(),
                     }
                 })
                 .collect();
@@ -1026,6 +1137,139 @@ impl AxoPass {
             m.with_unlocked_vault(&vault_key, |vw| {
                 vw.delete_item_credential(&item_key, &cred_key)
                     .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Create a login from a website, an optional username, and a password.
+    /// The item key and title come from the website unless given, and a taken
+    /// key gets a numeric suffix. Returns the item's key.
+    pub async fn create_login(
+        &self,
+        vault_key: String,
+        website: String,
+        username: Option<String>,
+        password: String,
+        item_key: Option<String>,
+        title: Option<String>,
+    ) -> Result<String, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                autofill::create_login(
+                    vw,
+                    &website,
+                    username.as_deref(),
+                    SecretString::from(password),
+                    item_key.as_deref(),
+                    title.as_deref(),
+                )
+                .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// The current one-time code of a `totp` credential.
+    pub async fn current_totp_code(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+    ) -> Result<TotpCodeInfo, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_vault(&vault_key)
+                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+            let secret = vault
+                .get_secret(&item_key, &cred_key)
+                .map_err(FfiError::from)?
+                .ok_or_else(|| FfiError::NotFound(format!("{vault_key}/{item_key}/{cred_key}")))?;
+            let code =
+                totp::current_code(secret.expose_secret()).map_err(FfiError::InvalidInput)?;
+            Ok(TotpCodeInfo {
+                code: code.code,
+                seconds_remaining: code.seconds_remaining,
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Generate a random password.
+    pub fn generate_password(&self, length: u32, symbols: bool) -> Result<String, FfiError> {
+        let policy = PasswordPolicy {
+            length: length as usize,
+            symbols,
+            ..PasswordPolicy::default()
+        };
+        policy
+            .generate()
+            .map(|password| password.expose_secret().to_string())
+            .map_err(|e| FfiError::InvalidInput(e.to_string()))
+    }
+
+    /// Assign a role ("username", "password", or "totp") to a credential, or
+    /// clear the role when `cred_key` is `None`. A credential has one role.
+    pub async fn set_credential_role(
+        &self,
+        vault_key: String,
+        item_key: String,
+        role: String,
+        cred_key: Option<String>,
+    ) -> Result<(), FfiError> {
+        let role = parse_role(&role)?;
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                autofill::set_role(vw, &item_key, role, cred_key.as_deref()).map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Replace the websites an item applies to.
+    pub async fn set_item_websites(
+        &self,
+        vault_key: String,
+        item_key: String,
+        websites: Vec<WebsiteInfo>,
+    ) -> Result<(), FfiError> {
+        let websites = websites
+            .into_iter()
+            .map(Website::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                autofill::set_websites(vw, &item_key, websites).map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Give an item with no autofill data the roles and websites its
+    /// credentials suggest. Returns false when there was nothing to convert.
+    pub async fn convert_item_to_login(
+        &self,
+        vault_key: String,
+        item_key: String,
+    ) -> Result<bool, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                autofill::convert_to_login(vw, &item_key).map_err(FfiError::from)
             })
         })
         .await

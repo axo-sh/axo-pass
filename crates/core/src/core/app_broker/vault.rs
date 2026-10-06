@@ -1357,28 +1357,17 @@ fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginS
         None => return Ok(None),
     };
 
-    let confirm = if other_site {
-        Some(ConfirmPrompt {
-            description: Some(format!(
-                "\"{}\" is saved for {}, not {}.\n\nFill it on {}?",
-                item.title,
-                stored_hosts(&item),
-                page.host,
-                page.host
-            )),
-            ok_label: Some("Fill".to_string()),
-            cancel_label: Some("Cancel".to_string()),
-        })
-    } else {
-        item.websites_from_url_fields.then(|| ConfirmPrompt {
-            description: Some(format!(
-                "\"{}\" lists no website. It matches {} only through a URL field.\n\nFill it on {}?",
-                item.title, page.host, page.host
-            )),
-            ok_label: Some("Fill".to_string()),
-            cancel_label: Some("Cancel".to_string()),
-        })
-    };
+    let confirm = other_site.then(|| ConfirmPrompt {
+        description: Some(format!(
+            "\"{}\" is saved for {}, not {}.\n\nFill it on {}?",
+            item.title,
+            stored_hosts(&item),
+            page.host,
+            page.host
+        )),
+        ok_label: Some("Fill".to_string()),
+        cancel_label: Some("Cancel".to_string()),
+    });
 
     let response = if totp {
         let code = autofill::login_totp(vw, &item).map_err(|e| e.to_string())?;

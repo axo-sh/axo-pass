@@ -27,9 +27,6 @@ struct Login: Decodable, Identifiable, Hashable {
   /// The stored website that made the login match. `nil` for a login that does
   /// not match the page. The app asks the user to confirm before filling one.
   let matched: Matched?
-  /// The login has no website of its own and matched through a URL field. The
-  /// app asks the user to confirm before filling it.
-  let urlFallback: Bool
   /// The login has a one-time code.
   let hasTotp: Bool
 
@@ -47,13 +44,12 @@ struct Login: Decodable, Identifiable, Hashable {
 
   init(
     recordID: String, title: String, username: String?, matched: Matched?,
-    urlFallback: Bool = false, hasTotp: Bool = false
+    hasTotp: Bool = false
   ) {
     self.recordID = recordID
     self.title = title
     self.username = username
     self.matched = matched
-    self.urlFallback = urlFallback
     self.hasTotp = hasTotp
   }
 
@@ -63,7 +59,6 @@ struct Login: Decodable, Identifiable, Hashable {
     title = try values.decode(String.self, forKey: .title)
     username = try values.decodeIfPresent(String.self, forKey: .username)
     matched = try values.decodeIfPresent(Matched.self, forKey: .matched)
-    urlFallback = try values.decodeIfPresent(Bool.self, forKey: .urlFallback) ?? false
     hasTotp = try values.decodeIfPresent(Bool.self, forKey: .hasTotp) ?? false
   }
 
@@ -79,7 +74,6 @@ struct Login: Decodable, Identifiable, Hashable {
   /// Why the login is listed, in words for the list.
   var reason: String {
     guard let matched else { return "Saved for another site" }
-    if urlFallback { return "Matched \(matched.host) through a URL field" }
     switch matched.kind {
     case "host": return "Saved for \(matched.host) only"
     case "starts-with": return "Saved for pages on \(matched.host)"
@@ -92,7 +86,6 @@ struct Login: Decodable, Identifiable, Hashable {
     case title
     case username
     case matched
-    case urlFallback = "url_fallback"
     case hasTotp = "has_totp"
   }
 }

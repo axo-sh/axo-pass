@@ -91,7 +91,6 @@ mod tests {
             username: Some("tp".to_string()),
             password_key: "password".to_string(),
             websites: vec![Website::new(site, MatchKind::Domain)],
-            websites_from_url_fields: false,
             has_totp: false,
             matched: None,
         }
