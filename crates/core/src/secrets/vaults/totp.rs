@@ -32,7 +32,7 @@ pub fn current_code(value: &str) -> Result<TotpCode, String> {
 fn parse(value: &str) -> Result<TOTP, String> {
     let value = value.trim();
     if value.starts_with("otpauth://") {
-        return TOTP::from_url_unchecked(value)
+        return TOTP::from_url_unchecked(uppercase_secret_param(value))
             .map_err(|_| "The one-time code URI is not valid".to_string());
     }
     // Secrets are often copied with spaces between groups.
@@ -56,6 +56,24 @@ fn parse(value: &str) -> Result<TOTP, String> {
         None,
         String::new(),
     ))
+}
+
+/// Uppercases the `secret` query parameter, since the base32 decoder only
+/// accepts uppercase and many services emit lowercase secrets.
+fn uppercase_secret_param(uri: &str) -> String {
+    let Some((head, query)) = uri.split_once('?') else {
+        return uri.to_string();
+    };
+    let query: Vec<String> = query
+        .split('&')
+        .map(|pair| match pair.split_once('=') {
+            Some((key, val)) if key.eq_ignore_ascii_case("secret") => {
+                format!("{key}={}", val.to_uppercase())
+            },
+            _ => pair.to_string(),
+        })
+        .collect();
+    format!("{head}?{}", query.join("&"))
 }
 
 #[cfg(test)]
@@ -97,6 +115,18 @@ mod tests {
         // A 60 second period puts T=59 in counter 0, and RFC 4226's counter 0
         // code is 755224. With 8 digits the value is 84755224.
         assert_eq!(totp.generate(59), "84755224");
+    }
+
+    #[test]
+    fn an_otpauth_uri_with_a_lowercase_secret_parses() {
+        let uri = "otpauth://totp/octavore?issuer=GitHub&secret=abcd";
+        assert!(parse(uri).is_ok());
+    }
+
+    #[test]
+    fn an_otpauth_uri_with_a_slash_in_its_label_parses() {
+        let uri = "otpauth://totp/github.com/octavore?issuer=GitHub&secret=ABCD";
+        assert!(parse(uri).is_ok());
     }
 
     #[test]
