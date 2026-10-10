@@ -351,11 +351,46 @@ struct StoredRecord {
     user_display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     counter: Option<u32>,
+    /// Unix seconds when the passkey was registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<i64>,
     /// Standard base64 of the CBOR-encoded COSE key, private half included.
     key: String,
 }
 
-fn encode(passkey: &Passkey) -> Result<String, Error> {
+/// Passkey details to display. Excludes key and the user handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeySummary {
+    pub rp_id: String,
+    /// base64url, no padding.
+    pub credential_id: String,
+    pub username: Option<String>,
+    pub user_display_name: Option<String>,
+    /// Unix seconds when the passkey was registered, when recorded.
+    pub created_at: Option<i64>,
+}
+
+/// Read the displayable fields of a stored passkey record. `None` when the
+/// value is not a passkey record.
+pub fn summary(value: &str) -> Option<PasskeySummary> {
+    let record: StoredRecord = serde_json::from_str(value).ok()?;
+    Some(PasskeySummary {
+        rp_id: record.rp_id,
+        credential_id: record.credential_id,
+        username: record.username,
+        user_display_name: record.user_display_name,
+        created_at: record.created_at,
+    })
+}
+
+fn now_unix() -> Option<i64> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    i64::try_from(elapsed.as_secs()).ok()
+}
+
+fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
     let key = passkey
         .key
         .clone()
@@ -371,6 +406,7 @@ fn encode(passkey: &Passkey) -> Result<String, Error> {
         username: passkey.username.clone(),
         user_display_name: passkey.user_display_name.clone(),
         counter: passkey.counter,
+        created_at,
         key: B64.encode(key),
     };
     serde_json::to_string(&record)
@@ -449,7 +485,7 @@ impl<'a> VaultStore<'a> {
         item_title: Option<&str>,
         credential_title: &str,
     ) -> Result<(), Error> {
-        let value = encode(cred)?;
+        let value = encode(cred, now_unix())?;
         store_passkey(
             self.vw,
             cred,
@@ -737,7 +773,7 @@ mod tests {
     async fn record_survives_a_round_trip() {
         let passkey = sample_passkey().await;
 
-        let encoded = encode(&passkey).unwrap();
+        let encoded = encode(&passkey, None).unwrap();
         let decoded = decode(&encoded).unwrap();
 
         assert_eq!(decoded.rp_id, passkey.rp_id);
@@ -757,7 +793,8 @@ mod tests {
     #[tokio::test]
     async fn record_is_plain_json_with_base64url_ids() {
         let passkey = sample_passkey().await;
-        let value: serde_json::Value = serde_json::from_str(&encode(&passkey).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&encode(&passkey, None).unwrap()).unwrap();
 
         assert_eq!(value["rp_id"], "example.com");
         assert_eq!(value["username"], "ada");
@@ -973,6 +1010,29 @@ mod tests {
             assert_eq!(&response.auth_data.to_vec()[33..37], &[0, 0, 0, 0]);
         }
         assert_eq!(stored(&vw), record);
+    }
+
+    #[tokio::test]
+    async fn a_registration_records_when_it_was_created() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        let value = vw
+            .get_secret(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap();
+
+        let summary = summary(value.expose_secret()).unwrap();
+        assert_eq!(summary.rp_id, "example.com");
+        assert_eq!(summary.username.as_deref(), Some("ada"));
+        assert!(summary.created_at.is_some_and(|t| t > 1_700_000_000));
+    }
+
+    #[test]
+    fn a_record_without_a_creation_time_still_summarizes() {
+        let summary = summary(r#"{"rp_id":"example.com","credential_id":"AA","key":"x"}"#).unwrap();
+        assert_eq!(summary.created_at, None);
+        assert!(super::summary("not json").is_none());
     }
 
     #[test]

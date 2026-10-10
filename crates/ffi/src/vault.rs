@@ -37,6 +37,22 @@ pub struct CredentialInfo {
     /// "totp", or none. The password role decides the credential is concealed,
     /// whatever its kind.
     pub role: Option<String>,
+    /// Only present for passkeys; contains passkey credential details for
+    /// display.
+    pub passkey: Option<PasskeyInfo>,
+}
+
+/// The displayable fields of a passkey. Carries no key material, so the UI
+/// can show a passkey without revealing its record.
+#[derive(uniffi::Record)]
+pub struct PasskeyInfo {
+    pub rp_id: String,
+    /// base64url, no padding.
+    pub credential_id: String,
+    pub username: Option<String>,
+    pub user_display_name: Option<String>,
+    /// Unix seconds when the passkey was registered, when recorded.
+    pub created_at: Option<i64>,
 }
 
 /// A previous value of a credential. The value is not included. Read it with
@@ -472,6 +488,17 @@ impl AxoPass {
                             if role == Some("password") {
                                 kind.concealed = true;
                             }
+                            let passkey = matches!(c.kind, FieldKind::Passkey)
+                                .then(|| vault.get_secret(&item.key, &c.key).ok().flatten())
+                                .flatten()
+                                .and_then(|value| passkey::summary(value.expose_secret()))
+                                .map(|s| PasskeyInfo {
+                                    rp_id: s.rp_id,
+                                    credential_id: s.credential_id,
+                                    username: s.username,
+                                    user_display_name: s.user_display_name,
+                                    created_at: s.created_at,
+                                });
                             CredentialInfo {
                                 id: c.id.to_string(),
                                 key: c.key.clone(),
@@ -480,6 +507,7 @@ impl AxoPass {
                                 position: c.position,
                                 section_id: c.section.map(|id| id.to_string()),
                                 role: role.map(str::to_string),
+                                passkey,
                             }
                         })
                         .collect();
