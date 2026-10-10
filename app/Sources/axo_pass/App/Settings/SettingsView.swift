@@ -1,4 +1,5 @@
 import AppKit
+import AuthenticationServices
 import AxoPassFFI
 import SunshineUI
 import SwiftUI
@@ -21,6 +22,9 @@ struct SettingsView: View {
       VaultsSettingsView()
         .settingsPane()
         .tabItem { SettingsTab.label("Vaults", symbol: "archivebox") }
+      AutoFillSettingsView()
+        .settingsPane()
+        .tabItem { SettingsTab.label("AutoFill", symbol: "key.viewfinder") }
       SshSettingsView()
         .settingsPane()
         .tabItem { SettingsTab.label("SSH", symbol: "key.horizontal") }
@@ -222,6 +226,49 @@ private struct VaultsSettingsView: View {
     .sheet(isPresented: $showingImport) {
       VaultImportSheet(model: model)
     }
+  }
+}
+
+/// Whether the system's AutoFill provider for Safari and other apps is on.
+private struct AutoFillSettingsView: View {
+  @State private var isEnabled: Bool? = nil
+
+  var body: some View {
+    Form {
+      LabeledContent("Safari and apps:") {
+        VStack(alignment: .leading, spacing: 6) {
+          switch isEnabled {
+          case .some(true):
+            Label("Axo Pass is on", systemImage: "checkmark.circle.fill")
+              .foregroundStyle(.green)
+          case .some(false):
+            Label("Axo Pass is off", systemImage: "xmark.circle.fill")
+              .foregroundStyle(.orange)
+          case .none:
+            ProgressView().controlSize(.small)
+          }
+          Button("Open System Settings…") {
+            ASSettingsHelper.openCredentialProviderAppSettings { _ in }
+          }
+        }
+      }
+      Text(
+        "Turn on Axo Pass under Passwords > Password Options to fill logins, one-time codes, and passkeys in Safari and other apps."
+      )
+      .settingsCaption()
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 12)
+    .task { await refresh() }
+    .onReceive(
+      NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+    ) { _ in
+      Task { await refresh() }
+    }
+  }
+
+  private func refresh() async {
+    isEnabled = await ASCredentialIdentityStore.shared.state().isEnabled
   }
 }
 
