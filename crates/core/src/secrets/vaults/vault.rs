@@ -276,13 +276,10 @@ impl Vault {
     /// Set the display order of folders. `ordered_folder_ids` must list every
     /// folder exactly once.
     pub fn reorder_folders(&mut self, ordered_folder_ids: &[FolderId]) -> Result<(), Error> {
-        if !is_permutation(ordered_folder_ids, self.folders.keys().copied()) {
+        if !assign_positions(&mut self.folders, ordered_folder_ids, |f| &mut f.position) {
             return Err(Error::InvalidFolderOrder);
         }
-        for (idx, folder_id) in ordered_folder_ids.iter().enumerate() {
-            if let Some(folder) = self.folders.get_mut(folder_id) {
-                folder.position = Some(idx as u32);
-            }
+        for folder_id in ordered_folder_ids {
             self.folder_blobs.remove(folder_id);
         }
         Ok(())
@@ -294,14 +291,10 @@ impl Vault {
         if let Some(folder_id) = folder_id {
             self.get_folder(folder_id)?;
         }
-        let item_id = *self.get_item_id(item_key)?;
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-        item.folder = folder_id;
-        self.item_blobs.remove(&item_id);
-        Ok(())
+        self.edit_item(item_key, |item| {
+            item.folder = folder_id;
+            Ok(())
+        })
     }
 
     pub fn list_items(&self) -> Vec<&VaultItemOverview> {
@@ -319,6 +312,23 @@ impl Vault {
         self.items
             .get(item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))
+    }
+
+    /// Apply `edit` to an item's overview. If it succeeds, the item's cached
+    /// metadata blob is dropped so the next save re-encrypts it.
+    fn edit_item<'a, R>(
+        &'a mut self,
+        item_key: &str,
+        edit: impl FnOnce(&'a mut VaultItemOverview) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        let item_id = *self.get_item_id(item_key)?;
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+        let result = edit(item)?;
+        self.item_blobs.remove(&item_id);
+        Ok(result)
     }
 
     pub fn add_or_update_item(
@@ -374,15 +384,10 @@ impl Vault {
         item_key: &str,
         title: &str,
     ) -> Result<&VaultItemSection, Error> {
-        let item_id = *self.get_item_id(item_key)?;
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-        self.item_blobs.remove(&item_id);
-
         let section = VaultItemSection::new(title);
-        Ok(item.sections.entry(section.id).or_insert(section))
+        self.edit_item(item_key, |item| {
+            Ok(&*item.sections.entry(section.id).or_insert(section))
+        })
     }
 
     pub fn rename_item_section(
@@ -391,18 +396,14 @@ impl Vault {
         section_id: SectionId,
         title: &str,
     ) -> Result<(), Error> {
-        let item_id = *self.get_item_id(item_key)?;
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-        let section = item
-            .sections
-            .get_mut(&section_id)
-            .ok_or_else(|| Error::InvalidSection(section_id.to_string()))?;
-        section.title = title.trim().to_string();
-        self.item_blobs.remove(&item_id);
-        Ok(())
+        self.edit_item(item_key, |item| {
+            let section = item
+                .sections
+                .get_mut(&section_id)
+                .ok_or_else(|| Error::InvalidSection(section_id.to_string()))?;
+            section.title = title.trim().to_string();
+            Ok(())
+        })
     }
 
     /// Delete a section of an item. Credentials in it move out of any section;
@@ -412,21 +413,21 @@ impl Vault {
         item_key: &str,
         section_id: SectionId,
     ) -> Result<(), Error> {
-        let item_id = *self.get_item_id(item_key)?;
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-        item.sections
-            .remove(&section_id)
-            .ok_or_else(|| Error::InvalidSection(section_id.to_string()))?;
-        self.item_blobs.remove(&item_id);
-
-        for cred in item.credentials.values_mut() {
-            if cred.section == Some(section_id) {
-                cred.section = None;
-                self.cred_blobs.remove(&cred.id);
+        let moved_cred_ids = self.edit_item(item_key, |item| {
+            item.sections
+                .remove(&section_id)
+                .ok_or_else(|| Error::InvalidSection(section_id.to_string()))?;
+            let mut moved = Vec::new();
+            for cred in item.credentials.values_mut() {
+                if cred.section == Some(section_id) {
+                    cred.section = None;
+                    moved.push(cred.id);
+                }
             }
+            Ok(moved)
+        })?;
+        for cred_id in &moved_cred_ids {
+            self.cred_blobs.remove(cred_id);
         }
         Ok(())
     }
@@ -438,21 +439,25 @@ impl Vault {
         item_key: &str,
         ordered_section_ids: &[SectionId],
     ) -> Result<(), Error> {
-        let item_id = *self.get_item_id(item_key)?;
-        let item = self
-            .items
-            .get_mut(&item_id)
-            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-        if !is_permutation(ordered_section_ids, item.sections.keys().copied()) {
-            return Err(Error::InvalidSectionOrder(item_key.to_string()));
-        }
-        for (idx, section_id) in ordered_section_ids.iter().enumerate() {
-            if let Some(section) = item.sections.get_mut(section_id) {
-                section.position = Some(idx as u32);
+        self.edit_item(item_key, |item| {
+            if assign_positions(&mut item.sections, ordered_section_ids, |s| &mut s.position) {
+                Ok(())
+            } else {
+                Err(Error::InvalidSectionOrder(item_key.to_string()))
             }
-        }
-        self.item_blobs.remove(&item_id);
-        Ok(())
+        })
+    }
+
+    /// The item and credential ids for a credential, by key.
+    fn get_credential_ids(
+        &self,
+        item_key: &str,
+        cred_key: &str,
+    ) -> Result<(ItemId, CredentialId), Error> {
+        self.item_credential_index
+            .get(&(item_key.to_string(), cred_key.to_string()))
+            .copied()
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))
     }
 
     pub fn get_item_credential(
@@ -460,17 +465,13 @@ impl Vault {
         item_key: &str,
         cred_key: &str,
     ) -> Result<&VaultItemCredentialOverview, Error> {
-        let composite_key = (item_key.to_string(), cred_key.to_string());
-        let (item_id, cred_id) = self
-            .item_credential_index
-            .get(&composite_key)
-            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
         let item = self
             .items
-            .get(item_id)
+            .get(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
         item.credentials
-            .get(cred_id)
+            .get(&cred_id)
             .ok_or_else(|| Error::InvalidCredentialKey(cred_key.to_string()))
     }
 
@@ -522,11 +523,7 @@ impl Vault {
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
-        let composite_key = (item_key.to_string(), cred_key.to_string());
-        let (item_id, cred_id) = *self
-            .item_credential_index
-            .get(&composite_key)
-            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
 
         // remove from item
         let item = self
@@ -536,7 +533,8 @@ impl Vault {
         item.credentials.remove(&cred_id);
 
         // remove from indices and secrets map
-        self.item_credential_index.remove(&composite_key);
+        self.item_credential_index
+            .remove(&(item_key.to_string(), cred_key.to_string()));
         self.secrets.remove(&cred_id);
         self.cred_blobs.remove(&cred_id); // for simplicity, always attempt this
 
@@ -578,11 +576,7 @@ impl Vault {
         cred_key: &str,
         section_id: Option<SectionId>,
     ) -> Result<(), Error> {
-        let composite_key = (item_key.to_string(), cred_key.to_string());
-        let (item_id, cred_id) = *self
-            .item_credential_index
-            .get(&composite_key)
-            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
         let item = self
             .items
             .get_mut(&item_id)
@@ -617,14 +611,7 @@ impl Vault {
         // Resolve every requested key to a credential id in this item.
         let mut ordered_ids = Vec::with_capacity(placements.len());
         for placement in placements {
-            let composite_key = (item_key.to_string(), placement.key.clone());
-            let (found_item_id, cred_id) = self
-                .item_credential_index
-                .get(&composite_key)
-                .copied()
-                .ok_or_else(|| {
-                    Error::InvalidCredentialKey(format!("{item_key}/{}", placement.key))
-                })?;
+            let (found_item_id, cred_id) = self.get_credential_ids(item_key, &placement.key)?;
             if found_item_id != item_id {
                 return Err(Error::InvalidCredentialKey(format!(
                     "{item_key}/{}",
@@ -676,6 +663,25 @@ fn is_permutation(ordered: &[Uuid], existing: impl Iterator<Item = Uuid>) -> boo
     let ordered_set: BTreeSet<Uuid> = ordered.iter().copied().collect();
     let existing: BTreeSet<Uuid> = existing.collect();
     ordered_set.len() == ordered.len() && ordered_set == existing
+}
+
+/// Set each entry's position, reached through `position`, to its index in
+/// `ordered`. Returns false without changing anything unless `ordered` lists
+/// every entry exactly once.
+fn assign_positions<T>(
+    entries: &mut BTreeMap<Uuid, T>,
+    ordered: &[Uuid],
+    position: impl Fn(&mut T) -> &mut Option<u32>,
+) -> bool {
+    if !is_permutation(ordered, entries.keys().copied()) {
+        return false;
+    }
+    for (idx, id) in ordered.iter().enumerate() {
+        if let Some(entry) = entries.get_mut(id) {
+            *position(entry) = Some(idx as u32);
+        }
+    }
+    true
 }
 
 #[derive(Clone)]
