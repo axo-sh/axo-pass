@@ -18,7 +18,10 @@ use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, Man
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
-use crate::secrets::vaults::vault::{Vault, VaultItemCredentialOverview, VaultItemOverview};
+use crate::secrets::vaults::vault::{
+    CredentialPlacement, Vault, VaultFolder, VaultItemCredentialOverview, VaultItemOverview,
+    VaultItemSection,
+};
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 
@@ -293,13 +296,111 @@ impl VaultWrapper {
         vault.delete_item_credential(item_key, cred_key)
     }
 
+    /// Reorder an item's credentials, keeping each in its current section.
     pub fn reorder_credentials(
         &mut self,
         item_key: &str,
         ordered_cred_keys: &[String],
     ) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
-        vault.reorder_item_credentials(item_key, ordered_cred_keys)
+        let placements = ordered_cred_keys
+            .iter()
+            .map(|key| {
+                let section = match vault.get_item_credential(item_key, key) {
+                    Ok(cred) => cred.section,
+                    // Unknown keys are reported by reorder_item_credentials.
+                    Err(_) => None,
+                };
+                CredentialPlacement {
+                    key: key.clone(),
+                    section,
+                }
+            })
+            .collect::<Vec<_>>();
+        vault.reorder_item_credentials(item_key, &placements)
+    }
+
+    /// Reorder an item's credentials and set each one's section.
+    pub fn arrange_credentials(
+        &mut self,
+        item_key: &str,
+        placements: &[CredentialPlacement],
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.reorder_item_credentials(item_key, placements)
+    }
+
+    pub fn move_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        section_id: Option<Uuid>,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.move_item_credential(item_key, cred_key, section_id)
+    }
+
+    pub fn list_folders(&self) -> Result<Vec<&VaultFolder>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        Ok(vault.list_folders())
+    }
+
+    pub fn create_folder(&mut self, title: &str) -> Result<&VaultFolder, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        Ok(vault.create_folder(title))
+    }
+
+    pub fn rename_folder(&mut self, folder_id: Uuid, title: &str) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.rename_folder(folder_id, title)
+    }
+
+    pub fn delete_folder(&mut self, folder_id: Uuid) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.delete_folder(folder_id)
+    }
+
+    pub fn reorder_folders(&mut self, ordered_folder_ids: &[Uuid]) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.reorder_folders(ordered_folder_ids)
+    }
+
+    pub fn move_item(&mut self, item_key: &str, folder_id: Option<Uuid>) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.move_item(item_key, folder_id)
+    }
+
+    pub fn create_item_section(
+        &mut self,
+        item_key: &str,
+        title: &str,
+    ) -> Result<&VaultItemSection, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.create_item_section(item_key, title)
+    }
+
+    pub fn rename_item_section(
+        &mut self,
+        item_key: &str,
+        section_id: Uuid,
+        title: &str,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.rename_item_section(item_key, section_id, title)
+    }
+
+    pub fn delete_item_section(&mut self, item_key: &str, section_id: Uuid) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.delete_item_section(item_key, section_id)
+    }
+
+    pub fn reorder_item_sections(
+        &mut self,
+        item_key: &str,
+        ordered_section_ids: &[Uuid],
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.reorder_item_sections(item_key, ordered_section_ids)
     }
 }
 

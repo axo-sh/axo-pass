@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::secrets::vaults::vault::VaultFolderMetadata;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVaultItem;
 
@@ -59,8 +60,10 @@ pub struct BundledVault {
     /// The vault's raw file key, encrypted with the bundle key.
     pub wrapped_file_key: EncryptedBlob<RawFileKey>,
 
-    /// The vault's already-encrypted items, copied verbatim from the on-disk
-    /// vault.
+    /// The vault's already-encrypted folders and items, copied verbatim from
+    /// the on-disk vault.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folders: BTreeMap<Uuid, EncryptedBlob<VaultFolderMetadata>>,
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
 }
 

@@ -3,8 +3,10 @@ use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::VaultFieldMetadata;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::vault::{
+    VaultCredentialMetadata, VaultFolderMetadata, VaultItemMetadata,
+};
 use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
 pub struct VaultCipher {
@@ -31,11 +33,36 @@ impl VaultCipher {
         }
     }
 
+    fn folder_metadata_aad(&self, folder_id: Uuid) -> Vec<String> {
+        vec![
+            self.vault_id.to_string(),
+            "folder".to_string(),
+            folder_id.to_string(),
+            "metadata".to_string(),
+        ]
+    }
+
+    pub fn encrypt_folder_metadata(
+        &self,
+        folder_id: Uuid,
+        value: &VaultFolderMetadata,
+    ) -> Result<EncryptedBlob<VaultFolderMetadata>, Error> {
+        EncryptedBlob::encrypt(value, &self.cipher, self.folder_metadata_aad(folder_id))
+    }
+
+    pub fn decrypt_folder_metadata(
+        &self,
+        folder_id: Uuid,
+        blob: &EncryptedBlob<VaultFolderMetadata>,
+    ) -> Result<SecretBox<VaultFolderMetadata>, Error> {
+        blob.decrypt(&self.cipher, self.folder_metadata_aad(folder_id))
+    }
+
     pub fn encrypt_item_metadata(
         &self,
         item_id: Uuid,
-        value: &VaultFieldMetadata,
-    ) -> Result<EncryptedBlob<VaultFieldMetadata>, Error> {
+        value: &VaultItemMetadata,
+    ) -> Result<EncryptedBlob<VaultItemMetadata>, Error> {
         EncryptedBlob::encrypt(
             value,
             &self.cipher,
@@ -50,8 +77,8 @@ impl VaultCipher {
     pub fn decrypt_item_metadata(
         &self,
         item_id: Uuid,
-        blob: &EncryptedBlob<VaultFieldMetadata>,
-    ) -> Result<SecretBox<VaultFieldMetadata>, Error> {
+        blob: &EncryptedBlob<VaultItemMetadata>,
+    ) -> Result<SecretBox<VaultItemMetadata>, Error> {
         blob.decrypt(
             &self.cipher,
             vec![
@@ -66,8 +93,8 @@ impl VaultCipher {
         &self,
         item_id: Uuid,
         cred_id: Uuid,
-        value: &VaultFieldMetadata,
-    ) -> Result<EncryptedBlob<VaultFieldMetadata>, Error> {
+        value: &VaultCredentialMetadata,
+    ) -> Result<EncryptedBlob<VaultCredentialMetadata>, Error> {
         EncryptedBlob::encrypt(
             value,
             &self.cipher,
@@ -84,8 +111,8 @@ impl VaultCipher {
         &self,
         item_id: Uuid,
         cred_id: Uuid,
-        blob: &EncryptedBlob<VaultFieldMetadata>,
-    ) -> Result<SecretBox<VaultFieldMetadata>, Error> {
+        blob: &EncryptedBlob<VaultCredentialMetadata>,
+    ) -> Result<SecretBox<VaultCredentialMetadata>, Error> {
         blob.decrypt(
             &self.cipher,
             vec![

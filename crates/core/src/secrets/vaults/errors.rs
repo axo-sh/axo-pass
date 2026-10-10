@@ -71,6 +71,18 @@ pub enum Error {
     #[error("Reorder must list every credential of item {0} exactly once")]
     InvalidCredentialOrder(String),
 
+    #[error("Folder {0} not found")]
+    InvalidFolder(String),
+
+    #[error("Reorder must list every folder exactly once")]
+    InvalidFolderOrder,
+
+    #[error("Section {0} not found")]
+    InvalidSection(String),
+
+    #[error("Reorder must list every section of item {0} exactly once")]
+    InvalidSectionOrder(String),
+
     #[error("Vault index parsing error: {0}")]
     VaultIndexParsingError(String),
 
