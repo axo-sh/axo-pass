@@ -1,3 +1,4 @@
+import AuthenticationServices
 import AxoPassFFI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -27,6 +28,8 @@ struct ItemsPane: View {
   @Environment(VaultsModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   @State private var showingNewItemSheet = false
+  @State private var showingNewLoginSheet = false
+  @State private var searchQuery = ""
   @State private var titleSheet: TitleSheetRequest? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
@@ -41,11 +44,28 @@ struct ItemsPane: View {
     return model.folders(for: key)
   }
 
+  private var isSearching: Bool {
+    !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  /// Items matching the search, without folder grouping.
+  private var searchResults: [DisplayItem] {
+    model.displayItems.filter { $0.item.matches(searchQuery: searchQuery) }
+  }
+
   var body: some View {
     @Bindable var model = model
     Group {
       if model.isLoadingSelectedItems {
         DelayedProgressView()
+      } else if isSearching, model.selectedVault != nil || model.isAllSecrets {
+        if searchResults.isEmpty {
+          ContentUnavailableView.search(text: searchQuery)
+        } else {
+          List(selection: $model.selectedItemRef) {
+            itemRows(searchResults)
+          }
+        }
       } else if (model.selectedVault != nil || model.isAllSecrets)
         && !(model.displayItems.isEmpty && folders.isEmpty)
       {
@@ -61,12 +81,18 @@ struct ItemsPane: View {
         }
       }
     }
+    .safeAreaInset(edge: .top, spacing: 0) {
+      if model.showAutofillSetupBanner {
+        AutofillSetupBanner()
+      }
+    }
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
     .navigationTitle(
       model.selectedVault.map { $0.name ?? $0.key }
         ?? (model.isAllSecrets ? "All Secrets" : "")
     )
+    .searchable(text: $searchQuery, prompt: "Search")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {
@@ -77,10 +103,11 @@ struct ItemsPane: View {
         .disabled(model.selectedVault == nil)
       }
       ToolbarItem(placement: .primaryAction) {
-        Button {
-          showingNewItemSheet = true
+        Menu {
+          Button("New Login…") { showingNewLoginSheet = true }
+          Button("New Item…") { showingNewItemSheet = true }
         } label: {
-          Label("New Item", systemImage: "plus")
+          Label("New", systemImage: "plus")
         }
         .disabled(model.selectedVault == nil)
       }
@@ -93,6 +120,20 @@ struct ItemsPane: View {
         }
         return model.actionError ?? "Failed to create item."
       }
+    }
+    .sheet(isPresented: $showingNewLoginSheet) {
+      NewLoginSheet(
+        onSubmit: { website, username, password, key, title in
+          guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
+          let created = await model.createLogin(
+            vaultKey: vaultKey, website: website,
+            username: username.isEmpty ? nil : username, password: password,
+            itemKey: key.isEmpty ? nil : key, title: title.isEmpty ? nil : title)
+          return created == nil ? (model.actionError ?? "Failed to create login.") : nil
+        },
+        generatePassword: { length, symbols in
+          model.generatePassword(length: length, symbols: symbols)
+        })
     }
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
@@ -229,6 +270,32 @@ struct ItemsPane: View {
   }
 }
 
+/// Tells the user, once, that the system's AutoFill provider is off.
+private struct AutofillSetupBanner: View {
+  @Environment(VaultsModel.self) private var model
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Label("Turn on AutoFill", systemImage: "key.viewfinder")
+        .font(.subheadline.weight(.semibold))
+      Text("Enable Axo Pass in System Settings to fill logins in Safari and other apps.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      HStack {
+        Button("Open System Settings") {
+          ASSettingsHelper.openCredentialProviderAppSettings { _ in }
+          model.dismissAutofillSetupBanner()
+        }
+        Button("Not Now") { model.dismissAutofillSetupBanner() }
+      }
+      .controlSize(.small)
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.quaternary)
+  }
+}
+
 private func dropHighlight(_ isTargeted: Bool) -> some View {
   RoundedRectangle(cornerRadius: 6)
     .fill(isTargeted ? AnyShapeStyle(.tint.opacity(0.2)) : AnyShapeStyle(.clear))
@@ -337,11 +404,16 @@ private struct NewItemSheet: View {
 private struct ItemRow: View {
   let item: ItemInfo
   var body: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      Text(item.title)
-      Text("\(item.credentials.count) credential\(item.credentials.count == 1 ? "" : "s")")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+    HStack(spacing: 10) {
+      Monogram(title: item.title, host: item.siteHosts.first)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(item.title)
+        Text(item.subtitle)
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
     }
   }
 }

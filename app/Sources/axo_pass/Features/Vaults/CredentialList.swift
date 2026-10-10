@@ -53,13 +53,15 @@ struct CredentialList: View {
 
   var body: some View {
     CredentialOutline(
-      entries: entries,
+      entries: listedEntries,
       collapsedSections: collapsedSections,
       selection: $selection,
       scrollTarget: renamingSection.map(CredentialEntry.section),
       isRenaming: renaming != nil,
-      banner: AnyView(banner),
-      row: { entry, state in AnyView(row(entry, state: state)) },
+      // Outline rows are hosted in their own NSHostingViews, which do not
+      // inherit this view's environment.
+      banner: AnyView(banner.environment(model)),
+      row: { entry, state in AnyView(row(entry, state: state).environment(model)) },
       menu: { menuItems(for: $0) },
       normalizeSelection: normalizedSelection,
       onSetCollapsed: { id, collapsed in
@@ -73,6 +75,17 @@ struct CredentialList: View {
       onPrimaryAction: startRename,
       onDelete: delete
     )
+    .onCopyCommand {
+      copyPassword()
+      return []
+    }
+    .background {
+      Button("Copy Username", action: copyUsername)
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
     .navigationTitle(item.title)
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
@@ -138,11 +151,17 @@ struct CredentialList: View {
     return nil
   }
 
-  /// Top row. Item title and key, then list messages.
+  /// Top row. Item title and key, the login banners and card, then list
+  /// messages.
   private var banner: some View {
     VStack(alignment: .leading, spacing: 0) {
       header
         .padding(EdgeInsets(top: 20, leading: 4, bottom: 16, trailing: 4))
+
+      VStack(alignment: .leading, spacing: credentialRowInset * 2) {
+        loginSection
+      }
+      .padding(.horizontal, credentialRowInset)
 
       if let listError {
         Text(listError)
@@ -161,10 +180,10 @@ struct CredentialList: View {
           .padding(4)
       }
 
-      if item.credentials.isEmpty, item.sections.isEmpty {
+      if item.listCredentials.isEmpty, item.sections.isEmpty {
         // Aligned with a credential row's text, which sits at the row inset
         // plus CredentialRow's own horizontal padding.
-        Text("No credentials")
+        Text(item.credentials.isEmpty ? "No credentials" : "No other credentials")
           .foregroundStyle(.secondary)
           .padding(
             EdgeInsets(
@@ -176,20 +195,42 @@ struct CredentialList: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
+  /// The item's identity: a monogram, the title, and for a login the account
+  /// and site. The item key is for the CLI, so a login shows it only in the
+  /// header's tooltip and context menu.
   private var header: some View {
-    HStack(alignment: .top, spacing: 12) {
-      Image(systemName: "lock.fill")
-        .font(.system(size: 26))
-        .foregroundStyle(.tint)
-        .frame(width: 34)
+    HStack(alignment: .center, spacing: 12) {
+      if item.isLogin {
+        Monogram(title: item.title, host: item.siteHosts.first, size: 40)
+      } else {
+        Image(systemName: "lock.fill")
+          .font(.system(size: 26))
+          .foregroundStyle(.tint)
+          .frame(width: 40)
+      }
       VStack(alignment: .leading, spacing: 2) {
         Text(item.title).font(.title2).fontWeight(.semibold)
-        Text(item.key)
+        Text(headerSubtitle)
           .font(.callout)
           .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
           .textSelection(.enabled)
       }
     }
+    .help("Item key: \(item.key)")
+    .contextMenu {
+      Button("Copy Item Key") {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.key, forType: .string)
+      }
+    }
+  }
+
+  private var headerSubtitle: String {
+    guard item.isLogin else { return item.key }
+    let parts = [item.username, item.siteHosts.first].compactMap { $0 }.filter { !$0.isEmpty }
+    return parts.isEmpty ? item.key : parts.joined(separator: " · ")
   }
 
   /// Row content with insets. The outline row view draws the highlight and
@@ -221,7 +262,7 @@ struct CredentialList: View {
       if let cred = item.credentials.first(where: { $0.key == key }) {
         // Credentials in a section are inset further to clear the outline.
         let side = outline == nil ? credentialRowInset : sectionContentInset
-        credentialRow(cred)
+        credentialRowBody(cred)
           .padding(
             EdgeInsets(
               top: credentialRowInset, leading: side,
@@ -248,7 +289,8 @@ struct CredentialList: View {
     )
   }
 
-  private func credentialRow(_ cred: CredentialInfo) -> some View {
+  /// A credential row. `fieldLabel` gives it the login card layout.
+  func credentialRowBody(_ cred: CredentialInfo, fieldLabel: String? = nil) -> some View {
     CredentialRow(
       cred: cred,
       vaultKey: vaultKey,
@@ -266,7 +308,12 @@ struct CredentialList: View {
         Task { await quickSaveValue(cred, newValue: newValue) }
       },
       onDelete: { delete([.credential(cred.key)]) },
-      onMove: { movingPasskey = cred.key }
+      onMove: { movingPasskey = cred.key },
+      onSetRole: { role, assign in
+        Task { await setRole(cred, role: role, assign: assign) }
+      },
+      fieldLabel: fieldLabel,
+      isDuplicatePasskey: item.hasDuplicate(of: cred)
     )
   }
 
@@ -328,8 +375,13 @@ struct CredentialList: View {
           previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
         },
       ]
-      // Concealed and multiline apply only to freeform text credentials.
-      if cred.kind.kind == "text" {
+      let roles = roleMenuItems(for: cred)
+      if !roles.isEmpty {
+        items += [.divider] + roles
+      }
+      // Concealed and multiline apply only to freeform text credentials. The
+      // password role always conceals the value, so it hides them too.
+      if cred.kind.kind == "text", cred.role != "password" {
         items += [
           .divider,
           .toggle("Concealed", isOn: cred.kind.concealed) {
@@ -341,6 +393,30 @@ struct CredentialList: View {
         ]
       }
       return items
+    }
+  }
+
+  /// Autofill role actions for a credential. A one-time code credential can only
+  /// be the code source, and a passkey takes no role.
+  private func roleMenuItems(for cred: CredentialInfo) -> [OutlineMenuItem] {
+    func roleItem(_ role: String, assign: String, clear: String) -> OutlineMenuItem {
+      let isAssigned = cred.role == role
+      return .action(isAssigned ? clear : assign) {
+        Task { await setRole(cred, role: role, assign: !isAssigned) }
+      }
+    }
+    switch cred.kind.kind {
+    case "passkey", "unknown":
+      return []
+    case "totp":
+      return [
+        roleItem("totp", assign: "Use for One-Time Code", clear: "Stop Using for One-Time Code")
+      ]
+    default:
+      return [
+        roleItem("username", assign: "Use as Username", clear: "Stop Using as Username"),
+        roleItem("password", assign: "Use as Password", clear: "Stop Using as Password"),
+      ]
     }
   }
 

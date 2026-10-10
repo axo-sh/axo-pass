@@ -29,8 +29,18 @@ struct CredentialRow: View {
   let onDelete: () -> Void
   /// Move this passkey to another item or vault. Only passkey rows offer it.
   let onMove: () -> Void
+  /// Assign (`true`) or clear (`false`) one of the credential's autofill roles:
+  /// "username", "password", or "totp".
+  let onSetRole: (_ role: String, _ assign: Bool) -> Void
+  /// The field name a login card shows beside the value, such as "Password".
+  /// Nil for a row in the item's credential list, which shows the credential's
+  /// title and reference instead.
+  var fieldLabel: String? = nil
+  /// Another passkey on the item has the same site and account.
+  var isDuplicatePasskey: Bool = false
 
   @State private var confirmingPasskeyDelete: Bool = false
+  @State private var showingPasskeyDetails: Bool = false
   @State private var hoveringValue: Bool = false
   @State private var justCopied: Bool = false
   @State private var hoveringReference: Bool = false
@@ -51,6 +61,8 @@ struct CredentialRow: View {
     VStack(alignment: .leading, spacing: 8) {
       if isPasskey {
         passkeyView
+      } else if let fieldLabel {
+        fieldView(fieldLabel)
       } else {
         readView
       }
@@ -61,6 +73,16 @@ struct CredentialRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 2)
     .padding(.horizontal, 6)
+    .confirmationDialog(
+      "Delete this passkey?", isPresented: $confirmingPasskeyDelete, titleVisibility: .visible
+    ) {
+      Button("Delete Passkey", role: .destructive, action: onDelete)
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "\(cred.passkey?.rpId ?? "The site") still lists this passkey until you remove it there. You will not be able to sign in with it again."
+      )
+    }
     .onChange(of: revealedText) { _, _ in
       // A quick edit opened before the reveal landed records the original as
       // soon as it arrives, whether or not the user has started typing.
@@ -70,6 +92,45 @@ struct CredentialRow: View {
           quickDraft = revealed
         }
       }
+    }
+  }
+
+  // MARK: - Roles
+
+  /// Context menu of a login card row. Rows in the item outline get their menu
+  /// from the outline instead.
+  @ViewBuilder
+  private var cardMenu: some View {
+    roleMenu
+    if isPasskey {
+      Button("Move to…", action: onMove)
+      Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+    }
+    Divider()
+    Button("Copy Reference", action: copyReference)
+  }
+
+  /// The autofill roles this credential can take. A one-time code credential can
+  /// only be the code source, and a passkey takes no role.
+  @ViewBuilder
+  private var roleMenu: some View {
+    switch cred.kind.kind {
+    case "passkey", "unknown":
+      EmptyView()
+    case "totp":
+      roleButton("totp", assign: "Use for one-time code", clear: "Stop using for one-time code")
+    default:
+      roleButton("username", assign: "Use as username", clear: "Stop using as username")
+      roleButton("password", assign: "Use as password", clear: "Stop using as password")
+    }
+  }
+
+  @ViewBuilder
+  private func roleButton(_ role: String, assign: String, clear: String) -> some View {
+    if cred.role == role {
+      Button(clear) { onSetRole(role, false) }
+    } else {
+      Button(assign) { onSetRole(role, true) }
     }
   }
 
@@ -133,16 +194,18 @@ struct CredentialRow: View {
     }
   }
 
+  private func copyReference() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(reference, forType: .string)
+    justCopiedReference = true
+    Task {
+      try? await Task.sleep(for: .seconds(1.2))
+      justCopiedReference = false
+    }
+  }
+
   private var referenceButton: some View {
-    Button {
-      NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(reference, forType: .string)
-      justCopiedReference = true
-      Task {
-        try? await Task.sleep(for: .seconds(1.2))
-        justCopiedReference = false
-      }
-    } label: {
+    Button(action: copyReference) {
       Text(reference)
         .font(.subheadline)
         .foregroundStyle(referenceColor)
@@ -187,7 +250,7 @@ struct CredentialRow: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        .task(id: cred.key) {
+        .task(id: "\(vaultKey)/\(itemKey)/\(cred.key)") {
           if secret == nil, !isRevealing { onReveal() }
         }
     }
@@ -260,59 +323,99 @@ struct CredentialRow: View {
 
   // MARK: - Passkey
 
+  /// One line: the account, when it was created, and a details popover. The
+  /// fields come from the item listing, so showing a passkey never decrypts
+  /// its private key into the app.
   private var passkeyView: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      LoginFieldLabel(fieldLabel ?? "Passkey")
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Image(systemName: "person.badge.key.fill")
           .foregroundStyle(.tint)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(cred.title).fontWeight(.semibold)
-          referenceLabel
+        Text(passkeyAccount)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        if let subtitle = passkeySubtitle {
+          Text(subtitle)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        if isDuplicatePasskey {
+          Text("Duplicate")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(.orange.opacity(0.15), in: Capsule())
+            .help(
+              "Another passkey on this login has the same site and account. The site uses one of them, so the other is likely unused."
+            )
         }
       }
-
-      VStack(alignment: .leading, spacing: 4) {
-        passkeyRow("Site", passkeyRecord?.rpId)
-        passkeyRow("Account", passkeyRecord?.displayAccount)
-        passkeyRow("Credential ID", passkeyRecord?.credentialId)
-      }
-      .padding(.vertical, 6)
-      .padding(.horizontal, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-      .task(id: cred.key) {
-        if secret == nil, !isRevealing { onReveal() }
-      }
 
-      HStack(spacing: 8) {
-        Button("Move to…", action: onMove)
-        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+      Button {
+        showingPasskeyDetails = true
+      } label: {
+        Label("Passkey Details", systemImage: "info.circle")
+          .labelStyle(.iconOnly)
       }
-      .buttonStyle(.bordered)
+      .buttonStyle(.borderless)
+      .help("Passkey details")
+      .popover(isPresented: $showingPasskeyDetails, arrowEdge: .trailing) {
+        passkeyDetails
+      }
+    }
+    .contentShape(.rect)
+    .contextMenu { cardMenu }
+  }
+
+  private var passkeyDetails: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+        passkeyDetail("Site", cred.passkey?.rpId)
+        passkeyDetail("Account", cred.passkey?.username)
+        if cred.passkey?.userDisplayName != cred.passkey?.username {
+          passkeyDetail("Name", cred.passkey?.userDisplayName)
+        }
+        passkeyDetail("Created", passkeyCreated)
+        passkeyDetail("Credential ID", cred.passkey?.credentialId, monospaced: true)
+        passkeyDetail("Reference", reference, monospaced: true)
+      }
+      if cred.passkey == nil {
+        Text("The passkey record could not be read.")
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+      HStack {
+        Button(justCopiedReference ? "Copied" : "Copy Reference", action: copyReference)
+        Spacer()
+        Button("Move to…") {
+          showingPasskeyDetails = false
+          onMove()
+        }
+        Button("Delete…", role: .destructive) {
+          showingPasskeyDetails = false
+          confirmingPasskeyDelete = true
+        }
+      }
       .controlSize(.small)
     }
-    .confirmationDialog(
-      "Delete this passkey?", isPresented: $confirmingPasskeyDelete, titleVisibility: .visible
-    ) {
-      Button("Delete Passkey", role: .destructive, action: onDelete)
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "\(passkeyRecord?.rpId ?? "The site") still lists this passkey until you remove it there. You will not be able to sign in with it again."
-      )
-    }
+    .padding(14)
+    .frame(width: 360)
   }
 
   @ViewBuilder
-  private func passkeyRow(_ label: String, _ value: String?) -> some View {
+  private func passkeyDetail(_ label: String, _ value: String?, monospaced: Bool = false)
+    -> some View
+  {
     if let value, !value.isEmpty {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
+      GridRow {
         Text(label)
-          .font(.caption)
           .foregroundStyle(.secondary)
-          .frame(width: 96, alignment: .leading)
+          .gridColumnAlignment(.trailing)
         Text(value)
-          .font(.system(.callout, design: .monospaced))
+          .font(monospaced ? .system(.callout, design: .monospaced) : .callout)
           .textSelection(.enabled)
           .lineLimit(1)
           .truncationMode(.middle)
@@ -320,9 +423,131 @@ struct CredentialRow: View {
     }
   }
 
-  private var passkeyRecord: PasskeyRecord? {
-    guard let json = revealedText, let data = json.data(using: .utf8) else { return nil }
-    return try? JSONDecoder().decode(PasskeyRecord.self, from: data)
+  /// The account the passkey signs in as, falling back to the credential
+  /// title for a record that names none.
+  private var passkeyAccount: String {
+    let info = cred.passkey
+    for name in [info?.userDisplayName, info?.username] {
+      if let name, !name.isEmpty { return name }
+    }
+    return cred.title
+  }
+
+  /// When the passkey was created, or its site for a record that predates
+  /// creation times.
+  private var passkeySubtitle: String? {
+    if let created = passkeyCreated { return "Created \(created)" }
+    return cred.passkey?.rpId
+  }
+
+  private var passkeyCreated: String? {
+    guard let createdAt = cred.passkey?.createdAt else { return nil }
+    return Date(timeIntervalSince1970: TimeInterval(createdAt))
+      .formatted(date: .abbreviated, time: .omitted)
+  }
+
+  // MARK: - Login field
+
+  /// A login card row: the field name, the value, and actions that appear on
+  /// hover. A one-time code shows the live code instead of its secret.
+  private func fieldView(_ label: String) -> some View {
+    HStack(alignment: quickEditing ? .center : .firstTextBaseline, spacing: 12) {
+      LoginFieldLabel(label)
+      if cred.kind.kind == "totp" {
+        TotpCodeValue(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+      } else if quickEditing {
+        quickEditor
+        HStack(spacing: 4) {
+          Button("Cancel") { cancelQuickEdit() }
+          Button("Save") { commitQuickEdit() }
+            .keyboardShortcut(.defaultAction)
+            .disabled(quickDraft.isEmpty || quickDraft == quickOriginal)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+      } else {
+        fieldValue
+        fieldActions
+      }
+    }
+    .contentShape(.rect)
+    .contextMenu { cardMenu }
+    .onHover { hoveringValue = $0 }
+    .animation(.easeInOut(duration: 0.12), value: hoveringValue)
+    .animation(.easeInOut(duration: 0.12), value: justCopied)
+  }
+
+  private var fieldValue: some View {
+    let concealed = cred.kind.concealed
+    let shown = revealedText ?? (concealed ? "••••••••" : " ")
+    return Text(shown)
+      .font(.system(.body, design: .monospaced))
+      .foregroundStyle(revealedText == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+      .textSelection(.enabled)
+      .lineLimit(1)
+      .truncationMode(.tail)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .task(id: "\(vaultKey)/\(itemKey)/\(cred.key)") {
+        // A plain value shows without a click; a concealed one waits for one.
+        if !concealed, secret == nil, !isRevealing { onReveal() }
+      }
+  }
+
+  /// The actions stay in the layout while hidden, so the row keeps the same
+  /// height whether or not the pointer is over it.
+  private var fieldActions: some View {
+    let visible =
+      justCopied || isRevealing || hoveringValue || (cred.kind.concealed && secret != nil)
+    return
+      fieldActionButtons
+      .opacity(visible ? 1 : 0)
+      .allowsHitTesting(visible)
+  }
+
+  /// The buttons always lay out so the row height is constant. The copy
+  /// confirmation and the revealing spinner overlay them.
+  private var fieldActionButtons: some View {
+    let busy = justCopied || isRevealing
+    return HStack(spacing: 4) {
+      if cred.kind.concealed {
+        Button {
+          secret == nil ? onReveal() : onHide()
+        } label: {
+          Label(
+            secret == nil ? "Show" : "Hide",
+            systemImage: secret == nil ? "eye" : "eye.slash"
+          )
+          .labelStyle(.iconOnly)
+        }
+        .help(secret == nil ? "Show" : "Hide")
+      }
+      Button {
+        beginQuickEdit()
+      } label: {
+        Label("Edit Value", systemImage: "pencil")
+          .labelStyle(.iconOnly)
+      }
+      .help("Edit value")
+      Button("Copy") {
+        Task {
+          if await onCopy() {
+            justCopied = true
+            try? await Task.sleep(for: .seconds(1.2))
+            justCopied = false
+          }
+        }
+      }
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .opacity(busy ? 0 : 1)
+    .overlay {
+      if justCopied {
+        Image(systemName: "checkmark").foregroundStyle(.green)
+      } else if isRevealing {
+        ProgressView().controlSize(.small)
+      }
+    }
   }
 
   // MARK: - Helpers
@@ -375,23 +600,20 @@ struct CredentialRow: View {
   }
 }
 
-/// The stored passkey record, decoded for the read-only detail view. Mirrors
-/// `StoredRecord` in crates/core/src/secrets/vaults/passkey.rs.
-struct PasskeyRecord: Decodable {
-  let rpId: String
-  let credentialId: String
-  let username: String?
-  let userDisplayName: String?
+/// Width of the field name column in the login card.
+let loginFieldLabelWidth: CGFloat = 84
 
-  var displayAccount: String? {
-    userDisplayName?.isEmpty == false ? userDisplayName : username
-  }
+/// The field name column of a login card row.
+struct LoginFieldLabel: View {
+  let text: String
 
-  enum CodingKeys: String, CodingKey {
-    case rpId = "rp_id"
-    case credentialId = "credential_id"
-    case username
-    case userDisplayName = "user_display_name"
+  init(_ text: String) { self.text = text }
+
+  var body: some View {
+    Text(text)
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      .frame(width: loginFieldLabelWidth, alignment: .leading)
   }
 }
 

@@ -3,8 +3,10 @@ import CryptoKit
 import SwiftUI
 
 extension CredentialList {
+  /// The credentials Reveal All and Hide All act on. Passkeys are left out:
+  /// their rows show the listing's passkey fields, never the record.
   var concealedCredentials: [CredentialInfo] {
-    item.credentials.filter(\.kind.concealed)
+    item.credentials.filter { $0.kind.concealed && $0.kind.kind != "passkey" }
   }
 
   var hasConcealed: Bool {
@@ -19,7 +21,10 @@ extension CredentialList {
 
   func revealAll() async {
     await withTaskGroup(of: Void.self) { group in
-      for cred in item.credentials where secrets[cred.key] == nil && !revealing.contains(cred.key) {
+      for cred in item.credentials
+      where cred.kind.kind != "passkey" && secrets[cred.key] == nil
+        && !revealing.contains(cred.key)
+      {
         group.addTask { await reveal(cred) }
       }
     }

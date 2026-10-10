@@ -61,14 +61,40 @@ extension CredentialList {
     return pendingEntries
   }
 
-  /// Credential count for a section. Shown on collapsed section headers.
-  func credentialCount(inSection id: String) -> Int {
-    item.credentials.filter { $0.sectionId == id }.count
+  /// Entries shown in the outline. A login shows its role credentials and
+  /// passkeys in the login card, so they are left out.
+  var listedEntries: [CredentialEntry] {
+    let listed = Set(item.listCredentials.map(\.key))
+    return entries.filter {
+      if case .credential(let key) = $0 { return listed.contains(key) }
+      return true
+    }
   }
 
-  /// Credentials under a section header in `entries`, including collapsed
+  /// `arranged` with the entries left out of the outline added back. Each
+  /// hidden credential goes after the nearest earlier section header or hidden
+  /// credential, so it keeps its section and its order among the hidden ones.
+  func restoringHiddenEntries(_ arranged: [CredentialEntry]) -> [CredentialEntry] {
+    let shown = Set(arranged)
+    let all = entries
+    var result = arranged
+    for (index, entry) in all.enumerated() where !shown.contains(entry) {
+      let anchor = all[..<index].last { $0.isSection || !shown.contains($0) }
+      let insertAt = anchor.flatMap { result.firstIndex(of: $0) }.map { $0 + 1 } ?? 0
+      result.insert(entry, at: insertAt)
+    }
+    return result
+  }
+
+  /// Credential count for a section. Shown on collapsed section headers.
+  func credentialCount(inSection id: String) -> Int {
+    item.listCredentials.filter { $0.sectionId == id }.count
+  }
+
+  /// Credentials under a section header in the outline, including collapsed
   /// ones.
   func sectionChildren(_ id: String) -> Set<CredentialEntry> {
+    let entries = listedEntries
     guard let header = entries.firstIndex(of: .section(id)) else { return [] }
     var children: Set<CredentialEntry> = []
     var next = header + 1
@@ -124,11 +150,11 @@ extension CredentialList {
     return selected.count == 1 ? selected.first : nil
   }
 
-  /// Move entries to an index in `entries`. A moved section header brings its
-  /// credentials and lands on a section boundary, so it does not split another
-  /// section.
+  /// Move entries to an index in `listedEntries`. A moved section header brings
+  /// its credentials and lands on a section boundary, so it does not split
+  /// another section.
   func moveEntries(_ moved: [CredentialEntry], to destination: Int) {
-    let current = entries
+    let current = listedEntries
     let source = IndexSet(moved.compactMap { current.firstIndex(of: $0) })
     var moving = source
     for index in source where current[index].isSection {
@@ -148,17 +174,18 @@ extension CredentialList {
       }
     }
     arranged.insert(contentsOf: block, at: insertAt)
-    apply(arranged, moved: Set(block))
+    apply(restoringHiddenEntries(arranged), moved: Set(block))
   }
 
   /// Move credentials to the end of a section. A nil section moves them to the
   /// end of the unsectioned credentials.
   func moveCredentials(_ keys: Set<String>, toSection sectionId: String?) {
-    let moved = entries.filter {
+    let current = listedEntries
+    let moved = current.filter {
       if case .credential(let key) = $0 { return keys.contains(key) }
       return false
     }
-    var arranged = entries.filter { !moved.contains($0) }
+    var arranged = current.filter { !moved.contains($0) }
     let insertAt: Int
     if let sectionId, let header = arranged.firstIndex(of: .section(sectionId)) {
       var end = header + 1
@@ -168,7 +195,7 @@ extension CredentialList {
       insertAt = arranged.firstIndex(where: \.isSection) ?? arranged.count
     }
     arranged.insert(contentsOf: moved, at: insertAt)
-    apply(arranged, moved: Set(moved))
+    apply(restoringHiddenEntries(arranged), moved: Set(moved))
   }
 
   /// Show `arranged` immediately and save it. On failure, rows revert and the
