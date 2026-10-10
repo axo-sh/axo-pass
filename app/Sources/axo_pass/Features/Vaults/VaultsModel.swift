@@ -1,4 +1,5 @@
 import AppKit
+import AuthenticationServices
 import AxoPassFFI
 import CryptoKit
 import Foundation
@@ -1426,6 +1427,159 @@ final class VaultsModel {
     await loadItems(for: vaultKey)
     if destVaultKey != vaultKey { await loadItems(for: destVaultKey) }
     return true
+  }
+
+  /// The items of a vault as last loaded, without loading. Empty when the
+  /// vault is not cached.
+  func cachedItems(in vaultKey: String) -> [ItemInfo] {
+    itemCache[vaultKey] ?? []
+  }
+
+  /// Move every credential of `sourceItemKey` into `destItemKey` and delete
+  /// the source item.
+  @discardableResult
+  func mergeItems(vaultKey: String, sourceItemKey: String, destItemKey: String) async -> Bool {
+    actionError = nil
+    do {
+      try await core.mergeItems(
+        vaultKey: vaultKey, sourceItemKey: sourceItemKey, destItemKey: destItemKey)
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+    await loadItems(for: vaultKey)
+    return true
+  }
+
+  // MARK: - Logins
+
+  /// Create a login and select it. Returns the new item's key, or nil with
+  /// `actionError` set.
+  func createLogin(
+    vaultKey: String, website: String, username: String?, password: String, itemKey: String?,
+    title: String?
+  ) async -> String? {
+    actionError = nil
+    let key: String
+    do {
+      key = try await core.createLogin(
+        vaultKey: vaultKey, website: website, username: username, password: password,
+        itemKey: itemKey, title: title)
+    } catch {
+      actionError = String(describing: error)
+      return nil
+    }
+    await loadItems(for: vaultKey)
+    selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: key)
+    await offerAutofillSetupIfNeeded()
+    return key
+  }
+
+  func generatePassword(length: UInt32 = 20, symbols: Bool = true) -> String? {
+    try? core.generatePassword(length: length, symbols: symbols)
+  }
+
+  /// Assign `role` ("username", "password", or "totp") to a credential, or
+  /// clear it when `credKey` is nil.
+  @discardableResult
+  func setCredentialRole(vaultKey: String, itemKey: String, role: String, credKey: String?) async
+    -> Bool
+  {
+    actionError = nil
+    do {
+      try await core.setCredentialRole(
+        vaultKey: vaultKey, itemKey: itemKey, role: role, credKey: credKey)
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func setItemWebsites(vaultKey: String, itemKey: String, websites: [WebsiteInfo]) async -> Bool {
+    actionError = nil
+    do {
+      try await core.setItemWebsites(vaultKey: vaultKey, itemKey: itemKey, websites: websites)
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  @discardableResult
+  func convertItemToLogin(vaultKey: String, itemKey: String) async -> Bool {
+    actionError = nil
+    do {
+      let converted = try await core.convertItemToLogin(vaultKey: vaultKey, itemKey: itemKey)
+      await loadItems(for: vaultKey)
+      if converted { await offerAutofillSetupIfNeeded() }
+      return converted
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  func currentTotpCode(vaultKey: String, itemKey: String, credKey: String) async throws
+    -> TotpCodeInfo
+  {
+    try await core.currentTotpCode(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
+  }
+
+  // MARK: - Conversion banner
+
+  /// The UUIDs of items whose "Use this item for AutoFill?" banner the user
+  /// dismissed. A UUID survives renaming the item or moving it between vaults.
+  private(set) var dismissedConversions: Set<String> = Set(
+    UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedConversions) ?? [])
+
+  func dismissConversion(_ item: ItemInfo) {
+    dismissedConversions.insert(item.id)
+    UserDefaults.standard.set(
+      dismissedConversions.sorted(), forKey: Preferences.Key.dismissedConversions)
+  }
+
+  // MARK: - Merge banner
+
+  /// Item pairs whose "Merge logins?" banner the user dismissed.
+  private(set) var dismissedMerges: Set<String> = Set(
+    UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedMerges) ?? [])
+
+  /// The key a dismissed merge is stored under: the two item UUIDs, sorted, so
+  /// the order of the two items does not matter.
+  static func mergeKey(_ a: ItemInfo, _ b: ItemInfo) -> String {
+    [a.id, b.id].sorted().joined(separator: "|")
+  }
+
+  func dismissMerge(_ a: ItemInfo, _ b: ItemInfo) {
+    dismissedMerges.insert(Self.mergeKey(a, b))
+    UserDefaults.standard.set(
+      dismissedMerges.sorted(), forKey: Preferences.Key.dismissedMerges)
+  }
+
+  // MARK: - AutoFill setup banner
+
+  /// Whether to tell the user to turn Axo Pass on in System Settings. Shown once,
+  /// after the first login is created or converted, and only while the provider
+  /// is off.
+  private(set) var showAutofillSetupBanner = false
+
+  private func offerAutofillSetupIfNeeded() async {
+    guard !UserDefaults.standard.bool(forKey: Preferences.Key.autofillSetupBannerSeen) else {
+      return
+    }
+    let enabled = await ASCredentialIdentityStore.shared.state().isEnabled
+    showAutofillSetupBanner = !enabled
+    if enabled { UserDefaults.standard.set(true, forKey: Preferences.Key.autofillSetupBannerSeen) }
+  }
+
+  func dismissAutofillSetupBanner() {
+    showAutofillSetupBanner = false
+    UserDefaults.standard.set(true, forKey: Preferences.Key.autofillSetupBannerSeen)
   }
 
   // MARK: - Derived

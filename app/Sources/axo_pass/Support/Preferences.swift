@@ -18,6 +18,15 @@ enum Preferences {
     /// The system-wide shortcut that shows the palette, as a `HotKey` raw
     /// value. Absent when none is set.
     static let paletteHotKey = "general.paletteHotKey"
+    /// Item UUIDs whose "Use this item for AutoFill?" banner the user
+    /// dismissed.
+    static let dismissedConversions = "autofill.dismissedConversions"
+    /// Item UUID pairs (`<uuid>|<uuid>`, sorted) whose "Merge logins?" banner
+    /// the user dismissed.
+    static let dismissedMerges = "autofill.dismissedMerges"
+    /// Whether the banner about turning on the AutoFill provider has been
+    /// shown or dismissed.
+    static let autofillSetupBannerSeen = "autofill.setupBannerSeen"
   }
 
   static let defaultAutoLockMinutes = 5
