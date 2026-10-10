@@ -24,7 +24,8 @@ use axo_pass_core::secrets::vaults::vault_export::{
     WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{
-    Error as VaultError, ExportProgress as CoreExportProgress, FieldKind, TextField, VaultsManager,
+    CredentialPlacement, Error as VaultError, ExportProgress as CoreExportProgress, FieldKind,
+    TextField, VaultFolder, VaultItemSection, VaultWrapper, VaultsManager,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -36,6 +37,7 @@ use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
 use axo_pass_core::ssh::{app_grants, autoload};
 use axo_pass_core::{audit, shell_integration};
 use secrecy::{ExposeSecret, SecretString};
+use uuid::Uuid;
 
 uniffi::setup_scaffolding!();
 
@@ -86,6 +88,11 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidCredentialKey(k) => {
                 FfiError::InvalidInput(format!("Invalid credential key: {k}"))
             },
+            VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
+            VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
+            other @ (VaultError::InvalidFolderOrder
+            | VaultError::InvalidSectionOrder(_)
+            | VaultError::InvalidCredentialOrder(_)) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),
         }
     }
@@ -144,9 +151,55 @@ pub struct CredentialInfo {
     pub key: String,
     pub title: String,
     pub kind: FieldKindInfo,
-    /// User-defined order within the item. `None` for credentials that have
-    /// never been reordered; the list is already returned in display order.
+    /// User-defined order within the credential's section. `None` for
+    /// credentials that have never been reordered; the list is already
+    /// returned in display order.
     pub position: Option<u32>,
+    /// `id` of the item section the credential is in. `None` for a credential
+    /// outside any section.
+    pub section_id: Option<String>,
+}
+
+/// A vault folder. Folders are listed in display order.
+#[derive(uniffi::Record)]
+pub struct FolderInfo {
+    /// Folder id as a UUID string.
+    pub id: String,
+    pub title: String,
+}
+
+impl From<&VaultFolder> for FolderInfo {
+    fn from(f: &VaultFolder) -> Self {
+        Self {
+            id: f.id.to_string(),
+            title: f.title.clone(),
+        }
+    }
+}
+
+/// A section of an item. Sections are listed in display order.
+#[derive(uniffi::Record)]
+pub struct SectionInfo {
+    /// Section id as a UUID string.
+    pub id: String,
+    pub title: String,
+}
+
+impl From<&VaultItemSection> for SectionInfo {
+    fn from(s: &VaultItemSection) -> Self {
+        Self {
+            id: s.id.to_string(),
+            title: s.title.clone(),
+        }
+    }
+}
+
+/// Where a credential goes in `arrange_credentials`.
+#[derive(uniffi::Record)]
+pub struct CredentialPlacementInfo {
+    pub key: String,
+    /// `id` of a section of the same item, or `None` for no section.
+    pub section_id: Option<String>,
 }
 
 /// Flattened view of `FieldKind` for the UI. `kind` is the discriminator:
@@ -216,6 +269,11 @@ impl TryFrom<FieldKindInfo> for FieldKind {
 pub struct ItemInfo {
     pub key: String,
     pub title: String,
+    /// `id` of the folder the item is in. `None` for an unfiled item.
+    pub folder_id: Option<String>,
+    pub sections: Vec<SectionInfo>,
+    /// Credentials outside any section first, then each section's
+    /// credentials in section order.
     pub credentials: Vec<CredentialInfo>,
 }
 
@@ -1210,6 +1268,50 @@ pub struct AxoPass {
     app_broker: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
+impl AxoPass {
+    /// Run `f` on an unlocked vault on a blocking thread, then save the vault.
+    async fn edit_vault<R: Send + 'static>(
+        &self,
+        vault_key: String,
+        f: impl FnOnce(&mut VaultWrapper) -> Result<R, FfiError> + Send + 'static,
+    ) -> Result<R, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, f)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+}
+
+/// Decrypt a vault from disk if it is not already in memory. Uses the shared
+/// LAContext, so there is no re-prompt after a successful `unlock`.
+fn ensure_unlocked(vault: &mut VaultWrapper) -> Result<(), FfiError> {
+    if matches!(vault.list_items(), Err(VaultError::VaultLocked)) {
+        vault.unlock()?;
+    }
+    Ok(())
+}
+
+/// Sort key for folders, sections, and credentials: entries with a set
+/// position first, in that order, then the rest by title.
+fn display_order(position: Option<u32>, title: &str) -> (u32, &str) {
+    (position.unwrap_or(u32::MAX), title)
+}
+
+fn parse_id(id: &str) -> Result<Uuid, FfiError> {
+    Uuid::parse_str(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
+}
+
+fn parse_optional_id(id: Option<String>) -> Result<Option<Uuid>, FfiError> {
+    id.as_deref().map(parse_id).transpose()
+}
+
+fn parse_ids(ids: &[String]) -> Result<Vec<Uuid>, FfiError> {
+    ids.iter().map(|id| parse_id(id)).collect()
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl AxoPass {
     #[uniffi::constructor]
@@ -1339,45 +1441,78 @@ impl AxoPass {
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
 
-            // Decrypt from disk if not already in memory. Uses the shared
-            // LAContext so no re-prompt after a successful unlock().
-            if let Err(e) = vault.list_items() {
-                if matches!(e, VaultError::VaultLocked) {
-                    vault.unlock().map_err(FfiError::from)?;
-                } else {
-                    return Err(FfiError::from(e));
-                }
-            }
+            ensure_unlocked(vault)?;
 
             let items = vault.list_items().map_err(FfiError::from)?;
             let mut result: Vec<ItemInfo> = items
                 .into_iter()
                 .map(|item| {
-                    let mut credentials: Vec<CredentialInfo> = item
-                        .credentials
-                        .values()
-                        .map(|c| CredentialInfo {
-                            key: c.key.clone(),
-                            title: c.title.clone(),
-                            kind: FieldKindInfo::from(&c.kind),
-                            position: c.position,
-                        })
-                        .collect();
-                    // Reordered credentials lead, in their set order; the rest
-                    // keep the title sort.
-                    credentials.sort_by(|a, b| {
-                        (a.position.unwrap_or(u32::MAX), &a.title)
-                            .cmp(&(b.position.unwrap_or(u32::MAX), &b.title))
+                    let mut sections: Vec<&VaultItemSection> = item.sections.values().collect();
+                    sections.sort_by(|a, b| {
+                        display_order(a.position, &a.title)
+                            .cmp(&display_order(b.position, &b.title))
                     });
+
+                    // Credentials outside any section rank 0, then each
+                    // section by its display order.
+                    let section_rank: HashMap<Uuid, usize> = sections
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, s)| (s.id, idx + 1))
+                        .collect();
+                    let rank = |section: Option<Uuid>| {
+                        section
+                            .and_then(|s| section_rank.get(&s).copied())
+                            .unwrap_or(0)
+                    };
+
+                    let mut credentials: Vec<_> = item.credentials.values().collect();
+                    credentials.sort_by(|a, b| {
+                        (rank(a.section), display_order(a.position, &a.title))
+                            .cmp(&(rank(b.section), display_order(b.position, &b.title)))
+                    });
+
                     ItemInfo {
                         key: item.key.clone(),
                         title: item.title.clone(),
-                        credentials,
+                        folder_id: item.folder.map(|id| id.to_string()),
+                        sections: sections.into_iter().map(SectionInfo::from).collect(),
+                        credentials: credentials
+                            .into_iter()
+                            .map(|c| CredentialInfo {
+                                key: c.key.clone(),
+                                title: c.title.clone(),
+                                kind: FieldKindInfo::from(&c.kind),
+                                position: c.position,
+                                section_id: c.section.map(|id| id.to_string()),
+                            })
+                            .collect(),
                     }
                 })
                 .collect();
             result.sort_by(|a, b| a.title.cmp(&b.title));
             Ok(result)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List a vault's folders in display order. Unlocks the vault the same
+    /// way as `list_items`.
+    pub async fn list_folders(&self, vault_key: String) -> Result<Vec<FolderInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+            ensure_unlocked(vault)?;
+
+            let mut folders = vault.list_folders().map_err(FfiError::from)?;
+            folders.sort_by(|a, b| {
+                display_order(a.position, &a.title).cmp(&display_order(b.position, &b.title))
+            });
+            Ok(folders.into_iter().map(FolderInfo::from).collect())
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
@@ -1605,8 +1740,9 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
-    /// Set the display order of an item's credentials. `ordered_cred_keys` must
-    /// list exactly the item's credential keys, once each.
+    /// Set the display order of an item's credentials, keeping each in its
+    /// current section. `ordered_cred_keys` must list exactly the item's
+    /// credential keys, once each.
     pub async fn reorder_credentials(
         &self,
         vault_key: String,
@@ -1623,6 +1759,166 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Set the display order and section of an item's credentials in one
+    /// save. `placements` must list exactly the item's credential keys, once
+    /// each, in display order.
+    pub async fn arrange_credentials(
+        &self,
+        vault_key: String,
+        item_key: String,
+        placements: Vec<CredentialPlacementInfo>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            let placements = placements
+                .into_iter()
+                .map(|p| {
+                    Ok(CredentialPlacement {
+                        key: p.key,
+                        section: parse_optional_id(p.section_id)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, FfiError>>()?;
+            Ok(vw.arrange_credentials(&item_key, &placements)?)
+        })
+        .await
+    }
+
+    /// Move a credential into a section of its item, or out of any section
+    /// when `section_id` is `None`.
+    pub async fn move_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        section_id: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            let section_id = parse_optional_id(section_id)?;
+            Ok(vw.move_credential(&item_key, &cred_key, section_id)?)
+        })
+        .await
+    }
+
+    // -----------------------------------------------------------------------
+    // Folders and sections
+    // -----------------------------------------------------------------------
+
+    pub async fn create_folder(
+        &self,
+        vault_key: String,
+        title: String,
+    ) -> Result<FolderInfo, FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(FolderInfo::from(vw.create_folder(&title)?))
+        })
+        .await
+    }
+
+    pub async fn rename_folder(
+        &self,
+        vault_key: String,
+        folder_id: String,
+        title: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.rename_folder(parse_id(&folder_id)?, &title)?)
+        })
+        .await
+    }
+
+    /// Delete a folder. Its items become unfiled.
+    pub async fn delete_folder(
+        &self,
+        vault_key: String,
+        folder_id: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.delete_folder(parse_id(&folder_id)?)?)
+        })
+        .await
+    }
+
+    /// Set the display order of folders. `ordered_folder_ids` must list every
+    /// folder exactly once.
+    pub async fn reorder_folders(
+        &self,
+        vault_key: String,
+        ordered_folder_ids: Vec<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.reorder_folders(&parse_ids(&ordered_folder_ids)?)?)
+        })
+        .await
+    }
+
+    /// Move an item into a folder, or out of any folder when `folder_id` is
+    /// `None`.
+    pub async fn move_item(
+        &self,
+        vault_key: String,
+        item_key: String,
+        folder_id: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.move_item(&item_key, parse_optional_id(folder_id)?)?)
+        })
+        .await
+    }
+
+    pub async fn create_section(
+        &self,
+        vault_key: String,
+        item_key: String,
+        title: String,
+    ) -> Result<SectionInfo, FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(SectionInfo::from(
+                vw.create_item_section(&item_key, &title)?,
+            ))
+        })
+        .await
+    }
+
+    pub async fn rename_section(
+        &self,
+        vault_key: String,
+        item_key: String,
+        section_id: String,
+        title: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.rename_item_section(&item_key, parse_id(&section_id)?, &title)?)
+        })
+        .await
+    }
+
+    /// Delete a section. Its credentials move out of any section.
+    pub async fn delete_section(
+        &self,
+        vault_key: String,
+        item_key: String,
+        section_id: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.delete_item_section(&item_key, parse_id(&section_id)?)?)
+        })
+        .await
+    }
+
+    /// Set the display order of an item's sections. `ordered_section_ids` must
+    /// list every section of the item exactly once.
+    pub async fn reorder_sections(
+        &self,
+        vault_key: String,
+        item_key: String,
+        ordered_section_ids: Vec<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.reorder_item_sections(&item_key, &parse_ids(&ordered_section_ids)?)?)
+        })
+        .await
     }
 
     // -----------------------------------------------------------------------
