@@ -409,7 +409,8 @@ private struct PasskeyPlacementCard: View {
           }
         }
       } else {
-        LabeledContent("Vault", value: state.vaults.first.map { $0.name ?? $0.key } ?? state.vaultKey)
+        LabeledContent(
+          "Vault", value: state.vaults.first.map { $0.name ?? $0.key } ?? state.vaultKey)
       }
 
       Picker("Save to", selection: $state.itemKey) {

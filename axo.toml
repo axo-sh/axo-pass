@@ -21,6 +21,8 @@ fmt = [
   "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
   "cargo +nightly fmt --all",
 ]
+
+"fmt:all" = { command = [":fmt", ":app:fmt"], parallel = true }
 check = "cargo check --workspace --all-targets"
 test = "cargo test --workspace"
 
