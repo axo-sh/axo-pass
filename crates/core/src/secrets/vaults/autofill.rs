@@ -727,6 +727,98 @@ pub fn add_passkey_login(
     Ok(item_key)
 }
 
+/// Move credentials from `source_key` item into `dest_key` and delete the
+/// source item.
+///
+/// - credentials whose key and value equal one already in the destination is
+/// dropped and not copied, so merging two logins for the same account does
+/// not leave two usernames.
+/// - keys already present in the destination are given a numeric suffix.
+/// - source's roles are only added to the destination unless already present
+/// - websites are added unless already present
+/// - uncategorized destinations take the source's category.
+/// - caller is responsible for saving the vault.
+pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> Result<(), Error> {
+    use secrecy::ExposeSecret;
+
+    if source_key == dest_key {
+        return Err(Error::InvalidItemKey(format!(
+            "cannot merge {source_key} into itself"
+        )));
+    }
+    let source = vw
+        .get_item_overview(source_key)?
+        .ok_or_else(|| Error::InvalidItemKey(source_key.to_string()))?
+        .clone();
+    let dest = vw
+        .get_item_overview(dest_key)?
+        .ok_or_else(|| Error::InvalidItemKey(dest_key.to_string()))?
+        .clone();
+
+    // Source credential id to the destination credential that now holds it.
+    let mut moved: Vec<(Uuid, Uuid)> = Vec::new();
+    for cred in sorted_credentials(&source) {
+        let Some(value) = vw.get_secret(source_key, &cred.key)? else {
+            continue;
+        };
+        let value = value.expose_secret().clone();
+        if let Some(existing) = dest.credentials.values().find(|c| c.key == cred.key) {
+            let same = vw
+                .get_secret(dest_key, &existing.key)?
+                .is_some_and(|v| *v.expose_secret() == value);
+            if same && existing.kind == cred.kind {
+                moved.push((cred.id, existing.id));
+                // skip identical key/value pairs
+                continue;
+            }
+        }
+        let key = unused_credential_key(vw, dest_key, &cred.key)?;
+        vw.add_secret(
+            dest_key,
+            &key,
+            &cred.title,
+            cred.kind.clone(),
+            SecretString::from(value),
+        )?;
+        moved.push((cred.id, credential_id(vw, dest_key, &key)?));
+    }
+    let carried = |slot: Option<Uuid>| {
+        slot.and_then(|id| {
+            moved
+                .iter()
+                .find(|(from, _)| *from == id)
+                .map(|(_, to)| *to)
+        })
+    };
+
+    let mut autofill = dest.autofill.clone();
+    autofill.username = autofill.username.or(carried(source.autofill.username));
+    autofill.password = autofill.password.or(carried(source.autofill.password));
+    autofill.totp = autofill.totp.or(carried(source.autofill.totp));
+    for website in &source.autofill.websites {
+        if !autofill.websites.iter().any(|w| w.url == website.url) {
+            autofill.websites.push(website.clone());
+        }
+    }
+    vw.set_item_autofill(dest_key, autofill)?;
+    if dest.category.is_none() && source.category.is_some() {
+        vw.set_item_category(dest_key, source.category.clone())?;
+    }
+    vw.delete_item(source_key)
+}
+
+/// `base`, or `base-2`, `base-3`, and so on, whichever is the first credential
+/// key the item does not use.
+fn unused_credential_key(vw: &VaultWrapper, item_key: &str, base: &str) -> Result<String, Error> {
+    let mut key = base.to_string();
+    let mut n = 2;
+    while vw.get_secret_overview(item_key, &key)?.is_some() {
+        key = format!("{base}-{n}");
+        n += 1;
+    }
+    Ok(key)
+}
+
 /// The login a record identifier names, wherever it applies. Unlike
 /// [`find_login`] this does not check a page, so the caller decides what an
 /// unmatched page means.
@@ -2198,5 +2290,109 @@ mod tests {
         let credentials = sorted_credentials(&item);
         assert_eq!(pick_password(&credentials).unwrap().key, "pass");
         assert_eq!(pick_username(&credentials).unwrap().key, "account");
+    }
+
+    #[test]
+    fn merge_moves_credentials_and_deletes_the_source() {
+        use secrecy::ExposeSecret;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
+        add_passkey_login(&mut vw, "github.com", Some("GitHub"), Some("tp")).unwrap();
+        let source = vw
+            .list_items()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.key != "github")
+            .unwrap()
+            .key
+            .clone();
+        vw.add_secret(
+            &source,
+            "passkey-aa",
+            "tp",
+            FieldKind::Passkey,
+            SecretString::from("{}"),
+        )
+        .unwrap();
+        set_websites(
+            &mut vw,
+            &source,
+            vec![
+                Website::new("github.com", MatchKind::Domain),
+                Website::new("gist.github.com", MatchKind::Host),
+            ],
+        )
+        .unwrap();
+
+        merge_items(&mut vw, &source, "github").unwrap();
+
+        assert!(vw.get_item_overview(&source).unwrap().is_none());
+        let item = vw.get_item_overview("github").unwrap().unwrap();
+        let mut keys: Vec<_> = item.credentials.values().map(|c| c.key.as_str()).collect();
+        keys.sort();
+        // The equal username is dropped rather than copied as `username-2`.
+        assert_eq!(keys, ["passkey-aa", "password", "username"]);
+        assert_eq!(
+            item.autofill.username_credential(item).unwrap().key,
+            "username"
+        );
+        assert_eq!(
+            item.autofill.password_credential(item).unwrap().key,
+            "password"
+        );
+        assert_eq!(
+            item.autofill.websites,
+            vec![
+                Website::new("github.com", MatchKind::Domain),
+                Website::new("gist.github.com", MatchKind::Host),
+            ]
+        );
+        let passkey = vw.get_secret("github", "passkey-aa").unwrap().unwrap();
+        assert_eq!(passkey.expose_secret(), "{}");
+    }
+
+    #[test]
+    fn merge_renames_a_differing_credential_and_fills_missing_roles() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(
+            &mut vw,
+            "alpha",
+            &[("username", FieldKind::Email, "x@y.com")],
+        );
+        legacy_item(
+            &mut vw,
+            "bravo",
+            &[
+                ("username", FieldKind::Email, "other@y.com"),
+                ("password", FieldKind::default(), "pw"),
+            ],
+        );
+        set_role(&mut vw, "bravo", Role::Password, Some("password")).unwrap();
+        set_role(&mut vw, "bravo", Role::Username, Some("username")).unwrap();
+
+        merge_items(&mut vw, "bravo", "alpha").unwrap();
+
+        let item = vw.get_item_overview("alpha").unwrap().unwrap();
+        let mut keys: Vec<_> = item.credentials.values().map(|c| c.key.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["password", "username", "username-2"]);
+        assert_eq!(
+            item.autofill.username_credential(item).unwrap().key,
+            "username-2"
+        );
+        assert_eq!(
+            item.autofill.password_credential(item).unwrap().key,
+            "password"
+        );
+        assert_eq!(item.category.as_deref(), Some(CATEGORY_LOGIN));
+    }
+
+    #[test]
+    fn merge_into_itself_is_an_error() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        github_login(&mut vw);
+        assert!(merge_items(&mut vw, "github", "github").is_err());
+        assert!(vw.get_item_overview("github").unwrap().is_some());
     }
 }

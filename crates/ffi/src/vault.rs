@@ -1323,6 +1323,25 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
+    /// Move every credential of `source_item_key` into `dest_item_key` and
+    /// delete the source item. Both items are in `vault_key`.
+    pub async fn merge_items(
+        &self,
+        vault_key: String,
+        source_item_key: String,
+        dest_item_key: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                autofill::merge_items(vw, &source_item_key, &dest_item_key).map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
     /// Set the display order of an item's credentials, keeping each in its
     /// current section. `ordered_cred_keys` must list exactly the item's
     /// credential keys, once each.
