@@ -34,6 +34,73 @@ struct DisplayItem: Identifiable, Hashable {
   func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+/// Contents removed from an item by an undoable delete, including values.
+struct DeletedEntries {
+  struct Section {
+    let id: String
+    let title: String
+  }
+
+  struct Credential {
+    let key: String
+    let title: String
+    let kind: FieldKindInfo
+    let value: SymmetricKey
+  }
+
+  let vaultKey: String
+  let itemKey: String
+  /// Item arrangement before the delete.
+  let before: [CredentialEntry]
+  let sections: [Section]
+  let credentials: [Credential]
+}
+
+/// Record of one undoable delete. Retained by the undo action and released
+/// when the undo manager discards it. `VaultsModel` empties it on lock.
+@MainActor
+final class DeletedEntriesBox {
+  var entries: DeletedEntries?
+}
+
+/// Partial failure of a delete undo or redo. Shown on the affected item.
+struct UndoFailure: Equatable {
+  let vaultKey: String
+  let itemKey: String
+  let message: String
+}
+
+/// Vault action on an item missing from the item cache.
+struct ItemNotLoadedError: Error, CustomStringConvertible {
+  let itemKey: String
+  var description: String { "Item \(itemKey) is not loaded." }
+}
+
+/// Error message for a failed action, or nil on success.
+@MainActor
+func failureMessage(_ action: () async throws -> Void) async -> String? {
+  do {
+    try await action()
+    return nil
+  } catch {
+    return String(describing: error)
+  }
+}
+
+extension UndoManager {
+  /// Register an undo handler that runs on the main actor. The handler receives
+  /// this undo manager so it can register its inverse. AppKit invokes undo
+  /// handlers on the main thread.
+  func registerMainActorUndo(
+    named actionName: String, _ handler: @escaping @MainActor (UndoManager) -> Void
+  ) {
+    registerUndo(withTarget: self) { manager in
+      MainActor.assumeIsolated { handler(manager) }
+    }
+    setActionName(actionName)
+  }
+}
+
 @Observable
 @MainActor
 final class VaultsModel {
@@ -92,6 +159,8 @@ final class VaultsModel {
 
   // Per-vault item cache; populated lazily after global unlock
   private var itemCache: [String: [ItemInfo]] = [:]
+  // Folders per vault in display order. Loaded with the items.
+  private var folderCache: [String: [FolderInfo]] = [:]
   // Vaults whose last load failed, with the error. They are not cached, so the
   // next load of the vault retries them.
   private(set) var itemLoadFailures: [String: String] = [:]
@@ -100,6 +169,12 @@ final class VaultsModel {
   // Surfaces failures from vault/item/credential mutations (create, rename,
   // delete) to whichever pane triggered them.
   var actionError: String? = nil
+
+  // Live undoable delete records. Emptied on lock since they hold deleted
+  // values.
+  private let deletedEntryBoxes = NSHashTable<DeletedEntriesBox>.weakObjects()
+  // Last partially failed undo or redo of a delete.
+  private(set) var undoFailure: UndoFailure? = nil
 
   init() {
     authContext = LAContext()
@@ -426,6 +501,12 @@ final class VaultsModel {
     // GPG passphrases pinentry unlocked.
     signingPrompt.forgetAll()
     passphrasePrompt.forgetAll()
+    // Release values held for undo. Undo after lock does nothing.
+    for box in deletedEntryBoxes.allObjects {
+      box.entries = nil
+    }
+    deletedEntryBoxes.removeAllObjects()
+    undoFailure = nil
     // Fail whatever prompt is on screen, which is not always on `authContext`,
     // then drop the authenticated context itself.
     cancelEvaluation()
@@ -437,6 +518,7 @@ final class VaultsModel {
     selectionTask = nil
     pendingSelection = nil
     itemCache = [:]
+    folderCache = [:]
     itemLoadFailures = [:]
     selectedItemRef = nil
     unlockError = nil
@@ -518,7 +600,10 @@ final class VaultsModel {
 
   private func loadItems(for vaultKey: String) async {
     do {
-      itemCache[vaultKey] = try await core.listItems(vaultKey: vaultKey)
+      let items = try await core.listItems(vaultKey: vaultKey)
+      let folders = try await core.listFolders(vaultKey: vaultKey)
+      itemCache[vaultKey] = items
+      folderCache[vaultKey] = folders
       itemLoadFailures.removeValue(forKey: vaultKey)
     } catch let e as FfiError {
       switch e {
@@ -555,6 +640,11 @@ final class VaultsModel {
     return failed.count == 1
       ? "Could not load \(names): \(error)"
       : "Could not load \(names). \(first.name ?? first.key): \(error)"
+  }
+
+  /// Vault folders in display order. Empty until the vault items load.
+  func folders(for vaultKey: String) -> [FolderInfo] {
+    folderCache[vaultKey] ?? []
   }
 
   /// Every cached item across all vaults, in vault order.
@@ -632,6 +722,7 @@ final class VaultsModel {
     do {
       try await core.deleteVault(vaultKey: vaultKey)
       itemCache.removeValue(forKey: vaultKey)
+      folderCache.removeValue(forKey: vaultKey)
       itemLoadFailures.removeValue(forKey: vaultKey)
       if selectedVaultKey == vaultKey { selectSidebarDestination(nil) }
       reload()
@@ -746,59 +837,331 @@ final class VaultsModel {
     }
   }
 
-  /// Change a credential's key. The FFI has no rename, so this writes the
-  /// credential under `newKey` and deletes `oldKey`. If the delete fails the
-  /// credential is left under both keys and the error is surfaced.
-  @discardableResult
-  func renameCredentialKey(
-    vaultKey: String, itemKey: String, oldKey: String, newKey: String, title: String, value: String,
-    kind: FieldKindInfo? = nil
-  ) async -> Bool {
-    actionError = nil
-    do {
-      try await core.addOrUpdateCredential(
-        vaultKey: vaultKey, itemKey: itemKey, credKey: newKey, title: title, value: value,
-        kind: kind
-      )
-      try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: oldKey)
-      await loadItems(for: vaultKey)
-      return true
-    } catch {
-      actionError = String(describing: error)
-      await loadItems(for: vaultKey)
-      return false
+  /// Change the key, title, or kind of a credential without resubmitting its
+  /// value. Nil arguments are left unchanged.
+  func updateCredential(
+    vaultKey: String, itemKey: String, credKey: String, newKey: String? = nil,
+    title: String? = nil, kind: FieldKindInfo? = nil
+  ) async throws {
+    try await mutate(vaultKey) {
+      try await core.updateCredential(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, newKey: newKey, title: title,
+        kind: kind)
     }
   }
 
-  /// Persist a new display order for an item's credentials. `orderedKeys` must
-  /// list every credential key of the item, once each.
-  @discardableResult
-  func reorderCredentials(vaultKey: String, itemKey: String, orderedKeys: [String]) async -> Bool {
-    actionError = nil
-    do {
-      try await core.reorderCredentials(
-        vaultKey: vaultKey, itemKey: itemKey, orderedCredKeys: orderedKeys
-      )
-      await loadItems(for: vaultKey)
-      return true
-    } catch {
-      actionError = String(describing: error)
-      await loadItems(for: vaultKey)
-      return false
+  /// Cached item, or nil if its vault is not loaded.
+  func item(vaultKey: String, itemKey: String) -> ItemInfo? {
+    itemCache[vaultKey]?.first { $0.key == itemKey }
+  }
+
+  /// Save the section order and credential placements described by `entries`.
+  /// Sections save first. Each save is skipped if unchanged.
+  func arrangeItem(vaultKey: String, itemKey: String, entries: [CredentialEntry]) async throws {
+    let target = CredentialEntry.arrangement(of: entries)
+    guard let before = item(vaultKey: vaultKey, itemKey: itemKey) else {
+      throw ItemNotLoadedError(itemKey: itemKey)
+    }
+    if target.sectionIds != before.sections.map(\.id) {
+      try await reorderSections(vaultKey: vaultKey, itemKey: itemKey, sectionIds: target.sectionIds)
+    }
+    // Compare after saving sections, since the model lists credentials in
+    // section order.
+    guard let current = item(vaultKey: vaultKey, itemKey: itemKey) else {
+      throw ItemNotLoadedError(itemKey: itemKey)
+    }
+    let currentPlacements = CredentialEntry.arrangement(of: CredentialEntry.entries(of: current))
+      .placements
+    if target.placements != currentPlacements {
+      try await arrangeCredentials(
+        vaultKey: vaultKey, itemKey: itemKey, placements: target.placements)
     }
   }
 
-  @discardableResult
-  func deleteCredential(vaultKey: String, itemKey: String, credKey: String) async -> Bool {
-    actionError = nil
-    do {
-      try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
-      await loadItems(for: vaultKey)
-      return true
-    } catch {
-      actionError = String(describing: error)
-      return false
+  /// Persist display order and section assignments for item credentials.
+  /// `placements` must list every credential key in the item exactly once.
+  func arrangeCredentials(
+    vaultKey: String, itemKey: String, placements: [CredentialPlacementInfo]
+  ) async throws {
+    try await mutate(vaultKey) {
+      try await core.arrangeCredentials(
+        vaultKey: vaultKey, itemKey: itemKey, placements: placements)
     }
+  }
+
+  // MARK: - Undoable delete
+
+  /// Delete item sections and credentials, and register an undo. The undo
+  /// restores values, sections, and positions. It is only registered if
+  /// something was deleted. The returned task yields an error message, or nil
+  /// on success.
+  @discardableResult
+  func deleteEntries(
+    vaultKey: String, itemKey: String, _ targets: Set<CredentialEntry>,
+    undoManager: UndoManager?
+  ) -> Task<String?, Never> {
+    let box = newDeletedEntriesBox()
+    return Task {
+      let error = await performDelete(
+        into: box, vaultKey: vaultKey, itemKey: itemKey, targets: targets)
+      if box.entries != nil, let undoManager {
+        registerUndo(
+          of: box, after: nil, vaultKey: vaultKey, itemKey: itemKey, undoManager: undoManager)
+      }
+      return error
+    }
+  }
+
+  private func newDeletedEntriesBox() -> DeletedEntriesBox {
+    let box = DeletedEntriesBox()
+    deletedEntryBoxes.add(box)
+    return box
+  }
+
+  /// Register an undo that restores the contents of `box` after `pending`
+  /// finishes. `pending` is the delete that fills `box`. Redo deletes the
+  /// restored entries again and registers a new undo. Each inverse is
+  /// registered during the undo or redo, since registering later would clear
+  /// the redo stack.
+  private func registerUndo(
+    of box: DeletedEntriesBox, after pending: Task<Void, Never>?, vaultKey: String,
+    itemKey: String, undoManager: UndoManager
+  ) {
+    undoManager.registerMainActorUndo(named: "Delete") { [weak self] manager in
+      guard let self else { return }
+      let restored = Task { () -> Set<CredentialEntry>? in
+        await pending?.value
+        return await self.performRestore(box)
+      }
+      manager.registerMainActorUndo(named: "Delete") { [weak self] manager in
+        guard let self else { return }
+        let redoBox = self.newDeletedEntriesBox()
+        let redo = Task {
+          guard let targets = await restored.value, !targets.isEmpty else { return }
+          if let error = await self.performDelete(
+            into: redoBox, vaultKey: vaultKey, itemKey: itemKey, targets: targets)
+          {
+            self.undoFailure = UndoFailure(
+              vaultKey: vaultKey, itemKey: itemKey, message: "Redo failed: \(error)")
+          }
+        }
+        self.registerUndo(
+          of: redoBox, after: redo, vaultKey: vaultKey, itemKey: itemKey, undoManager: manager)
+      }
+    }
+  }
+
+  /// Delete `targets` and record the deleted contents in `box` for undo.
+  private func performDelete(
+    into box: DeletedEntriesBox, vaultKey: String, itemKey: String,
+    targets: Set<CredentialEntry>
+  ) async -> String? {
+    undoFailure = nil
+    guard let item = item(vaultKey: vaultKey, itemKey: itemKey) else {
+      return ItemNotLoadedError(itemKey: itemKey).description
+    }
+    let before = CredentialEntry.entries(of: item)
+
+    // Fetch all values first so undo can restore everything deleted.
+    var sections: [DeletedEntries.Section] = []
+    var credentials: [DeletedEntries.Credential] = []
+    do {
+      for entry in before where targets.contains(entry) {
+        switch entry {
+        case .section(let id):
+          if let section = item.sections.first(where: { $0.id == id }) {
+            sections.append(.init(id: id, title: section.title))
+          }
+        case .credential(let key):
+          if let cred = item.credentials.first(where: { $0.key == key }) {
+            let value = try await credentialSecret(
+              vaultKey: vaultKey, itemKey: itemKey, credKey: key)
+            credentials.append(.init(key: key, title: cred.title, kind: cred.kind, value: value))
+          }
+        }
+      }
+    } catch {
+      return String(describing: error)
+    }
+
+    var deletedSections: [DeletedEntries.Section] = []
+    var deletedCredentials: [DeletedEntries.Credential] = []
+    let error = await failureMessage {
+      try await mutate(vaultKey) {
+        for cred in credentials {
+          try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+          deletedCredentials.append(cred)
+        }
+        for section in sections {
+          try await core.deleteSection(vaultKey: vaultKey, itemKey: itemKey, sectionId: section.id)
+          deletedSections.append(section)
+        }
+      }
+    }
+    if !deletedSections.isEmpty || !deletedCredentials.isEmpty {
+      box.entries = DeletedEntries(
+        vaultKey: vaultKey, itemKey: itemKey, before: before, sections: deletedSections,
+        credentials: deletedCredentials)
+    }
+    return error
+  }
+
+  /// Restore deleted contents, then the arrangement from before the delete.
+  /// Returns the restored entries, or nil if there is nothing to restore. A
+  /// credential whose key has since been reused is restored under a new key.
+  /// Failures are reported in `undoFailure`.
+  private func performRestore(_ box: DeletedEntriesBox) async -> Set<CredentialEntry>? {
+    guard let deleted = box.entries else { return nil }
+    box.entries = nil
+    let vaultKey = deleted.vaultKey
+    let itemKey = deleted.itemKey
+    var takenKeys = Set(item(vaultKey: vaultKey, itemKey: itemKey)?.credentials.map(\.key) ?? [])
+
+    undoFailure = nil
+    var failures: [String] = []
+    var newSectionIds: [String: String] = [:]
+    var newCredentialKeys: [String: String] = [:]
+    var restored: Set<CredentialEntry> = []
+    for section in deleted.sections {
+      do {
+        let id = try await core.createSection(
+          vaultKey: vaultKey, itemKey: itemKey, title: section.title
+        ).id
+        newSectionIds[section.id] = id
+        restored.insert(.section(id))
+      } catch {
+        failures.append("section \(section.title): \(error)")
+      }
+    }
+    for cred in deleted.credentials {
+      let key = Self.unusedKey(cred.key, taken: takenKeys)
+      do {
+        // Values are stored as strings, so they are valid UTF-8.
+        let value = cred.value.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
+        try await core.addOrUpdateCredential(
+          vaultKey: vaultKey, itemKey: itemKey, credKey: key, title: cred.title,
+          value: value, kind: cred.kind)
+        takenKeys.insert(key)
+        newCredentialKeys[cred.key] = key
+        restored.insert(.credential(key))
+      } catch {
+        failures.append("\(cred.key): \(error)")
+      }
+    }
+    await loadItems(for: vaultKey)
+
+    // Old arrangement with restored entries under their new ids and keys.
+    // Entries added after the delete go at the end.
+    if let item = item(vaultKey: vaultKey, itemKey: itemKey) {
+      let current = CredentialEntry.entries(of: item)
+      let currentSet = Set(current)
+      var arranged = deleted.before.map { entry -> CredentialEntry in
+        switch entry {
+        case .section(let id): return .section(newSectionIds[id] ?? id)
+        case .credential(let key): return .credential(newCredentialKeys[key] ?? key)
+        }
+      }.filter { currentSet.contains($0) }
+      let arrangedSet = Set(arranged)
+      arranged += current.filter { !arrangedSet.contains($0) }
+      if let error = await failureMessage({
+        try await arrangeItem(vaultKey: vaultKey, itemKey: itemKey, entries: arranged)
+      }) {
+        failures.append("order: \(error)")
+      }
+    }
+
+    if !failures.isEmpty {
+      undoFailure = UndoFailure(
+        vaultKey: vaultKey, itemKey: itemKey,
+        message: "Undo did not restore everything. \(failures.joined(separator: "; "))")
+    }
+    return restored
+  }
+
+  /// `key` if not in `taken`, otherwise the first free key of `key-restored`,
+  /// `key-restored-2`, and so on.
+  private static func unusedKey(_ key: String, taken: Set<String>) -> String {
+    guard taken.contains(key) else { return key }
+    var candidate = "\(key)-restored"
+    var suffix = 2
+    while taken.contains(candidate) {
+      candidate = "\(key)-restored-\(suffix)"
+      suffix += 1
+    }
+    return candidate
+  }
+
+  // MARK: - Folders and sections
+
+  func createFolder(vaultKey: String, title: String) async throws {
+    try await mutate(vaultKey) {
+      _ = try await core.createFolder(vaultKey: vaultKey, title: title)
+    }
+  }
+
+  func renameFolder(vaultKey: String, folderId: String, title: String) async throws {
+    try await mutate(vaultKey) {
+      try await core.renameFolder(vaultKey: vaultKey, folderId: folderId, title: title)
+    }
+  }
+
+  /// Delete a folder. Its items become unfiled.
+  func deleteFolder(vaultKey: String, folderId: String) async throws {
+    try await mutate(vaultKey) {
+      try await core.deleteFolder(vaultKey: vaultKey, folderId: folderId)
+    }
+  }
+
+  /// Move an item into a folder. A nil `folderId` removes it from its folder.
+  func moveItem(vaultKey: String, itemKey: String, folderId: String?) async throws {
+    try await mutate(vaultKey) {
+      try await core.moveItem(vaultKey: vaultKey, itemKey: itemKey, folderId: folderId)
+    }
+  }
+
+  /// Create a section at the end of the item. Returns its id.
+  func createSection(vaultKey: String, itemKey: String, title: String) async throws -> String {
+    try await mutate(vaultKey) {
+      try await core.createSection(vaultKey: vaultKey, itemKey: itemKey, title: title).id
+    }
+  }
+
+  /// Persist the display order of item sections. `sectionIds` must list every
+  /// section in the item exactly once.
+  func reorderSections(vaultKey: String, itemKey: String, sectionIds: [String]) async throws {
+    try await mutate(vaultKey) {
+      try await core.reorderSections(
+        vaultKey: vaultKey, itemKey: itemKey, orderedSectionIds: sectionIds)
+    }
+  }
+
+  func renameSection(vaultKey: String, itemKey: String, sectionId: String, title: String)
+    async throws
+  {
+    try await mutate(vaultKey) {
+      try await core.renameSection(
+        vaultKey: vaultKey, itemKey: itemKey, sectionId: sectionId, title: title)
+    }
+  }
+
+  /// Delete a section. Its credentials become unsectioned.
+  func deleteSection(vaultKey: String, itemKey: String, sectionId: String) async throws {
+    try await mutate(vaultKey) {
+      try await core.deleteSection(vaultKey: vaultKey, itemKey: itemKey, sectionId: sectionId)
+    }
+  }
+
+  /// Run a vault mutation, then reload the vault items so the panes show what
+  /// was saved. Reloads on success and failure. Rethrows the mutation error.
+  private func mutate<T>(_ vaultKey: String, _ action: () async throws -> T) async throws -> T {
+    let result: Result<T, Error>
+    do {
+      result = .success(try await action())
+    } catch {
+      result = .failure(error)
+    }
+    await loadItems(for: vaultKey)
+    return try result.get()
   }
 
   // MARK: - Derived

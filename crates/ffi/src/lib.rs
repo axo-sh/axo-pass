@@ -24,8 +24,9 @@ use axo_pass_core::secrets::vaults::vault_export::{
     WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{
-    CredentialPlacement, Error as VaultError, ExportProgress as CoreExportProgress, FieldKind,
-    TextField, VaultFolder, VaultItemSection, VaultWrapper, VaultsManager,
+    CredentialPlacement, CredentialUpdate, Error as VaultError,
+    ExportProgress as CoreExportProgress, FieldKind, TextField, VaultFolder, VaultItemSection,
+    VaultWrapper, VaultsManager, display_order,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -91,6 +92,7 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
             other @ (VaultError::InvalidFolderOrder
+            | VaultError::DuplicateCredentialKey(_)
             | VaultError::InvalidSectionOrder(_)
             | VaultError::InvalidCredentialOrder(_)) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),
@@ -1294,12 +1296,6 @@ fn ensure_unlocked(vault: &mut VaultWrapper) -> Result<(), FfiError> {
     Ok(())
 }
 
-/// Sort key for folders, sections, and credentials: entries with a set
-/// position first, in that order, then the rest by title.
-fn display_order(position: Option<u32>, title: &str) -> (u32, &str) {
-    (position.unwrap_or(u32::MAX), title)
-}
-
 fn parse_id(id: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
 }
@@ -1719,6 +1715,28 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Change the key, title, or kind of a credential without resubmitting its
+    /// value. `None` arguments are left unchanged.
+    pub async fn update_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        new_key: Option<String>,
+        title: Option<String>,
+        kind: Option<FieldKindInfo>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            let update = CredentialUpdate {
+                key: new_key,
+                title,
+                kind: kind.map(FieldKind::try_from).transpose()?,
+            };
+            Ok(vw.update_credential(&item_key, &cred_key, update)?)
+        })
+        .await
     }
 
     /// Delete a single credential from an item.

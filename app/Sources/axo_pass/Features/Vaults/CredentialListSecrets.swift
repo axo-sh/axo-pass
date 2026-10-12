@@ -69,36 +69,58 @@ extension CredentialList {
     }
   }
 
-  /// Persist an edited credential. A changed id means adding the credential
-  /// under the new key and deleting the old one, since the FFI has no rename.
-  func save(
-    _ cred: CredentialInfo, newKey: String, newTitle: String, newValue: String,
-    newKind: FieldKindInfo?
-  ) async {
-    let ok: Bool
-    if newKey == cred.key {
-      ok = await model.addOrUpdateCredential(
-        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key,
-        title: newTitle, value: newValue, kind: newKind
-      )
-      if ok {
-        applySavedSecret(newValue, for: cred.key, kind: newKind)
-        errors.removeValue(forKey: cred.key)
+  /// Save a renamed title or id. A new id moves the cached secret, error, and
+  /// selection to the new key.
+  func rename(_ cred: CredentialInfo, field: CredentialRow.RenameField, to text: String) {
+    renaming = nil
+    switch field {
+    case .title:
+      guard text != cred.title else { return }
+      Task {
+        errors[cred.key] = await failureMessage {
+          try await model.updateCredential(
+            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: text)
+        }
       }
-    } else {
-      ok = await model.renameCredentialKey(
-        vaultKey: vaultKey, itemKey: item.key, oldKey: cred.key, newKey: newKey,
-        title: newTitle, value: newValue, kind: newKind
-      )
-      if ok {
-        secrets[newKey] = secrets.removeValue(forKey: cred.key)
-        applySavedSecret(newValue, for: newKey, kind: newKind)
-        errors.removeValue(forKey: cred.key)
-        if revealing.remove(cred.key) != nil { revealing.insert(newKey) }
+    case .key:
+      guard text != cred.key else { return }
+      let oldKeys = Set(item.credentials.map(\.key))
+      Task {
+        let error = await failureMessage {
+          try await model.updateCredential(
+            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, newKey: text)
+        }
+        // The core may normalize the key. The new key is the one present in
+        // the item now and absent before.
+        let reloaded = model.item(vaultKey: vaultKey, itemKey: item.key)
+        if error == nil,
+          let newKey = reloaded?.credentials.map(\.key).first(where: { !oldKeys.contains($0) })
+        {
+          secrets[newKey] = secrets.removeValue(forKey: cred.key)
+          errors.removeValue(forKey: cred.key)
+          if selection.remove(.credential(cred.key)) != nil {
+            selection.insert(.credential(newKey))
+          }
+        } else {
+          errors[cred.key] = error
+        }
       }
     }
-    if !ok, let err = model.actionError {
-      errors[cred.key] = err
+  }
+
+  /// Change the concealed or multiline option of a text credential. Applies
+  /// immediately. A newly concealed credential is hidden again.
+  func setTextOptions(_ cred: CredentialInfo, concealed: Bool, multiline: Bool) {
+    let kind = FieldKindInfo(kind: "text", concealed: concealed, multiline: multiline)
+    Task {
+      let error = await failureMessage {
+        try await model.updateCredential(
+          vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, kind: kind)
+      }
+      if error == nil, concealed, !cred.kind.concealed {
+        secrets.removeValue(forKey: cred.key)
+      }
+      errors[cred.key] = error
     }
   }
 
@@ -109,23 +131,17 @@ extension CredentialList {
     )
     if ok {
       refreshCachedSecret(newValue, for: cred.key)
-      errors.removeValue(forKey: cred.key)
-    } else if let err = model.actionError {
-      errors[cred.key] = err
     }
+    finishEdit(cred.key, ok: ok)
   }
 
-  /// Bring the secret cache in line with what was just saved. A credential the
-  /// save made concealed goes back to hidden: `hideAll` on Done runs before the
-  /// save, against the old kind, so it does not cover this. Otherwise the
-  /// revealed value is refreshed. A credential the save made plain text is
-  /// left out of the cache and reveals itself when its value view appears.
-  private func applySavedSecret(_ value: String, for key: String, kind: FieldKindInfo?) {
-    if kind?.concealed == true {
-      secrets.removeValue(forKey: key)
-      return
+  /// Set or clear a credential error after a save.
+  private func finishEdit(_ key: String, ok: Bool) {
+    if ok {
+      errors.removeValue(forKey: key)
+    } else {
+      errors[key] = model.actionError ?? "Failed to save."
     }
-    refreshCachedSecret(value, for: key)
   }
 
   /// Update a revealed value in the cache after a successful save, so the row
@@ -137,15 +153,5 @@ extension CredentialList {
     var raw = Data(value.utf8)
     secrets[key] = SymmetricKey(data: raw)
     raw.resetBytes(in: raw.indices)
-  }
-
-  func delete(_ cred: CredentialInfo) async {
-    let ok = await model.deleteCredential(vaultKey: vaultKey, itemKey: item.key, credKey: cred.key)
-    if ok {
-      secrets.removeValue(forKey: cred.key)
-      errors.removeValue(forKey: cred.key)
-    } else if let err = model.actionError {
-      errors[cred.key] = err
-    }
   }
 }

@@ -19,8 +19,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
-    CredentialPlacement, Vault, VaultFolder, VaultItemCredentialOverview, VaultItemOverview,
-    VaultItemSection,
+    CredentialPlacement, CredentialUpdate, Vault, VaultFolder, VaultItemCredentialOverview,
+    VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -289,6 +289,18 @@ impl VaultWrapper {
             Err(Error::InvalidCredentialKey(_)) | Err(Error::InvalidItemKey(_)) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Change the key, title, or kind of a credential. The value is unchanged.
+    pub fn update_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        update: CredentialUpdate,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.update_item_credential(item_key, cred_key, update)?;
+        Ok(())
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {

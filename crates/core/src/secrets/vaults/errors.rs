@@ -68,6 +68,9 @@ pub enum Error {
     #[error("Invalid credential key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidCredentialKey(String),
 
+    #[error("A credential with key {0} already exists")]
+    DuplicateCredentialKey(String),
+
     #[error("Reorder must list every credential of item {0} exactly once")]
     InvalidCredentialOrder(String),
 

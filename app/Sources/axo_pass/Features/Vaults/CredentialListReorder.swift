@@ -1,170 +1,225 @@
 import AxoPassFFI
 import SwiftUI
-import UniformTypeIdentifiers
 
-/// Drag payload for credential reordering. A dedicated type keeps the drag
-/// inside the app: the credential key is not exported as plain text, and text
-/// dragged in from elsewhere does not decode into a drop.
-struct CredentialDrag: Codable, Transferable {
-  let itemKey: String
-  let credKey: String
+/// Credential list row, either a section header or a credential. The list is
+/// flat. A credential belongs to the nearest section header above it, or to no
+/// section if there is none. The flat list lets a single `onMove` move
+/// credentials across sections and move sections.
+enum CredentialEntry: Hashable {
+  case section(String)
+  case credential(String)
 
-  static var transferRepresentation: some TransferRepresentation {
-    CodableRepresentation(contentType: .axoCredentialDrag)
+  var isSection: Bool {
+    if case .section = self { return true }
+    return false
   }
-}
 
-extension UTType {
-  fileprivate static let axoCredentialDrag = UTType(
-    exportedAs: "com.breakfastlabs.frittata.credential-drag"
-  )
+  /// Item entries as returned by the model. Credentials without sections are
+  /// returned first, then section headers followed by their credentials.
+  static func entries(of item: ItemInfo) -> [CredentialEntry] {
+    var entries = item.credentials.filter { $0.sectionId == nil }.map {
+      CredentialEntry.credential($0.key)
+    }
+    for section in item.sections {
+      entries.append(.section(section.id))
+      entries += item.credentials.filter { $0.sectionId == section.id }.map {
+        CredentialEntry.credential($0.key)
+      }
+    }
+    return entries
+  }
+
+  /// Section order and credential placements described by `entries`.
+  static func arrangement(of entries: [CredentialEntry]) -> (
+    sectionIds: [String], placements: [CredentialPlacementInfo]
+  ) {
+    var sectionIds: [String] = []
+    var placements: [CredentialPlacementInfo] = []
+    var currentSection: String? = nil
+    for entry in entries {
+      switch entry {
+      case .section(let id):
+        sectionIds.append(id)
+        currentSection = id
+      case .credential(let key):
+        placements.append(CredentialPlacementInfo(key: key, sectionId: currentSection))
+      }
+    }
+    return (sectionIds, placements)
+  }
 }
 
 extension CredentialList {
-  /// A drag inserts before a given credential, or at the end of the list. The
-  /// end is its own case because no row's leading indicator can address it.
-  enum DropTarget: Equatable {
-    case before(String)
-    case end
+  /// Entries in display order. Uses the pending move if set, otherwise the
+  /// model order. Ignores a pending move that no longer covers the same
+  /// entries.
+  var entries: [CredentialEntry] {
+    let current = CredentialEntry.entries(of: item)
+    guard let pendingEntries, pendingEntries.count == current.count,
+      Set(pendingEntries) == Set(current)
+    else { return current }
+    return pendingEntries
   }
 
-  /// Credentials in display order: the pending drag order when set, otherwise
-  /// the order the model returned (persisted position, then title).
-  var displayCredentials: [CredentialInfo] {
-    guard let pendingOrder else { return item.credentials }
-    let byKey = Dictionary(item.credentials.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-    let ordered = pendingOrder.compactMap { byKey[$0] }
-    return ordered.count == item.credentials.count ? ordered : item.credentials
+  /// Credential count for a section. Shown on collapsed section headers.
+  func credentialCount(inSection id: String) -> Int {
+    item.credentials.filter { $0.sectionId == id }.count
   }
 
-  /// A credential row with a drag handle for reordering, plus a drop indicator
-  /// on the row the drag is over. Reordering is an edit-mode action, alongside
-  /// the other structural edits. The row keeps one view identity across the
-  /// edit toggle so CredentialRow retains its draft state, so nothing here
-  /// branches on isEditing: a branch would give the row a new identity and
-  /// reset it.
-  func reorderableRow(_ cred: CredentialInfo) -> some View {
-    HStack(alignment: .top, spacing: 0) {
-      credentialRowBody(cred)
-      dragHandle(cred)
+  /// Credentials under a section header in `entries`, including collapsed
+  /// ones.
+  func sectionChildren(_ id: String) -> Set<CredentialEntry> {
+    guard let header = entries.firstIndex(of: .section(id)) else { return [] }
+    var children: Set<CredentialEntry> = []
+    var next = header + 1
+    while next < entries.count, !entries[next].isSection {
+      children.insert(entries[next])
+      next += 1
     }
-    .overlay(alignment: .top) {
-      // The overlay sits inside the row insets, so pull the indicator back
-      // out to the row's top edge, where the separator is drawn.
-      dropIndicator(for: .before(cred.key))
-        .offset(y: -credentialRowInset)
-    }
-    .dropDestination(for: CredentialDrag.self) { dropped, _ in
-      dropTarget = nil
-      guard let moved = reorderDragKey(dropped.first) else { return false }
-      reorder(moved: moved, before: cred.key)
-      return true
-    } isTargeted: { targeted in
-      setDropTarget(.before(cred.key), targeted: targeted)
-    }
+    return children
   }
 
-  /// The only drag source for a reorder, shown in edit mode. SwiftUI has no way
-  /// to disable `draggable` in place, and applying it conditionally would
-  /// rebuild the row, so the handle carries it instead: hit testing off means no
-  /// drag starts. A handle also keeps the drag from competing with the text
-  /// fields inside the row. Its width collapses outside edit mode so the row
-  /// content is not inset on the trailing edge for a handle that is not there.
-  private func dragHandle(_ cred: CredentialInfo) -> some View {
-    Image(systemName: "line.3.horizontal")
-      .font(.caption)
-      .foregroundStyle(.tertiary)
-      .frame(width: isEditing ? 18 : 0, height: 20)
-      .clipped()
-      .contentShape(Rectangle())
-      .draggable(CredentialDrag(itemKey: item.key, credKey: cred.key)) {
-        credentialRowBody(cred)
-          .frame(width: 340)
-          .padding(8)
-          .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-          .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.tint, lineWidth: 1))
+  /// `targets` plus the credentials of every section in it. A selected section
+  /// includes its contents.
+  func withSectionChildren(_ targets: Set<CredentialEntry>) -> Set<CredentialEntry> {
+    var result = targets
+    for case .section(let id) in targets {
+      result.formUnion(sectionChildren(id))
+    }
+    return result
+  }
+
+  /// Sync section selection with credential selection. Selecting a header
+  /// selects its credentials so the highlight covers the whole section.
+  /// Deselecting only the header deselects its credentials. Deselecting a
+  /// credential deselects its header.
+  func normalizedSelection(from old: Set<CredentialEntry>, to new: Set<CredentialEntry>)
+    -> Set<CredentialEntry>
+  {
+    var result = new
+    for section in item.sections {
+      let header = CredentialEntry.section(section.id)
+      let children = sectionChildren(section.id)
+      switch (old.contains(header), new.contains(header)) {
+      case (false, true):
+        result.formUnion(children)
+      case (true, false) where children.isSubset(of: new):
+        result.subtract(children)
+      case (true, true) where !children.isSubset(of: new):
+        result.remove(header)
+      default:
+        break
       }
-      .opacity(isEditing ? 1 : 0)
-      .allowsHitTesting(isEditing)
-      .animation(.easeInOut(duration: 0.12), value: isEditing)
+    }
+    return result
   }
 
-  /// A short strip after the last row, so a drag can reach the final slot. No
-  /// row's leading indicator addresses it, since each marks "insert before".
-  var endDropZone: some View {
-    Color.clear
-      .frame(height: credentialRowInset * 2)
-      .contentShape(Rectangle())
-      .overlay(alignment: .top) { dropIndicator(for: .end) }
-      .dropDestination(for: CredentialDrag.self) { dropped, _ in
-        dropTarget = nil
-        guard let moved = reorderDragKey(dropped.first) else { return false }
-        reorder(moved: moved, before: nil)
-        return true
-      } isTargeted: { targeted in
-        setDropTarget(.end, targeted: targeted)
+  /// Row to rename. Either a single selected credential, or a section selected
+  /// with its credentials.
+  func renameTarget(_ selected: Set<CredentialEntry>) -> CredentialEntry? {
+    let sections = selected.filter(\.isSection)
+    if sections.count == 1, let header = sections.first, case .section(let id) = header {
+      return selected.subtracting([header]).isSubset(of: sectionChildren(id)) ? header : nil
+    }
+    return selected.count == 1 ? selected.first : nil
+  }
+
+  /// Move entries to an index in `entries`. A moved section header brings its
+  /// credentials and lands on a section boundary, so it does not split another
+  /// section.
+  func moveEntries(_ moved: [CredentialEntry], to destination: Int) {
+    let current = entries
+    let source = IndexSet(moved.compactMap { current.firstIndex(of: $0) })
+    var moving = source
+    for index in source where current[index].isSection {
+      var next = index + 1
+      while next < current.count, !current[next].isSection {
+        moving.insert(next)
+        next += 1
       }
-  }
-
-  /// The insertion bar, drawn on the row edge it marks. Empty unless the drag
-  /// is currently over `target`.
-  @ViewBuilder
-  private func dropIndicator(for target: DropTarget) -> some View {
-    if dropTarget == target {
-      Rectangle()
-        .fill(.tint)
-        .frame(height: 2)
-        .padding(.horizontal, -credentialRowInset)
-        // Centre the bar on the edge rather than hanging it below.
-        .offset(y: -1)
     }
-  }
 
-  private func setDropTarget(_ target: DropTarget, targeted: Bool) {
-    guard isEditing else { return }
-    if targeted {
-      dropTarget = target
-    } else if dropTarget == target {
-      dropTarget = nil
+    let block = moving.map { current[$0] }
+    var arranged = current.indices.filter { !moving.contains($0) }.map { current[$0] }
+    var insertAt = destination - moving.count(in: 0..<destination)
+    if block.contains(where: \.isSection) {
+      while insertAt < arranged.count, !arranged[insertAt].isSection {
+        insertAt += 1
+      }
     }
+    arranged.insert(contentsOf: block, at: insertAt)
+    apply(arranged, moved: Set(block))
   }
 
-  /// The credential key a drag carries, or nil when the drag is not a reorder
-  /// of a credential belonging to this item.
-  private func reorderDragKey(_ drag: CredentialDrag?) -> String? {
-    guard isEditing, let drag, drag.itemKey == item.key,
-      item.credentials.contains(where: { $0.key == drag.credKey })
-    else { return nil }
-    return drag.credKey
+  /// Move credentials to the end of a section. A nil section moves them to the
+  /// end of the unsectioned credentials.
+  func moveCredentials(_ keys: Set<String>, toSection sectionId: String?) {
+    let moved = entries.filter {
+      if case .credential(let key) = $0 { return keys.contains(key) }
+      return false
+    }
+    var arranged = entries.filter { !moved.contains($0) }
+    let insertAt: Int
+    if let sectionId, let header = arranged.firstIndex(of: .section(sectionId)) {
+      var end = header + 1
+      while end < arranged.count, !arranged[end].isSection { end += 1 }
+      insertAt = end
+    } else {
+      insertAt = arranged.firstIndex(where: \.isSection) ?? arranged.count
+    }
+    arranged.insert(contentsOf: moved, at: insertAt)
+    apply(arranged, moved: Set(moved))
   }
 
-  /// Move `moved` to just before `target`, or to the end when `target` is nil,
-  /// and persist the new order.
-  private func reorder(moved: String, before target: String?) {
-    guard moved != target else { return }
-
-    var keys = displayCredentials.map(\.key)
-    guard let from = keys.firstIndex(of: moved) else { return }
-    keys.remove(at: from)
-
-    let insertAt = target.flatMap { keys.firstIndex(of: $0) } ?? keys.count
-    keys.insert(moved, at: insertAt)
-
-    guard keys != displayCredentials.map(\.key) else { return }
-    pendingOrder = keys
-
+  /// Show `arranged` immediately and save it. On failure, rows revert and the
+  /// moved rows show the error.
+  private func apply(_ arranged: [CredentialEntry], moved: Set<CredentialEntry>) {
+    guard arranged != entries else { return }
+    pendingEntries = arranged
     Task {
-      let ok = await model.reorderCredentials(
-        vaultKey: vaultKey, itemKey: item.key, orderedKeys: keys
-      )
-      // A failed reorder reloads the original order, so the key list does not
-      // change and the onChange above never fires. Drop the override here so
-      // the rows snap back instead of showing an order that was not saved.
-      if !ok {
-        pendingOrder = nil
-        if let err = model.actionError {
-          errors[moved] = err
-        }
+      let error = await failureMessage {
+        try await model.arrangeItem(vaultKey: vaultKey, itemKey: item.key, entries: arranged)
+      }
+      // The model has reloaded with either the new or old arrangement. The
+      // override is no longer needed.
+      if pendingEntries == arranged {
+        pendingEntries = nil
+      }
+      if let error {
+        setError(error, on: moved)
+      }
+    }
+  }
+
+  /// Delete entries with undo. Deleting a section deletes its credentials.
+  /// Errors show on the remaining rows.
+  func delete(_ selected: Set<CredentialEntry>) {
+    let targets = withSectionChildren(selected)
+    guard !targets.isEmpty else { return }
+    selection.subtract(targets)
+    renaming = nil
+    let work = model.deleteEntries(
+      vaultKey: vaultKey, itemKey: item.key, targets, undoManager: undoManager)
+    Task {
+      if let error = await work.value {
+        setError(error, on: targets)
+        return
+      }
+      for case .credential(let key) in targets {
+        secrets.removeValue(forKey: key)
+        errors.removeValue(forKey: key)
+      }
+      for case .section(let id) in targets {
+        sectionErrors.removeValue(forKey: id)
+      }
+    }
+  }
+
+  func setError(_ message: String, on targets: Set<CredentialEntry>) {
+    for target in targets {
+      switch target {
+      case .credential(let key): errors[key] = message
+      case .section(let id): sectionErrors[id] = message
       }
     }
   }

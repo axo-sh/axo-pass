@@ -379,14 +379,26 @@ impl Vault {
         Ok(())
     }
 
+    /// Create a section after the existing sections of an item. Existing
+    /// sections are assigned positions in current display order, since
+    /// sections without positions sort by title.
     pub fn create_item_section(
         &mut self,
         item_key: &str,
         title: &str,
     ) -> Result<&VaultItemSection, Error> {
         let section = VaultItemSection::new(title);
+        let section_id = section.id;
         self.edit_item(item_key, |item| {
-            Ok(&*item.sections.entry(section.id).or_insert(section))
+            let mut ordered: Vec<&VaultItemSection> = item.sections.values().collect();
+            ordered.sort_by(|a, b| {
+                display_order(a.position, &a.title).cmp(&display_order(b.position, &b.title))
+            });
+            let mut ordered_ids: Vec<SectionId> = ordered.iter().map(|s| s.id).collect();
+            ordered_ids.push(section_id);
+            item.sections.insert(section_id, section);
+            assign_positions(&mut item.sections, &ordered_ids, |s| &mut s.position);
+            Ok(&item.sections[&section_id])
         })
     }
 
@@ -520,6 +532,62 @@ impl Vault {
         // get a reference to return
         let cred_overview_ref = item.credentials.get(&cred_id).expect("just inserted");
         Ok(cred_overview_ref)
+    }
+
+    /// Change the key, title, or kind of a credential without touching its
+    /// value. Fields left `None` in `update` are unchanged. The value is
+    /// encrypted under the credential id, not its key, so it remains valid
+    /// after a key change.
+    pub fn update_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        update: CredentialUpdate,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+
+        let new_key = match update.key {
+            Some(key) => {
+                let key =
+                    normalized_key(&key).ok_or_else(|| Error::InvalidCredentialKey(key.clone()))?;
+                if key != cred_key
+                    && self
+                        .item_credential_index
+                        .contains_key(&(item_key.to_string(), key.clone()))
+                {
+                    return Err(Error::DuplicateCredentialKey(key));
+                }
+                Some(key)
+            },
+            None => None,
+        };
+
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+        let cred = item
+            .credentials
+            .get_mut(&cred_id)
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+
+        if let Some(title) = update.title {
+            cred.title = title.trim().to_string();
+        }
+        if let Some(kind) = update.kind {
+            cred.kind = kind;
+        }
+        if let Some(key) = new_key
+            && key != cred.key
+        {
+            self.item_credential_index
+                .remove(&(item_key.to_string(), cred.key.clone()));
+            self.item_credential_index
+                .insert((item_key.to_string(), key.clone()), (item_id, cred_id));
+            cred.key = key;
+        }
+        self.cred_blobs.remove(&cred_id);
+        Ok(cred)
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
@@ -665,6 +733,12 @@ fn is_permutation(ordered: &[Uuid], existing: impl Iterator<Item = Uuid>) -> boo
     ordered_set.len() == ordered.len() && ordered_set == existing
 }
 
+/// Sort key for folders, sections, and credentials. Entries with a position
+/// come first, ordered by position, then the rest by title.
+pub fn display_order(position: Option<u32>, title: &str) -> (u32, &str) {
+    (position.unwrap_or(u32::MAX), title)
+}
+
 /// Set each entry's position, reached through `position`, to its index in
 /// `ordered`. Returns false without changing anything unless `ordered` lists
 /// every entry exactly once.
@@ -801,7 +875,7 @@ impl VaultItemOverview {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultItemCredentialOverview {
     pub id: Uuid,
     pub title: String,
@@ -849,6 +923,15 @@ impl VaultItemCredentialOverview {
             section: self.section,
         }
     }
+}
+
+/// Changes for [`Vault::update_item_credential`]. `None` fields are left
+/// unchanged.
+#[derive(Default)]
+pub struct CredentialUpdate {
+    pub key: Option<String>,
+    pub title: Option<String>,
+    pub kind: Option<FieldKind>,
 }
 
 /// Where a credential goes in [`Vault::reorder_item_credentials`].
@@ -1337,6 +1420,68 @@ mod tests {
     }
 
     #[test]
+    fn updating_a_credential_keeps_its_value_and_persists() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        populate_caches(&mut vault);
+
+        let new_kind = FieldKind::Text(TextField {
+            multiline: Some(true),
+        });
+        vault
+            .update_item_credential(
+                "item",
+                "alpha",
+                CredentialUpdate {
+                    key: Some("renamed".to_string()),
+                    title: Some(" Renamed ".to_string()),
+                    kind: Some(new_kind.clone()),
+                },
+            )
+            .unwrap();
+
+        let vault = reload(&vault);
+        assert!(matches!(
+            vault.get_item_credential("item", "alpha"),
+            Err(Error::InvalidCredentialKey(_))
+        ));
+        let cred = vault.get_item_credential("item", "renamed").unwrap();
+        assert_eq!(cred.title, "Renamed");
+        assert_eq!(cred.kind, new_kind);
+        let secret = vault
+            .get_item_credential_secret("item", "renamed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(secret.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn updating_a_credential_to_a_taken_key_fails() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let err = vault
+            .update_item_credential(
+                "item",
+                "alpha",
+                CredentialUpdate {
+                    key: Some("beta".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::DuplicateCredentialKey(_)));
+        // The same key is not a conflict with itself.
+        vault
+            .update_item_credential(
+                "item",
+                "alpha",
+                CredentialUpdate {
+                    key: Some("alpha".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
     fn renaming_and_reordering_sections_persists() {
         let mut vault = vault_with_credentials("item", &["alpha"]);
         let a = vault.create_item_section("item", "A").unwrap().id;
@@ -1355,6 +1500,31 @@ mod tests {
         assert_eq!(sections.get(&a).unwrap().title, "Renamed");
         assert_eq!(sections.get(&a).unwrap().position, Some(1));
         assert_eq!(sections.get(&b).unwrap().position, Some(0));
+    }
+
+    #[test]
+    fn new_sections_go_last_regardless_of_title() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        let a = vault.create_item_section("item", "zeta").unwrap().id;
+        let b = vault.create_item_section("item", "Alpha").unwrap().id;
+        // Without a position this section would sort first by title.
+        let mut legacy = VaultItemSection::new("beta");
+        legacy.position = None;
+        let legacy_id = legacy.id;
+        vault
+            .edit_item("item", |item| {
+                item.sections.insert(legacy_id, legacy);
+                Ok(())
+            })
+            .unwrap();
+        let c = vault.create_item_section("item", "Another").unwrap().id;
+
+        let sections = &vault.get_item("item").unwrap().sections;
+        let position = |id: Uuid| sections.get(&id).unwrap().position;
+        assert_eq!(
+            [position(a), position(b), position(legacy_id), position(c)],
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
     }
 
     #[test]

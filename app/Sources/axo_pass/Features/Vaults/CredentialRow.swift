@@ -3,6 +3,11 @@ import CryptoKit
 import SwiftUI
 
 struct CredentialRow: View {
+  /// Credential field being renamed in place.
+  enum RenameField {
+    case title, key
+  }
+
   let cred: CredentialInfo
   /// Vault and item this credential belongs to, for its `axo://` reference.
   let vaultKey: String
@@ -10,49 +15,32 @@ struct CredentialRow: View {
   let secret: SymmetricKey?
   let error: String?
   let isRevealing: Bool
-  let isEditing: Bool
+  /// The field being renamed, or nil.
+  let renaming: RenameField?
   let onReveal: () -> Void
   let onHide: () -> Void
   let onCopy: () async -> Bool
-  let onSave: (_ key: String, _ title: String, _ value: String, _ kind: FieldKindInfo?) -> Void
+  /// Save a renamed field. Text is trimmed and non-empty.
+  let onRename: (_ field: RenameField, _ text: String) -> Void
+  let onCancelRename: () -> Void
   /// Save a new value for this credential, keeping its title, key and kind.
   let onQuickSaveValue: (_ value: String) -> Void
-  let onDelete: () -> Void
 
-  @State private var draftTitle: String = ""
-  @State private var draftKey: String = ""
-  @State private var draftValue: String = ""
-  @State private var draftConcealed: Bool = true
-  @State private var draftMultiline: Bool = false
   @State private var hoveringValue: Bool = false
   @State private var justCopied: Bool = false
   @State private var hoveringReference: Bool = false
   @State private var justCopiedReference: Bool = false
-  // The value at the moment editing began. Nil when the secret could not be
-  // revealed, in which case the value cannot be resubmitted and no edit saves.
-  @State private var originalValue: String? = nil
 
-  // Value-only inline edit, available outside the pane's Edit mode.
+  // Value-only inline edit.
   @State private var quickEditing: Bool = false
   @State private var quickDraft: String = ""
   // The value the quick editor opened with, used to disable Save until it
   // actually changes. Nil until the secret is revealed.
   @State private var quickOriginal: String? = nil
 
-  // Which edit-mode field the pointer is over, for the hover background.
-  @State private var hoveredField: EditField? = nil
-
-  private enum EditField {
-    case title, key, value
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      if isEditing {
-        editForm
-      } else {
-        readView
-      }
+      readView
       if let err = error {
         Text(err).font(.caption).foregroundStyle(.red)
       }
@@ -60,28 +48,7 @@ struct CredentialRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 2)
     .padding(.horizontal, 6)
-    // Seeds the drafts both when the pane enters edit mode and when a row is
-    // built while it is already editing. List creates rows lazily, so a row that
-    // did not exist at the moment Edit was pressed never sees that transition.
-    .task(id: isEditing) {
-      guard isEditing else { return }
-      resetDrafts()
-      cancelQuickEdit()
-      // Edit mode reveals every existing credential up front, but one added
-      // while editing has no secret yet. The onChange below seeds the draft
-      // when the reveal lands.
-      if secret == nil, !isRevealing { onReveal() }
-    }
-    .onChange(of: isEditing) { wasEditing, editing in
-      if !editing, wasEditing {
-        commitIfChanged()
-      }
-    }
     .onChange(of: revealedText) { _, _ in
-      if isEditing, originalValue == nil {
-        originalValue = revealedText
-        draftValue = revealedText ?? ""
-      }
       // A quick edit opened before the reveal landed records the original as
       // soon as it arrives, whether or not the user has started typing.
       if quickEditing, quickOriginal == nil, let revealed = revealedText {
@@ -99,8 +66,26 @@ struct CredentialRow: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 2) {
-          Text(cred.title).fontWeight(.semibold)
-          referenceLabel
+          if renaming == .title {
+            InlineRenameField(
+              initial: cred.title, placeholder: "Title",
+              onCommit: { onRename(.title, $0) }, onCancel: onCancelRename
+            )
+            .fontWeight(.semibold)
+          } else {
+            Text(cred.title).fontWeight(.semibold)
+          }
+          if renaming == .key {
+            HStack(spacing: 0) {
+              Text(referencePrefix).foregroundStyle(.secondary)
+              InlineRenameField(
+                initial: cred.key, placeholder: "id",
+                onCommit: { onRename(.key, $0) }, onCancel: onCancelRename)
+            }
+            .font(.subheadline)
+          } else {
+            referenceLabel
+          }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -260,80 +245,17 @@ struct CredentialRow: View {
     }
   }
 
-  // MARK: - Edit
-
-  private var editForm: some View {
-    VStack(alignment: .leading, spacing: 2) {
-      TextField("Title", text: $draftTitle)
-        .textFieldStyle(.plain)
-        .font(.body)
-        .fontWeight(.semibold)
-        .editableFieldBackground(active: hoveredField == .title)
-        .onHover { hoveredField = $0 ? .title : (hoveredField == .title ? nil : hoveredField) }
-
-      TextField("ID", text: $draftKey)
-        .textFieldStyle(.plain)
-        .font(.body)
-        .foregroundStyle(.secondary)
-        .editableFieldBackground(active: hoveredField == .key)
-        .onHover { hoveredField = $0 ? .key : (hoveredField == .key ? nil : hoveredField) }
-
-      Group {
-        if originalValue == nil {
-          Text(isRevealing ? "Revealing…" : "Value unavailable")
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-          ValueTextEditor(
-            text: $draftValue,
-            placeholder: "Value",
-            multiline: draftMultiline,
-            minLines: 3,
-            maxLines: 12)
-        }
-      }
-      .font(.system(.body, design: .monospaced))
-      .padding(.vertical, 6)
-      .padding(.horizontal, 8)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-      .overlay(
-        RoundedRectangle(cornerRadius: 6)
-          .strokeBorder(
-            hoveredField == .value ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator),
-            lineWidth: 1)
-      )
-      .padding(.top, 6)
-      .onHover { hoveredField = $0 ? .value : (hoveredField == .value ? nil : hoveredField) }
-
-      if supportsTextOptions {
-        HStack(spacing: 16) {
-          Toggle("Concealed", isOn: $draftConcealed)
-          Toggle("Multiline", isOn: $draftMultiline)
-        }
-        .toggleStyle(.checkbox)
-        .controlSize(.small)
-        .padding(.top, 6)
-      }
-
-      Button("Delete", role: .destructive, action: onDelete)
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .padding(.top, 8)
-    }
-    .animation(.easeInOut(duration: 0.12), value: hoveredField)
-  }
-
   // MARK: - Helpers
 
   /// The reference `ap exec` and `ap inject` resolve for this credential.
   private var reference: String {
-    "axo://\(vaultKey)/\(itemKey)/\(cred.key)"
+    referencePrefix + cred.key
   }
 
-  /// Concealed and multiline apply only to freeform text credentials. Other
-  /// kinds (email, totp, unknown, ...) hide the toggles.
-  private var supportsTextOptions: Bool {
-    cred.kind.kind == "text"
+  /// Reference prefix before the credential key. Shown beside the key during
+  /// rename.
+  private var referencePrefix: String {
+    "axo://\(vaultKey)/\(itemKey)/"
   }
 
   /// Lines the value gets in the read view. A multiline credential grows to fit
@@ -371,59 +293,76 @@ struct CredentialRow: View {
     onQuickSaveValue(value)
     cancelQuickEdit()
   }
-
-  private func resetDrafts() {
-    draftTitle = cred.title
-    draftKey = cred.key
-    draftConcealed = cred.kind.concealed
-    draftMultiline = cred.kind.multiline
-    originalValue = revealedText
-    draftValue = revealedText ?? ""
-  }
-
-  private func commitIfChanged() {
-    let newTitle = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    let newKey = draftKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !newTitle.isEmpty, !newKey.isEmpty else { return }
-
-    let valueChanged = originalValue != nil && draftValue != originalValue
-    let kindChanged =
-      supportsTextOptions
-      && (draftConcealed != cred.kind.concealed || draftMultiline != cred.kind.multiline)
-    guard newTitle != cred.title || newKey != cred.key || valueChanged || kindChanged else {
-      return
-    }
-
-    // The FFI resubmits title and value together, so a save needs the value.
-    guard let value = valueChanged ? draftValue : originalValue else { return }
-    let kind: FieldKindInfo? =
-      supportsTextOptions
-      ? FieldKindInfo(kind: "text", concealed: draftConcealed, multiline: draftMultiline)
-      : nil
-    onSave(newKey, newTitle, value, kind)
-  }
 }
 
-/// A subtle rounded fill behind an edit-mode text field, shown while the pointer
-/// is over it.
-private struct EditableFieldBackground: ViewModifier {
-  let active: Bool
+/// Text field that replaces a label during rename, as in Finder. Takes focus on
+/// appear. Return or clicking away commits. Escape cancels. Sized to its text,
+/// so the rest of the row can still be selected and dragged.
+struct InlineRenameField: View {
+  let initial: String
+  let placeholder: String
+  /// Called with the trimmed text when it is not empty. The text may equal
+  /// `initial`.
+  let onCommit: (String) -> Void
+  /// Called on Escape or on commit with empty text.
+  let onCancel: () -> Void
 
-  func body(content: Content) -> some View {
-    content
-      .padding(.vertical, 3)
-      .padding(.horizontal, 4)
-      .background(
-        RoundedRectangle(cornerRadius: 4)
-          .fill(.quaternary.opacity(active ? 1 : 0))
-      )
-      .animation(.easeInOut(duration: 0.12), value: active)
+  @State private var text: String
+  @State private var finished = false
+  @FocusState private var focused: Bool
+
+  init(
+    initial: String, placeholder: String, onCommit: @escaping (String) -> Void,
+    onCancel: @escaping () -> Void
+  ) {
+    self.initial = initial
+    self.placeholder = placeholder
+    self.onCommit = onCommit
+    self.onCancel = onCancel
+    _text = State(initialValue: initial)
+  }
+
+  var body: some View {
+    TextField(placeholder, text: $text)
+      .textFieldStyle(.plain)
+      .focused($focused)
+      .autoWidth(text.isEmpty ? placeholder : text)
+      .padding(.horizontal, 3)
+      .background(.background, in: RoundedRectangle(cornerRadius: 3))
+      .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.tint, lineWidth: 1))
+      .padding(.horizontal, -3)
+      .onSubmit { finish(commit: true) }
+      .onExitCommand { finish(commit: false) }
+      .onChange(of: focused) { _, isFocused in
+        if !isFocused { finish(commit: true) }
+      }
+      .task {
+        // Wait for the field to reach the window before focusing it.
+        await Task.yield()
+        focused = true
+      }
+  }
+
+  private func finish(commit: Bool) {
+    guard !finished else { return }
+    finished = true
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if commit, !trimmed.isEmpty {
+      onCommit(trimmed)
+    } else {
+      onCancel()
+    }
   }
 }
 
 extension View {
-  fileprivate func editableFieldBackground(active: Bool) -> some View {
-    modifier(EditableFieldBackground(active: active))
+  /// Size a text field to `text` rather than the full row width.
+  func autoWidth(_ text: String) -> some View {
+    Text(text)
+      .lineLimit(1)
+      .padding(.trailing, 8)
+      .hidden()
+      .overlay(alignment: .leading) { self }
   }
 }
 
