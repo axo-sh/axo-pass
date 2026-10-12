@@ -96,7 +96,7 @@ struct CredentialList: View {
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in
-        if await model.addOrUpdateCredential(
+        if await model.addCredential(
           vaultKey: vaultKey, itemKey: item.key, credKey: key, title: title, value: value,
           kind: kind
         ) {

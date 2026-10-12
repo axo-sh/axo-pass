@@ -1677,6 +1677,38 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
+    /// Create a credential within an item. Fails if the key is already taken.
+    pub async fn add_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        title: String,
+        value: String,
+        kind: Option<FieldKindInfo>,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            m.with_unlocked_vault(&vault_key, |vw| {
+                let kind = match kind {
+                    Some(info) => FieldKind::try_from(info)?,
+                    None => FieldKind::default(),
+                };
+                vw.add_new_secret(
+                    &item_key,
+                    &cred_key,
+                    &title,
+                    kind,
+                    SecretString::from(value),
+                )
+                .map_err(FfiError::from)
+            })
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
     /// Create or update a credential's title/value within an item.
     pub async fn add_or_update_credential(
         &self,

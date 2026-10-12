@@ -818,6 +818,26 @@ final class VaultsModel {
 
   // MARK: - Credential CRUD
 
+  /// Create a credential. Fails if the key is already taken in the item.
+  @discardableResult
+  func addCredential(
+    vaultKey: String, itemKey: String, credKey: String, title: String, value: String,
+    kind: FieldKindInfo? = nil
+  ) async -> Bool {
+    actionError = nil
+    do {
+      try await core.addCredential(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, title: title, value: value,
+        kind: kind
+      )
+      await loadItems(for: vaultKey)
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
   @discardableResult
   func addOrUpdateCredential(
     vaultKey: String, itemKey: String, credKey: String, title: String, value: String,

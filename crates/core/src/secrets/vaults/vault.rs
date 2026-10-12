@@ -492,6 +492,26 @@ impl Vault {
             .ok_or_else(|| Error::InvalidCredentialKey(cred_key.to_string()))
     }
 
+    /// Add a credential. Fails with `DuplicateCredentialKey` if the item
+    /// already has a credential with this key.
+    pub fn add_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        cred_title: &str,
+        cred_kind: FieldKind,
+        cred_value: SecretString,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
+        if let Some(key) = normalized_key(cred_key)
+            && self
+                .item_credential_index
+                .contains_key(&(item_key.to_string(), key.clone()))
+        {
+            return Err(Error::DuplicateCredentialKey(key));
+        }
+        self.add_or_update_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value)
+    }
+
     pub fn add_or_update_item_credential(
         &mut self,
         item_key: &str,
@@ -1473,6 +1493,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(secret.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn adding_a_credential_with_a_taken_key_fails() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        let err = vault
+            .add_item_credential(
+                "item",
+                "alpha",
+                "Title",
+                FieldKind::default(),
+                SecretString::from("other".to_string()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::DuplicateCredentialKey(_)));
+        let secret = vault
+            .get_item_credential_secret("item", "alpha")
+            .unwrap()
+            .unwrap();
+        assert_ne!(secret.expose_secret(), "other");
+        vault
+            .add_item_credential(
+                "item",
+                "gamma",
+                "Title",
+                FieldKind::default(),
+                SecretString::from("new".to_string()),
+            )
+            .unwrap();
     }
 
     #[test]
