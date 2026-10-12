@@ -429,6 +429,8 @@ private struct SshKeyDetail: View {
     case "ssh.key_add": return "Added to agent"
     case "ssh.key_remove": return "Removed from agent"
     case "ssh.session_bind": return "Session bound"
+    case "ssh.managed_key_create": return "Key created"
+    case "ssh.managed_key_delete": return "Key deleted"
     case "ssh.app_grant_add": return "App allowed"
     case "ssh.app_grant_remove": return "App removed"
     default: return action
