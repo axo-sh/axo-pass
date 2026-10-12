@@ -58,7 +58,7 @@ The Axo Pass ssh-agent supports several kinds of ssh key storage. The use of ssh
 
 **`ssh-add -c`.** A key added with `-c` asks for approval on every use, superseding any Allowed App configuration.
 
-**Allowed Apps.** When an app asks to sign, the prompt offers "Allow <App> to use this key for" a duration: 30 seconds, 5 minutes, 1 hour, 12 hours, or no expiration. While the grant lasts, that app signs with the key without a prompt and you get a notification instead. See and remove grants under Allowed Apps in the key's details. Limitations:
+**Allowed Apps.** When an app asks to sign, the prompt offers "Allow <App> to use this key for" a duration: 30 seconds, 5 minutes, 1 hour, 12 hours, 1 day, 1 week, 30 days, or no expiration. While the grant lasts, that app signs with the key without a prompt and you get a notification instead. See and remove grants under Allowed Apps in the key's details. Limitations:
 
 - An app is identified by its team ID and bundle ID, so the grant survives app updates.
 - Anything the app runs, such as git hooks, can also use the key.

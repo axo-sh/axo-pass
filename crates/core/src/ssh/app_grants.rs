@@ -1,7 +1,7 @@
 //! Lasting per-app access to SSH keys.
 //!
 //! A grant lets one signed app use one key without a prompt, until it expires
-//! (30 seconds to 12 hours) or indefinitely. Grants are kept in
+//! (30 seconds to 30 days) or indefinitely. Grants are kept in
 //! the app's data-protection keychain, which the user and other processes
 //! cannot edit, and are checked by the app broker before it prompts. Only keys
 //! with [`KeyPolicy::Default`] can be granted: a key with a hardware access
@@ -55,7 +55,7 @@ pub struct AppGrant {
 /// The shortest expiration a grant can have.
 pub const MIN_EXPIRATION: Duration = Duration::seconds(30);
 /// The longest expiration a grant can have, short of none at all.
-pub const MAX_EXPIRATION: Duration = Duration::hours(12);
+pub const MAX_EXPIRATION: Duration = Duration::days(30);
 
 impl AppGrant {
     /// Whether the grant still applies at `now`.

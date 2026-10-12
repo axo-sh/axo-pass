@@ -2141,7 +2141,7 @@ impl AxoPass {
         &self,
         fingerprint_sha256: String,
         app: SshGrantApp,
-        // Seconds until the grant expires, from 30 seconds to 12 hours. `None`
+        // Seconds until the grant expires, from 30 seconds to 30 days. `None`
         // for a grant with no expiration.
         expires_in_seconds: Option<u32>,
         peer: Option<RequestActor>,

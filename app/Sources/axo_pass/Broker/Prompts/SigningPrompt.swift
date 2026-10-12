@@ -236,13 +236,16 @@ final class GrantChoice {
   var expiration: GrantExpiration = .oneHour
 }
 
-/// How long an app grant lasts. The core accepts 30 seconds to 12 hours, or
+/// How long an app grant lasts. The core accepts 30 seconds to 30 days, or
 /// no expiration.
 enum GrantExpiration: CaseIterable, Hashable {
   case thirtySeconds
   case fiveMinutes
   case oneHour
   case twelveHours
+  case oneDay
+  case oneWeek
+  case thirtyDays
   case never
 
   /// Nil for no expiration.
@@ -252,6 +255,9 @@ enum GrantExpiration: CaseIterable, Hashable {
     case .fiveMinutes: 5 * 60
     case .oneHour: 60 * 60
     case .twelveHours: 12 * 60 * 60
+    case .oneDay: 24 * 60 * 60
+    case .oneWeek: 7 * 24 * 60 * 60
+    case .thirtyDays: 30 * 24 * 60 * 60
     case .never: nil
     }
   }
@@ -262,6 +268,9 @@ enum GrantExpiration: CaseIterable, Hashable {
     case .fiveMinutes: "5 minutes"
     case .oneHour: "1 hour"
     case .twelveHours: "12 hours"
+    case .oneDay: "1 day"
+    case .oneWeek: "1 week"
+    case .thirtyDays: "30 days"
     case .never: "No expiration"
     }
   }
