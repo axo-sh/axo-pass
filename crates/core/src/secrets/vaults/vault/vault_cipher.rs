@@ -4,9 +4,7 @@ use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault::{
-    VaultCredentialMetadata, VaultFolderMetadata, VaultItemMetadata,
-};
+use crate::secrets::vaults::vault::{VaultCredentialMetadata, VaultItemMetadata, VaultMetadata};
 use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
 pub struct VaultCipher {
@@ -36,13 +34,8 @@ impl VaultCipher {
     // AAD binding each blob to its location in the vault. Changing any of
     // these makes existing vaults undecryptable.
 
-    fn folder_metadata_aad(&self, folder_id: Uuid) -> Vec<String> {
-        vec![
-            self.vault_id.to_string(),
-            "folder".to_string(),
-            folder_id.to_string(),
-            "metadata".to_string(),
-        ]
+    fn vault_metadata_aad(&self) -> Vec<String> {
+        vec![self.vault_id.to_string(), "metadata".to_string()]
     }
 
     fn item_metadata_aad(&self, item_id: Uuid) -> Vec<String> {
@@ -63,20 +56,18 @@ impl VaultCipher {
         ]
     }
 
-    pub fn encrypt_folder_metadata(
+    pub fn encrypt_vault_metadata(
         &self,
-        folder_id: Uuid,
-        value: &VaultFolderMetadata,
-    ) -> Result<EncryptedBlob<VaultFolderMetadata>, Error> {
-        EncryptedBlob::encrypt(value, &self.cipher, self.folder_metadata_aad(folder_id))
+        value: &VaultMetadata,
+    ) -> Result<EncryptedBlob<VaultMetadata>, Error> {
+        EncryptedBlob::encrypt(value, &self.cipher, self.vault_metadata_aad())
     }
 
-    pub fn decrypt_folder_metadata(
+    pub fn decrypt_vault_metadata(
         &self,
-        folder_id: Uuid,
-        blob: &EncryptedBlob<VaultFolderMetadata>,
-    ) -> Result<SecretBox<VaultFolderMetadata>, Error> {
-        blob.decrypt(&self.cipher, self.folder_metadata_aad(folder_id))
+        blob: &EncryptedBlob<VaultMetadata>,
+    ) -> Result<SecretBox<VaultMetadata>, Error> {
+        blob.decrypt(&self.cipher, self.vault_metadata_aad())
     }
 
     pub fn encrypt_item_metadata(
@@ -161,6 +152,10 @@ mod tests {
         let cred_id = Uuid::new_v4();
         let cipher = VaultCipher::new(vault_id);
 
+        assert_eq!(
+            cipher.vault_metadata_aad(),
+            vec![vault_id.to_string(), "metadata".to_string()]
+        );
         assert_eq!(
             cipher.item_metadata_aad(item_id),
             vec![

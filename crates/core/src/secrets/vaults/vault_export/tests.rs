@@ -97,7 +97,7 @@ fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
             name: Some(format!("vault {i}")),
             default_key: (i > 0).then(|| format!("vault-{i}")),
             wrapped_file_key,
-            folders: BTreeMap::new(),
+            metadata: None,
             items: BTreeMap::new(),
         });
     }

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::VaultFolderMetadata;
+use crate::secrets::vaults::vault::VaultMetadata;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
@@ -48,7 +48,7 @@ struct PreparedVault {
     name: Option<String>,
     default_key: Option<String>,
     raw_file_key: SecretBox<Vec<u8>>,
-    folders: BTreeMap<Uuid, EncryptedBlob<VaultFolderMetadata>>,
+    metadata: Option<EncryptedBlob<VaultMetadata>>,
     items: BTreeMap<Uuid, EncryptedVaultItem>,
 }
 
@@ -125,7 +125,7 @@ impl ImportableBundle {
                 name: v.name,
                 default_key: v.default_key,
                 raw_file_key: SecretBox::new(Box::new(raw_bytes)),
-                folders: v.folders,
+                metadata: v.metadata,
                 items: v.items,
             });
         }
@@ -217,7 +217,7 @@ impl ImportableBundle {
                 id: p.prepared.id,
                 name: p.prepared.name,
                 file_key: enc_file_key,
-                folders: p.prepared.folders,
+                metadata: p.prepared.metadata,
                 items: p.prepared.items,
             };
             let json = serde_json::to_string_pretty(&encrypted_vault)

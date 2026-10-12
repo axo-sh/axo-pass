@@ -45,9 +45,10 @@ pub struct Vault {
     item_credential_index: BTreeMap<(String, String), (ItemId, CredentialId)>,
     secrets: BTreeMap<CredentialId, EncryptedBlob<String>>,
 
-    // Cached encrypted metadata blobs. An entry is dropped when its metadata
-    // changes so that to_encrypted() only re-encrypts what is necessary.
-    folder_blobs: BTreeMap<FolderId, EncryptedBlob<VaultFolderMetadata>>,
+    // Cached encrypted metadata blobs. The vault blob holds the folders. An
+    // entry is dropped when its metadata changes so that to_encrypted() only
+    // re-encrypts what is necessary.
+    metadata_blob: Option<EncryptedBlob<VaultMetadata>>,
     item_blobs: BTreeMap<ItemId, EncryptedBlob<VaultItemMetadata>>,
     cred_blobs: BTreeMap<CredentialId, EncryptedBlob<VaultCredentialMetadata>>,
 }
@@ -82,7 +83,7 @@ impl Vault {
             item_index: BTreeMap::new(),
             item_credential_index: BTreeMap::new(),
             secrets: BTreeMap::new(),
-            folder_blobs: BTreeMap::new(),
+            metadata_blob: None,
             item_blobs: BTreeMap::new(),
             cred_blobs: BTreeMap::new(),
         }
@@ -104,13 +105,14 @@ impl Vault {
     ) -> Result<Self, Error> {
         let mut vault = Self::empty(enc_vault.id, enc_vault.name, enc_vault.file_key, cipher);
 
-        for (folder_id, blob) in enc_vault.folders {
-            let folder = vault
-                .cipher
-                .decrypt_folder_metadata(folder_id, &blob)
-                .map(|m| VaultFolder::from_metadata(folder_id, m.expose_secret()))?;
-            vault.folder_blobs.insert(folder_id, blob);
-            vault.folders.insert(folder_id, folder);
+        if let Some(blob) = enc_vault.metadata {
+            let metadata = vault.cipher.decrypt_vault_metadata(&blob)?;
+            for folder in &metadata.expose_secret().folders {
+                vault
+                    .folders
+                    .insert(folder.id, VaultFolder::from_metadata(folder));
+            }
+            vault.metadata_blob = Some(blob);
         }
 
         for (item_id, encrypted_item) in enc_vault.items {
@@ -169,14 +171,18 @@ impl Vault {
             id: self.id,
             name: self.name.clone(),
             file_key: self.file_key.clone(),
-            folders: BTreeMap::new(),
+            metadata: None,
             items: BTreeMap::new(),
         };
 
-        for folder in self.folders.values() {
-            let existing_metadata = self.folder_blobs.get(&folder.id);
-            vault.add_folder(&self.cipher, existing_metadata, folder)?;
-        }
+        let metadata = VaultMetadata {
+            folders: self
+                .folders
+                .values()
+                .map(VaultFolder::to_metadata)
+                .collect(),
+        };
+        vault.set_metadata(&self.cipher, self.metadata_blob.as_ref(), &metadata)?;
 
         for item_overview in self.items.values() {
             let existing_metadata = self.item_blobs.get(&item_overview.id);
@@ -227,7 +233,7 @@ impl Vault {
             name: encrypted_vault.name,
             default_key: key,
             wrapped_file_key,
-            folders: encrypted_vault.folders,
+            metadata: encrypted_vault.metadata,
             items: encrypted_vault.items,
         })
     }
@@ -244,6 +250,7 @@ impl Vault {
 
     pub fn create_folder(&mut self, title: &str) -> &VaultFolder {
         let folder = VaultFolder::new(title);
+        self.metadata_blob = None;
         self.folders.entry(folder.id).or_insert(folder)
     }
 
@@ -253,7 +260,7 @@ impl Vault {
             .get_mut(&folder_id)
             .ok_or_else(|| Error::InvalidFolder(folder_id.to_string()))?;
         folder.title = title.trim().to_string();
-        self.folder_blobs.remove(&folder_id);
+        self.metadata_blob = None;
         Ok(())
     }
 
@@ -262,7 +269,7 @@ impl Vault {
         self.folders
             .remove(&folder_id)
             .ok_or_else(|| Error::InvalidFolder(folder_id.to_string()))?;
-        self.folder_blobs.remove(&folder_id);
+        self.metadata_blob = None;
 
         for item in self.items.values_mut() {
             if item.folder == Some(folder_id) {
@@ -279,9 +286,7 @@ impl Vault {
         if !assign_positions(&mut self.folders, ordered_folder_ids, |f| &mut f.position) {
             return Err(Error::InvalidFolderOrder);
         }
-        for folder_id in ordered_folder_ids {
-            self.folder_blobs.remove(folder_id);
-        }
+        self.metadata_blob = None;
         Ok(())
     }
 
@@ -775,9 +780,9 @@ impl VaultFolder {
         }
     }
 
-    fn from_metadata(id: Uuid, metadata: &VaultFolderMetadata) -> Self {
+    fn from_metadata(metadata: &VaultFolderMetadata) -> Self {
         Self {
-            id,
+            id: metadata.id,
             title: metadata.title.clone(),
             position: metadata.position,
         }
@@ -785,6 +790,7 @@ impl VaultFolder {
 
     pub fn to_metadata(&self) -> VaultFolderMetadata {
         VaultFolderMetadata {
+            id: self.id,
             title: self.title.clone(),
             position: self.position,
         }
@@ -940,8 +946,23 @@ pub struct CredentialPlacement {
     pub section: Option<Uuid>,
 }
 
+/// Vault-level metadata, stored as one encrypted blob.
+#[derive(Default, Serialize, Deserialize, Zeroize)]
+pub struct VaultMetadata {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<VaultFolderMetadata>,
+}
+
+impl VaultMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.folders.is_empty()
+    }
+}
+
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct VaultFolderMetadata {
+    #[zeroize(skip)]
+    pub id: Uuid,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
@@ -1068,7 +1089,7 @@ mod tests {
     /// change has to invalidate them to take effect.
     fn populate_caches(vault: &mut Vault) {
         let encrypted = vault.to_encrypted().unwrap();
-        vault.folder_blobs = encrypted.folders;
+        vault.metadata_blob = encrypted.metadata;
         for (item_id, item) in encrypted.items {
             vault.item_blobs.insert(item_id, item.metadata);
             for (cred_id, cred) in item.credentials {
@@ -1331,7 +1352,7 @@ mod tests {
         vault.move_item("item", Some(folder_id)).unwrap();
 
         let mut encrypted = vault.to_encrypted().unwrap();
-        encrypted.folders.clear();
+        encrypted.metadata = None;
         let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
         let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
 

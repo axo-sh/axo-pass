@@ -12,8 +12,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{
-    VaultCredentialMetadata, VaultFolder, VaultFolderMetadata, VaultItemCredentialOverview,
-    VaultItemMetadata, VaultItemOverview,
+    VaultCredentialMetadata, VaultItemCredentialOverview, VaultItemMetadata, VaultItemOverview,
+    VaultMetadata,
 };
 
 // EncryptedVault is the on disk representation of a vault, with metadata and
@@ -25,8 +25,9 @@ pub struct EncryptedVault {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub file_key: VaultFileKey,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub folders: BTreeMap<Uuid, EncryptedBlob<VaultFolderMetadata>>,
+    /// Vault-level metadata such as folders. Absent for a vault with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<EncryptedBlob<VaultMetadata>>,
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
 }
 
@@ -64,20 +65,22 @@ impl EncryptedVault {
         Err(Error::VaultFileKeyDecryptionError)
     }
 
-    /// Add a folder to the vault. The caller must have already decrypted the
-    /// vault's file key and is responsible for passing in the cipher for
-    /// encryption.
-    pub fn add_folder(
+    /// Set the vault metadata. If `value` is empty, the field is left as none.
+    /// A decrypted the vault cipher is required.
+    pub fn set_metadata(
         &mut self,
         vault_cipher: &VaultCipher,
-        metadata: Option<&EncryptedBlob<VaultFolderMetadata>>,
-        folder: &VaultFolder,
+        existing: Option<&EncryptedBlob<VaultMetadata>>,
+        value: &VaultMetadata,
     ) -> Result<(), Error> {
-        let blob = match metadata {
-            Some(existing) => existing.clone(),
-            None => vault_cipher.encrypt_folder_metadata(folder.id, &folder.to_metadata())?,
+        self.metadata = if value.is_empty() {
+            None
+        } else {
+            Some(match existing {
+                Some(blob) => blob.clone(),
+                None => vault_cipher.encrypt_vault_metadata(value)?,
+            })
         };
-        self.folders.insert(folder.id, blob);
         Ok(())
     }
 
@@ -163,13 +166,14 @@ mod tests {
 
     use super::*;
     use crate::secrets::vaults::fields::FieldKind;
+    use crate::secrets::vaults::vault::VaultFolder;
 
     fn make_vault() -> EncryptedVault {
         EncryptedVault {
             id: Uuid::new_v4(),
             name: Some("test vault".to_string()),
             file_key: VaultFileKey::Personal(vec![0u8; 32]),
-            folders: BTreeMap::new(),
+            metadata: None,
             items: BTreeMap::new(),
         }
     }
@@ -281,32 +285,35 @@ mod tests {
     }
 
     #[test]
-    fn folder_metadata_is_encrypted_and_bound_to_its_id() {
+    fn vault_metadata_is_encrypted_and_bound_to_its_vault() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
-        let folder = VaultFolder::new("Work");
-        vault.add_folder(&cipher, None, &folder).unwrap();
+        let metadata = VaultMetadata {
+            folders: vec![VaultFolder::new("Work").to_metadata()],
+        };
+        vault.set_metadata(&cipher, None, &metadata).unwrap();
 
-        let blob = vault.folders.get(&folder.id).unwrap();
-        let meta = cipher.decrypt_folder_metadata(folder.id, blob).unwrap();
-        assert_eq!(meta.expose_secret().title, "Work");
+        let blob = vault.metadata.as_ref().unwrap();
+        let back = cipher.decrypt_vault_metadata(blob).unwrap();
+        assert_eq!(back.expose_secret().folders[0].title, "Work");
 
-        // The AAD binds the blob to its folder id.
-        assert!(
-            cipher
-                .decrypt_folder_metadata(Uuid::new_v4(), blob)
-                .is_err()
-        );
+        // The AAD binds the blob to its vault id.
+        let other = VaultCipher::new(Uuid::new_v4());
+        assert!(other.decrypt_vault_metadata(blob).is_err());
     }
 
     #[test]
-    fn vault_without_folders_omits_the_field() {
-        let vault = make_vault();
+    fn vault_without_metadata_omits_the_field() {
+        let mut vault = make_vault();
+        let cipher = VaultCipher::new(vault.id);
+        vault
+            .set_metadata(&cipher, None, &VaultMetadata::default())
+            .unwrap();
         let json = serde_json::to_value(&vault).unwrap();
-        assert!(json.get("folders").is_none());
+        assert!(json.get("metadata").is_none());
 
         let back: EncryptedVault = serde_json::from_value(json).unwrap();
-        assert!(back.folders.is_empty());
+        assert!(back.metadata.is_none());
     }
 
     #[test]
