@@ -604,6 +604,12 @@ struct CredentialOutline: NSViewRepresentable {
       parent.onDelete(parent.selection)
     }
 
+    /// Whether `row` is the banner row.
+    func isBanner(row: Int) -> Bool {
+      guard let outline, row >= 0, row < outline.numberOfRows else { return false }
+      return (outline.item(atRow: row) as? OutlineNode) === bannerNode
+    }
+
     // MARK: Context menu
 
     /// Menu for a right click on a row, or on empty space if `row` is -1. Acts
@@ -964,6 +970,18 @@ final class EntryOutlineView: NSOutlineView {
 
   override func menu(for event: NSEvent) -> NSMenu? {
     coordinator?.menu(forRow: row(at: convert(event.locationInWindow, from: nil)))
+  }
+
+  /// Let views in the banner row take focus on the first click. By default a
+  /// table only lets a text field in a selected row take focus, and the banner
+  /// row is never selected.
+  override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?)
+    -> Bool
+  {
+    if let view = responder as? NSView, coordinator?.isBanner(row: row(for: view)) == true {
+      return true
+    }
+    return super.validateProposedFirstResponder(responder, for: event)
   }
 
   // The row view draws the context menu outline. Skipping super leaves out the
