@@ -20,8 +20,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
-    CredentialPlacement, CredentialUpdate, Vault, VaultFolder, VaultItemCredentialOverview,
-    VaultItemOverview, VaultItemSection,
+    CredentialPlacement, CredentialUpdate, DeletedCredentialOverview, Vault, VaultFolder,
+    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -197,7 +197,7 @@ impl VaultWrapper {
         };
 
         let vault = self.get_unlocked_vault()?;
-        let encrypted_vault = vault.to_encrypted()?;
+        let encrypted_vault = vault.to_encrypted(true)?;
         let vault_data = serde_json::to_string_pretty(&encrypted_vault)
             .map_err(Error::VaultSerializationError)?;
 
@@ -350,6 +350,34 @@ impl VaultWrapper {
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item_credential(item_key, cred_key)
+    }
+
+    pub fn list_deleted(&self, item_key: &str) -> Result<Vec<&DeletedCredentialOverview>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.list_deleted(item_key)
+    }
+
+    pub fn restore_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_id: Uuid,
+        new_key: Option<String>,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.restore_item_credential(item_key, cred_id, new_key)?;
+        Ok(())
+    }
+
+    pub fn purge_item_credential(&mut self, item_key: &str, cred_id: Uuid) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.purge_item_credential(item_key, cred_id)
+    }
+
+    /// Purge every deleted credential deleted before
+    /// `older_than`, a Unix timestamp in seconds.
+    pub fn purge_deleted(&mut self, older_than: i64) -> Result<usize, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        Ok(vault.purge_deleted(older_than))
     }
 
     /// Reorder an item's credentials, keeping each in its current section.

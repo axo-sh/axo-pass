@@ -12,8 +12,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{
-    VaultCredentialMetadata, VaultItemCredentialOverview, VaultItemMetadata, VaultItemOverview,
-    VaultMetadata,
+    DeletedInfo, VaultCredentialMetadata, VaultItemCredentialOverview, VaultItemMetadata,
+    VaultItemOverview, VaultMetadata,
 };
 
 // EncryptedVault is the on disk representation of a vault, with metadata and
@@ -99,6 +99,7 @@ impl EncryptedVault {
                 None => vault_cipher.encrypt_item_metadata(item.id, &item.to_metadata())?,
             },
             credentials: BTreeMap::new(),
+            deleted: BTreeMap::new(),
         };
         self.items.insert(item.id, encrypted_item);
         Ok(self.items.get(&item.id).expect("just inserted"))
@@ -131,6 +132,21 @@ impl EncryptedVault {
         item.credentials.insert(cred.id, encrypted_cred);
         Ok(item.credentials.get(&cred.id).expect("just inserted"))
     }
+
+    /// Add a deleted credential to an item. The blobs are stored unchanged.
+    pub fn add_deleted_credential(
+        &mut self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        deleted: DeletedCredential,
+    ) -> Result<(), Error> {
+        let item = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_id.to_string()))?;
+        item.deleted.insert(cred_id, deleted);
+        Ok(())
+    }
 }
 
 #[serde_as]
@@ -152,12 +168,24 @@ pub struct VaultMember {
 pub struct EncryptedVaultItem {
     pub metadata: EncryptedBlob<VaultItemMetadata>,
     pub credentials: BTreeMap<Uuid, EncryptedVaultItemCredential>,
+    /// Deleted credentials that can still be restored. Absent if empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deleted: BTreeMap<Uuid, DeletedCredential>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EncryptedVaultItemCredential {
     pub metadata: EncryptedBlob<VaultCredentialMetadata>,
     pub value: EncryptedBlob<String>,
+}
+
+/// A deleted credential. The credential blobs are the same as when it was
+/// live, so moving it to or from deleted needs no re-encryption.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DeletedCredential {
+    #[serde(flatten)]
+    pub credential: EncryptedVaultItemCredential,
+    pub info: EncryptedBlob<DeletedInfo>,
 }
 
 #[cfg(test)]

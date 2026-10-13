@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault::{VaultCredentialMetadata, VaultItemMetadata, VaultMetadata};
+use crate::secrets::vaults::vault::{
+    DeletedInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
+};
 use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
 pub struct VaultCipher {
@@ -46,7 +48,7 @@ impl VaultCipher {
         ]
     }
 
-    /// `part` is `"metadata"` or `"value"`.
+    /// `part` is `"metadata"`, `"value"`, or `"deleted"`.
     fn cred_aad(&self, item_id: Uuid, cred_id: Uuid, part: &str) -> Vec<String> {
         vec![
             self.vault_id.to_string(),
@@ -130,6 +132,28 @@ impl VaultCipher {
         blob.decrypt(&self.cipher, self.cred_aad(item_id, cred_id, "value"))
     }
 
+    pub fn encrypt_deleted_info(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        value: &DeletedInfo,
+    ) -> Result<EncryptedBlob<DeletedInfo>, Error> {
+        EncryptedBlob::encrypt(
+            value,
+            &self.cipher,
+            self.cred_aad(item_id, cred_id, "deleted"),
+        )
+    }
+
+    pub fn decrypt_deleted_info(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        blob: &EncryptedBlob<DeletedInfo>,
+    ) -> Result<SecretBox<DeletedInfo>, Error> {
+        blob.decrypt(&self.cipher, self.cred_aad(item_id, cred_id, "deleted"))
+    }
+
     /// Encrypt this vault's raw file key with the bundle cipher for export.
     pub fn wrap_raw_key(
         &self,
@@ -171,6 +195,15 @@ mod tests {
                 item_id.to_string(),
                 cred_id.to_string(),
                 "value".to_string()
+            ]
+        );
+        assert_eq!(
+            cipher.cred_aad(item_id, cred_id, "deleted"),
+            vec![
+                vault_id.to_string(),
+                item_id.to_string(),
+                cred_id.to_string(),
+                "deleted".to_string()
             ]
         );
     }
