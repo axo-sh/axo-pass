@@ -1522,6 +1522,122 @@ impl Vault {
         Ok(())
     }
 
+    /// Move a credential to another item, with its value and previous values.
+    /// The credential keeps its id. It gets `new_key` and goes in `section_id`
+    /// of the destination, after the credentials there that have a position.
+    /// The value and history are encrypted again, since their blobs are bound
+    /// to the item. A role slot of the source item that points at the
+    /// credential is cleared. Fails with `DuplicateCredentialKey` if the
+    /// destination already has `new_key`.
+    pub fn transfer_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        dest_item_key: &str,
+        new_key: &str,
+        section_id: Option<SectionId>,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let dest_item_id = *self.get_item_id(dest_item_key)?;
+        if dest_item_id == item_id {
+            return Err(Error::InvalidItemKey(format!(
+                "cannot move {item_key}/{cred_key} into its own item"
+            )));
+        }
+        let new_key = normalized_key(new_key)
+            .ok_or_else(|| Error::InvalidCredentialKey(new_key.to_string()))?;
+        if self
+            .item_credential_index
+            .contains_key(&(dest_item_key.to_string(), new_key.clone()))
+        {
+            return Err(Error::DuplicateCredentialKey(new_key));
+        }
+        let dest = self
+            .items
+            .get(&dest_item_id)
+            .ok_or_else(|| Error::InvalidItemKey(dest_item_key.to_string()))?;
+        if let Some(section_id) = section_id
+            && !dest.sections.contains_key(&section_id)
+        {
+            return Err(Error::InvalidSection(section_id.to_string()));
+        }
+
+        // Encrypt everything for the destination before changing anything.
+        let value = match self.secrets.get(&cred_id) {
+            Some(blob) => {
+                let plain = self.cipher.decrypt_cred_value(item_id, cred_id, blob)?;
+                Some(self.cipher.encrypt_cred_value(
+                    dest_item_id,
+                    cred_id,
+                    plain.expose_secret(),
+                )?)
+            },
+            None => None,
+        };
+        let mut history = Vec::new();
+        for entry in self.history.get(&cred_id).into_iter().flatten() {
+            let plain = self
+                .cipher
+                .decrypt_history_value(item_id, cred_id, entry.id, &entry.value)?;
+            let info = self
+                .cipher
+                .decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
+            history.push(HistoryEntry {
+                id: entry.id,
+                value: self.cipher.encrypt_history_value(
+                    dest_item_id,
+                    cred_id,
+                    entry.id,
+                    plain.expose_secret(),
+                )?,
+                info: self.cipher.encrypt_history_info(
+                    dest_item_id,
+                    cred_id,
+                    entry.id,
+                    info.expose_secret(),
+                )?,
+            });
+        }
+
+        // Remove from the source item.
+        let source = self
+            .items
+            .get_mut(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+        let mut credential = source
+            .credentials
+            .remove(&cred_id)
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        if source.autofill.role_of(cred_id).is_some() {
+            source.autofill.clear_credential(cred_id);
+            self.autofill_blobs.remove(&item_id);
+        }
+        self.item_credential_index
+            .remove(&(item_key.to_string(), cred_key.to_string()));
+        self.cred_blobs.remove(&cred_id);
+        self.secrets.remove(&cred_id);
+        self.history.remove(&cred_id);
+
+        // Add to the destination item.
+        credential.key = new_key.clone();
+        credential.section = section_id;
+        credential.position = None;
+        if let Some(value) = value {
+            self.secrets.insert(cred_id, value);
+        }
+        if !history.is_empty() {
+            self.history.insert(cred_id, history);
+        }
+        self.item_credential_index
+            .insert((dest_item_key.to_string(), new_key), (dest_item_id, cred_id));
+        let dest = self
+            .items
+            .get_mut(&dest_item_id)
+            .ok_or_else(|| Error::InvalidItemKey(dest_item_key.to_string()))?;
+        dest.credentials.insert(cred_id, credential);
+        Ok(dest.credentials.get(&cred_id).expect("just inserted"))
+    }
+
     /// Set the display order and section of an item's credentials.
     /// `placements` must list exactly the item's credential keys, once each.
     /// Each credential's `position` is set to its index in `placements` and
@@ -2294,6 +2410,57 @@ mod tests {
         let item = vault.get_item("item").unwrap();
         assert!(item.autofill.password.is_none());
         assert!(item.autofill.username.is_some());
+    }
+
+    #[test]
+    fn transferring_a_credential_keeps_its_value_history_and_id() {
+        let mut vault = vault_with_credentials("item", &["password"]);
+        vault
+            .add_or_update_item_credential(
+                "item",
+                "password",
+                "password",
+                FieldKind::default(),
+                SecretString::from("new"),
+            )
+            .unwrap();
+        let id = cred_id(&vault, "item", "password");
+        let section = vault.create_item_section("other-item", "Old").unwrap().id;
+
+        vault
+            .transfer_item_credential("item", "password", "other-item", "old-password", Some(section))
+            .unwrap();
+        // The blobs are re-encrypted for the destination, so they decrypt there
+        // after a save.
+        let vault = reload(&vault);
+
+        assert!(vault.get_item_credential("item", "password").is_err());
+        let moved = vault
+            .get_item_credential("other-item", "old-password")
+            .unwrap();
+        assert_eq!(moved.id, id);
+        assert_eq!(moved.section, Some(section));
+        let value = vault
+            .get_item_credential_secret("other-item", "old-password")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.expose_secret(), "new");
+        let history = vault.list_history("other-item", "old-password").unwrap();
+        assert_eq!(history.len(), 1);
+        let previous = vault
+            .get_history_value("other-item", "old-password", history[0].id)
+            .unwrap();
+        assert_eq!(previous.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn transferring_a_credential_rejects_a_taken_key() {
+        let mut vault = vault_with_credentials("item", &["password"]);
+        let err = vault
+            .transfer_item_credential("item", "password", "other-item", "elsewhere", None)
+            .unwrap_err();
+        assert!(matches!(err, Error::DuplicateCredentialKey(_)));
+        assert!(vault.get_item_credential("item", "password").is_ok());
     }
 
     #[test]

@@ -562,6 +562,21 @@ impl VaultWrapper {
         vault.move_item_credential(item_key, cred_key, section_id)
     }
 
+    /// Move a credential to another item, with its value and previous values.
+    /// See [`Vault::transfer_item_credential`].
+    pub fn transfer_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        dest_item_key: &str,
+        new_key: &str,
+        section_id: Option<Uuid>,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.transfer_item_credential(item_key, cred_key, dest_item_key, new_key, section_id)?;
+        Ok(())
+    }
+
     pub fn list_folders(&self) -> Result<Vec<&VaultFolder>, Error> {
         let vault = self.get_unlocked_vault()?;
         Ok(vault.list_folders())

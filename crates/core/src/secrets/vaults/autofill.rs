@@ -14,6 +14,8 @@
 //! Websites match through the Public Suffix List, including its private
 //! section, so `a.github.io` and `b.github.io` are different sites.
 
+use std::collections::HashMap;
+
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
@@ -24,7 +26,7 @@ use super::totp::{self, TotpCode};
 use super::vault_wrapper::validate_key;
 use super::{
     CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultItemCredentialOverview,
-    VaultItemOverview, VaultWrapper, Website,
+    VaultItemOverview, VaultItemSection, VaultWrapper, Website,
 };
 
 /// Credential keys treated as the account name when a conversion finds no
@@ -722,15 +724,21 @@ pub fn add_passkey_login(
 /// Move credentials from `source_key` item into `dest_key` and delete the
 /// source item.
 ///
-/// - credentials whose key and value equal one already in the destination is
-/// dropped and not copied, so merging two logins for the same account does
-/// not leave two usernames.
+/// - credentials move with their values and previous values, and keep their
+/// ids.
+/// - credentials whose key and value equal one already in the destination stay
+/// in the source and are not moved, so merging two logins for the same account
+/// does not leave two usernames.
 /// - keys already present in the destination are given a numeric suffix.
+/// - a credential in a source section goes in the destination section with the
+/// same title, which is created if missing.
 /// - source's roles are only added to the destination unless already present
 /// - websites are added unless already present
 /// - uncategorized destinations take the source's category.
-/// - source passkeys are purged, not kept with the deleted source item, so a
-/// restored source does not give a second copy of a passkey.
+/// - source passkeys that stay in the source are purged, so a restored source
+/// does not give a second copy of a passkey.
+/// - the source goes to the deleted items with the credentials that stayed and
+/// its own deleted credentials. With neither, it is purged.
 /// - caller is responsible for saving the vault.
 pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> Result<(), Error> {
     use secrecy::ExposeSecret;
@@ -751,30 +759,36 @@ pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> R
 
     // Source credential id to the destination credential that now holds it.
     let mut moved: Vec<(Uuid, Uuid)> = Vec::new();
+    // Source section id to the destination section with the same title.
+    let mut sections: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut stayed = 0;
     for cred in sorted_credentials(&source) {
-        let Some(value) = vw.get_secret(source_key, &cred.key)? else {
-            continue;
-        };
-        let value = value.expose_secret().clone();
         if let Some(existing) = dest.credentials.values().find(|c| c.key == cred.key) {
-            let same = vw
-                .get_secret(dest_key, &existing.key)?
-                .is_some_and(|v| *v.expose_secret() == value);
-            if same && existing.kind == cred.kind {
+            let value = vw.get_secret(source_key, &cred.key)?;
+            let same = existing.kind == cred.kind
+                && value.is_some_and(|value| {
+                    vw.get_secret(dest_key, &existing.key)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|v| v.expose_secret() == value.expose_secret())
+                });
+            if same {
                 moved.push((cred.id, existing.id));
-                // skip identical key/value pairs
+                if matches!(cred.kind, FieldKind::Passkey) {
+                    super::passkey::remove_record(vw, source_key, &cred.key)?;
+                } else {
+                    stayed += 1;
+                }
                 continue;
             }
         }
+        let section = match cred.section.and_then(|id| source.sections.get(&id)) {
+            Some(section) => Some(dest_section(vw, dest_key, section, &mut sections)?),
+            None => None,
+        };
         let key = unused_credential_key(vw, dest_key, &cred.key)?;
-        vw.add_secret(
-            dest_key,
-            &key,
-            &cred.title,
-            cred.kind.clone(),
-            SecretString::from(value),
-        )?;
-        moved.push((cred.id, credential_id(vw, dest_key, &key)?));
+        vw.transfer_credential(source_key, &cred.key, dest_key, &key, section)?;
+        moved.push((cred.id, cred.id));
     }
     let carried = |slot: Option<Uuid>| {
         slot.and_then(|id| {
@@ -798,12 +812,39 @@ pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> R
     if dest.category.is_none() && source.category.is_some() {
         vw.set_item_category(dest_key, source.category.clone())?;
     }
-    for cred in source.credentials.values() {
-        if matches!(cred.kind, FieldKind::Passkey) {
-            super::passkey::remove_record(vw, source_key, &cred.key)?;
-        }
+    let has_deleted = vw
+        .list_all_deleted()?
+        .iter()
+        .any(|entry| entry.item.id == source.id);
+    vw.delete_item(source_key)?;
+    if stayed == 0 && !has_deleted {
+        vw.purge_item(source.id)?;
     }
-    vw.delete_item(source_key)
+    Ok(())
+}
+
+/// Destination section for credentials from `section` of the source item: the
+/// destination section with the same title, created if there is none.
+/// `sections` caches the choice per source section.
+fn dest_section(
+    vw: &mut VaultWrapper,
+    dest_key: &str,
+    section: &VaultItemSection,
+    sections: &mut HashMap<Uuid, Uuid>,
+) -> Result<Uuid, Error> {
+    if let Some(id) = sections.get(&section.id) {
+        return Ok(*id);
+    }
+    let existing = vw
+        .get_item_overview(dest_key)?
+        .and_then(|dest| dest.sections.values().find(|s| s.title == section.title))
+        .map(|s| s.id);
+    let id = match existing {
+        Some(id) => id,
+        None => vw.create_item_section(dest_key, &section.title)?.id,
+    };
+    sections.insert(section.id, id);
+    Ok(id)
 }
 
 /// `base`, or `base-2`, `base-3`, and so on, whichever is the first credential
@@ -2393,6 +2434,53 @@ mod tests {
             "password"
         );
         assert_eq!(item.category.as_deref(), Some(CATEGORY_LOGIN));
+    }
+
+    #[test]
+    fn merge_keeps_history_and_sections_and_purges_an_emptied_source() {
+        use secrecy::ExposeSecret;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        legacy_item(&mut vw, "alpha", &[]);
+        legacy_item(
+            &mut vw,
+            "bravo",
+            &[("password", FieldKind::default(), "old")],
+        );
+        vw.add_secret(
+            "bravo",
+            "password",
+            "password",
+            FieldKind::default(),
+            SecretString::from("new"),
+        )
+        .unwrap();
+        let section = vw.create_item_section("bravo", "Recovery").unwrap().id;
+        vw.move_credential("bravo", "password", Some(section)).unwrap();
+        let existing = vw.create_item_section("alpha", "Recovery").unwrap().id;
+        let bravo_id = vw.get_item_overview("bravo").unwrap().unwrap().id;
+
+        merge_items(&mut vw, "bravo", "alpha").unwrap();
+
+        let item = vw.get_item_overview("alpha").unwrap().unwrap();
+        // The source section maps onto the destination section with its title.
+        assert_eq!(item.sections.len(), 1);
+        let moved = &item.credentials.values().next().unwrap();
+        assert_eq!(moved.section, Some(existing));
+        let history = vw.list_history("alpha", "password").unwrap();
+        assert_eq!(history.len(), 1);
+        let previous = vw
+            .get_history_value("alpha", "password", history[0].id)
+            .unwrap();
+        assert_eq!(previous.expose_secret(), "old");
+        // Nothing stayed in the source, so it is not kept as a deleted item.
+        assert!(vw.get_item_overview("bravo").unwrap().is_none());
+        assert!(
+            !vw.list_deleted_items()
+                .unwrap()
+                .iter()
+                .any(|d| d.item.id == bravo_id)
+        );
     }
 
     #[test]
