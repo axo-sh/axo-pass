@@ -482,7 +482,7 @@ private struct AddLoginFieldRow: View {
     Task {
       defer { saving = false }
       guard
-        await model.addOrUpdateCredential(
+        await model.addCredential(
           vaultKey: vaultKey, itemKey: item.key, credKey: key, title: label, value: value,
           kind: kind)
       else {
