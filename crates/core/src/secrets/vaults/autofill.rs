@@ -2456,7 +2456,8 @@ mod tests {
         )
         .unwrap();
         let section = vw.create_item_section("bravo", "Recovery").unwrap().id;
-        vw.move_credential("bravo", "password", Some(section)).unwrap();
+        vw.move_credential("bravo", "password", Some(section))
+            .unwrap();
         let existing = vw.create_item_section("alpha", "Recovery").unwrap().id;
         let bravo_id = vw.get_item_overview("bravo").unwrap().unwrap().id;
 

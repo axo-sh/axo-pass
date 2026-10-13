@@ -696,15 +696,13 @@ impl Vault {
             );
         }
         let deleted_at = OffsetDateTime::now_utc().unix_timestamp();
-        let info = self
-            .cipher
-            .encrypt_deleted_item_info(
-                item_id,
-                &DeletedInfo {
-                    deleted_at,
-                    role: None,
-                },
-            )?;
+        let info = self.cipher.encrypt_deleted_item_info(
+            item_id,
+            &DeletedInfo {
+                deleted_at,
+                role: None,
+            },
+        )?;
 
         // remove credentials from indices, secrets, and cached blobs
         for cred in overview.credentials.values() {
@@ -1576,9 +1574,9 @@ impl Vault {
         };
         let mut history = Vec::new();
         for entry in self.history.get(&cred_id).into_iter().flatten() {
-            let plain = self
-                .cipher
-                .decrypt_history_value(item_id, cred_id, entry.id, &entry.value)?;
+            let plain =
+                self.cipher
+                    .decrypt_history_value(item_id, cred_id, entry.id, &entry.value)?;
             let info = self
                 .cipher
                 .decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
@@ -1628,8 +1626,10 @@ impl Vault {
         if !history.is_empty() {
             self.history.insert(cred_id, history);
         }
-        self.item_credential_index
-            .insert((dest_item_key.to_string(), new_key), (dest_item_id, cred_id));
+        self.item_credential_index.insert(
+            (dest_item_key.to_string(), new_key),
+            (dest_item_id, cred_id),
+        );
         let dest = self
             .items
             .get_mut(&dest_item_id)
@@ -2428,7 +2428,13 @@ mod tests {
         let section = vault.create_item_section("other-item", "Old").unwrap().id;
 
         vault
-            .transfer_item_credential("item", "password", "other-item", "old-password", Some(section))
+            .transfer_item_credential(
+                "item",
+                "password",
+                "other-item",
+                "old-password",
+                Some(section),
+            )
             .unwrap();
         // The blobs are re-encrypted for the destination, so they decrypt there
         // after a save.
@@ -2481,7 +2487,9 @@ mod tests {
         vault.delete_item_credential("item", "password").unwrap();
         // The role survives a save while the credential is deleted.
         let mut vault = reload(&vault);
-        vault.restore_item_credential("item", password, None).unwrap();
+        vault
+            .restore_item_credential("item", password, None)
+            .unwrap();
         let vault = reload(&vault);
 
         let item = vault.get_item("item").unwrap();
