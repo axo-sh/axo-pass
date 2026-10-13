@@ -17,7 +17,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
-    DeletedCredential, EncryptedVault, EncryptedVaultItemCredential, VaultFileKey,
+    DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
+    EncryptedVaultItemCredential, VaultFileKey,
 };
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
@@ -50,6 +51,9 @@ pub struct Vault {
     // Deleted credentials of all items, by credential id. The key of a deleted
     // credential is not in `item_credential_index`.
     deleted: BTreeMap<CredentialId, DeletedEntry>,
+    // Deleted items, by item id. Each holds its credentials and its own
+    // deleted credentials. The key of a deleted item is not in `item_index`.
+    deleted_items: BTreeMap<ItemId, DeletedItemEntry>,
 
     // Cached encrypted metadata blobs. The vault blob holds the folders. An
     // entry is dropped when its metadata changes so that to_encrypted() only
@@ -90,6 +94,7 @@ impl Vault {
             item_credential_index: BTreeMap::new(),
             secrets: BTreeMap::new(),
             deleted: BTreeMap::new(),
+            deleted_items: BTreeMap::new(),
             metadata_blob: None,
             item_blobs: BTreeMap::new(),
             cred_blobs: BTreeMap::new(),
@@ -123,82 +128,177 @@ impl Vault {
         }
 
         for (item_id, encrypted_item) in enc_vault.items {
-            let mut item_overview = vault
+            let item = Self::decrypt_item(&vault.cipher, &vault.folders, item_id, encrypted_item)?;
+            vault.insert_item(item);
+        }
+
+        for (item_id, deleted_item) in enc_vault.deleted {
+            let info = vault
                 .cipher
-                .decrypt_item_metadata(item_id, &encrypted_item.metadata)
-                .map(|m| VaultItemOverview::from_metadata(item_id, m.expose_secret()))?;
-
-            // An item filed in a folder that no longer exists is unfiled. Its
-            // cached blob is not kept, so the next save persists that.
-            if item_overview
-                .folder
-                .is_some_and(|f| !vault.folders.contains_key(&f))
-            {
-                item_overview.folder = None;
-            } else {
-                vault.item_blobs.insert(item_id, encrypted_item.metadata);
-            }
-
-            for (cred_id, encrypted_cred) in encrypted_item.credentials {
-                let mut cred_overview = vault
-                    .cipher
-                    .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
-                    .map(|m| {
-                        VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret())
-                    })?;
-
-                // Same as above, for a credential in a missing section.
-                if cred_overview
-                    .section
-                    .is_some_and(|s| !item_overview.sections.contains_key(&s))
-                {
-                    cred_overview.section = None;
-                } else {
-                    vault.cred_blobs.insert(cred_id, encrypted_cred.metadata);
-                }
-
-                // update (item_key, cred_key) index
-                vault.item_credential_index.insert(
-                    (item_overview.key.clone(), cred_overview.key.clone()),
-                    (item_id, cred_id),
-                );
-                vault.secrets.insert(cred_id, encrypted_cred.value);
-                item_overview.credentials.insert(cred_id, cred_overview);
-            }
-
-            for (cred_id, deleted) in encrypted_item.deleted {
-                let credential = vault
-                    .cipher
-                    .decrypt_cred_metadata(item_id, cred_id, &deleted.credential.metadata)
-                    .map(|m| {
-                        VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret())
-                    })?;
-                let info = vault
-                    .cipher
-                    .decrypt_deleted_info(item_id, cred_id, &deleted.info)?;
-                let overview = DeletedCredentialOverview {
-                    item_id,
-                    credential,
+                .decrypt_deleted_item_info(item_id, &deleted_item.info)?;
+            let item =
+                Self::decrypt_item(&vault.cipher, &vault.folders, item_id, deleted_item.item)?;
+            vault.deleted_items.insert(
+                item_id,
+                DeletedItemEntry {
+                    item,
+                    info: deleted_item.info,
                     deleted_at: info.expose_secret().deleted_at,
-                };
-                vault.deleted.insert(
-                    cred_id,
-                    DeletedEntry {
-                        blobs: deleted,
-                        overview,
-                    },
-                );
-            }
-
-            vault.item_index.insert(item_overview.key.clone(), item_id);
-            vault.items.insert(item_id, item_overview);
+                },
+            );
         }
 
         Ok(vault)
     }
 
-    /// Convert to the on disk form. Deleted credentials are written only if
-    /// `include_deleted` is set.
+    /// Decrypt the metadata of an item, its credentials, and its deleted
+    /// credentials. Secret values stay encrypted.
+    fn decrypt_item(
+        cipher: &VaultCipher,
+        folders: &BTreeMap<FolderId, VaultFolder>,
+        item_id: ItemId,
+        encrypted_item: EncryptedVaultItem,
+    ) -> Result<DecryptedItem, Error> {
+        let mut overview = cipher
+            .decrypt_item_metadata(item_id, &encrypted_item.metadata)
+            .map(|m| VaultItemOverview::from_metadata(item_id, m.expose_secret()))?;
+
+        // An item filed in a folder that no longer exists is unfiled. Its
+        // metadata blob is not current, so the next save persists that.
+        let mut metadata_current = true;
+        if overview.folder.is_some_and(|f| !folders.contains_key(&f)) {
+            overview.folder = None;
+            metadata_current = false;
+        }
+
+        let mut credentials = BTreeMap::new();
+        for (cred_id, encrypted_cred) in encrypted_item.credentials {
+            let mut cred_overview = cipher
+                .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
+                .map(|m| VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret()))?;
+
+            // Same as above, for a credential in a missing section.
+            let mut cred_metadata_current = true;
+            if cred_overview
+                .section
+                .is_some_and(|s| !overview.sections.contains_key(&s))
+            {
+                cred_overview.section = None;
+                cred_metadata_current = false;
+            }
+
+            overview.credentials.insert(cred_id, cred_overview);
+            credentials.insert(
+                cred_id,
+                DecryptedCredential {
+                    metadata: encrypted_cred.metadata,
+                    metadata_current: cred_metadata_current,
+                    value: encrypted_cred.value,
+                },
+            );
+        }
+
+        let mut deleted = BTreeMap::new();
+        for (cred_id, encrypted_deleted) in encrypted_item.deleted {
+            let credential = cipher
+                .decrypt_cred_metadata(item_id, cred_id, &encrypted_deleted.credential.metadata)
+                .map(|m| VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret()))?;
+            let info = cipher.decrypt_deleted_info(item_id, cred_id, &encrypted_deleted.info)?;
+            deleted.insert(
+                cred_id,
+                DeletedEntry {
+                    blobs: encrypted_deleted,
+                    overview: DeletedCredentialOverview {
+                        item_id,
+                        credential,
+                        deleted_at: info.expose_secret().deleted_at,
+                    },
+                },
+            );
+        }
+
+        Ok(DecryptedItem {
+            overview,
+            metadata: encrypted_item.metadata,
+            metadata_current,
+            credentials,
+            deleted,
+        })
+    }
+
+    /// Make a decrypted item live. Its indices, secrets, cached metadata
+    /// blobs, and deleted credentials are added.
+    fn insert_item(&mut self, item: DecryptedItem) {
+        let DecryptedItem {
+            overview,
+            metadata,
+            metadata_current,
+            credentials,
+            deleted,
+        } = item;
+        let item_id = overview.id;
+
+        if metadata_current {
+            self.item_blobs.insert(item_id, metadata);
+        }
+        for (cred_id, cred) in credentials {
+            if cred.metadata_current {
+                self.cred_blobs.insert(cred_id, cred.metadata);
+            }
+            self.secrets.insert(cred_id, cred.value);
+        }
+        for cred in overview.credentials.values() {
+            self.item_credential_index
+                .insert((overview.key.clone(), cred.key.clone()), (item_id, cred.id));
+        }
+        self.deleted.extend(deleted);
+        self.item_index.insert(overview.key.clone(), item_id);
+        self.items.insert(item_id, overview);
+    }
+
+    /// Encrypted form of a decrypted item. Blobs that are not current are
+    /// encrypted again.
+    fn item_to_encrypted(&self, item: &DecryptedItem) -> Result<EncryptedVaultItem, Error> {
+        let item_id = item.overview.id;
+        let metadata = if item.metadata_current {
+            item.metadata.clone()
+        } else {
+            self.cipher
+                .encrypt_item_metadata(item_id, &item.overview.to_metadata())?
+        };
+
+        let mut credentials = BTreeMap::new();
+        for (cred_id, cred) in &item.credentials {
+            let metadata = match item.overview.credentials.get(cred_id) {
+                Some(overview) if !cred.metadata_current => {
+                    self.cipher
+                        .encrypt_cred_metadata(item_id, *cred_id, &overview.to_metadata())?
+                },
+                _ => cred.metadata.clone(),
+            };
+            credentials.insert(
+                *cred_id,
+                EncryptedVaultItemCredential {
+                    metadata,
+                    value: cred.value.clone(),
+                },
+            );
+        }
+
+        let deleted = item
+            .deleted
+            .iter()
+            .map(|(cred_id, entry)| (*cred_id, entry.blobs.clone()))
+            .collect();
+        Ok(EncryptedVaultItem {
+            metadata,
+            credentials,
+            deleted,
+        })
+    }
+
+    /// Convert to the on disk form. Deleted items and credentials are written
+    /// only if `include_deleted` is set.
     pub fn to_encrypted(&self, include_deleted: bool) -> Result<EncryptedVault, Error> {
         let mut vault = EncryptedVault {
             id: self.id,
@@ -206,6 +306,7 @@ impl Vault {
             file_key: self.file_key.clone(),
             metadata: None,
             items: BTreeMap::new(),
+            deleted: BTreeMap::new(),
         };
 
         let metadata = VaultMetadata {
@@ -250,6 +351,15 @@ impl Vault {
                     entry.blobs.clone(),
                 )?;
             }
+            for (item_id, entry) in &self.deleted_items {
+                vault.add_deleted_item(
+                    *item_id,
+                    DeletedItem {
+                        item: self.item_to_encrypted(&entry.item)?,
+                        info: entry.info.clone(),
+                    },
+                );
+            }
         }
 
         Ok(vault)
@@ -258,7 +368,7 @@ impl Vault {
     /// Build a [`BundledVault`] for export. `key` is the preferred import key,
     /// `bundle_cipher` wraps the raw file key.
     ///
-    /// Deleted credentials are not exported.
+    /// Deleted items and credentials are not exported.
     ///
     /// The exported vault carries this vault's own file key. An imported copy
     /// shares that key with the source; export does not re-key.
@@ -408,28 +518,177 @@ impl Vault {
         Ok(item_overview_ref)
     }
 
+    /// Mark an item as deleted. Its key is free for reuse. Its credentials,
+    /// with their encrypted values, and its deleted credentials go with it.
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
         let item_id = *self.get_item_id(item_key)?;
+        let overview = self
+            .items
+            .get(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?
+            .clone();
+
+        // Build the deleted entry before changing anything.
+        let metadata = match self.item_blobs.get(&item_id) {
+            Some(blob) => blob.clone(),
+            None => self
+                .cipher
+                .encrypt_item_metadata(item_id, &overview.to_metadata())?,
+        };
+        let mut credentials = BTreeMap::new();
+        for cred in overview.credentials.values() {
+            let blobs = self.live_credential_blobs(item_id, cred)?;
+            credentials.insert(
+                cred.id,
+                DecryptedCredential {
+                    metadata: blobs.metadata,
+                    metadata_current: true,
+                    value: blobs.value,
+                },
+            );
+        }
+        let deleted_at = OffsetDateTime::now_utc().unix_timestamp();
+        let info = self
+            .cipher
+            .encrypt_deleted_item_info(item_id, &DeletedInfo { deleted_at })?;
 
         // remove credentials from indices, secrets, and cached blobs
-        if let Some(item) = self.items.get(&item_id) {
-            for cred in item.credentials.values() {
-                let composite_key = (item_key.to_string(), cred.key.clone());
-                self.item_credential_index.remove(&composite_key);
-                self.secrets.remove(&cred.id);
-                self.cred_blobs.remove(&cred.id);
-            }
+        for cred in overview.credentials.values() {
+            let composite_key = (item_key.to_string(), cred.key.clone());
+            self.item_credential_index.remove(&composite_key);
+            self.secrets.remove(&cred.id);
+            self.cred_blobs.remove(&cred.id);
         }
 
-        self.deleted
-            .retain(|_, entry| entry.overview.item_id != item_id);
+        // The item's deleted credentials go with it.
+        let deleted_cred_ids: Vec<CredentialId> = self
+            .deleted
+            .iter()
+            .filter(|(_, entry)| entry.overview.item_id == item_id)
+            .map(|(cred_id, _)| *cred_id)
+            .collect();
+        let mut deleted = BTreeMap::new();
+        for cred_id in deleted_cred_ids {
+            if let Some(entry) = self.deleted.remove(&cred_id) {
+                deleted.insert(cred_id, entry);
+            }
+        }
 
         // remove from indices and items map
         self.item_index.remove(item_key);
         self.items.remove(&item_id);
-        self.item_blobs.remove(&item_id); // for simplicity, always attempt this
+        self.item_blobs.remove(&item_id);
 
+        self.deleted_items.insert(
+            item_id,
+            DeletedItemEntry {
+                item: DecryptedItem {
+                    overview,
+                    metadata,
+                    metadata_current: true,
+                    credentials,
+                    deleted,
+                },
+                info,
+                deleted_at,
+            },
+        );
         Ok(())
+    }
+
+    /// Deleted items, most recently deleted first.
+    pub fn list_deleted_items(&self) -> Vec<DeletedItemOverview<'_>> {
+        let mut entries: Vec<DeletedItemOverview<'_>> = self
+            .deleted_items
+            .values()
+            .map(|entry| DeletedItemOverview {
+                item: &entry.item.overview,
+                deleted_at: entry.deleted_at,
+                deleted_credential_count: entry.item.deleted.len(),
+            })
+            .collect();
+        entries.sort_by_key(|overview| std::cmp::Reverse(overview.deleted_at));
+        entries
+    }
+
+    /// Restore a deleted item with its id, folder, sections, credentials, and
+    /// deleted credentials. A folder that no longer exists is dropped. The item
+    /// gets `new_key` if given. Fails with `DuplicateItemKey` if the resulting
+    /// key is taken, and with `DeletedItemNotFound` if there is no such
+    /// deleted item.
+    pub fn restore_item(
+        &mut self,
+        item_id: ItemId,
+        new_key: Option<String>,
+    ) -> Result<&VaultItemOverview, Error> {
+        let entry = self
+            .deleted_items
+            .get(&item_id)
+            .ok_or_else(|| Error::DeletedItemNotFound(item_id.to_string()))?;
+        let key = match new_key {
+            Some(new_key) => normalized_key(&new_key).ok_or(Error::InvalidItemKey(new_key))?,
+            None => entry.item.overview.key.clone(),
+        };
+        if self.item_index.contains_key(&key) {
+            return Err(Error::DuplicateItemKey(key));
+        }
+
+        let Some(DeletedItemEntry { mut item, .. }) = self.deleted_items.remove(&item_id) else {
+            return Err(Error::DeletedItemNotFound(item_id.to_string()));
+        };
+        if item.overview.key != key {
+            item.overview.key = key;
+            item.metadata_current = false;
+        }
+        if item
+            .overview
+            .folder
+            .is_some_and(|f| !self.folders.contains_key(&f))
+        {
+            item.overview.folder = None;
+            item.metadata_current = false;
+        }
+        self.insert_item(item);
+        self.items
+            .get(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_id.to_string()))
+    }
+
+    /// Purge a deleted item with its credentials and deleted credentials.
+    pub fn purge_item(&mut self, item_id: ItemId) -> Result<(), Error> {
+        self.deleted_items
+            .remove(&item_id)
+            .map(|_| ())
+            .ok_or_else(|| Error::DeletedItemNotFound(item_id.to_string()))
+    }
+
+    /// Purge every deleted item deleted before `older_than`, a Unix timestamp
+    /// in seconds. Return the number purged.
+    pub fn purge_deleted_items(&mut self, older_than: i64) -> usize {
+        let before = self.deleted_items.len();
+        self.deleted_items
+            .retain(|_, entry| entry.deleted_at >= older_than);
+        before - self.deleted_items.len()
+    }
+
+    /// Encrypted blobs of a live credential. A credential created with no value
+    /// yet has no entry in `secrets`, so its value is encrypted as empty.
+    fn live_credential_blobs(
+        &self,
+        item_id: ItemId,
+        cred: &VaultItemCredentialOverview,
+    ) -> Result<EncryptedVaultItemCredential, Error> {
+        let metadata = match self.cred_blobs.get(&cred.id) {
+            Some(blob) => blob.clone(),
+            None => self
+                .cipher
+                .encrypt_cred_metadata(item_id, cred.id, &cred.to_metadata())?,
+        };
+        let value = match self.secrets.get(&cred.id) {
+            Some(value) => value.clone(),
+            None => self.cipher.encrypt_cred_value(item_id, cred.id, "")?,
+        };
+        Ok(EncryptedVaultItemCredential { metadata, value })
     }
 
     /// Create a section after the existing sections of an item. Existing
@@ -670,17 +929,7 @@ impl Vault {
         let credential = self.get_item_credential(item_key, cred_key)?.clone();
 
         // Build the deleted entry before changing anything.
-        let metadata = match self.cred_blobs.get(&cred_id) {
-            Some(blob) => blob.clone(),
-            None => {
-                self.cipher
-                    .encrypt_cred_metadata(item_id, cred_id, &credential.to_metadata())?
-            },
-        };
-        let value = match self.secrets.get(&cred_id) {
-            Some(value) => value.clone(),
-            None => self.cipher.encrypt_cred_value(item_id, cred_id, "")?,
-        };
+        let credential_blobs = self.live_credential_blobs(item_id, &credential)?;
         let deleted_at = OffsetDateTime::now_utc().unix_timestamp();
         let info =
             self.cipher
@@ -703,7 +952,7 @@ impl Vault {
             cred_id,
             DeletedEntry {
                 blobs: DeletedCredential {
-                    credential: EncryptedVaultItemCredential { metadata, value },
+                    credential: credential_blobs,
                     info,
                 },
                 overview: DeletedCredentialOverview {
@@ -802,13 +1051,22 @@ impl Vault {
         Ok(())
     }
 
-    /// Purge every deleted credential deleted before
-    /// `older_than`, a Unix timestamp in seconds. Return the number purged.
+    /// Purge every deleted credential deleted before `older_than`, a Unix
+    /// timestamp in seconds. Deleted credentials of deleted items are
+    /// included. Return the number purged.
     pub fn purge_deleted(&mut self, older_than: i64) -> usize {
-        let before = self.deleted.len();
-        self.deleted
-            .retain(|_, entry| entry.overview.deleted_at >= older_than);
-        before - self.deleted.len()
+        let mut purged = 0;
+        let deleted_maps = std::iter::once(&mut self.deleted).chain(
+            self.deleted_items
+                .values_mut()
+                .map(|entry| &mut entry.item.deleted),
+        );
+        for deleted in deleted_maps {
+            let before = deleted.len();
+            deleted.retain(|_, entry| entry.overview.deleted_at >= older_than);
+            purged += before - deleted.len();
+        }
+        purged
     }
 
     fn deleted_overview(
@@ -1007,7 +1265,7 @@ impl VaultFolder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultItemSection {
     pub id: Uuid,
     pub title: String,
@@ -1026,7 +1284,7 @@ impl VaultItemSection {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VaultItemOverview {
     pub id: Uuid,
     pub title: String,
@@ -1156,7 +1414,41 @@ struct DeletedEntry {
     overview: DeletedCredentialOverview,
 }
 
-/// Details of a deleted credential, stored as one encrypted blob.
+/// A deleted item as shown in the Recently Deleted list.
+pub struct DeletedItemOverview<'a> {
+    /// The item as it was when deleted, with its credentials.
+    pub item: &'a VaultItemOverview,
+    /// Unix timestamp in seconds.
+    pub deleted_at: i64,
+    /// Credentials of the item that were deleted before the item.
+    pub deleted_credential_count: usize,
+}
+
+struct DeletedItemEntry {
+    item: DecryptedItem,
+    info: EncryptedBlob<DeletedInfo>,
+    deleted_at: i64,
+}
+
+/// An item with decrypted metadata and encrypted secrets, as it is held while
+/// moving between live and deleted.
+struct DecryptedItem {
+    overview: VaultItemOverview,
+    metadata: EncryptedBlob<VaultItemMetadata>,
+    /// Whether `metadata` matches `overview`.
+    metadata_current: bool,
+    credentials: BTreeMap<CredentialId, DecryptedCredential>,
+    deleted: BTreeMap<CredentialId, DeletedEntry>,
+}
+
+struct DecryptedCredential {
+    metadata: EncryptedBlob<VaultCredentialMetadata>,
+    /// Whether `metadata` matches the credential overview.
+    metadata_current: bool,
+    value: EncryptedBlob<String>,
+}
+
+/// Details of a deleted credential or item, stored as one encrypted blob.
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct DeletedInfo {
     pub deleted_at: i64,
@@ -2100,20 +2392,232 @@ mod tests {
         assert!(vault.list_deleted("item").unwrap().is_empty());
     }
 
+    fn item_id_of(vault: &Vault, item_key: &str) -> Uuid {
+        *vault.get_item_id(item_key).unwrap()
+    }
+
     #[test]
-    fn deleting_an_item_purges_its_deleted() {
-        let mut vault = vault_with_credentials("item", &["alpha"]);
+    fn a_deleted_item_survives_a_save_and_load_and_frees_its_key() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        populate_caches(&mut vault);
+        let item_id = item_id_of(&vault, "item");
+
+        vault.delete_item("item").unwrap();
+        assert!(vault.get_item("item").is_err());
+        assert!(vault.get_item_credential("item", "alpha").is_err());
+        assert!(vault.get_item("other-item").is_ok());
+
+        let mut vault = reload(&vault);
+        assert!(vault.get_item("item").is_err());
+        let deleted = vault.list_deleted_items();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].item.id, item_id);
+        assert_eq!(deleted[0].item.key, "item");
+        assert_eq!(deleted[0].item.credentials.len(), 2);
+        assert!(deleted[0].deleted_at > 0);
+
+        // The key can be used by a new item.
+        vault.add_or_update_item("item", "New").unwrap();
+        assert_ne!(item_id_of(&vault, "item"), item_id);
+    }
+
+    #[test]
+    fn restoring_an_item_brings_back_credentials_values_and_layout() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let folder_id = vault.create_folder("Work").id;
+        vault.move_item("item", Some(folder_id)).unwrap();
+        let section_id = vault.create_item_section("item", "Login").unwrap().id;
+        vault
+            .move_item_credential("item", "beta", Some(section_id))
+            .unwrap();
+        let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        populate_caches(&mut vault);
+        let item_id = item_id_of(&vault, "item");
+
+        vault.delete_item("item").unwrap();
+        let mut vault = reload(&vault);
+        vault.restore_item(item_id, None).unwrap();
+        assert!(vault.list_deleted_items().is_empty());
+
+        let vault = reload(&vault);
+        let item = vault.get_item("item").unwrap();
+        assert_eq!(item.id, item_id);
+        assert_eq!(item.folder, Some(folder_id));
+        assert_eq!(item.sections.get(&section_id).unwrap().title, "Login");
+        assert_eq!(
+            vault.get_item_credential("item", "alpha").unwrap().id,
+            alpha_id
+        );
+        assert_eq!(
+            vault.get_item_credential("item", "beta").unwrap().section,
+            Some(section_id)
+        );
+        assert_eq!(secret_of(&vault, "item", "alpha"), "secret");
+        assert_eq!(secret_of(&vault, "item", "beta"), "secret");
+    }
+
+    #[test]
+    fn a_deleted_item_keeps_its_own_deleted_credentials() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        populate_caches(&mut vault);
+        let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        let item_id = item_id_of(&vault, "item");
         vault.delete_item_credential("item", "alpha").unwrap();
+
         vault.delete_item("item").unwrap();
         assert!(vault.deleted.is_empty());
-        assert!(
-            vault
-                .to_encrypted(true)
-                .unwrap()
-                .items
-                .values()
-                .all(|item| item.deleted.is_empty())
-        );
+        assert_eq!(vault.list_deleted_items()[0].deleted_credential_count, 1);
+
+        let mut vault = reload(&vault);
+        vault.restore_item(item_id, None).unwrap();
+        assert_eq!(deleted_ids(&vault, "item"), vec![alpha_id]);
+        assert!(vault.get_item_credential("item", "beta").is_ok());
+
+        vault
+            .restore_item_credential("item", alpha_id, None)
+            .unwrap();
+        let vault = reload(&vault);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "secret");
+    }
+
+    #[test]
+    fn restoring_an_item_with_a_taken_key_fails_unless_a_new_key_is_given() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        let item_id = item_id_of(&vault, "item");
+        vault.delete_item("item").unwrap();
+        vault.add_or_update_item("item", "New").unwrap();
+
+        let err = vault.restore_item(item_id, None).unwrap_err();
+        assert!(matches!(err, Error::DuplicateItemKey(_)));
+        let err = vault
+            .restore_item(item_id, Some("item".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, Error::DuplicateItemKey(_)));
+        let err = vault
+            .restore_item(item_id, Some("  ".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidItemKey(_)));
+        // A failed restore leaves the item deleted.
+        assert_eq!(vault.list_deleted_items().len(), 1);
+
+        vault
+            .restore_item(item_id, Some("item-old".to_string()))
+            .unwrap();
+        let vault = reload(&vault);
+        assert_eq!(vault.get_item("item-old").unwrap().id, item_id);
+        assert_eq!(secret_of(&vault, "item-old", "alpha"), "secret");
+        assert_ne!(item_id_of(&vault, "item"), item_id);
+    }
+
+    #[test]
+    fn restoring_an_item_into_a_deleted_folder_unfiles_it() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        let folder_id = vault.create_folder("Work").id;
+        vault.move_item("item", Some(folder_id)).unwrap();
+        populate_caches(&mut vault);
+        let item_id = item_id_of(&vault, "item");
+
+        vault.delete_item("item").unwrap();
+        vault.delete_folder(folder_id).unwrap();
+        vault.restore_item(item_id, None).unwrap();
+
+        let vault = reload(&vault);
+        assert_eq!(vault.get_item("item").unwrap().folder, None);
+    }
+
+    #[test]
+    fn purging_an_item_removes_it_and_its_deleted_credentials() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        vault.delete_item_credential("item", "alpha").unwrap();
+        let item_id = item_id_of(&vault, "item");
+        vault.delete_item("item").unwrap();
+
+        vault.purge_item(item_id).unwrap();
+        assert!(matches!(
+            vault.restore_item(item_id, None),
+            Err(Error::DeletedItemNotFound(_))
+        ));
+        assert!(matches!(
+            vault.purge_item(item_id),
+            Err(Error::DeletedItemNotFound(_))
+        ));
+
+        let encrypted = vault.to_encrypted(true).unwrap();
+        assert!(encrypted.deleted.is_empty());
+        assert!(vault.deleted.is_empty());
+    }
+
+    #[test]
+    fn purge_deleted_includes_deleted_credentials_of_deleted_items() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        vault.delete_item_credential("item", "alpha").unwrap();
+        vault
+            .delete_item_credential("other-item", "elsewhere")
+            .unwrap();
+        let item_id = item_id_of(&vault, "item");
+        vault.delete_item("item").unwrap();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        assert_eq!(vault.purge_deleted(now + 10), 2);
+        assert!(vault.deleted.is_empty());
+        assert_eq!(vault.list_deleted_items()[0].deleted_credential_count, 0);
+
+        // The deleted item itself is kept.
+        vault.restore_item(item_id, None).unwrap();
+        assert!(vault.list_deleted("item").unwrap().is_empty());
+        assert!(vault.get_item_credential("item", "beta").is_ok());
+    }
+
+    #[test]
+    fn purge_deleted_items_removes_entries_older_than_the_cutoff() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        vault.delete_item("item").unwrap();
+        vault.delete_item("other-item").unwrap();
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+
+        assert_eq!(vault.purge_deleted_items(0), 0);
+        assert_eq!(vault.list_deleted_items().len(), 2);
+        assert_eq!(vault.purge_deleted_items(now + 10), 2);
+        assert!(vault.list_deleted_items().is_empty());
+    }
+
+    #[test]
+    fn bundled_export_leaves_out_deleted_items() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        vault.delete_item("item").unwrap();
+
+        assert_eq!(vault.to_encrypted(true).unwrap().deleted.len(), 1);
+        let without = vault.to_encrypted(false).unwrap();
+        assert!(without.deleted.is_empty());
+        assert_eq!(without.items.len(), 1);
+    }
+
+    #[test]
+    fn a_vault_file_without_a_deleted_field_loads_with_no_deleted_items() {
+        let vault = vault_with_credentials("item", &["alpha"]);
+        let json = serde_json::to_value(vault.to_encrypted(true).unwrap()).unwrap();
+        assert!(json.get("deleted").is_none());
+
+        let encrypted: EncryptedVault = serde_json::from_value(json).unwrap();
+        let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
+        let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+        assert!(vault.list_deleted_items().is_empty());
+    }
+
+    #[test]
+    fn deleted_item_info_is_bound_to_its_item() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        vault.delete_item("item").unwrap();
+        vault.delete_item("other-item").unwrap();
+
+        // Swap the info blobs of the two deleted items.
+        let mut encrypted = vault.to_encrypted(true).unwrap();
+        let mut entries = encrypted.deleted.values_mut();
+        let (first, second) = (entries.next().unwrap(), entries.next().unwrap());
+        std::mem::swap(&mut first.info, &mut second.info);
+
+        let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
+        assert!(Vault::from_encrypted_with_cipher(cipher, encrypted).is_err());
     }
 
     #[test]

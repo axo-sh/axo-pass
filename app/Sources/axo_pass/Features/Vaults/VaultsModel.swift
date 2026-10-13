@@ -793,8 +793,102 @@ final class VaultsModel {
     }
   }
 
+  /// Delete an item. It stays in the vault's deleted items until purged. If
+  /// `undoManager` is given, an undo is registered that restores the item.
   @discardableResult
-  func deleteItem(vaultKey: String, itemKey: String) async -> Bool {
+  func deleteItem(
+    vaultKey: String, itemKey: String, undoManager: UndoManager? = nil
+  ) async -> Bool {
+    guard let itemId = item(vaultKey: vaultKey, itemKey: itemKey)?.id else {
+      actionError = ItemNotLoadedError(itemKey: itemKey).description
+      return false
+    }
+    guard await performItemDelete(vaultKey: vaultKey, itemKey: itemKey) else { return false }
+    if let undoManager {
+      registerItemUndo(
+        after: nil, vaultKey: vaultKey, itemId: itemId, preferredKey: itemKey,
+        undoManager: undoManager)
+    }
+    return true
+  }
+
+  /// Register an undo that restores the item after `pending` finishes. `pending`
+  /// is the delete the undo reverses. Redo deletes the item again under the key
+  /// it was restored with. Each inverse is registered during the undo or redo,
+  /// since registering later would clear the redo stack.
+  private func registerItemUndo(
+    after pending: Task<Void, Never>?, vaultKey: String, itemId: String, preferredKey: String,
+    undoManager: UndoManager
+  ) {
+    undoManager.registerMainActorUndo(named: "Delete") { [weak self] manager in
+      guard let self else { return }
+      let restored = Task { () -> String? in
+        await pending?.value
+        return await self.performItemRestore(
+          vaultKey: vaultKey, itemId: itemId, preferredKey: preferredKey)
+      }
+      manager.registerMainActorUndo(named: "Delete") { [weak self] manager in
+        guard let self else { return }
+        let redo = Task {
+          guard let key = await restored.value else { return }
+          await self.performItemDelete(vaultKey: vaultKey, itemKey: key)
+        }
+        self.registerItemUndo(
+          after: redo, vaultKey: vaultKey, itemId: itemId, preferredKey: preferredKey,
+          undoManager: manager)
+      }
+    }
+  }
+
+  /// Restore a deleted item for an undo. Returns the key it was restored under,
+  /// or nil if it could not be restored. Does nothing while locked. An item
+  /// that was already restored or purged from Recently Deleted is skipped
+  /// without an error.
+  private func performItemRestore(
+    vaultKey: String, itemId: String, preferredKey: String
+  ) async -> String? {
+    guard isAppUnlocked else { return nil }
+    actionError = nil
+    do {
+      return try await restoreDeletedItem(
+        vaultKey: vaultKey, itemId: itemId, preferredKey: preferredKey)
+    } catch FfiError.NotFound {
+      return nil
+    } catch {
+      actionError = String(describing: error)
+      return nil
+    }
+  }
+
+  /// Deleted items of a vault, most recently deleted first.
+  func deletedItems(vaultKey: String) async throws -> [DeletedItemInfo] {
+    try await core.listDeletedItems(vaultKey: vaultKey)
+  }
+
+  /// Restore a deleted item. If `preferredKey` has been reused, the item is
+  /// restored under a new key. Returns the key it was restored under. Items
+  /// are reloaded first so the new key is chosen from current keys.
+  @discardableResult
+  func restoreDeletedItem(vaultKey: String, itemId: String, preferredKey: String) async throws
+    -> String
+  {
+    await loadItems(for: vaultKey)
+    let taken = Set(itemCache[vaultKey]?.map(\.key) ?? [])
+    let key = Self.unusedKey(preferredKey, taken: taken)
+    try await mutate(vaultKey) {
+      try await core.restoreItem(
+        vaultKey: vaultKey, itemId: itemId, newKey: key == preferredKey ? nil : key)
+    }
+    return key
+  }
+
+  /// Delete a deleted item permanently.
+  func purgeDeletedItem(vaultKey: String, itemId: String) async throws {
+    try await core.purgeItem(vaultKey: vaultKey, itemId: itemId)
+  }
+
+  @discardableResult
+  private func performItemDelete(vaultKey: String, itemKey: String) async -> Bool {
     actionError = nil
     do {
       try await core.deleteItem(vaultKey: vaultKey, itemKey: itemKey)

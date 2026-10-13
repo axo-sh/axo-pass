@@ -219,6 +219,7 @@ impl ImportableBundle {
                 file_key: enc_file_key,
                 metadata: p.prepared.metadata,
                 items: p.prepared.items,
+                deleted: BTreeMap::new(),
             };
             let json = serde_json::to_string_pretty(&encrypted_vault)
                 .map_err(Error::VaultSerializationError)?;

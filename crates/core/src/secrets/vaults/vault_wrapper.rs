@@ -20,8 +20,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
-    CredentialPlacement, CredentialUpdate, DeletedCredentialOverview, Vault, VaultFolder,
-    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
+    CredentialPlacement, CredentialUpdate, DeletedCredentialOverview, DeletedItemOverview, Vault,
+    VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -269,6 +269,29 @@ impl VaultWrapper {
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item(item_key)
+    }
+
+    pub fn list_deleted_items(&self) -> Result<Vec<DeletedItemOverview<'_>>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        Ok(vault.list_deleted_items())
+    }
+
+    pub fn restore_item(&mut self, item_id: Uuid, new_key: Option<String>) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.restore_item(item_id, new_key)?;
+        Ok(())
+    }
+
+    pub fn purge_item(&mut self, item_id: Uuid) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.purge_item(item_id)
+    }
+
+    /// Purge every deleted item deleted before `older_than`, a Unix timestamp
+    /// in seconds.
+    pub fn purge_deleted_items(&mut self, older_than: i64) -> Result<usize, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        Ok(vault.purge_deleted_items(older_than))
     }
 
     pub fn add_secret(

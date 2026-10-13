@@ -29,6 +29,9 @@ pub struct EncryptedVault {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EncryptedBlob<VaultMetadata>>,
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
+    /// Deleted items that can still be restored. Absent if empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deleted: BTreeMap<Uuid, DeletedItem>,
 }
 
 impl EncryptedVault {
@@ -147,6 +150,11 @@ impl EncryptedVault {
         item.deleted.insert(cred_id, deleted);
         Ok(())
     }
+
+    /// Add a deleted item. The blobs are stored unchanged.
+    pub fn add_deleted_item(&mut self, item_id: Uuid, deleted: DeletedItem) {
+        self.deleted.insert(item_id, deleted);
+    }
 }
 
 #[serde_as]
@@ -171,6 +179,16 @@ pub struct EncryptedVaultItem {
     /// Deleted credentials that can still be restored. Absent if empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub deleted: BTreeMap<Uuid, DeletedCredential>,
+}
+
+/// A deleted item. The item blobs are the same as when it was live, including
+/// its credentials and its own deleted credentials, so moving it to or from
+/// deleted needs no re-encryption.
+#[derive(Serialize, Deserialize)]
+pub struct DeletedItem {
+    #[serde(flatten)]
+    pub item: EncryptedVaultItem,
+    pub info: EncryptedBlob<DeletedInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -203,6 +221,7 @@ mod tests {
             file_key: VaultFileKey::Personal(vec![0u8; 32]),
             metadata: None,
             items: BTreeMap::new(),
+            deleted: BTreeMap::new(),
         }
     }
 

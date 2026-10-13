@@ -65,6 +65,12 @@ pub enum Error {
     #[error("Invalid item key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidItemKey(String),
 
+    #[error("An item with key {0} already exists")]
+    DuplicateItemKey(String),
+
+    #[error("Deleted item {0} not found")]
+    DeletedItemNotFound(String),
+
     #[error("Invalid credential key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidCredentialKey(String),
 

@@ -91,8 +91,12 @@ impl From<VaultError> for FfiError {
             },
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
+            VaultError::DeletedItemNotFound(id) => {
+                FfiError::NotFound(format!("Deleted item {id}"))
+            },
             other @ (VaultError::InvalidFolderOrder
             | VaultError::DuplicateCredentialKey(_)
+            | VaultError::DuplicateItemKey(_)
             | VaultError::InvalidSectionOrder(_)
             | VaultError::InvalidCredentialOrder(_)) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),
@@ -162,6 +166,23 @@ pub struct CredentialInfo {
     /// `id` of the item section the credential is in. `None` for a credential
     /// outside any section.
     pub section_id: Option<String>,
+}
+
+/// A deleted item that can still be restored. Credential values are not
+/// included.
+#[derive(uniffi::Record)]
+pub struct DeletedItemInfo {
+    /// Item id as a UUID string. Pass back to `restore_item` or `purge_item`.
+    pub id: String,
+    pub key: String,
+    pub title: String,
+    /// Credentials the item had when deleted.
+    pub credential_count: u32,
+    /// Credentials of the item that were deleted before the item. They are
+    /// restored with the item.
+    pub deleted_credential_count: u32,
+    /// Deletion time as a Unix timestamp in seconds.
+    pub deleted_at: i64,
 }
 
 /// A deleted credential that can still be restored. The value is not
@@ -285,6 +306,8 @@ impl TryFrom<FieldKindInfo> for FieldKind {
 
 #[derive(uniffi::Record)]
 pub struct ItemInfo {
+    /// Item id as a UUID string. It does not change when the key does.
+    pub id: String,
     pub key: String,
     pub title: String,
     /// `id` of the folder the item is in. `None` for an unfiled item.
@@ -1485,6 +1508,7 @@ impl AxoPass {
                     });
 
                     ItemInfo {
+                        id: item.id.to_string(),
                         key: item.key.clone(),
                         title: item.title.clone(),
                         folder_id: item.folder.map(|id| id.to_string()),
@@ -1681,7 +1705,60 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
-    /// Delete an item (and all its credentials) from a vault.
+    /// List a vault's deleted items, most recently deleted first.
+    pub async fn list_deleted_items(
+        &self,
+        vault_key: String,
+    ) -> Result<Vec<DeletedItemInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+            ensure_unlocked(vault)?;
+
+            let deleted = vault.list_deleted_items().map_err(FfiError::from)?;
+            Ok(deleted
+                .into_iter()
+                .map(|d| DeletedItemInfo {
+                    id: d.item.id.to_string(),
+                    key: d.item.key.clone(),
+                    title: d.item.title.clone(),
+                    credential_count: d.item.credentials.len() as u32,
+                    deleted_credential_count: d.deleted_credential_count as u32,
+                    deleted_at: d.deleted_at,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Restore a deleted item with its credentials, deleted credentials,
+    /// sections, and folder. A folder that no longer exists is dropped. The
+    /// item gets `new_key` if given. Fails with `InvalidInput` if the
+    /// resulting key is taken.
+    pub async fn restore_item(
+        &self,
+        vault_key: String,
+        item_id: String,
+        new_key: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.restore_item(parse_id(&item_id)?, new_key)?)
+        })
+        .await
+    }
+
+    /// Delete a deleted item permanently, with its credentials.
+    pub async fn purge_item(&self, vault_key: String, item_id: String) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| Ok(vw.purge_item(parse_id(&item_id)?)?))
+            .await
+    }
+
+    /// Delete an item (and all its credentials) from a vault. It stays
+    /// recoverable with `restore_item` until purged.
     pub async fn delete_item(&self, vault_key: String, item_key: String) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
