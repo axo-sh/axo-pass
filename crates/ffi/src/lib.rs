@@ -90,6 +90,9 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidCredentialKey(k) => {
                 FfiError::InvalidInput(format!("Invalid credential key: {k}"))
             },
+            VaultError::InvalidHistoryEntry(id) => {
+                FfiError::NotFound(format!("Previous value {id}"))
+            },
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
             VaultError::DeletedItemNotFound(id) => FfiError::NotFound(format!("Deleted item {id}")),
@@ -165,6 +168,16 @@ pub struct CredentialInfo {
     /// `id` of the item section the credential is in. `None` for a credential
     /// outside any section.
     pub section_id: Option<String>,
+}
+
+/// A previous value of a credential. The value is not included. Read it with
+/// `get_credential_history_value`.
+#[derive(uniffi::Record)]
+pub struct HistoryEntryInfo {
+    /// Entry id as a UUID string.
+    pub id: String,
+    /// Time the value was replaced, as a Unix timestamp in seconds.
+    pub replaced_at: i64,
 }
 
 /// A deleted item that can still be restored. Credential values are not
@@ -1613,6 +1626,89 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List the previous values of a credential, most recently replaced first.
+    pub async fn list_credential_history(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+    ) -> Result<Vec<HistoryEntryInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+            ensure_unlocked(vault)?;
+
+            let history = vault
+                .list_history(&item_key, &cred_key)
+                .map_err(FfiError::from)?;
+            Ok(history
+                .into_iter()
+                .map(|h| HistoryEntryInfo {
+                    id: h.id.to_string(),
+                    replaced_at: h.replaced_at,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Retrieve a previous value of a credential as raw bytes (same zeroing
+    /// convention as `get_credential_secret`).
+    pub async fn get_credential_history_value(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        history_id: String,
+    ) -> Result<Vec<u8>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_vault(&vault_key)
+                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+            let secret = vault
+                .get_history_value(&item_key, &cred_key, parse_id(&history_id)?)
+                .map_err(FfiError::from)?;
+            Ok(secret.expose_secret().as_bytes().to_vec())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Make a previous value the current value. The value it replaces is added
+    /// to the history.
+    pub async fn restore_credential_history_value(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        history_id: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.restore_history_value(&item_key, &cred_key, parse_id(&history_id)?)?)
+        })
+        .await
+    }
+
+    /// Delete a previous value of a credential permanently.
+    pub async fn purge_credential_history(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        history_id: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.purge_history(&item_key, &cred_key, parse_id(&history_id)?)?)
+        })
+        .await
     }
 
     /// Retrieve a credential secret's decrypted title as raw bytes (same

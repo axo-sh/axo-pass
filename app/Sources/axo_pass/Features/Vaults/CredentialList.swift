@@ -46,6 +46,8 @@ struct CredentialList: View {
   // Section creation error. Shown separately since there is no row for it.
   @State private var listError: String? = nil
   @State private var showingNewCredentialSheet = false
+  // Credential whose previous values are shown.
+  @State private var previousValuesTarget: PreviousValuesTarget? = nil
 
   var body: some View {
     CredentialOutline(
@@ -93,6 +95,11 @@ struct CredentialList: View {
         .menuIndicator(.hidden)
         .help("New credential or section.")
       }
+    }
+    .sheet(item: $previousValuesTarget) { target in
+      PreviousValuesSheet(
+        vaultKey: vaultKey, itemKey: item.key, credKey: target.key, title: target.title,
+        onValueChanged: { refreshCachedSecret(for: target.key) })
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in
@@ -295,6 +302,10 @@ struct CredentialList: View {
       var items: [OutlineMenuItem] = [
         .action("Rename") { renaming = .credential(key, .title) },
         .action("Change ID") { renaming = .credential(key, .key) },
+        .divider,
+        .action("Previous Values…") {
+          previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
+        },
       ]
       // Concealed and multiline apply only to freeform text credentials.
       if cred.kind.kind == "text" {

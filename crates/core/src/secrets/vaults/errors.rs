@@ -74,6 +74,9 @@ pub enum Error {
     #[error("Invalid credential key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidCredentialKey(String),
 
+    #[error("Previous value {0} not found")]
+    InvalidHistoryEntry(String),
+
     #[error("A credential with key {0} already exists")]
     DuplicateCredentialKey(String),
 

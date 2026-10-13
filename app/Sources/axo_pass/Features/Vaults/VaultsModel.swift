@@ -1220,6 +1220,41 @@ final class VaultsModel {
     return key
   }
 
+  /// Previous values of a credential, most recently replaced first.
+  func credentialHistory(vaultKey: String, itemKey: String, credKey: String) async throws
+    -> [HistoryEntryInfo]
+  {
+    try await core.listCredentialHistory(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
+  }
+
+  /// Fetch a previous value of a credential without keeping it in plain memory.
+  func historyValue(vaultKey: String, itemKey: String, credKey: String, historyId: String)
+    async throws -> SymmetricKey
+  {
+    var raw = try await core.getCredentialHistoryValue(
+      vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, historyId: historyId)
+    let key = SymmetricKey(data: raw)
+    raw.resetBytes(in: raw.indices)
+    return key
+  }
+
+  /// Make a previous value the current value. The value it replaces is added to
+  /// the history.
+  func restoreHistoryValue(
+    vaultKey: String, itemKey: String, credKey: String, historyId: String
+  ) async throws {
+    try await core.restoreCredentialHistoryValue(
+      vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, historyId: historyId)
+  }
+
+  /// Delete a previous value permanently.
+  func purgeHistoryValue(
+    vaultKey: String, itemKey: String, credKey: String, historyId: String
+  ) async throws {
+    try await core.purgeCredentialHistory(
+      vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, historyId: historyId)
+  }
+
   /// Delete a deleted credential permanently.
   func purgeDeletedCredential(vaultKey: String, _ deleted: DeletedCredentialInfo) async throws {
     try await core.purgeCredential(

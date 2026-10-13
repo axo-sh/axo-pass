@@ -12,8 +12,8 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{
-    DeletedInfo, VaultCredentialMetadata, VaultItemCredentialOverview, VaultItemMetadata,
-    VaultItemOverview, VaultMetadata,
+    DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
+    VaultItemMetadata, VaultItemOverview, VaultMetadata,
 };
 
 // EncryptedVault is the on disk representation of a vault, with metadata and
@@ -118,6 +118,7 @@ impl EncryptedVault {
         item_id: Uuid,
         cred: &VaultItemCredentialOverview,
         secret: EncryptedBlob<String>,
+        history: Vec<HistoryEntry>,
     ) -> Result<&EncryptedVaultItemCredential, Error> {
         let item = self
             .items
@@ -131,6 +132,7 @@ impl EncryptedVault {
                 },
             },
             value: secret,
+            history,
         };
         item.credentials.insert(cred.id, encrypted_cred);
         Ok(item.credentials.get(&cred.id).expect("just inserted"))
@@ -195,6 +197,19 @@ pub struct DeletedItem {
 pub struct EncryptedVaultItemCredential {
     pub metadata: EncryptedBlob<VaultCredentialMetadata>,
     pub value: EncryptedBlob<String>,
+    /// Previous values, oldest first. Absent if empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<HistoryEntry>,
+}
+
+/// A previous value of a credential. The value is encrypted under the entry id
+/// as well as the credential, so it cannot be swapped into the live value's
+/// place.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct HistoryEntry {
+    pub id: Uuid,
+    pub value: EncryptedBlob<String>,
+    pub info: EncryptedBlob<HistoryInfo>,
 }
 
 /// A deleted credential. The credential blobs are the same as when it was
@@ -275,7 +290,7 @@ mod tests {
             .unwrap();
 
         vault
-            .add_credential(&cipher, None, item.id, &cred, secret)
+            .add_credential(&cipher, None, item.id, &cred, secret, Vec::new())
             .unwrap();
 
         // Verify the vault has exactly one item with exactly one credential
@@ -315,7 +330,7 @@ mod tests {
             .encrypt_cred_value(item.id, cred.id, "secret123")
             .unwrap();
         vault
-            .add_credential(&cipher, None, item.id, &cred, secret)
+            .add_credential(&cipher, None, item.id, &cred, secret, Vec::new())
             .unwrap();
 
         let enc_cred = vault
@@ -373,7 +388,7 @@ mod tests {
             .encrypt_cred_value(Uuid::new_v4(), Uuid::new_v4(), "tok")
             .unwrap();
 
-        let result = vault.add_credential(&cipher, None, Uuid::new_v4(), &cred, secret);
+        let result = vault.add_credential(&cipher, None, Uuid::new_v4(), &cred, secret, Vec::new());
         assert!(matches!(result, Err(Error::InvalidItemKey(_))));
     }
 }

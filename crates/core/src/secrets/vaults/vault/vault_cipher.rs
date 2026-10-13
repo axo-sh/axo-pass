@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::{
-    DeletedInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
+    DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
 };
 use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
@@ -56,7 +56,8 @@ impl VaultCipher {
         ]
     }
 
-    /// `part` is `"metadata"`, `"value"`, or `"deleted"`.
+    /// `part` is `"metadata"`, `"value"`, `"deleted"`, `"history:<id>"`, or
+    /// `"history-info:<id>"`.
     fn cred_aad(&self, item_id: Uuid, cred_id: Uuid, part: &str) -> Vec<String> {
         vec![
             self.vault_id.to_string(),
@@ -162,6 +163,68 @@ impl VaultCipher {
         blob.decrypt(&self.cipher, self.cred_aad(item_id, cred_id, "deleted"))
     }
 
+    fn history_value_aad(&self, item_id: Uuid, cred_id: Uuid, entry_id: Uuid) -> Vec<String> {
+        self.cred_aad(item_id, cred_id, &format!("history:{entry_id}"))
+    }
+
+    fn history_info_aad(&self, item_id: Uuid, cred_id: Uuid, entry_id: Uuid) -> Vec<String> {
+        self.cred_aad(item_id, cred_id, &format!("history-info:{entry_id}"))
+    }
+
+    pub fn encrypt_history_value(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry_id: Uuid,
+        value: &str,
+    ) -> Result<EncryptedBlob<String>, Error> {
+        EncryptedBlob::encrypt(
+            &value.to_string(),
+            &self.cipher,
+            self.history_value_aad(item_id, cred_id, entry_id),
+        )
+    }
+
+    pub fn decrypt_history_value(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry_id: Uuid,
+        blob: &EncryptedBlob<String>,
+    ) -> Result<SecretBox<String>, Error> {
+        blob.decrypt(
+            &self.cipher,
+            self.history_value_aad(item_id, cred_id, entry_id),
+        )
+    }
+
+    pub fn encrypt_history_info(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry_id: Uuid,
+        value: &HistoryInfo,
+    ) -> Result<EncryptedBlob<HistoryInfo>, Error> {
+        EncryptedBlob::encrypt(
+            value,
+            &self.cipher,
+            self.history_info_aad(item_id, cred_id, entry_id),
+        )
+    }
+
+    pub fn decrypt_history_info(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry_id: Uuid,
+        blob: &EncryptedBlob<HistoryInfo>,
+    ) -> Result<SecretBox<HistoryInfo>, Error> {
+        blob.decrypt(
+            &self.cipher,
+            self.history_info_aad(item_id, cred_id, entry_id),
+        )
+    }
+
     pub fn encrypt_deleted_item_info(
         &self,
         item_id: Uuid,
@@ -228,6 +291,25 @@ mod tests {
                 item_id.to_string(),
                 cred_id.to_string(),
                 "deleted".to_string()
+            ]
+        );
+        let entry_id = Uuid::new_v4();
+        assert_eq!(
+            cipher.history_value_aad(item_id, cred_id, entry_id),
+            vec![
+                vault_id.to_string(),
+                item_id.to_string(),
+                cred_id.to_string(),
+                format!("history:{entry_id}")
+            ]
+        );
+        assert_eq!(
+            cipher.history_info_aad(item_id, cred_id, entry_id),
+            vec![
+                vault_id.to_string(),
+                item_id.to_string(),
+                cred_id.to_string(),
+                format!("history-info:{entry_id}")
             ]
         );
         assert_eq!(

@@ -18,7 +18,7 @@ use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
-    EncryptedVaultItemCredential, VaultFileKey,
+    EncryptedVaultItemCredential, HistoryEntry, VaultFileKey,
 };
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
@@ -48,6 +48,9 @@ pub struct Vault {
     item_index: BTreeMap<String, ItemId>,
     item_credential_index: BTreeMap<(String, String), (ItemId, CredentialId)>,
     secrets: BTreeMap<CredentialId, EncryptedBlob<String>>,
+    // Previous values of live credentials, oldest first. A credential with none
+    // has no entry.
+    history: BTreeMap<CredentialId, Vec<HistoryEntry>>,
     // Deleted credentials of all items, by credential id. The key of a deleted
     // credential is not in `item_credential_index`.
     deleted: BTreeMap<CredentialId, DeletedEntry>,
@@ -93,6 +96,7 @@ impl Vault {
             item_index: BTreeMap::new(),
             item_credential_index: BTreeMap::new(),
             secrets: BTreeMap::new(),
+            history: BTreeMap::new(),
             deleted: BTreeMap::new(),
             deleted_items: BTreeMap::new(),
             metadata_blob: None,
@@ -194,6 +198,7 @@ impl Vault {
                     metadata: encrypted_cred.metadata,
                     metadata_current: cred_metadata_current,
                     value: encrypted_cred.value,
+                    history: encrypted_cred.history,
                 },
             );
         }
@@ -246,6 +251,9 @@ impl Vault {
                 self.cred_blobs.insert(cred_id, cred.metadata);
             }
             self.secrets.insert(cred_id, cred.value);
+            if !cred.history.is_empty() {
+                self.history.insert(cred_id, cred.history);
+            }
         }
         for cred in overview.credentials.values() {
             self.item_credential_index
@@ -281,6 +289,7 @@ impl Vault {
                 EncryptedVaultItemCredential {
                     metadata,
                     value: cred.value.clone(),
+                    history: cred.history.clone(),
                 },
             );
         }
@@ -339,6 +348,7 @@ impl Vault {
                     item_overview.id,
                     cred_overview,
                     secret,
+                    self.history.get(cred_id).cloned().unwrap_or_default(),
                 )?;
             }
         }
@@ -544,6 +554,7 @@ impl Vault {
                     metadata: blobs.metadata,
                     metadata_current: true,
                     value: blobs.value,
+                    history: blobs.history,
                 },
             );
         }
@@ -557,6 +568,7 @@ impl Vault {
             let composite_key = (item_key.to_string(), cred.key.clone());
             self.item_credential_index.remove(&composite_key);
             self.secrets.remove(&cred.id);
+            self.history.remove(&cred.id);
             self.cred_blobs.remove(&cred.id);
         }
 
@@ -693,7 +705,48 @@ impl Vault {
             Some(value) => value.clone(),
             None => self.cipher.encrypt_cred_value(item_id, cred.id, "")?,
         };
-        Ok(EncryptedVaultItemCredential { metadata, value })
+        let history = self.history.get(&cred.id).cloned().unwrap_or_default();
+        Ok(EncryptedVaultItemCredential {
+            metadata,
+            value,
+            history,
+        })
+    }
+
+    /// History entry for the current value of a credential, if `new_value`
+    /// replaces it. A credential with no value yet, an empty value, or the same
+    /// value has nothing to keep.
+    fn replaced_value_entry(
+        &self,
+        item_id: ItemId,
+        cred_id: CredentialId,
+        new_value: &str,
+    ) -> Result<Option<HistoryEntry>, Error> {
+        let Some(current) = self.secrets.get(&cred_id) else {
+            return Ok(None);
+        };
+        let current = self.cipher.decrypt_cred_value(item_id, cred_id, current)?;
+        if current.expose_secret().is_empty() || current.expose_secret() == new_value {
+            return Ok(None);
+        }
+
+        let id = Uuid::new_v4();
+        let replaced_at = OffsetDateTime::now_utc().unix_timestamp();
+        Ok(Some(HistoryEntry {
+            id,
+            value: self.cipher.encrypt_history_value(
+                item_id,
+                cred_id,
+                id,
+                current.expose_secret(),
+            )?,
+            info: self.cipher.encrypt_history_info(
+                item_id,
+                cred_id,
+                id,
+                &HistoryInfo { replaced_at },
+            )?,
+        }))
     }
 
     /// Create a section after the existing sections of an item. Existing
@@ -848,14 +901,18 @@ impl Vault {
         let cred_key = cred_overview.key.clone(); // normalized key
 
         let item_id = *self.get_item_id(item_key)?;
+        let secret = cred_value.expose_secret();
+        let replaced = self.replaced_value_entry(item_id, cred_id, secret)?;
+        let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
+
         let item = self
             .items
             .get_mut(&item_id)
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
-
-        let secret = cred_value.expose_secret();
-        let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
         self.secrets.insert(cred_id, encrypted_secret);
+        if let Some(entry) = replaced {
+            self.history.entry(cred_id).or_default().push(entry);
+        }
 
         // add or update credential in item.credentials
         item.credentials.insert(cred_id, cred_overview);
@@ -951,6 +1008,7 @@ impl Vault {
         self.item_credential_index
             .remove(&(item_key.to_string(), cred_key.to_string()));
         self.secrets.remove(&cred_id);
+        self.history.remove(&cred_id);
         self.cred_blobs.remove(&cred_id);
 
         self.deleted.insert(
@@ -1079,6 +1137,9 @@ impl Vault {
             credential: blobs, ..
         } = entry.blobs;
         self.secrets.insert(cred_id, blobs.value);
+        if !blobs.history.is_empty() {
+            self.history.insert(cred_id, blobs.history);
+        }
         // The stored metadata blob is reused only if it still matches.
         if !metadata_changed {
             self.cred_blobs.insert(cred_id, blobs.metadata);
@@ -1159,6 +1220,106 @@ impl Vault {
             .cipher
             .decrypt_cred_value(item_id, cred_id, encrypted_secret)?;
         Ok(Some(plaintext))
+    }
+
+    /// Previous values of a credential, most recently replaced first. Entries
+    /// whose details fail to decrypt are skipped and logged.
+    pub fn list_history(
+        &self,
+        item_key: &str,
+        cred_key: &str,
+    ) -> Result<Vec<HistoryOverview>, Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let mut entries = Vec::new();
+        for entry in self.history.get(&cred_id).into_iter().flatten().rev() {
+            let info =
+                match self
+                    .cipher
+                    .decrypt_history_info(item_id, cred_id, entry.id, &entry.info)
+                {
+                    Ok(info) => info,
+                    Err(e) => {
+                        let id = entry.id;
+                        log::warn!("Skipping previous value {id} of {item_key}/{cred_key}: {e}");
+                        continue;
+                    },
+                };
+            entries.push(HistoryOverview {
+                id: entry.id,
+                replaced_at: info.expose_secret().replaced_at,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// A previous value of a credential.
+    pub fn get_history_value(
+        &self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<SecretBox<String>, Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let entry = self.history_entry(cred_id, history_id)?;
+        self.cipher
+            .decrypt_history_value(item_id, cred_id, history_id, &entry.value)
+    }
+
+    /// Make a previous value the current value. The entry is removed from the
+    /// history, and the value it replaces is added to it.
+    pub fn restore_history_value(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<(), Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let value = self.get_history_value(item_key, cred_key, history_id)?;
+        let replaced = self.replaced_value_entry(item_id, cred_id, value.expose_secret())?;
+        let encrypted_value =
+            self.cipher
+                .encrypt_cred_value(item_id, cred_id, value.expose_secret())?;
+
+        self.secrets.insert(cred_id, encrypted_value);
+        if let Some(history) = self.history.get_mut(&cred_id) {
+            history.retain(|entry| entry.id != history_id);
+        }
+        if let Some(entry) = replaced {
+            self.history.entry(cred_id).or_default().push(entry);
+        }
+        if self.history.get(&cred_id).is_some_and(Vec::is_empty) {
+            self.history.remove(&cred_id);
+        }
+        Ok(())
+    }
+
+    /// Delete a previous value permanently.
+    pub fn purge_history(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<(), Error> {
+        let (_, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        self.history_entry(cred_id, history_id)?;
+        if let Some(history) = self.history.get_mut(&cred_id) {
+            history.retain(|entry| entry.id != history_id);
+            if history.is_empty() {
+                self.history.remove(&cred_id);
+            }
+        }
+        Ok(())
+    }
+
+    fn history_entry(
+        &self,
+        cred_id: CredentialId,
+        history_id: Uuid,
+    ) -> Result<&HistoryEntry, Error> {
+        self.history
+            .get(&cred_id)
+            .and_then(|history| history.iter().find(|entry| entry.id == history_id))
+            .ok_or_else(|| Error::InvalidHistoryEntry(history_id.to_string()))
     }
 
     /// Move a credential into a section of its item, or out of any section
@@ -1504,6 +1665,21 @@ struct DecryptedCredential {
     /// Whether `metadata` matches the credential overview.
     metadata_current: bool,
     value: EncryptedBlob<String>,
+    history: Vec<HistoryEntry>,
+}
+
+/// A previous value of a credential, without the value.
+#[derive(Clone, Debug)]
+pub struct HistoryOverview {
+    pub id: Uuid,
+    /// Unix timestamp in seconds.
+    pub replaced_at: i64,
+}
+
+/// Details of a previous value, stored as one encrypted blob.
+#[derive(Serialize, Deserialize, Zeroize)]
+pub struct HistoryInfo {
+    pub replaced_at: i64,
 }
 
 /// Details of a deleted credential or item, stored as one encrypted blob.
@@ -2664,6 +2840,282 @@ mod tests {
             vault.get_deleted_credential_secret(item_id, alpha_id),
             Err(Error::InvalidCredentialKey(_))
         ));
+    }
+
+    fn set_value(vault: &mut Vault, item_key: &str, cred_key: &str, value: &str) {
+        vault
+            .add_or_update_item_credential(
+                item_key,
+                cred_key,
+                cred_key,
+                FieldKind::default(),
+                SecretString::from(value.to_string()),
+            )
+            .unwrap();
+    }
+
+    fn history_values(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<String> {
+        vault
+            .list_history(item_key, cred_key)
+            .unwrap()
+            .iter()
+            .map(|h| {
+                vault
+                    .get_history_value(item_key, cred_key, h.id)
+                    .unwrap()
+                    .expose_secret()
+                    .clone()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changing_a_value_keeps_the_old_value_in_the_history() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        assert!(vault.list_history("item", "alpha").unwrap().is_empty());
+
+        set_value(&mut vault, "item", "alpha", "second");
+        set_value(&mut vault, "item", "alpha", "third");
+
+        assert_eq!(secret_of(&vault, "item", "alpha"), "third");
+        // Most recently replaced first.
+        assert_eq!(
+            history_values(&vault, "item", "alpha"),
+            vec!["second", "secret"]
+        );
+        assert!(
+            vault
+                .list_history("item", "alpha")
+                .unwrap()
+                .iter()
+                .all(|h| h.replaced_at > 0)
+        );
+    }
+
+    #[test]
+    fn saving_the_same_or_a_first_or_an_empty_value_adds_no_history() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "secret");
+        assert!(vault.list_history("item", "alpha").unwrap().is_empty());
+
+        // A credential created with no value yet, then given one.
+        vault
+            .add_item_credential(
+                "item",
+                "empty",
+                "Empty",
+                FieldKind::default(),
+                SecretString::from(String::new()),
+            )
+            .unwrap();
+        set_value(&mut vault, "item", "empty", "first");
+        assert!(vault.list_history("item", "empty").unwrap().is_empty());
+        set_value(&mut vault, "item", "empty", "second");
+        assert_eq!(history_values(&vault, "item", "empty"), vec!["first"]);
+    }
+
+    #[test]
+    fn history_survives_a_save_and_load() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        set_value(&mut vault, "item", "alpha", "third");
+
+        let vault = reload(&vault);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "third");
+        assert_eq!(
+            history_values(&vault, "item", "alpha"),
+            vec!["second", "secret"]
+        );
+    }
+
+    #[test]
+    fn restoring_a_previous_value_swaps_it_with_the_current_value() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        let first = vault.list_history("item", "alpha").unwrap()[0].id;
+
+        vault.restore_history_value("item", "alpha", first).unwrap();
+
+        assert_eq!(secret_of(&vault, "item", "alpha"), "secret");
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["second"]);
+        let vault = reload(&vault);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "secret");
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["second"]);
+    }
+
+    #[test]
+    fn restoring_the_only_previous_value_over_an_empty_value_clears_the_history() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "");
+        let first = vault.list_history("item", "alpha").unwrap()[0].id;
+
+        vault.restore_history_value("item", "alpha", first).unwrap();
+
+        assert_eq!(secret_of(&vault, "item", "alpha"), "secret");
+        assert!(vault.history.is_empty());
+    }
+
+    #[test]
+    fn listing_history_skips_an_entry_that_fails_to_decrypt() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        set_value(&mut vault, "item", "alpha", "third");
+        let item_id = item_id_of(&vault, "item");
+        let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+
+        let mut encrypted = vault.to_encrypted(true).unwrap();
+        let cred = encrypted
+            .items
+            .get_mut(&item_id)
+            .unwrap()
+            .credentials
+            .get_mut(&cred_id)
+            .unwrap();
+        let first_info = cred.history[0].info.clone();
+        cred.history[1].info = first_info;
+        let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
+        let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+    }
+
+    #[test]
+    fn restoring_an_unknown_previous_value_fails() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        assert!(matches!(
+            vault.restore_history_value("item", "alpha", Uuid::new_v4()),
+            Err(Error::InvalidHistoryEntry(_))
+        ));
+        assert!(matches!(
+            vault.get_history_value("item", "alpha", Uuid::new_v4()),
+            Err(Error::InvalidHistoryEntry(_))
+        ));
+        assert!(matches!(
+            vault.purge_history("item", "alpha", Uuid::new_v4()),
+            Err(Error::InvalidHistoryEntry(_))
+        ));
+        assert_eq!(secret_of(&vault, "item", "alpha"), "second");
+    }
+
+    #[test]
+    fn purging_a_previous_value_removes_it_for_good() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        set_value(&mut vault, "item", "alpha", "third");
+        let newest = vault.list_history("item", "alpha").unwrap()[0].id;
+
+        vault.purge_history("item", "alpha", newest).unwrap();
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+
+        let vault = reload(&vault);
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "third");
+    }
+
+    #[test]
+    fn history_follows_a_credential_through_delete_and_restore() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+
+        vault.delete_item_credential("item", "alpha").unwrap();
+        assert!(vault.history.is_empty());
+
+        let mut vault = reload(&vault);
+        vault
+            .restore_item_credential("item", cred_id, None)
+            .unwrap();
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "second");
+    }
+
+    #[test]
+    fn history_follows_a_credential_through_item_delete_and_restore() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        let item_id = item_id_of(&vault, "item");
+
+        vault.delete_item("item").unwrap();
+        assert!(vault.history.is_empty());
+
+        let mut vault = reload(&vault);
+        vault.restore_item(item_id, None).unwrap();
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+
+        let vault = reload(&vault);
+        assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+        assert_eq!(secret_of(&vault, "item", "alpha"), "second");
+    }
+
+    #[test]
+    fn history_is_exported_and_omitted_from_the_file_when_empty() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        set_value(&mut vault, "item", "alpha", "second");
+
+        let json = serde_json::to_value(vault.to_encrypted(false).unwrap()).unwrap();
+        let creds = json["items"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|item| item["credentials"].as_object().unwrap().values())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            creds.iter().filter(|c| c.get("history").is_some()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_previous_value_cannot_be_swapped_into_another_place() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        set_value(&mut vault, "item", "alpha", "second");
+        set_value(&mut vault, "item", "alpha", "third");
+        let item_id = item_id_of(&vault, "item");
+        let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+
+        let load = |encrypted: EncryptedVault| {
+            let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
+            Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap()
+        };
+
+        // A history value in the live value's place.
+        let mut encrypted = vault.to_encrypted(true).unwrap();
+        let cred = encrypted
+            .items
+            .get_mut(&item_id)
+            .unwrap()
+            .credentials
+            .get_mut(&cred_id)
+            .unwrap();
+        cred.value = cred.history[0].value.clone();
+        let swapped = load(encrypted);
+        assert!(swapped.get_item_credential_secret("item", "alpha").is_err());
+
+        // A history value in another history entry's place.
+        let mut encrypted = vault.to_encrypted(true).unwrap();
+        let cred = encrypted
+            .items
+            .get_mut(&item_id)
+            .unwrap()
+            .credentials
+            .get_mut(&cred_id)
+            .unwrap();
+        let first_value = cred.history[0].value.clone();
+        cred.history[1].value = first_value;
+        let swapped = load(encrypted);
+        let ids: Vec<Uuid> = swapped
+            .list_history("item", "alpha")
+            .unwrap()
+            .iter()
+            .map(|h| h.id)
+            .collect();
+        let decrypted: Vec<bool> = ids
+            .iter()
+            .map(|id| swapped.get_history_value("item", "alpha", *id).is_ok())
+            .collect();
+        // Only the entry that kept its own value decrypts.
+        assert_eq!(decrypted.iter().filter(|ok| **ok).count(), 1);
     }
 
     #[test]

@@ -146,12 +146,25 @@ extension CredentialList {
 
   /// Update a revealed value in the cache after a successful save, so the row
   /// stops showing what was there before. A credential that is not revealed is
-  /// left alone: the next reveal fetches the new value. The row only requests a
+  /// left alone. The next reveal fetches the new value. The row only requests a
   /// secret on first appearance, so a stale entry would otherwise persist.
   private func refreshCachedSecret(_ value: String, for key: String) {
     guard secrets[key] != nil else { return }
     var raw = Data(value.utf8)
     secrets[key] = SymmetricKey(data: raw)
     raw.resetBytes(in: raw.indices)
+  }
+
+  /// Same as `refreshCachedSecret(_:for:)`, for a value changed outside the
+  /// row. The new value is fetched from the vault.
+  func refreshCachedSecret(for key: String) {
+    guard secrets[key] != nil else { return }
+    Task {
+      if let secret = try? await model.credentialSecret(
+        vaultKey: vaultKey, itemKey: item.key, credKey: key)
+      {
+        secrets[key] = secret
+      }
+    }
   }
 }

@@ -20,8 +20,9 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
-    CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview, Vault,
-    VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
+    CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
+    HistoryOverview, Vault, VaultFolder, VaultItemCredentialOverview, VaultItemOverview,
+    VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -329,6 +330,48 @@ impl VaultWrapper {
     ) -> Result<Option<SecretBox<String>>, Error> {
         let vault = self.get_unlocked_vault()?;
         vault.get_item_credential_secret(item_key, cred_key)
+    }
+
+    /// Previous values of a credential, most recently replaced first.
+    pub fn list_history(
+        &self,
+        item_key: &str,
+        cred_key: &str,
+    ) -> Result<Vec<HistoryOverview>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.list_history(item_key, cred_key)
+    }
+
+    pub fn get_history_value(
+        &self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<SecretBox<String>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.get_history_value(item_key, cred_key, history_id)
+    }
+
+    /// Make a previous value the current value.
+    pub fn restore_history_value(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.restore_history_value(item_key, cred_key, history_id)
+    }
+
+    /// Delete a previous value permanently.
+    pub fn purge_history(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        history_id: Uuid,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.purge_history(item_key, cred_key, history_id)
     }
 
     pub fn get_secret_by_url(&self, url: Url) -> Result<Option<SecretBox<String>>, Error> {
