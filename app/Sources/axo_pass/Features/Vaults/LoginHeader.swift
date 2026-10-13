@@ -371,34 +371,36 @@ private struct AddLoginFieldRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       if adding {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        // Matches the quick editor of a login card row.
+        HStack(alignment: .center, spacing: 12) {
           LoginFieldLabel(label)
-          Group {
+          ValueTextEditor(text: $draft, placeholder: placeholder)
+            .focused($focused)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+              RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(.tint, lineWidth: 2)
+            )
+          HStack(spacing: 4) {
             if field == .password {
-              SecureField("Password", text: $draft)
-            } else {
-              TextField(placeholder, text: $draft)
+              Button("Generate") {
+                if let generated = model.generatePassword() { draft = generated }
+              }
             }
-          }
-          .textFieldStyle(.roundedBorder)
-          .font(.system(.body, design: .monospaced))
-          .focused($focused)
-          .onSubmit(save)
-          if field == .password {
-            Button("Generate") {
-              if let generated = model.generatePassword() { draft = generated }
+            Button("Cancel") {
+              adding = false
+              draft = ""
+              error = nil
             }
+            Button("Save", action: save)
+              .keyboardShortcut(.defaultAction)
+              .disabled(saving || draft.trimmingCharacters(in: .whitespaces).isEmpty)
           }
-          Button("Cancel") {
-            adding = false
-            draft = ""
-            error = nil
-          }
-          Button("Save", action: save)
-            .keyboardShortcut(.defaultAction)
-            .disabled(saving || draft.trimmingCharacters(in: .whitespaces).isEmpty)
+          .buttonStyle(.bordered)
+          .controlSize(.small)
         }
-        .controlSize(.small)
         if let error {
           Text(error).font(.caption).foregroundStyle(.red)
             .padding(.leading, loginFieldLabelWidth + 12)
@@ -434,7 +436,11 @@ private struct AddLoginFieldRow: View {
   }
 
   private var placeholder: String {
-    field == .totp ? "Setup key or otpauth:// link" : "Username or email"
+    switch field {
+    case .username: return "Username or email"
+    case .password: return "Password"
+    case .totp: return "Setup key or otpauth:// link"
+    }
   }
 
   /// The credential key and kind the new field is stored under.
