@@ -34,7 +34,8 @@ struct DisplayItem: Identifiable, Hashable {
   func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-/// Contents removed from an item by an undoable delete, including values.
+/// Contents removed from an item by an undoable delete. Deleted credentials
+/// keep their values in the vault, so only their ids are recorded.
 struct DeletedEntries {
   struct Section {
     let id: String
@@ -42,10 +43,8 @@ struct DeletedEntries {
   }
 
   struct Credential {
+    let id: String
     let key: String
-    let title: String
-    let kind: FieldKindInfo
-    let value: SymmetricKey
   }
 
   let vaultKey: String
@@ -57,7 +56,7 @@ struct DeletedEntries {
 }
 
 /// Record of one undoable delete. Retained by the undo action and released
-/// when the undo manager discards it. `VaultsModel` empties it on lock.
+/// when the undo manager discards it.
 @MainActor
 final class DeletedEntriesBox {
   var entries: DeletedEntries?
@@ -170,9 +169,6 @@ final class VaultsModel {
   // delete) to whichever pane triggered them.
   var actionError: String? = nil
 
-  // Live undoable delete records. Emptied on lock since they hold deleted
-  // values.
-  private let deletedEntryBoxes = NSHashTable<DeletedEntriesBox>.weakObjects()
   // Last partially failed undo or redo of a delete.
   private(set) var undoFailure: UndoFailure? = nil
 
@@ -501,11 +497,6 @@ final class VaultsModel {
     // GPG passphrases pinentry unlocked.
     signingPrompt.forgetAll()
     passphrasePrompt.forgetAll()
-    // Release values held for undo. Undo after lock does nothing.
-    for box in deletedEntryBoxes.allObjects {
-      box.entries = nil
-    }
-    deletedEntryBoxes.removeAllObjects()
     undoFailure = nil
     // Fail whatever prompt is on screen, which is not always on `authContext`,
     // then drop the authenticated context itself.
@@ -912,15 +903,15 @@ final class VaultsModel {
   // MARK: - Undoable delete
 
   /// Delete item sections and credentials, and register an undo. The undo
-  /// restores values, sections, and positions. It is only registered if
-  /// something was deleted. The returned task yields an error message, or nil
-  /// on success.
+  /// restores credentials from the vault's deleted credentials, recreates
+  /// sections, and restores positions. It is only registered if something was
+  /// deleted. The returned task yields an error message, or nil on success.
   @discardableResult
   func deleteEntries(
     vaultKey: String, itemKey: String, _ targets: Set<CredentialEntry>,
     undoManager: UndoManager?
   ) -> Task<String?, Never> {
-    let box = newDeletedEntriesBox()
+    let box = DeletedEntriesBox()
     return Task {
       let error = await performDelete(
         into: box, vaultKey: vaultKey, itemKey: itemKey, targets: targets)
@@ -932,30 +923,32 @@ final class VaultsModel {
     }
   }
 
-  private func newDeletedEntriesBox() -> DeletedEntriesBox {
-    let box = DeletedEntriesBox()
-    deletedEntryBoxes.add(box)
-    return box
-  }
-
   /// Register an undo that restores the contents of `box` after `pending`
   /// finishes. `pending` is the delete that fills `box`. Redo deletes the
   /// restored entries again and registers a new undo. Each inverse is
   /// registered during the undo or redo, since registering later would clear
-  /// the redo stack.
+  /// the redo stack. An undo while locked restores nothing and is registered
+  /// again after it finishes. Re-registering clears the redo stack.
   private func registerUndo(
     of box: DeletedEntriesBox, after pending: Task<Void, Never>?, vaultKey: String,
     itemKey: String, undoManager: UndoManager
   ) {
     undoManager.registerMainActorUndo(named: "Delete") { [weak self] manager in
       guard let self else { return }
+      guard self.isAppUnlocked else {
+        Task { @MainActor in
+          self.registerUndo(
+            of: box, after: pending, vaultKey: vaultKey, itemKey: itemKey, undoManager: manager)
+        }
+        return
+      }
       let restored = Task { () -> Set<CredentialEntry>? in
         await pending?.value
         return await self.performRestore(box)
       }
       manager.registerMainActorUndo(named: "Delete") { [weak self] manager in
         guard let self else { return }
-        let redoBox = self.newDeletedEntriesBox()
+        let redoBox = DeletedEntriesBox()
         let redo = Task {
           guard let targets = await restored.value, !targets.isEmpty else { return }
           if let error = await self.performDelete(
@@ -982,26 +975,19 @@ final class VaultsModel {
     }
     let before = CredentialEntry.entries(of: item)
 
-    // Fetch all values first so undo can restore everything deleted.
     var sections: [DeletedEntries.Section] = []
     var credentials: [DeletedEntries.Credential] = []
-    do {
-      for entry in before where targets.contains(entry) {
-        switch entry {
-        case .section(let id):
-          if let section = item.sections.first(where: { $0.id == id }) {
-            sections.append(.init(id: id, title: section.title))
-          }
-        case .credential(let key):
-          if let cred = item.credentials.first(where: { $0.key == key }) {
-            let value = try await credentialSecret(
-              vaultKey: vaultKey, itemKey: itemKey, credKey: key)
-            credentials.append(.init(key: key, title: cred.title, kind: cred.kind, value: value))
-          }
+    for entry in before where targets.contains(entry) {
+      switch entry {
+      case .section(let id):
+        if let section = item.sections.first(where: { $0.id == id }) {
+          sections.append(.init(id: id, title: section.title))
+        }
+      case .credential(let key):
+        if let cred = item.credentials.first(where: { $0.key == key }) {
+          credentials.append(.init(id: cred.id, key: key))
         }
       }
-    } catch {
-      return String(describing: error)
     }
 
     var deletedSections: [DeletedEntries.Section] = []
@@ -1029,13 +1015,22 @@ final class VaultsModel {
   /// Restore deleted contents, then the arrangement from before the delete.
   /// Returns the restored entries, or nil if there is nothing to restore. A
   /// credential whose key has since been reused is restored under a new key.
-  /// Failures are reported in `undoFailure`.
+  /// A credential already restored from Recently Deleted is kept under its
+  /// current key. A credential that fails to restore stays in the vault's
+  /// deleted credentials. Failures, including credentials deleted
+  /// permanently, are reported in `undoFailure`. Does nothing while locked.
   private func performRestore(_ box: DeletedEntriesBox) async -> Set<CredentialEntry>? {
-    guard let deleted = box.entries else { return nil }
+    guard isAppUnlocked, let deleted = box.entries else { return nil }
     box.entries = nil
     let vaultKey = deleted.vaultKey
     let itemKey = deleted.itemKey
-    var takenKeys = Set(item(vaultKey: vaultKey, itemKey: itemKey)?.credentials.map(\.key) ?? [])
+    let liveCredentials = item(vaultKey: vaultKey, itemKey: itemKey)?.credentials ?? []
+    var takenKeys = Set(liveCredentials.map(\.key))
+    let liveKeys = Dictionary(
+      liveCredentials.map { ($0.id, $0.key) }, uniquingKeysWith: { first, _ in first })
+    // Ids in the vault's deleted credentials, or nil if they could not be listed.
+    let deletedIds = (try? await core.listDeletedCredentials(vaultKey: vaultKey, itemKey: itemKey))
+      .map { Set($0.map(\.id)) }
 
     undoFailure = nil
     var failures: [String] = []
@@ -1054,13 +1049,20 @@ final class VaultsModel {
       }
     }
     for cred in deleted.credentials {
+      if let liveKey = liveKeys[cred.id] {
+        newCredentialKeys[cred.key] = liveKey
+        restored.insert(.credential(liveKey))
+        continue
+      }
+      if let deletedIds, !deletedIds.contains(cred.id) {
+        failures.append("\(cred.key) was deleted permanently")
+        continue
+      }
       let key = Self.unusedKey(cred.key, taken: takenKeys)
       do {
-        // Values are stored as strings, so they are valid UTF-8.
-        let value = cred.value.withUnsafeBytes { String(decoding: $0, as: UTF8.self) }
-        try await core.addOrUpdateCredential(
-          vaultKey: vaultKey, itemKey: itemKey, credKey: key, title: cred.title,
-          value: value, kind: cred.kind)
+        try await core.restoreCredential(
+          vaultKey: vaultKey, itemKey: itemKey, credId: cred.id,
+          newKey: key == cred.key ? nil : key)
         takenKeys.insert(key)
         newCredentialKeys[cred.key] = key
         restored.insert(.credential(key))
@@ -1098,9 +1100,37 @@ final class VaultsModel {
     return restored
   }
 
+  /// Deleted credentials of an item, most recently deleted first.
+  func deletedCredentials(vaultKey: String, itemKey: String) async throws
+    -> [DeletedCredentialInfo]
+  {
+    try await core.listDeletedCredentials(vaultKey: vaultKey, itemKey: itemKey)
+  }
+
+  /// Restore a deleted credential. If its key has been reused, it is restored
+  /// under a new key. Returns the key it was restored under.
+  @discardableResult
+  func restoreDeletedCredential(
+    vaultKey: String, itemKey: String, _ deleted: DeletedCredentialInfo
+  ) async throws -> String {
+    let taken = Set(item(vaultKey: vaultKey, itemKey: itemKey)?.credentials.map(\.key) ?? [])
+    let key = Self.unusedKey(deleted.key, taken: taken)
+    try await mutate(vaultKey) {
+      try await core.restoreCredential(
+        vaultKey: vaultKey, itemKey: itemKey, credId: deleted.id,
+        newKey: key == deleted.key ? nil : key)
+    }
+    return key
+  }
+
+  /// Delete a deleted credential permanently.
+  func purgeDeletedCredential(vaultKey: String, itemKey: String, credId: String) async throws {
+    try await core.purgeCredential(vaultKey: vaultKey, itemKey: itemKey, credId: credId)
+  }
+
   /// `key` if not in `taken`, otherwise the first free key of `key-restored`,
   /// `key-restored-2`, and so on.
-  private static func unusedKey(_ key: String, taken: Set<String>) -> String {
+  static func unusedKey(_ key: String, taken: Set<String>) -> String {
     guard taken.contains(key) else { return key }
     var candidate = "\(key)-restored"
     var suffix = 2

@@ -150,6 +150,8 @@ pub struct VaultInfo {
 
 #[derive(uniffi::Record)]
 pub struct CredentialInfo {
+    /// Credential id as a UUID string. It does not change when the key does.
+    pub id: String,
     pub key: String,
     pub title: String,
     pub kind: FieldKindInfo,
@@ -160,6 +162,20 @@ pub struct CredentialInfo {
     /// `id` of the item section the credential is in. `None` for a credential
     /// outside any section.
     pub section_id: Option<String>,
+}
+
+/// A deleted credential that can still be restored. The value is not
+/// included.
+#[derive(uniffi::Record)]
+pub struct DeletedCredentialInfo {
+    /// Credential id as a UUID string. Pass back to `restore_credential` or
+    /// `purge_credential`.
+    pub id: String,
+    pub key: String,
+    pub title: String,
+    pub kind: FieldKindInfo,
+    /// Deletion time as a Unix timestamp in seconds.
+    pub deleted_at: i64,
 }
 
 /// A vault folder. Folders are listed in display order.
@@ -1476,6 +1492,7 @@ impl AxoPass {
                         credentials: credentials
                             .into_iter()
                             .map(|c| CredentialInfo {
+                                id: c.id.to_string(),
                                 key: c.key.clone(),
                                 title: c.title.clone(),
                                 kind: FieldKindInfo::from(&c.kind),
@@ -1771,7 +1788,67 @@ impl AxoPass {
         .await
     }
 
-    /// Delete a single credential from an item.
+    /// List an item's deleted credentials, most recently deleted first.
+    pub async fn list_deleted_credentials(
+        &self,
+        vault_key: String,
+        item_key: String,
+    ) -> Result<Vec<DeletedCredentialInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+            ensure_unlocked(vault)?;
+
+            let deleted = vault.list_deleted(&item_key).map_err(FfiError::from)?;
+            Ok(deleted
+                .into_iter()
+                .map(|d| DeletedCredentialInfo {
+                    id: d.credential.id.to_string(),
+                    key: d.credential.key.clone(),
+                    title: d.credential.title.clone(),
+                    kind: FieldKindInfo::from(&d.credential.kind),
+                    deleted_at: d.deleted_at,
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Restore a deleted credential with its value, position, and section. A
+    /// section that no longer exists is dropped. The credential gets `new_key`
+    /// if given. Fails with `InvalidInput` if the resulting key is taken.
+    pub async fn restore_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_id: String,
+        new_key: Option<String>,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.restore_item_credential(&item_key, parse_id(&cred_id)?, new_key)?)
+        })
+        .await
+    }
+
+    /// Delete a deleted credential permanently.
+    pub async fn purge_credential(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_id: String,
+    ) -> Result<(), FfiError> {
+        self.edit_vault(vault_key, move |vw| {
+            Ok(vw.purge_item_credential(&item_key, parse_id(&cred_id)?)?)
+        })
+        .await
+    }
+
+    /// Delete a single credential from an item. It stays recoverable with
+    /// `restore_credential` until purged.
     pub async fn delete_credential(
         &self,
         vault_key: String,
