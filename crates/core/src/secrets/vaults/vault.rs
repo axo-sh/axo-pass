@@ -15,7 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
-use crate::secrets::vaults::item_autofill::ItemAutofill;
+use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
@@ -698,7 +698,13 @@ impl Vault {
         let deleted_at = OffsetDateTime::now_utc().unix_timestamp();
         let info = self
             .cipher
-            .encrypt_deleted_item_info(item_id, &DeletedInfo { deleted_at })?;
+            .encrypt_deleted_item_info(
+                item_id,
+                &DeletedInfo {
+                    deleted_at,
+                    role: None,
+                },
+            )?;
 
         // remove credentials from indices, secrets, and cached blobs
         for cred in overview.credentials.values() {
@@ -1132,9 +1138,15 @@ impl Vault {
         // Build the deleted entry before changing anything.
         let credential_blobs = self.live_credential_blobs(item_id, &credential)?;
         let deleted_at = OffsetDateTime::now_utc().unix_timestamp();
-        let info =
-            self.cipher
-                .encrypt_deleted_info(item_id, cred_id, &DeletedInfo { deleted_at })?;
+        let role = self
+            .items
+            .get(&item_id)
+            .and_then(|item| item.autofill.role_of(cred_id));
+        let info = self.cipher.encrypt_deleted_info(
+            item_id,
+            cred_id,
+            &DeletedInfo { deleted_at, role },
+        )?;
 
         // remove from item
         let item = self
@@ -1143,11 +1155,9 @@ impl Vault {
             .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
         item.credentials.remove(&cred_id);
 
-        // clear any role slot pointing at the deleted credential
-        if item.autofill.username == Some(cred_id)
-            || item.autofill.password == Some(cred_id)
-            || item.autofill.totp == Some(cred_id)
-        {
+        // Clear the role slot pointing at the deleted credential. The role is
+        // kept in the deleted info for a restore.
+        if role.is_some() {
             item.autofill.clear_credential(cred_id);
             self.autofill_blobs.remove(&item_id);
         }
@@ -1277,6 +1287,15 @@ impl Vault {
             metadata_changed = true;
         }
 
+        let role = match self.deleted.get(&cred_id) {
+            Some(entry) => {
+                self.cipher
+                    .decrypt_deleted_info(item_id, cred_id, &entry.blobs.info)?
+                    .expose_secret()
+                    .role
+            },
+            None => None,
+        };
         let entry = self
             .deleted
             .remove(&cred_id)
@@ -1284,6 +1303,12 @@ impl Vault {
         let DeletedCredential {
             credential: blobs, ..
         } = entry.blobs;
+        // Give the role back unless another credential took it meanwhile.
+        if let Some(role) = role
+            && item.autofill.fill_empty_slot(role, cred_id)
+        {
+            self.autofill_blobs.remove(&item_id);
+        }
         self.secrets.insert(cred_id, blobs.value);
         if !blobs.history.is_empty() {
             self.history.insert(cred_id, blobs.history);
@@ -1844,6 +1869,12 @@ pub struct HistoryInfo {
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct DeletedInfo {
     pub deleted_at: i64,
+    /// Autofill role the credential had when deleted. Restoring the credential
+    /// gives the role back if no other credential took it. Always `None` for an
+    /// item, which keeps its own autofill data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[zeroize(skip)]
+    pub role: Option<Role>,
 }
 
 /// Changes for [`Vault::update_item_credential`]. `None` fields are left
@@ -2263,6 +2294,63 @@ mod tests {
         let item = vault.get_item("item").unwrap();
         assert!(item.autofill.password.is_none());
         assert!(item.autofill.username.is_some());
+    }
+
+    #[test]
+    fn restoring_a_credential_gives_back_its_role() {
+        let mut vault = vault_with_credentials("item", &["username", "password"]);
+        let password = cred_id(&vault, "item", "password");
+        vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    username: Some(cred_id(&vault, "item", "username")),
+                    password: Some(password),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        vault.delete_item_credential("item", "password").unwrap();
+        // The role survives a save while the credential is deleted.
+        let mut vault = reload(&vault);
+        vault.restore_item_credential("item", password, None).unwrap();
+        let vault = reload(&vault);
+
+        let item = vault.get_item("item").unwrap();
+        assert_eq!(item.autofill.password, Some(password));
+    }
+
+    #[test]
+    fn restoring_a_credential_leaves_a_role_another_credential_took() {
+        let mut vault = vault_with_credentials("item", &["password", "new-password"]);
+        let old = cred_id(&vault, "item", "password");
+        let new = cred_id(&vault, "item", "new-password");
+        vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    password: Some(old),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        vault.delete_item_credential("item", "password").unwrap();
+        vault
+            .set_item_autofill(
+                "item",
+                ItemAutofill {
+                    password: Some(new),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        vault.restore_item_credential("item", old, None).unwrap();
+
+        let item = vault.get_item("item").unwrap();
+        assert_eq!(item.autofill.password, Some(new));
+        assert_eq!(item.autofill.role_of(old), None);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 use uuid::Uuid;
 
+pub use super::item_autofill::Role;
 use super::totp::{self, TotpCode};
 use super::vault_wrapper::validate_key;
 use super::{
@@ -595,15 +596,6 @@ pub fn create_login(
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-/// A credential's part in autofill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Username,
-    Password,
-    /// The credential the one-time code comes from.
-    Totp,
 }
 
 /// Assign `role` to the credential `cred_key`, or clear the role with `None`. A

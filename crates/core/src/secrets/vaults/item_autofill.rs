@@ -8,6 +8,16 @@ use super::vault::{VaultItemCredentialOverview, VaultItemOverview};
 /// The `category` value for items created as logins.
 pub const CATEGORY_LOGIN: &str = "login";
 
+/// A credential's part in autofill.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Username,
+    Password,
+    /// The credential the one-time code comes from.
+    Totp,
+}
+
 /// Role slots and websites for autofill. Stored in its own encrypted blob so
 /// that edits here do not conflict with item renames.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
@@ -84,6 +94,38 @@ impl ItemAutofill {
     /// Whether one credential fills both roles.
     pub fn has_shared_slot(&self) -> bool {
         self.username.is_some() && self.username == self.password
+    }
+
+    /// Role slot of `role`.
+    fn slot_mut(&mut self, role: Role) -> &mut Option<Uuid> {
+        match role {
+            Role::Username => &mut self.username,
+            Role::Password => &mut self.password,
+            Role::Totp => &mut self.totp,
+        }
+    }
+
+    /// Role whose slot points at `cred_id`. A credential has at most one.
+    pub fn role_of(&self, cred_id: Uuid) -> Option<Role> {
+        [
+            (Role::Username, self.username),
+            (Role::Password, self.password),
+            (Role::Totp, self.totp),
+        ]
+        .into_iter()
+        .find(|(_, slot)| *slot == Some(cred_id))
+        .map(|(role, _)| role)
+    }
+
+    /// Point the `role` slot at `cred_id` if the slot is empty. Returns whether
+    /// the slot was set.
+    pub fn fill_empty_slot(&mut self, role: Role, cred_id: Uuid) -> bool {
+        let slot = self.slot_mut(role);
+        if slot.is_some() {
+            return false;
+        }
+        *slot = Some(cred_id);
+        true
     }
 
     /// Clear any slot that points at `cred_id`.
