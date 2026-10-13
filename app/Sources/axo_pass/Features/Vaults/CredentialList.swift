@@ -46,7 +46,6 @@ struct CredentialList: View {
   // Section creation error. Shown separately since there is no row for it.
   @State private var listError: String? = nil
   @State private var showingNewCredentialSheet = false
-  @State private var showingRecentlyDeleted = false
 
   var body: some View {
     CredentialOutline(
@@ -88,17 +87,12 @@ struct CredentialList: View {
         Menu {
           Button("New Credential…") { showingNewCredentialSheet = true }
           Button("New Section") { newSection() }
-          Divider()
-          Button("Recently Deleted…") { showingRecentlyDeleted = true }
         } label: {
           Label("Add", systemImage: "plus")
         }
         .menuIndicator(.hidden)
-        .help("New credential or section, or restore a deleted credential.")
+        .help("New credential or section.")
       }
-    }
-    .sheet(isPresented: $showingRecentlyDeleted) {
-      RecentlyDeletedSheet(vaultKey: vaultKey, itemKey: item.key)
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in

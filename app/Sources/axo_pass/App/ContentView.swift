@@ -22,6 +22,7 @@ private struct MainView: View {
   @State private var sshModel = SshModel()
   @State private var gpgModel = GpgModel()
   @State private var ageModel = AgeModel()
+  @State private var deletedModel = RecentlyDeletedModel()
 
   var body: some View {
     NavigationSplitView {
@@ -41,6 +42,8 @@ private struct MainView: View {
       GpgKeyDetailView(model: gpgModel)
     } else if case .age = model.sidebarSelection {
       AgeKeyDetailView(model: ageModel)
+    } else if case .recentlyDeleted = model.sidebarSelection {
+      RecentlyDeletedDetailView(model: deletedModel)
     } else {
       VaultDetailView()
     }
@@ -56,6 +59,8 @@ private struct MainView: View {
       GpgPane(model: gpgModel)
     } else if case .age = model.sidebarSelection {
       AgePane(model: ageModel)
+    } else if case .recentlyDeleted = model.sidebarSelection {
+      RecentlyDeletedPane(model: deletedModel)
     } else {
       ContentUnavailableView("Select a section", systemImage: "sidebar.left")
         .paneBackground()

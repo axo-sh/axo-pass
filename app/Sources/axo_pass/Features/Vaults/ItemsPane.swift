@@ -27,7 +27,6 @@ struct ItemsPane: View {
   @Environment(VaultsModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   @State private var showingNewItemSheet = false
-  @State private var showingRecentlyDeleted = false
   @State private var titleSheet: TitleSheetRequest? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
@@ -71,15 +70,6 @@ struct ItemsPane: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {
-          showingRecentlyDeleted = true
-        } label: {
-          Label("Recently Deleted", systemImage: "clock.arrow.circlepath")
-        }
-        .help("Restore deleted items.")
-        .disabled(model.selectedVault == nil)
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Button {
           newFolder()
         } label: {
           Label("New Folder", systemImage: "folder.badge.plus")
@@ -106,11 +96,6 @@ struct ItemsPane: View {
     }
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
-    }
-    .sheet(isPresented: $showingRecentlyDeleted) {
-      if let vaultKey = model.selectedVaultKey {
-        RecentlyDeletedItemsSheet(vaultKey: vaultKey)
-      }
     }
   }
 

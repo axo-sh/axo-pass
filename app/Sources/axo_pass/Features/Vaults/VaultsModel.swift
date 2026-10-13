@@ -10,6 +10,7 @@ enum SidebarDestination: Hashable {
   case ssh
   case gpg
   case age
+  case recentlyDeleted
 }
 
 /// The sidebar's "All Secrets" row selects this key. It is not a real vault;
@@ -1123,7 +1124,7 @@ final class VaultsModel {
     let liveKeys = Dictionary(
       liveCredentials.map { ($0.id, $0.key) }, uniquingKeysWith: { first, _ in first })
     // Ids in the vault's deleted credentials, or nil if they could not be listed.
-    let deletedIds = (try? await core.listDeletedCredentials(vaultKey: vaultKey, itemKey: itemKey))
+    let deletedIds = (try? await core.listDeletedCredentials(vaultKey: vaultKey))
       .map { Set($0.map(\.id)) }
 
     undoFailure = nil
@@ -1195,31 +1196,46 @@ final class VaultsModel {
   }
 
   /// Deleted credentials of an item, most recently deleted first.
-  func deletedCredentials(vaultKey: String, itemKey: String) async throws
-    -> [DeletedCredentialInfo]
-  {
-    try await core.listDeletedCredentials(vaultKey: vaultKey, itemKey: itemKey)
+  func deletedCredentials(vaultKey: String) async throws -> [DeletedCredentialInfo] {
+    try await core.listDeletedCredentials(vaultKey: vaultKey)
   }
 
-  /// Restore a deleted credential. If its key has been reused, it is restored
-  /// under a new key. Returns the key it was restored under.
+  /// Restore a deleted credential into the item it was deleted from. If its
+  /// key has been reused, it is restored under a new key. Returns the key it
+  /// was restored under. Items are reloaded first so the new key is chosen from
+  /// current keys.
   @discardableResult
-  func restoreDeletedCredential(
-    vaultKey: String, itemKey: String, _ deleted: DeletedCredentialInfo
-  ) async throws -> String {
-    let taken = Set(item(vaultKey: vaultKey, itemKey: itemKey)?.credentials.map(\.key) ?? [])
+  func restoreDeletedCredential(vaultKey: String, _ deleted: DeletedCredentialInfo) async throws
+    -> String
+  {
+    await loadItems(for: vaultKey)
+    let taken = Set(
+      item(vaultKey: vaultKey, itemKey: deleted.itemKey)?.credentials.map(\.key) ?? [])
     let key = Self.unusedKey(deleted.key, taken: taken)
     try await mutate(vaultKey) {
       try await core.restoreCredential(
-        vaultKey: vaultKey, itemKey: itemKey, credId: deleted.id,
+        vaultKey: vaultKey, itemKey: deleted.itemKey, credId: deleted.id,
         newKey: key == deleted.key ? nil : key)
     }
     return key
   }
 
   /// Delete a deleted credential permanently.
-  func purgeDeletedCredential(vaultKey: String, itemKey: String, credId: String) async throws {
-    try await core.purgeCredential(vaultKey: vaultKey, itemKey: itemKey, credId: credId)
+  func purgeDeletedCredential(vaultKey: String, _ deleted: DeletedCredentialInfo) async throws {
+    try await core.purgeCredential(
+      vaultKey: vaultKey, itemKey: deleted.itemKey, credId: deleted.id)
+  }
+
+  /// Fetch the value of a deleted credential, or of a credential in a deleted
+  /// item, without keeping it in plain memory.
+  func deletedCredentialSecret(vaultKey: String, itemId: String, credId: String) async throws
+    -> SymmetricKey
+  {
+    var raw = try await core.getDeletedCredentialSecret(
+      vaultKey: vaultKey, itemId: itemId, credId: credId)
+    let key = SymmetricKey(data: raw)
+    raw.resetBytes(in: raw.indices)
+    return key
   }
 
   /// `key` if not in `taken`, otherwise the first free key of `key-restored`,

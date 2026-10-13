@@ -25,8 +25,9 @@ use axo_pass_core::secrets::vaults::vault_export::{
 };
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError,
-    ExportProgress as CoreExportProgress, FieldKind, TextField, VaultFolder, VaultItemSection,
-    VaultWrapper, VaultsManager, display_order,
+    ExportProgress as CoreExportProgress, FieldKind, TextField, VaultFolder,
+    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, VaultWrapper, VaultsManager,
+    display_order,
 };
 use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, default_socket_path};
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
@@ -91,9 +92,7 @@ impl From<VaultError> for FfiError {
             },
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
-            VaultError::DeletedItemNotFound(id) => {
-                FfiError::NotFound(format!("Deleted item {id}"))
-            },
+            VaultError::DeletedItemNotFound(id) => FfiError::NotFound(format!("Deleted item {id}")),
             other @ (VaultError::InvalidFolderOrder
             | VaultError::DuplicateCredentialKey(_)
             | VaultError::DuplicateItemKey(_)
@@ -176,17 +175,29 @@ pub struct DeletedItemInfo {
     pub id: String,
     pub key: String,
     pub title: String,
-    /// Credentials the item had when deleted.
-    pub credential_count: u32,
-    /// Credentials of the item that were deleted before the item. They are
-    /// restored with the item.
-    pub deleted_credential_count: u32,
+    /// Credentials the item had, in display order, including those deleted
+    /// before the item at their former positions. All are restored with the
+    /// item.
+    pub credentials: Vec<DeletedItemCredentialInfo>,
     /// Deletion time as a Unix timestamp in seconds.
     pub deleted_at: i64,
 }
 
-/// A deleted credential that can still be restored. The value is not
-/// included.
+/// A credential of a deleted item. Read its value with
+/// `get_deleted_credential_secret`.
+#[derive(uniffi::Record)]
+pub struct DeletedItemCredentialInfo {
+    /// Credential id as a UUID string.
+    pub id: String,
+    pub key: String,
+    pub title: String,
+    pub kind: FieldKindInfo,
+    /// True if the credential was deleted before the item.
+    pub deleted_before_item: bool,
+}
+
+/// A deleted credential of a live item that can still be restored. The value
+/// is not included. Read it with `get_deleted_credential_secret`.
 #[derive(uniffi::Record)]
 pub struct DeletedCredentialInfo {
     /// Credential id as a UUID string. Pass back to `restore_credential` or
@@ -195,6 +206,10 @@ pub struct DeletedCredentialInfo {
     pub key: String,
     pub title: String,
     pub kind: FieldKindInfo,
+    /// Id of the item the credential was deleted from.
+    pub item_id: String,
+    pub item_key: String,
+    pub item_title: String,
     /// Deletion time as a Unix timestamp in seconds.
     pub deleted_at: i64,
 }
@@ -1335,6 +1350,38 @@ fn ensure_unlocked(vault: &mut VaultWrapper) -> Result<(), FfiError> {
     Ok(())
 }
 
+/// Item sections in display order, and a comparator that orders item
+/// credentials for display. Credentials outside any section come first, then
+/// each section by its display order.
+fn item_display_order(
+    item: &VaultItemOverview,
+) -> (
+    Vec<&VaultItemSection>,
+    impl Fn(&VaultItemCredentialOverview, &VaultItemCredentialOverview) -> std::cmp::Ordering,
+) {
+    let mut sections: Vec<&VaultItemSection> = item.sections.values().collect();
+    sections.sort_by(|a, b| {
+        display_order(a.position, &a.title).cmp(&display_order(b.position, &b.title))
+    });
+
+    let section_rank: HashMap<Uuid, usize> = sections
+        .iter()
+        .enumerate()
+        .map(|(idx, s)| (s.id, idx + 1))
+        .collect();
+    let rank = move |section: Option<Uuid>| {
+        section
+            .and_then(|s| section_rank.get(&s).copied())
+            .unwrap_or(0)
+    };
+    let credential_order = move |a: &VaultItemCredentialOverview,
+                                 b: &VaultItemCredentialOverview| {
+        (rank(a.section), display_order(a.position, &a.title))
+            .cmp(&(rank(b.section), display_order(b.position, &b.title)))
+    };
+    (sections, credential_order)
+}
+
 fn parse_id(id: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
 }
@@ -1482,30 +1529,9 @@ impl AxoPass {
             let mut result: Vec<ItemInfo> = items
                 .into_iter()
                 .map(|item| {
-                    let mut sections: Vec<&VaultItemSection> = item.sections.values().collect();
-                    sections.sort_by(|a, b| {
-                        display_order(a.position, &a.title)
-                            .cmp(&display_order(b.position, &b.title))
-                    });
-
-                    // Credentials outside any section rank 0, then each
-                    // section by its display order.
-                    let section_rank: HashMap<Uuid, usize> = sections
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, s)| (s.id, idx + 1))
-                        .collect();
-                    let rank = |section: Option<Uuid>| {
-                        section
-                            .and_then(|s| section_rank.get(&s).copied())
-                            .unwrap_or(0)
-                    };
-
+                    let (sections, credential_order) = item_display_order(item);
                     let mut credentials: Vec<_> = item.credentials.values().collect();
-                    credentials.sort_by(|a, b| {
-                        (rank(a.section), display_order(a.position, &a.title))
-                            .cmp(&(rank(b.section), display_order(b.position, &b.title)))
-                    });
+                    credentials.sort_by(|a, b| credential_order(a, b));
 
                     ItemInfo {
                         id: item.id.to_string(),
@@ -1721,13 +1747,33 @@ impl AxoPass {
             let deleted = vault.list_deleted_items().map_err(FfiError::from)?;
             Ok(deleted
                 .into_iter()
-                .map(|d| DeletedItemInfo {
-                    id: d.item.id.to_string(),
-                    key: d.item.key.clone(),
-                    title: d.item.title.clone(),
-                    credential_count: d.item.credentials.len() as u32,
-                    deleted_credential_count: d.deleted_credential_count as u32,
-                    deleted_at: d.deleted_at,
+                .map(|d| {
+                    let (_, credential_order) = item_display_order(d.item);
+                    let mut credentials: Vec<_> = d
+                        .item
+                        .credentials
+                        .values()
+                        .map(|c| (c, false))
+                        .chain(d.deleted_credentials.iter().map(|c| (*c, true)))
+                        .collect();
+                    credentials.sort_by(|(a, _), (b, _)| credential_order(a, b));
+                    let credentials = credentials
+                        .into_iter()
+                        .map(|(c, deleted_before_item)| DeletedItemCredentialInfo {
+                            id: c.id.to_string(),
+                            key: c.key.clone(),
+                            title: c.title.clone(),
+                            kind: FieldKindInfo::from(&c.kind),
+                            deleted_before_item,
+                        })
+                        .collect();
+                    DeletedItemInfo {
+                        id: d.item.id.to_string(),
+                        key: d.item.key.clone(),
+                        title: d.item.title.clone(),
+                        credentials,
+                        deleted_at: d.deleted_at,
+                    }
                 })
                 .collect())
         })
@@ -1865,11 +1911,12 @@ impl AxoPass {
         .await
     }
 
-    /// List an item's deleted credentials, most recently deleted first.
+    /// List the deleted credentials of a vault's live items, most recently
+    /// deleted first. Credentials of deleted items are listed with the item
+    /// by `list_deleted_items`.
     pub async fn list_deleted_credentials(
         &self,
         vault_key: String,
-        item_key: String,
     ) -> Result<Vec<DeletedCredentialInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
@@ -1879,17 +1926,44 @@ impl AxoPass {
                 .map_err(FfiError::from)?;
             ensure_unlocked(vault)?;
 
-            let deleted = vault.list_deleted(&item_key).map_err(FfiError::from)?;
+            let deleted = vault.list_all_deleted().map_err(FfiError::from)?;
             Ok(deleted
                 .into_iter()
                 .map(|d| DeletedCredentialInfo {
-                    id: d.credential.id.to_string(),
-                    key: d.credential.key.clone(),
-                    title: d.credential.title.clone(),
-                    kind: FieldKindInfo::from(&d.credential.kind),
-                    deleted_at: d.deleted_at,
+                    id: d.credential.credential.id.to_string(),
+                    key: d.credential.credential.key.clone(),
+                    title: d.credential.credential.title.clone(),
+                    kind: FieldKindInfo::from(&d.credential.credential.kind),
+                    item_id: d.item.id.to_string(),
+                    item_key: d.item.key.clone(),
+                    item_title: d.item.title.clone(),
+                    deleted_at: d.credential.deleted_at,
                 })
                 .collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// Retrieve the secret of a deleted credential, or of a credential in a
+    /// deleted item, as raw bytes (same zeroing convention as
+    /// `get_credential_secret`).
+    pub async fn get_deleted_credential_secret(
+        &self,
+        vault_key: String,
+        item_id: String,
+        cred_id: String,
+    ) -> Result<Vec<u8>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_vault(&vault_key)
+                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+            let secret = vault
+                .get_deleted_secret(parse_id(&item_id)?, parse_id(&cred_id)?)
+                .map_err(FfiError::from)?;
+            Ok(secret.expose_secret().as_bytes().to_vec())
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

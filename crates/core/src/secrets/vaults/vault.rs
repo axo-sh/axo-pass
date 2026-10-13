@@ -604,7 +604,12 @@ impl Vault {
             .map(|entry| DeletedItemOverview {
                 item: &entry.item.overview,
                 deleted_at: entry.deleted_at,
-                deleted_credential_count: entry.item.deleted.len(),
+                deleted_credentials: entry
+                    .item
+                    .deleted
+                    .values()
+                    .map(|deleted| &deleted.overview.credential)
+                    .collect(),
             })
             .collect();
         entries.sort_by_key(|overview| std::cmp::Reverse(overview.deleted_at));
@@ -966,6 +971,7 @@ impl Vault {
     }
 
     /// Deleted credentials of an item, most recently deleted first.
+    #[cfg(test)]
     pub fn list_deleted(&self, item_key: &str) -> Result<Vec<&DeletedCredentialOverview>, Error> {
         let item_id = *self.get_item_id(item_key)?;
         let mut entries: Vec<&DeletedCredentialOverview> = self
@@ -976,6 +982,52 @@ impl Vault {
             .collect();
         entries.sort_by_key(|overview| std::cmp::Reverse(overview.deleted_at));
         Ok(entries)
+    }
+
+    /// Deleted credentials of all live items, most recently deleted first.
+    pub fn list_all_deleted(&self) -> Vec<DeletedCredentialEntry<'_>> {
+        let mut entries: Vec<DeletedCredentialEntry<'_>> = self
+            .deleted
+            .values()
+            .filter_map(|entry| {
+                Some(DeletedCredentialEntry {
+                    item: self.items.get(&entry.overview.item_id)?,
+                    credential: &entry.overview,
+                })
+            })
+            .collect();
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.credential.deleted_at));
+        entries
+    }
+
+    /// Secret of a deleted credential. The credential is either deleted from
+    /// the live item `item_id`, or part of the deleted item `item_id`, live or
+    /// deleted before the item.
+    pub fn get_deleted_credential_secret(
+        &self,
+        item_id: ItemId,
+        cred_id: CredentialId,
+    ) -> Result<SecretBox<String>, Error> {
+        let from_live_item = self
+            .deleted
+            .get(&cred_id)
+            .filter(|entry| entry.overview.item_id == item_id)
+            .map(|entry| &entry.blobs.credential.value);
+        let from_deleted_item = || {
+            let item = &self.deleted_items.get(&item_id)?.item;
+            item.credentials
+                .get(&cred_id)
+                .map(|cred| &cred.value)
+                .or_else(|| {
+                    item.deleted
+                        .get(&cred_id)
+                        .map(|entry| &entry.blobs.credential.value)
+                })
+        };
+        let blob = from_live_item
+            .or_else(from_deleted_item)
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_id}/{cred_id}")))?;
+        self.cipher.decrypt_cred_value(item_id, cred_id, blob)
     }
 
     /// Restore a deleted credential with its id, position, and section. A
@@ -1421,7 +1473,13 @@ pub struct DeletedItemOverview<'a> {
     /// Unix timestamp in seconds.
     pub deleted_at: i64,
     /// Credentials of the item that were deleted before the item.
-    pub deleted_credential_count: usize,
+    pub deleted_credentials: Vec<&'a VaultItemCredentialOverview>,
+}
+
+/// A deleted credential with the live item it was deleted from.
+pub struct DeletedCredentialEntry<'a> {
+    pub item: &'a VaultItemOverview,
+    pub credential: &'a DeletedCredentialOverview,
 }
 
 struct DeletedItemEntry {
@@ -2466,7 +2524,7 @@ mod tests {
 
         vault.delete_item("item").unwrap();
         assert!(vault.deleted.is_empty());
-        assert_eq!(vault.list_deleted_items()[0].deleted_credential_count, 1);
+        assert_eq!(vault.list_deleted_items()[0].deleted_credentials.len(), 1);
 
         let mut vault = reload(&vault);
         vault.restore_item(item_id, None).unwrap();
@@ -2525,6 +2583,89 @@ mod tests {
         assert_eq!(vault.get_item("item").unwrap().folder, None);
     }
 
+    fn deleted_secret_of(vault: &Vault, item_id: Uuid, cred_id: Uuid) -> String {
+        vault
+            .get_deleted_credential_secret(item_id, cred_id)
+            .unwrap()
+            .expose_secret()
+            .clone()
+    }
+
+    #[test]
+    fn list_all_deleted_lists_credentials_of_live_items_with_their_item() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        let elsewhere_id = vault
+            .get_item_credential("other-item", "elsewhere")
+            .unwrap()
+            .id;
+        vault.delete_item_credential("item", "alpha").unwrap();
+        vault
+            .delete_item_credential("other-item", "elsewhere")
+            .unwrap();
+
+        let vault = reload(&vault);
+        let all = vault.list_all_deleted();
+        let mut found: Vec<(Uuid, &str)> = all
+            .iter()
+            .map(|e| (e.credential.credential.id, e.item.key.as_str()))
+            .collect();
+        found.sort();
+        let mut expected = vec![(alpha_id, "item"), (elsewhere_id, "other-item")];
+        expected.sort();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn list_all_deleted_leaves_out_credentials_of_deleted_items() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        vault.delete_item_credential("item", "alpha").unwrap();
+        vault.delete_item("item").unwrap();
+        assert!(vault.list_all_deleted().is_empty());
+    }
+
+    #[test]
+    fn deleted_secrets_can_be_read_in_every_deleted_location() {
+        let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
+        let item_id = item_id_of(&vault, "item");
+        let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        let beta_id = vault.get_item_credential("item", "beta").unwrap().id;
+        let other_item_id = item_id_of(&vault, "other-item");
+
+        // Deleted from a live item.
+        vault.delete_item_credential("item", "alpha").unwrap();
+        let vault = reload(&vault);
+        assert_eq!(deleted_secret_of(&vault, item_id, alpha_id), "secret");
+
+        // In a deleted item, and deleted before the item.
+        let mut vault = vault;
+        vault.delete_item("item").unwrap();
+        let vault = reload(&vault);
+        assert_eq!(deleted_secret_of(&vault, item_id, alpha_id), "secret");
+        assert_eq!(deleted_secret_of(&vault, item_id, beta_id), "secret");
+
+        // A credential id is only valid with its own item.
+        assert!(matches!(
+            vault.get_deleted_credential_secret(other_item_id, alpha_id),
+            Err(Error::InvalidCredentialKey(_))
+        ));
+        assert!(matches!(
+            vault.get_deleted_credential_secret(item_id, Uuid::new_v4()),
+            Err(Error::InvalidCredentialKey(_))
+        ));
+    }
+
+    #[test]
+    fn a_live_credential_has_no_deleted_secret() {
+        let vault = vault_with_credentials("item", &["alpha"]);
+        let item_id = item_id_of(&vault, "item");
+        let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+        assert!(matches!(
+            vault.get_deleted_credential_secret(item_id, alpha_id),
+            Err(Error::InvalidCredentialKey(_))
+        ));
+    }
+
     #[test]
     fn purging_an_item_removes_it_and_its_deleted_credentials() {
         let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
@@ -2560,7 +2701,7 @@ mod tests {
 
         assert_eq!(vault.purge_deleted(now + 10), 2);
         assert!(vault.deleted.is_empty());
-        assert_eq!(vault.list_deleted_items()[0].deleted_credential_count, 0);
+        assert_eq!(vault.list_deleted_items()[0].deleted_credentials.len(), 0);
 
         // The deleted item itself is kept.
         vault.restore_item(item_id, None).unwrap();

@@ -120,6 +120,9 @@ struct VaultsSidebar: View {
         }
       }
 
+      Label("Recently Deleted", systemImage: "trash")
+        .tag(SidebarDestination.recentlyDeleted)
+
       Button {
         showingNewVaultSheet = true
       } label: {

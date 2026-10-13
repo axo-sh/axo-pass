@@ -20,7 +20,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
-    CredentialPlacement, CredentialUpdate, DeletedCredentialOverview, DeletedItemOverview, Vault,
+    CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview, Vault,
     VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
@@ -375,9 +375,20 @@ impl VaultWrapper {
         vault.delete_item_credential(item_key, cred_key)
     }
 
-    pub fn list_deleted(&self, item_key: &str) -> Result<Vec<&DeletedCredentialOverview>, Error> {
+    /// Deleted credentials of all live items, most recently deleted first.
+    pub fn list_all_deleted(&self) -> Result<Vec<DeletedCredentialEntry<'_>>, Error> {
         let vault = self.get_unlocked_vault()?;
-        vault.list_deleted(item_key)
+        Ok(vault.list_all_deleted())
+    }
+
+    /// Secret of a deleted credential, or of a credential in a deleted item.
+    pub fn get_deleted_secret(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+    ) -> Result<SecretBox<String>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.get_deleted_credential_secret(item_id, cred_id)
     }
 
     pub fn restore_item_credential(
