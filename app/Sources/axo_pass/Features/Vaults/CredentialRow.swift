@@ -42,6 +42,9 @@ struct CredentialRow: View {
   /// Nil for a row in the item's credential list, which shows the credential's
   /// title and reference instead.
   var fieldLabel: String? = nil
+  /// A copy shortcut just copied this credential. The row shows the copy
+  /// confirmation.
+  var showsCopied: Bool = false
   /// Another passkey on the item has the same site and account.
   var isDuplicatePasskey: Bool = false
 
@@ -62,6 +65,9 @@ struct CredentialRow: View {
   /// Passkeys are shown read only: their value is a structured record the
   /// authenticator owns, not free text to edit.
   private var isPasskey: Bool { cred.kind.kind == "passkey" }
+
+  /// Copied by the Copy button or a copy shortcut.
+  private var copied: Bool { justCopied || showsCopied }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -199,7 +205,7 @@ struct CredentialRow: View {
           .overlay(alignment: .topTrailing) { valueOverlay }
           .onHover { hoveringValue = $0 }
           .animation(.easeInOut(duration: 0.12), value: hoveringValue)
-          .animation(.easeInOut(duration: 0.12), value: justCopied)
+          .animation(.easeInOut(duration: 0.12), value: copied)
       }
     }
   }
@@ -303,7 +309,7 @@ struct CredentialRow: View {
 
   @ViewBuilder
   private var valueOverlay: some View {
-    if justCopied {
+    if copied {
       Label("Copied", systemImage: "checkmark")
         .labelStyle(.iconOnly)
         .foregroundStyle(.green)
@@ -475,7 +481,8 @@ struct CredentialRow: View {
       HStack(alignment: quickEditing ? .center : .firstTextBaseline, spacing: 12) {
         LoginFieldLabel(label)
         if cred.kind.kind == "totp" {
-          TotpCodeValue(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+          TotpCodeValue(
+            vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key, showsCopied: showsCopied)
         } else if quickEditing {
           quickEditor
           HStack(spacing: 4) {
@@ -493,7 +500,7 @@ struct CredentialRow: View {
       }
       .onHover { hoveringValue = $0 }
       .animation(.easeInOut(duration: 0.12), value: hoveringValue)
-      .animation(.easeInOut(duration: 0.12), value: justCopied)
+      .animation(.easeInOut(duration: 0.12), value: copied)
 
       if let renaming {
         fieldRename(renaming)
@@ -547,7 +554,7 @@ struct CredentialRow: View {
   /// height whether or not the pointer is over it.
   private var fieldActions: some View {
     let visible =
-      justCopied || isRevealing || hoveringValue || (cred.kind.concealed && secret != nil)
+      copied || isRevealing || hoveringValue || (cred.kind.concealed && secret != nil)
     return
       fieldActionButtons
       .opacity(visible ? 1 : 0)
@@ -557,7 +564,7 @@ struct CredentialRow: View {
   /// The buttons always lay out so the row height is constant. The copy
   /// confirmation and the revealing spinner overlay them.
   private var fieldActionButtons: some View {
-    let busy = justCopied || isRevealing
+    let busy = copied || isRevealing
     return HStack(spacing: 4) {
       if cred.kind.concealed {
         Button {
@@ -592,7 +599,7 @@ struct CredentialRow: View {
     .controlSize(.small)
     .opacity(busy ? 0 : 1)
     .overlay {
-      if justCopied {
+      if copied {
         Image(systemName: "checkmark").foregroundStyle(.green)
       } else if isRevealing {
         ProgressView().controlSize(.small)

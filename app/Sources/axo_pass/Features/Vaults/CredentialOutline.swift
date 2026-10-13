@@ -63,7 +63,10 @@ struct CredentialOutline: NSViewRepresentable {
   /// Whether a row is being renamed. The outline takes focus back after a
   /// rename ends.
   let isRenaming: Bool
-  let banner: AnyView
+  /// Count of focus requests. The outline takes focus when it changes.
+  let focusRequest: Int
+  /// Banner content. Takes whether the outline has focus in the key window.
+  let banner: (_ isEmphasized: Bool) -> AnyView
   let row: (CredentialEntry, OutlineRowState) -> AnyView
   /// Context menu for the targeted rows. Empty targets mean empty space.
   let menu: (Set<CredentialEntry>) -> [OutlineMenuItem]
@@ -76,6 +79,9 @@ struct CredentialOutline: NSViewRepresentable {
   /// Return or double-click.
   let onPrimaryAction: (Set<CredentialEntry>) -> Void
   let onDelete: (Set<CredentialEntry>) -> Void
+  /// Mouse down that reaches the outline. Row content that handles a click
+  /// itself does not report it.
+  let onMouseDown: () -> Void
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -146,9 +152,11 @@ struct CredentialOutline: NSViewRepresentable {
     private var menuTargets: Set<CredentialEntry> = []
     private var scrolledTarget: CredentialEntry?
     private var wasRenaming = false
+    private var focusRequest: Int
 
     init(_ parent: CredentialOutline) {
       self.parent = parent
+      focusRequest = parent.focusRequest
     }
 
     // MARK: Updates
@@ -203,6 +211,13 @@ struct CredentialOutline: NSViewRepresentable {
         }
       }
       wasRenaming = parent.isRenaming
+
+      if parent.focusRequest != focusRequest {
+        focusRequest = parent.focusRequest
+        if let window = outline.window, window.firstResponder !== outline {
+          window.makeFirstResponder(outline)
+        }
+      }
     }
 
     /// Change the outline from `tree` to `target` with animated row moves,
@@ -421,7 +436,7 @@ struct CredentialOutline: NSViewRepresentable {
     private func content(for node: OutlineNode, row: Int) -> AnyView {
       switch node.kind {
       case .banner:
-        return parent.banner
+        return parent.banner(outline?.isEmphasized ?? false)
       case .entry(let entry):
         let isProminent =
           outline.map { $0.isRowSelected(row) && $0.isEmphasized } ?? false
@@ -962,6 +977,11 @@ final class EntryOutlineView: NSOutlineView {
     coordinator?.showDrop(nil)
   }
 
+  override func mouseDown(with event: NSEvent) {
+    coordinator?.parent.onMouseDown()
+    super.mouseDown(with: event)
+  }
+
   override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
     rect(ofRow: row).insetBy(dx: cellMargin, dy: 0)
   }
@@ -988,6 +1008,20 @@ final class EntryOutlineView: NSOutlineView {
   // table menu outline, which spans the full row width.
   override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {}
   override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {}
+
+  // The banner shows a selected login card row in the accent color only while
+  // the outline has focus. `isEmphasized` changes after these return.
+  override func becomeFirstResponder() -> Bool {
+    let became = super.becomeFirstResponder()
+    DispatchQueue.main.async { [weak self] in self?.coordinator?.refreshRows() }
+    return became
+  }
+
+  override func resignFirstResponder() -> Bool {
+    let resigned = super.resignFirstResponder()
+    DispatchQueue.main.async { [weak self] in self?.coordinator?.refreshRows() }
+    return resigned
+  }
 
   override func keyDown(with event: NSEvent) {
     let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])

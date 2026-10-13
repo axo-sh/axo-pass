@@ -16,7 +16,8 @@ private let newSectionTitle = "New Section"
 
 /// Item credentials and sections, edited in place as in Finder. Rows can be
 /// selected and dragged at any time. Return or double-click renames the
-/// selected row. Delete removes the selection, with undo. Other actions are in
+/// selected row. Delete removes the selection, with undo. ⌘C copies the
+/// selected credential, in the outline or the login card. Other actions are in
 /// the context menu.
 struct CredentialList: View {
   /// A title or id being renamed in place.
@@ -50,6 +51,14 @@ struct CredentialList: View {
   @State private var previousValuesTarget: PreviousValuesTarget? = nil
   // Key of the passkey the move sheet is open for.
   @State private var movingPasskey: String? = nil
+  // Key of the selected login card credential. Selecting a card row clears the
+  // outline selection, and selecting outline rows clears this.
+  @State var cardSelection: String? = nil
+  // Key of the credential a copy shortcut just copied. Its row shows the copy
+  // confirmation until this is cleared.
+  @State var shortcutCopied: String? = nil
+  // Incremented to move focus to the outline.
+  @State var outlineFocusRequest = 0
 
   var body: some View {
     CredentialOutline(
@@ -58,9 +67,10 @@ struct CredentialList: View {
       selection: $selection,
       scrollTarget: renamingSection.map(CredentialEntry.section),
       isRenaming: renaming != nil,
+      focusRequest: outlineFocusRequest,
       // Outline rows are hosted in their own NSHostingViews, which do not
       // inherit this view's environment.
-      banner: AnyView(banner.environment(model)),
+      banner: { AnyView(banner(isEmphasized: $0).environment(model)) },
       row: { entry, state in AnyView(row(entry, state: state).environment(model)) },
       menu: { menuItems(for: $0) },
       normalizeSelection: normalizedSelection,
@@ -73,11 +83,15 @@ struct CredentialList: View {
       },
       onMove: moveEntries,
       onPrimaryAction: startRename,
-      onDelete: delete
+      onDelete: delete,
+      onMouseDown: { cardSelection = nil }
     )
     .onCopyCommand {
-      copyPassword()
+      copySelection()
       return []
+    }
+    .onChange(of: selection) { _, new in
+      if !new.isEmpty { cardSelection = nil }
     }
     .background {
       Button("Copy Username", action: copyUsername)
@@ -153,13 +167,13 @@ struct CredentialList: View {
 
   /// Top row. Item title and key, the login banners and card, then list
   /// messages.
-  private var banner: some View {
+  private func banner(isEmphasized: Bool) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       header
         .padding(EdgeInsets(top: 20, leading: 4, bottom: 16, trailing: 4))
 
       VStack(alignment: .leading, spacing: credentialRowInset * 2) {
-        loginSection
+        loginSection(isEmphasized: isEmphasized)
       }
       .padding(.horizontal, credentialRowInset)
 
@@ -317,6 +331,7 @@ struct CredentialList: View {
         Task { await setRole(cred, role: role, assign: assign) }
       },
       fieldLabel: fieldLabel,
+      showsCopied: shortcutCopied == cred.key,
       isDuplicatePasskey: item.hasDuplicate(of: cred)
     )
   }

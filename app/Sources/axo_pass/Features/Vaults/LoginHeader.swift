@@ -12,7 +12,7 @@ extension CredentialList {
   /// item that is not a login shows only the conversion banner, when it
   /// qualifies.
   @ViewBuilder
-  var loginSection: some View {
+  func loginSection(isEmphasized: Bool) -> some View {
     if item.canConvertToLogin, !model.dismissedConversions.contains(item.id) {
       conversionBanner
         .listRowSeparator(.hidden)
@@ -29,7 +29,7 @@ extension CredentialList {
         .listRowInsets(loginRowInsets)
     }
     if item.isLogin {
-      loginCard
+      loginCard(isEmphasized: isEmphasized)
         .listRowSeparator(.hidden)
         .listRowInsets(loginRowInsets)
       if !item.listCredentials.isEmpty {
@@ -93,16 +93,21 @@ extension CredentialList {
     return entries
   }
 
-  private var loginCard: some View {
+  /// Login card. `isEmphasized` gives the selected row the accent highlight.
+  private func loginCard(isEmphasized: Bool) -> some View {
     let entries = loginCardEntries
     return VStack(alignment: .leading, spacing: 0) {
       ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
         if index > 0, !isAddEntry(entry) || !isAddEntry(entries[index - 1]) {
           Divider().padding(.leading, 14)
         }
-        loginCardRow(entry)
-          .padding(.vertical, isAddEntry(entry) ? 4 : 8)
-          .padding(.horizontal, 8)
+        if case .credential(let cred, let label) = entry {
+          cardCredentialRow(cred, label: label, isEmphasized: isEmphasized)
+        } else {
+          loginCardRow(entry)
+            .padding(.vertical, isAddEntry(entry) ? 4 : 8)
+            .padding(.horizontal, 8)
+        }
       }
     }
     .padding(.vertical, 4)
@@ -117,6 +122,31 @@ extension CredentialList {
     return false
   }
 
+  /// Credential row of the login card. A click selects it and moves focus to
+  /// the outline, so ⌘C copies it.
+  private func cardCredentialRow(_ cred: CredentialInfo, label: String, isEmphasized: Bool)
+    -> some View
+  {
+    let isSelected = cardSelection == cred.key
+    // Hierarchical colors turn light on the accent highlight, as in the outline.
+    return credentialRowBody(cred, fieldLabel: label)
+      .environment(\.backgroundProminence, isSelected && isEmphasized ? .increased : .standard)
+      .padding(.vertical, 6)
+      .background {
+        if isSelected {
+          RoundedRectangle(cornerRadius: 6)
+            .fill(
+              Color(
+                nsColor: isEmphasized
+                  ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor))
+        }
+      }
+      .contentShape(.rect)
+      .simultaneousGesture(TapGesture().onEnded { selectCardRow(cred.key) })
+      .padding(.vertical, 2)
+      .padding(.horizontal, 8)
+  }
+
   @ViewBuilder
   private func loginCardRow(_ entry: LoginCardEntry) -> some View {
     switch entry {
@@ -127,6 +157,12 @@ extension CredentialList {
     case .websites:
       WebsitesEditor(item: item, vaultKey: vaultKey)
     }
+  }
+
+  private func selectCardRow(_ key: String) {
+    selection = []
+    cardSelection = key
+    outlineFocusRequest += 1
   }
 
   private var conversionBanner: some View {
@@ -185,16 +221,52 @@ extension CredentialList {
     }
   }
 
-  /// Copy the password with ⌘C when the list has focus.
-  func copyPassword() {
-    guard item.isLogin, let cred = item.passwordCredential else { return }
-    Task { _ = await copy(cred) }
+  /// Copy the selected credential with ⌘C. Copies nothing if several rows or
+  /// a section are selected.
+  func copySelection() {
+    if let key = cardSelection, let cred = item.credentials.first(where: { $0.key == key }) {
+      copyFromShortcut(cred, isCardRow: true)
+    } else if selection.count == 1, case .credential(let key)? = selection.first,
+      let cred = item.credentials.first(where: { $0.key == key })
+    {
+      copyFromShortcut(cred, isCardRow: false)
+    }
   }
 
   /// Copy the username with ⇧⌘C.
   func copyUsername() {
     guard let cred = item.usernameCredential else { return }
-    Task { _ = await copy(cred) }
+    copyFromShortcut(cred, isCardRow: item.isLogin)
+  }
+
+  /// Copy a credential and show the copy confirmation on its row. The login
+  /// card code row copies the current code. Passkeys are not copied.
+  private func copyFromShortcut(_ cred: CredentialInfo, isCardRow: Bool) {
+    guard cred.kind.kind != "passkey" else { return }
+    Task {
+      let copied =
+        isCardRow && cred.kind.kind == "totp" ? await copyCurrentCode(cred) : await copy(cred)
+      guard copied else { return }
+      shortcutCopied = cred.key
+      try? await Task.sleep(for: .seconds(1.2))
+      if shortcutCopied == cred.key {
+        shortcutCopied = nil
+      }
+    }
+  }
+
+  /// Copy the current one-time code of a TOTP credential.
+  private func copyCurrentCode(_ cred: CredentialInfo) async -> Bool {
+    do {
+      let code = try await model.currentTotpCode(
+        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key)
+      secureCopy(code.code)
+      errors.removeValue(forKey: cred.key)
+      return true
+    } catch {
+      errors[cred.key] = String(describing: error)
+      return false
+    }
   }
 }
 
@@ -431,6 +503,8 @@ struct TotpCodeValue: View {
   let vaultKey: String
   let itemKey: String
   let credKey: String
+  /// A copy shortcut just copied the code. The copy confirmation shows.
+  var showsCopied = false
 
   @State private var code: String?
   @State private var expiresAt = Date.distantPast
@@ -459,7 +533,7 @@ struct TotpCodeValue: View {
             .font(.callout.monospacedDigit())
             .foregroundStyle(left <= 5 ? Color.orange : Color.secondary)
         }
-        if justCopied {
+        if justCopied || showsCopied {
           Image(systemName: "checkmark").foregroundStyle(.green)
         } else if hovering {
           Button("Copy", action: copy)
