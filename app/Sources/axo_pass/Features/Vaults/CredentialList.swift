@@ -166,11 +166,13 @@ struct CredentialList: View {
   }
 
   /// Top row. Item title and key, the login banners and card, then list
-  /// messages.
+  /// messages. Header is inset to the login card edge.
   private func banner(isEmphasized: Bool) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       header
-        .padding(EdgeInsets(top: 20, leading: 4, bottom: 16, trailing: 4))
+        .padding(
+          EdgeInsets(
+            top: 20, leading: credentialRowInset, bottom: 16, trailing: credentialRowInset))
 
       VStack(alignment: .leading, spacing: credentialRowInset * 2) {
         loginSection(isEmphasized: isEmphasized)
@@ -214,14 +216,7 @@ struct CredentialList: View {
   /// header's tooltip and context menu.
   private var header: some View {
     HStack(alignment: .center, spacing: 12) {
-      if item.isLogin {
-        Monogram(title: item.title, host: item.siteHosts.first, size: 40)
-      } else {
-        Image(systemName: "lock.fill")
-          .font(.system(size: 26))
-          .foregroundStyle(.tint)
-          .frame(width: 40)
-      }
+      Monogram(title: item.title, host: item.siteHosts.first, size: 40)
       VStack(alignment: .leading, spacing: 2) {
         Text(item.title).font(.title2).fontWeight(.semibold)
         Text(headerSubtitle)
