@@ -309,6 +309,10 @@ struct CredentialList: View {
       },
       onDelete: { delete([.credential(cred.key)]) },
       onMove: { movingPasskey = cred.key },
+      onStartRename: { field in renaming = .credential(cred.key, field) },
+      onShowPreviousValues: {
+        previousValuesTarget = PreviousValuesTarget(key: cred.key, title: cred.title)
+      },
       onSetRole: { role, assign in
         Task { await setRole(cred, role: role, assign: assign) }
       },

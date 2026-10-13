@@ -25,10 +25,16 @@ struct CredentialRow: View {
   let onCancelRename: () -> Void
   /// Save a new value for this credential, keeping its title, key and kind.
   let onQuickSaveValue: (_ value: String) -> Void
-  /// Delete this passkey after confirmation. Only passkey rows offer it.
+  /// Delete this credential. Offered by login card rows. A passkey asks for
+  /// confirmation first.
   let onDelete: () -> Void
   /// Move this passkey to another item or vault. Only passkey rows offer it.
   let onMove: () -> Void
+  /// Start renaming the title or id. Offered by login card rows. Outline rows
+  /// start a rename from the outline menu.
+  let onStartRename: (_ field: RenameField) -> Void
+  /// Show previous values. Offered by login card rows.
+  let onShowPreviousValues: () -> Void
   /// Assign (`true`) or clear (`false`) one of the credential's autofill roles:
   /// "username", "password", or "totp".
   let onSetRole: (_ role: String, _ assign: Bool) -> Void
@@ -97,17 +103,30 @@ struct CredentialRow: View {
 
   // MARK: - Roles
 
-  /// Context menu of a login card row. Rows in the item outline get their menu
-  /// from the outline instead.
+  /// Context menu of a login card row, in the same order as the outline menu.
+  /// Rows in the item outline get their menu from the outline instead. A
+  /// passkey record is owned by the authenticator, so a passkey is not renamed
+  /// and has no previous values.
   @ViewBuilder
   private var cardMenu: some View {
-    roleMenu
     if isPasskey {
       Button("Move to…", action: onMove)
+      Divider()
+      Button("Copy Reference", action: copyReference)
+      Divider()
       Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+    } else {
+      Button("Rename") { onStartRename(.title) }
+      Button("Change ID") { onStartRename(.key) }
+      Divider()
+      Button("Previous Values…", action: onShowPreviousValues)
+      Divider()
+      roleMenu
+      Divider()
+      Button("Copy Reference", action: copyReference)
+      Divider()
+      Button("Delete", role: .destructive, action: onDelete)
     }
-    Divider()
-    Button("Copy Reference", action: copyReference)
   }
 
   /// The autofill roles this credential can take. A one-time code credential can
@@ -449,32 +468,63 @@ struct CredentialRow: View {
   // MARK: - Login field
 
   /// A login card row: the field name, the value, and actions that appear on
-  /// hover. A one-time code shows the live code instead of its secret.
+  /// hover. A one-time code shows the live code instead of its secret. A rename
+  /// shows on its own line below.
   private func fieldView(_ label: String) -> some View {
-    HStack(alignment: quickEditing ? .center : .firstTextBaseline, spacing: 12) {
-      LoginFieldLabel(label)
-      if cred.kind.kind == "totp" {
-        TotpCodeValue(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
-      } else if quickEditing {
-        quickEditor
-        HStack(spacing: 4) {
-          Button("Cancel") { cancelQuickEdit() }
-          Button("Save") { commitQuickEdit() }
-            .keyboardShortcut(.defaultAction)
-            .disabled(quickDraft.isEmpty || quickDraft == quickOriginal)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: quickEditing ? .center : .firstTextBaseline, spacing: 12) {
+        LoginFieldLabel(label)
+        if cred.kind.kind == "totp" {
+          TotpCodeValue(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+        } else if quickEditing {
+          quickEditor
+          HStack(spacing: 4) {
+            Button("Cancel") { cancelQuickEdit() }
+            Button("Save") { commitQuickEdit() }
+              .keyboardShortcut(.defaultAction)
+              .disabled(quickDraft.isEmpty || quickDraft == quickOriginal)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+        } else {
+          fieldValue
+          fieldActions
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-      } else {
-        fieldValue
-        fieldActions
+      }
+      .onHover { hoveringValue = $0 }
+      .animation(.easeInOut(duration: 0.12), value: hoveringValue)
+      .animation(.easeInOut(duration: 0.12), value: justCopied)
+
+      if let renaming {
+        fieldRename(renaming)
       }
     }
     .contentShape(.rect)
     .contextMenu { cardMenu }
-    .onHover { hoveringValue = $0 }
-    .animation(.easeInOut(duration: 0.12), value: hoveringValue)
-    .animation(.easeInOut(duration: 0.12), value: justCopied)
+  }
+
+  /// Rename line of a login card row. The card shows a field name in place of
+  /// the title and id, so the one being renamed is shown here.
+  private func fieldRename(_ field: RenameField) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      LoginFieldLabel(field == .title ? "Title" : "ID")
+      switch field {
+      case .title:
+        InlineRenameField(
+          initial: cred.title, placeholder: "Title",
+          onCommit: { onRename(.title, $0) }, onCancel: onCancelRename)
+      case .key:
+        HStack(spacing: 0) {
+          Text(referencePrefix)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.head)
+          InlineRenameField(
+            initial: cred.key, placeholder: "id",
+            onCommit: { onRename(.key, $0) }, onCancel: onCancelRename)
+        }
+      }
+    }
   }
 
   private var fieldValue: some View {
