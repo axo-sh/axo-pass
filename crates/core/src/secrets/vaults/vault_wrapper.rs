@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::{fs, io};
@@ -59,6 +60,35 @@ fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> 
     let vault_key =
         normalized_key(vault_key).ok_or_else(|| Error::InvalidVaultKey(vault_key.to_string()))?;
     Ok(vault_dir.join(format!("{vault_key}.json")))
+}
+
+/// Write a file by way of a temp file in the same directory. The data is
+/// synced before the temp file is renamed over `path`, so `path` holds either
+/// the old or the new contents after a crash.
+fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path has no parent directory"))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Path has no file name"))?
+        .to_string_lossy();
+    let tmp_path = dir.join(format!(".{file_name}.tmp"));
+
+    let result = write_synced(&tmp_path, data).and_then(|()| fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        return result;
+    }
+
+    // Sync the directory so the rename itself is durable.
+    fs::File::open(dir)?.sync_all()
+}
+
+fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(data)?;
+    file.sync_all()
 }
 
 impl VaultWrapper {
@@ -172,7 +202,7 @@ impl VaultWrapper {
             .map_err(Error::VaultSerializationError)?;
 
         fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
-        fs::write(self.path.clone(), vault_data).map_err(Error::VaultWriteError)?;
+        write_atomic(&self.path, vault_data.as_bytes()).map_err(Error::VaultWriteError)?;
         Ok(())
     }
 
@@ -590,5 +620,40 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
             .map_err(Error::KeyCreationFailed)
         },
         Err(e) => Err(Error::KeyRetrievalFailed(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::*;
+
+    #[test]
+    fn write_atomic_replaces_contents_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.json");
+        fs::write(&path, "old contents that are longer").unwrap();
+
+        write_atomic(&path, b"new").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![OsString::from("vault.json")]);
+    }
+
+    #[test]
+    fn write_atomic_keeps_the_old_file_if_the_write_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.json");
+        fs::write(&path, "old").unwrap();
+        // A directory at the temp path makes creating the temp file fail.
+        fs::create_dir(dir.path().join(".vault.json.tmp")).unwrap();
+
+        assert!(write_atomic(&path, b"new").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 }
