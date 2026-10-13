@@ -570,6 +570,26 @@ pub fn write_record(
     store_passkey(vw, &cred, value, None, &record.title, target)
 }
 
+/// Remove the passkey at `item_key`/`credential_key` after it was copied by
+/// [`write_record`]. The passkey is deleted and purged immediately rather than
+/// kept in the deleted credentials. A copy left there would keep the private
+/// key in this vault, and restoring it would give two passkeys with one
+/// credential id. Fails when the credential is not a passkey. The caller saves
+/// the vault.
+pub fn remove_record(
+    vw: &mut VaultWrapper,
+    item_key: &str,
+    credential_key: &str,
+) -> Result<(), Error> {
+    let cred_id = vw
+        .get_secret_overview(item_key, credential_key)?
+        .filter(|cred| matches!(cred.kind, FieldKind::Passkey))
+        .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?
+        .id;
+    vw.delete_item_credential(item_key, credential_key)?;
+    vw.purge_item_credential(item_key, cred_id)
+}
+
 #[async_trait]
 impl CredentialStore for VaultStore<'_> {
     type PasskeyItem = Passkey;
@@ -937,6 +957,37 @@ mod tests {
             stored.passkey.key.clone().to_vec().unwrap()
         );
         assert_eq!(dest.list_items().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_moved_passkey_is_not_kept_in_the_source_deleted_credentials() {
+        let mut source = VaultWrapper::new_for_test("personal");
+        register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&source).unwrap().remove(0);
+        let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
+        let mut dest = VaultWrapper::new_for_test("work");
+        write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
+
+        remove_record(&mut source, &stored.item_key, &stored.credential_key).unwrap();
+
+        assert!(list(&source).unwrap().is_empty());
+        assert!(source.list_all_deleted().unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_passkeys_can_be_removed_after_a_move() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        vw.add_item("site", "Site").unwrap();
+        vw.add_secret(
+            "site",
+            "password",
+            "Password",
+            FieldKind::default(),
+            SecretString::from("pw"),
+        )
+        .unwrap();
+        assert!(remove_record(&mut vw, "site", "password").is_err());
+        assert!(vw.get_secret("site", "password").unwrap().is_some());
     }
 
     #[test]

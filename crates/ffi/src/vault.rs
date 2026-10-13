@@ -1307,9 +1307,9 @@ impl AxoPass {
     /// Move a passkey to another item, which may be in another vault. With no
     /// `dest_item_key` it moves into a new login item for its relying party.
     ///
-    /// The destination is written and saved before the source is deleted, so a
+    /// The destination is written and saved before the source is removed, so a
     /// failure partway leaves the passkey in both places rather than in
-    /// neither.
+    /// neither. The source is purged, not kept in the deleted credentials.
     pub async fn move_passkey(
         &self,
         vault_key: String,
@@ -1332,7 +1332,7 @@ impl AxoPass {
                 return m.with_unlocked_vault(&vault_key, |vw| {
                     let record = passkey::read_record(vw, &item_key, &cred_key)?;
                     passkey::write_record(vw, &record, &target)?;
-                    vw.delete_item_credential(&item_key, &cred_key)?;
+                    passkey::remove_record(vw, &item_key, &cred_key)?;
                     Ok::<_, FfiError>(())
                 });
             }
@@ -1343,8 +1343,7 @@ impl AxoPass {
                 passkey::write_record(vw, &record, &target).map_err(FfiError::from)
             })?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.delete_item_credential(&item_key, &cred_key)
-                    .map_err(FfiError::from)
+                passkey::remove_record(vw, &item_key, &cred_key).map_err(FfiError::from)
             })
         })
         .await

@@ -729,6 +729,8 @@ pub fn add_passkey_login(
 /// - source's roles are only added to the destination unless already present
 /// - websites are added unless already present
 /// - uncategorized destinations take the source's category.
+/// - source passkeys are purged, not kept with the deleted source item, so a
+/// restored source does not give a second copy of a passkey.
 /// - caller is responsible for saving the vault.
 pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> Result<(), Error> {
     use secrecy::ExposeSecret;
@@ -795,6 +797,11 @@ pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> R
     vw.set_item_autofill(dest_key, autofill)?;
     if dest.category.is_none() && source.category.is_some() {
         vw.set_item_category(dest_key, source.category.clone())?;
+    }
+    for cred in source.credentials.values() {
+        if matches!(cred.kind, FieldKind::Passkey) {
+            super::passkey::remove_record(vw, source_key, &cred.key)?;
+        }
     }
     vw.delete_item(source_key)
 }
@@ -2342,6 +2349,14 @@ mod tests {
         );
         let passkey = vw.get_secret("github", "passkey-aa").unwrap().unwrap();
         assert_eq!(passkey.expose_secret(), "{}");
+
+        // The deleted source keeps no copy of the passkey.
+        let deleted = vw.list_deleted_items().unwrap();
+        assert_eq!(deleted.len(), 1);
+        let is_passkey = |c: &&VaultItemCredentialOverview| matches!(c.kind, FieldKind::Passkey);
+        assert!(!deleted[0].item.credentials.values().any(|c| is_passkey(&c)));
+        assert!(!deleted[0].deleted_credentials.iter().any(is_passkey));
+        assert!(vw.list_all_deleted().unwrap().is_empty());
     }
 
     #[test]
