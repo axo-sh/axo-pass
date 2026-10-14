@@ -73,9 +73,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
   /// A passkey sign-in where the user picked Axo Pass rather than one of our
   /// registered identities. The passkeys come from the app's index, which
-  /// answers with the vaults locked. If several passkeys match, the user picks
-  /// one here and only that one is allowed. If the app has not indexed since it
-  /// started, the app asks the user to pick after the vaults unlock.
+  /// answers with the vaults locked. Only the indexed passkey the user picks
+  /// here, or the one indexed match, is allowed. If the index has no match,
+  /// the app asks the user to pick after the vaults unlock.
   override func prepareCredentialList(
     for serviceIdentifiers: [ASCredentialServiceIdentifier],
     requestParameters: ASPasskeyCredentialRequestParameters
@@ -96,7 +96,9 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
           allowedCredentialIDs: credentialIDs, chooseAccount: chooseAccount, prf: prf,
           name: name)
       }
-      guard let accounts else {
+      // No indexed match means the index is not built or out of date, or every
+      // match is rejected. The app then asks after the vaults unlock.
+      guard let accounts, let only = accounts.first else {
         sign(allowed, rpID, true)
         return
       }
@@ -106,7 +108,7 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
         }
         model.choosePasskey(rpID: rpID, accounts: accounts)
       } else {
-        sign(allowed, accounts.first?.userName ?? rpID, false)
+        sign([only.credentialID], only.userName, false)
       }
     }
   }
