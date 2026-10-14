@@ -32,7 +32,8 @@ pub enum AuditRequesterKind {
     Cli,
     Browser,
     Autofill,
-    SshGpgClient,
+    SshClient,
+    GpgClient,
     Other,
 }
 
@@ -43,7 +44,8 @@ impl From<audit::Requester> for AuditRequesterKind {
             audit::Requester::Cli => Self::Cli,
             audit::Requester::Browser => Self::Browser,
             audit::Requester::Autofill => Self::Autofill,
-            audit::Requester::SshGpgClient => Self::SshGpgClient,
+            audit::Requester::SshClient => Self::SshClient,
+            audit::Requester::GpgClient => Self::GpgClient,
             audit::Requester::Other => Self::Other,
         }
     }
@@ -56,7 +58,8 @@ impl From<AuditRequesterKind> for audit::Requester {
             AuditRequesterKind::Cli => Self::Cli,
             AuditRequesterKind::Browser => Self::Browser,
             AuditRequesterKind::Autofill => Self::Autofill,
-            AuditRequesterKind::SshGpgClient => Self::SshGpgClient,
+            AuditRequesterKind::SshClient => Self::SshClient,
+            AuditRequesterKind::GpgClient => Self::GpgClient,
             AuditRequesterKind::Other => Self::Other,
         }
     }
@@ -74,6 +77,22 @@ pub enum AuditCategory {
     Passkey,
     Grant,
     Broker,
+}
+
+impl From<audit::Category> for AuditCategory {
+    fn from(c: audit::Category) -> Self {
+        match c {
+            audit::Category::Ssh => Self::Ssh,
+            audit::Category::Gpg => Self::Gpg,
+            audit::Category::Age => Self::Age,
+            audit::Category::Vault => Self::Vault,
+            audit::Category::Item => Self::Item,
+            audit::Category::Credential => Self::Credential,
+            audit::Category::Passkey => Self::Passkey,
+            audit::Category::Grant => Self::Grant,
+            audit::Category::Broker => Self::Broker,
+        }
+    }
 }
 
 impl From<AuditCategory> for audit::Category {
@@ -108,6 +127,26 @@ impl From<AuditActionKind> for audit::ActionKind {
             AuditActionKind::Other => Self::Other,
         }
     }
+}
+
+impl From<audit::ActionKind> for AuditActionKind {
+    fn from(k: audit::ActionKind) -> Self {
+        match k {
+            audit::ActionKind::Access => Self::Access,
+            audit::ActionKind::Change => Self::Change,
+            audit::ActionKind::Other => Self::Other,
+        }
+    }
+}
+
+/// One audit action, for the audit log help.
+#[derive(uniffi::Record)]
+pub struct AuditActionInfo {
+    /// Dotted action string, e.g. `ssh.sign`.
+    pub action: String,
+    pub category: AuditCategory,
+    pub kind: AuditActionKind,
+    pub description: String,
 }
 
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +354,20 @@ impl AxoPass {
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?;
         Ok(page.events.into_iter().map(Into::into).collect())
+    }
+
+    /// Every audit action with its category, kind, and description, grouped
+    /// by category in display order.
+    pub fn audit_actions(&self) -> Vec<AuditActionInfo> {
+        audit::Action::ALL
+            .iter()
+            .map(|action| AuditActionInfo {
+                action: action.as_str().to_string(),
+                category: action.category().into(),
+                kind: action.kind().into(),
+                description: action.description().to_string(),
+            })
+            .collect()
     }
 
     /// Path of the current month's audit file, for a "Reveal in Finder"

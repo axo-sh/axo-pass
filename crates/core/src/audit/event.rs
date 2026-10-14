@@ -126,8 +126,9 @@ impl AuditEvent {
 
     /// Who asked for the event. An app event is named by the verified peer
     /// executable in its actor. The SSH agent and pinentry also run as `ap`, so
-    /// an `ap` event that uses or grants an SSH or GPG key names an SSH or GPG
-    /// client. An `ap` event that changes a key names the CLI.
+    /// an `ap` event about a GPG key, or one that uses or grants an SSH key,
+    /// names a GPG or SSH client. An `ap` event that changes an SSH key names
+    /// the CLI.
     pub fn requester(&self) -> Requester {
         match self.source {
             Source::Cli => return Requester::Cli,
@@ -137,7 +138,8 @@ impl AuditEvent {
             {
                 return Requester::Cli;
             },
-            Source::Agent | Source::Pinentry | Source::Askpass => return Requester::SshGpgClient,
+            Source::Agent | Source::Askpass => return Requester::SshClient,
+            Source::Pinentry => return Requester::GpgClient,
             Source::App => {},
         }
         let Some(actor) = &self.actor else {
@@ -148,23 +150,24 @@ impl AuditEvent {
             .as_deref()
             .and_then(|path| Path::new(path).file_name())
             .and_then(|name| name.to_str());
-        let key_subject = matches!(
-            &self.subject,
-            Some(Subject {
-                kind: SubjectKind::SshKey | SubjectKind::GpgKey,
-                ..
-            })
-        );
-        match executable {
-            Some(AGENT_EXECUTABLE_NAME)
-                if key_subject && self.action.kind() != ActionKind::Change =>
+        let key_client = match self.subject.as_ref().map(|s| s.kind) {
+            Some(SubjectKind::SshKey) => Some(Requester::SshClient),
+            Some(SubjectKind::GpgKey) => Some(Requester::GpgClient),
+            _ => None,
+        };
+        match (executable, key_client) {
+            // `ap` has no GPG commands, so an `ap` event about a GPG key comes
+            // from pinentry.
+            (Some(AGENT_EXECUTABLE_NAME), Some(Requester::GpgClient)) => Requester::GpgClient,
+            (Some(AGENT_EXECUTABLE_NAME), Some(client))
+                if self.action.kind() != ActionKind::Change =>
             {
-                Requester::SshGpgClient
+                client
             },
-            Some(AGENT_EXECUTABLE_NAME) => Requester::Cli,
-            Some(BROWSER_HOST_EXECUTABLE_NAME) => Requester::Browser,
-            Some(AUTOFILL_EXTENSION_NAME) => Requester::Autofill,
-            _ if key_subject => Requester::SshGpgClient,
+            (Some(AGENT_EXECUTABLE_NAME), _) => Requester::Cli,
+            (Some(BROWSER_HOST_EXECUTABLE_NAME), _) => Requester::Browser,
+            (Some(AUTOFILL_EXTENSION_NAME), _) => Requester::Autofill,
+            (_, Some(client)) => client,
             _ => Requester::Other,
         }
     }
@@ -420,9 +423,152 @@ impl Action {
         }
     }
 
+    /// Every action, grouped by category in display order. A new action must
+    /// be added here to appear in the audit log help.
+    pub const ALL: [Action; 56] = [
+        Action::SshSign,
+        Action::SshPassphrase,
+        Action::SshKeyAdd,
+        Action::SshKeyRemove,
+        Action::SshManagedKeyCreate,
+        Action::SshManagedKeyDelete,
+        Action::SshAppGrantAdd,
+        Action::SshAppGrantRemove,
+        Action::SshSessionBind,
+        Action::SshAgentStart,
+        Action::SshAgentStop,
+        Action::GpgPassphrase,
+        Action::GpgConfirm,
+        Action::GpgMessage,
+        Action::GpgPassphraseSaved,
+        Action::GpgAgentConfChanged,
+        Action::AgeDecrypt,
+        Action::AgeEncrypt,
+        Action::AgeKeyCreate,
+        Action::AgeKeyDelete,
+        Action::VaultUnlock,
+        Action::VaultLock,
+        Action::VaultAutolock,
+        Action::VaultCreated,
+        Action::VaultUpdated,
+        Action::VaultDeleted,
+        Action::VaultLinked,
+        Action::VaultExported,
+        Action::VaultImported,
+        Action::ItemListed,
+        Action::ItemCreated,
+        Action::ItemUpdated,
+        Action::ItemDeleted,
+        Action::ItemRestored,
+        Action::ItemPurged,
+        Action::ItemMerged,
+        Action::ItemWebsitesChanged,
+        Action::ItemConverted,
+        Action::CredentialRead,
+        Action::CredentialExec,
+        Action::CredentialInject,
+        Action::CredentialCreated,
+        Action::CredentialUpdated,
+        Action::CredentialDeleted,
+        Action::CredentialRestored,
+        Action::CredentialPurged,
+        Action::CredentialHistoryRestored,
+        Action::CredentialHistoryPurged,
+        Action::CredentialRoleChanged,
+        Action::PasskeyRegistered,
+        Action::PasskeyAsserted,
+        Action::PasskeyMoved,
+        Action::AuthGrantCreated,
+        Action::AuthGrantReused,
+        Action::AuthGrantExpired,
+        Action::BrokerPeerRejected,
+    ];
+
     /// Parse the dotted string form.
     pub fn parse(s: &str) -> Option<Self> {
         serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
+
+    /// What the action records, for the audit log help.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Action::SshSign => "Signed with an SSH key, such as for an ssh login or a git push.",
+            Action::SshPassphrase => {
+                "Gave ssh the passphrase of an encrypted SSH key through askpass."
+            },
+            Action::SshKeyAdd => "Added a key to the SSH agent, such as with ssh-add.",
+            Action::SshKeyRemove => "Removed a key from the SSH agent.",
+            Action::SshManagedKeyCreate => "Created an SSH key stored by Axo Pass.",
+            Action::SshManagedKeyDelete => "Deleted an SSH key stored by Axo Pass.",
+            Action::SshAppGrantAdd => "Let an app use an SSH key without a prompt.",
+            Action::SshAppGrantRemove => "Removed an app's access to an SSH key without a prompt.",
+            Action::SshSessionBind => {
+                "Bound an SSH connection to the server's host key, for destination constraints."
+            },
+            Action::SshAgentStart => "Started the SSH agent.",
+            Action::SshAgentStop => "Stopped the SSH agent.",
+            Action::GpgPassphrase => "Gave gpg-agent the passphrase of a GPG key through pinentry.",
+            Action::GpgConfirm => "Asked for confirmation on behalf of gpg-agent.",
+            Action::GpgMessage => "Showed a message on behalf of gpg-agent.",
+            Action::GpgPassphraseSaved => "Saved a GPG key passphrase in the keychain.",
+            Action::GpgAgentConfChanged => {
+                "Set Axo Pass as the pinentry program in gpg-agent.conf."
+            },
+            Action::AgeDecrypt => "Decrypted data with an age identity.",
+            Action::AgeEncrypt => "Encrypted data to one or more age recipients.",
+            Action::AgeKeyCreate => "Created an age identity.",
+            Action::AgeKeyDelete => "Deleted an age identity.",
+            Action::VaultUnlock => "Unlocked the app and its vaults.",
+            Action::VaultLock => "Locked the app and its vaults.",
+            Action::VaultAutolock => {
+                "Locked the app automatically, after the timeout, on sleep, or on screen lock."
+            },
+            Action::VaultCreated => "Created a vault.",
+            Action::VaultUpdated => "Renamed a vault or changed its key.",
+            Action::VaultDeleted => "Deleted a vault. The vault file is moved to the Trash.",
+            Action::VaultLinked => "Added an external vault file.",
+            Action::VaultExported => "Exported vaults to an encrypted bundle.",
+            Action::VaultImported => "Imported vaults from an encrypted bundle.",
+            Action::ItemListed => {
+                "Listed the items in a vault, or the logins for a site. No values are read."
+            },
+            Action::ItemCreated => "Created an item.",
+            Action::ItemUpdated => "Renamed an item, or wrote a credential of an existing item.",
+            Action::ItemDeleted => "Moved an item to the deleted items.",
+            Action::ItemRestored => "Restored a deleted item.",
+            Action::ItemPurged => "Permanently deleted an item.",
+            Action::ItemMerged => "Moved the credentials of one item into another.",
+            Action::ItemWebsitesChanged => "Changed the websites an item is filled on.",
+            Action::ItemConverted => "Gave an item the roles and websites of a login.",
+            Action::CredentialRead => {
+                "Read a credential value, such as with ap read, an AutoFill fill, or a one-time code."
+            },
+            Action::CredentialExec => "Read credential values for a command run with ap exec.",
+            Action::CredentialInject => {
+                "Read credential values for a template filled with ap inject."
+            },
+            Action::CredentialCreated => "Created a credential.",
+            Action::CredentialUpdated => "Changed the value, title, key, or kind of a credential.",
+            Action::CredentialDeleted => "Moved a credential to the deleted credentials.",
+            Action::CredentialRestored => "Restored a deleted credential.",
+            Action::CredentialPurged => "Permanently deleted a credential.",
+            Action::CredentialHistoryRestored => "Made a previous value of a credential current.",
+            Action::CredentialHistoryPurged => {
+                "Permanently deleted a previous value of a credential."
+            },
+            Action::CredentialRoleChanged => {
+                "Set or cleared the username, password, or one-time code role of a credential."
+            },
+            Action::PasskeyRegistered => "Created a passkey for a website.",
+            Action::PasskeyAsserted => "Signed in to a website with a passkey.",
+            Action::PasskeyMoved => "Moved a passkey to another item.",
+            Action::AuthGrantCreated => "Approved access that can be reused for a short time.",
+            Action::AuthGrantReused => "Used an earlier approval, so no prompt was shown.",
+            Action::AuthGrantExpired => "An earlier approval ran out.",
+            Action::BrokerPeerRejected => {
+                "Refused a request from a process that failed verification."
+            },
+        }
     }
 
     /// Category of the action, matching the namespace of its dotted form.
@@ -589,8 +735,12 @@ pub enum Requester {
     Browser,
     /// The AutoFill credential provider extension.
     Autofill,
-    /// A process using an SSH or GPG key, such as `git` or `ssh`.
-    SshGpgClient,
+    /// A process using an SSH key through the agent or askpass, such as `ssh`
+    /// or `git`.
+    SshClient,
+    /// A process using a GPG key through gpg-agent and pinentry, such as `gpg`
+    /// or `git`.
+    GpgClient,
     /// Any other process, such as a rejected broker peer.
     Other,
 }

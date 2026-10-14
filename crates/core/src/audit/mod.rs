@@ -168,7 +168,7 @@ mod tests {
         );
         record(event(Action::SshSign, Outcome::Denied).message("expired"));
         record(AuditEvent::new(
-            Source::Agent,
+            Source::Pinentry,
             Action::GpgPassphrase,
             Outcome::Succeeded,
         ));
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(by_action.events.len(), 2);
 
         let by_requester = read(&AuditFilter {
-            requesters: vec![Requester::SshGpgClient],
+            requesters: vec![Requester::GpgClient],
             ..Default::default()
         });
         assert_eq!(by_requester.events.len(), 1);
@@ -265,7 +265,14 @@ mod tests {
                 .actor(actor(ap))
                 .subject(ssh_key())
                 .requester(),
-            Requester::SshGpgClient
+            Requester::SshClient
+        );
+        assert_eq!(
+            app(Action::GpgPassphraseSaved)
+                .actor(actor(ap))
+                .subject(Subject::new(SubjectKind::GpgKey, "keygrip"))
+                .requester(),
+            Requester::GpgClient
         );
         assert_eq!(
             app(Action::SshManagedKeyDelete)
@@ -286,12 +293,35 @@ mod tests {
         );
         assert_eq!(
             AuditEvent::new(Source::Agent, Action::SshSign, Outcome::Succeeded).requester(),
-            Requester::SshGpgClient
+            Requester::SshClient
+        );
+        assert_eq!(
+            AuditEvent::new(Source::Askpass, Action::SshPassphrase, Outcome::Succeeded).requester(),
+            Requester::SshClient
+        );
+        assert_eq!(
+            AuditEvent::new(Source::Pinentry, Action::GpgPassphrase, Outcome::Succeeded)
+                .requester(),
+            Requester::GpgClient
         );
         assert_eq!(
             AuditEvent::new(Source::Agent, Action::SshAgentStart, Outcome::Succeeded).requester(),
             Requester::Cli
         );
+    }
+
+    #[test]
+    fn all_actions_are_listed_once_with_a_description() {
+        let mut seen = std::collections::HashSet::new();
+        for action in Action::ALL {
+            assert!(
+                seen.insert(action.as_str()),
+                "{} is listed twice",
+                action.as_str()
+            );
+            assert_eq!(Action::parse(action.as_str()), Some(action));
+            assert!(!action.description().is_empty());
+        }
     }
 
     #[test]

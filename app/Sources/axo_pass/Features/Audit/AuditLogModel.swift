@@ -81,6 +81,11 @@ final class AuditLogModel {
     }
   }
 
+  /// Every audit action with its description, for the help sheet.
+  func actionCatalog() -> [AuditActionInfo] {
+    core.auditActions()
+  }
+
   func revealInFinder() {
     let path = core.auditLogPath()
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
@@ -111,7 +116,7 @@ extension AuditCategory: CaseIterable {
 extension AuditRequesterKind: CaseIterable {
   /// Requesters in toolbar order.
   public static var allCases: [AuditRequesterKind] {
-    [.app, .cli, .browser, .autofill, .sshGpgClient, .other]
+    [.app, .cli, .browser, .autofill, .sshClient, .gpgClient, .other]
   }
 
   var label: String {
@@ -120,7 +125,8 @@ extension AuditRequesterKind: CaseIterable {
     case .cli: return "CLI"
     case .browser: return "Browser"
     case .autofill: return "AutoFill"
-    case .sshGpgClient: return "SSH & GPG clients"
+    case .sshClient: return "SSH clients"
+    case .gpgClient: return "GPG clients"
     case .other: return "Other"
     }
   }

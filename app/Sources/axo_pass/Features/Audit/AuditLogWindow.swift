@@ -7,6 +7,7 @@ struct AuditLogWindow: View {
   @State private var model = AuditLogModel()
   @State private var selection: AuditLogRow.ID? = nil
   @State private var showInspector = false
+  @State private var showHelp = false
   @Environment(VaultsModel.self) private var vaults
   @Environment(\.dismiss) private var dismiss
 
@@ -23,6 +24,9 @@ struct AuditLogWindow: View {
         .inspector(isPresented: $showInspector) {
           AuditEventInspector(row: selectedRow)
             .inspectorColumnWidth(min: 280, ideal: 340, max: 460)
+        }
+        .sheet(isPresented: $showHelp) {
+          AuditHelpSheet(actions: model.actionCatalog())
         }
     }
     .task { await model.reload() }
@@ -111,6 +115,12 @@ struct AuditLogWindow: View {
         showInspector.toggle()
       } label: {
         Label("Details", systemImage: "sidebar.right")
+      }
+
+      Button {
+        showHelp = true
+      } label: {
+        Label("About the Audit Log", systemImage: "questionmark.circle")
       }
     }
   }
