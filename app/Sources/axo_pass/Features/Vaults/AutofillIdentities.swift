@@ -20,6 +20,14 @@ enum AutofillIdentities {
   /// Replace the whole index with the current contents of the vaults. Called
   /// after an unlock, when every vault can be read on one authentication.
   static func refresh(from core: AxoPass) async {
+    // Site reports received while the vaults were locked are written into the
+    // vaults first, so the listings below leave out rejected passkeys.
+    do {
+      try await core.applyPasskeyReports()
+    } catch {
+      NSLog("Failed to apply passkey reports: %@", String(describing: error))
+    }
+
     // Listing also replaces the broker's own login index, which answers the
     // clients that list without a prompt and offers the registration prompt its
     // logins, so it runs whether or not the system provider is enabled.

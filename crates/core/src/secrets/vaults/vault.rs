@@ -16,6 +16,7 @@ use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
+use crate::secrets::vaults::passkey_signals::SignalStore;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
@@ -45,6 +46,8 @@ pub struct Vault {
     cipher: VaultCipher,
 
     folders: BTreeMap<FolderId, VaultFolder>,
+    // Site reports about the passkeys in this vault. Stored in the vault blob.
+    passkey_signals: SignalStore,
     items: BTreeMap<ItemId, VaultItemOverview>,
     item_index: BTreeMap<String, ItemId>,
     item_credential_index: BTreeMap<(String, String), (ItemId, CredentialId)>,
@@ -94,6 +97,7 @@ impl Vault {
             file_key,
             cipher,
             folders: BTreeMap::new(),
+            passkey_signals: SignalStore::new(),
             items: BTreeMap::new(),
             item_index: BTreeMap::new(),
             item_credential_index: BTreeMap::new(),
@@ -143,6 +147,7 @@ impl Vault {
                     .folders
                     .insert(folder.id, VaultFolder::from_metadata(folder));
             }
+            vault.passkey_signals = metadata.expose_secret().passkey_signals.clone();
             vault.metadata_blob = Some(blob);
         }
 
@@ -360,6 +365,7 @@ impl Vault {
                 .values()
                 .map(VaultFolder::to_metadata)
                 .collect(),
+            passkey_signals: self.passkey_signals.clone(),
         };
         vault.set_metadata(&self.cipher, self.metadata_blob.as_ref(), &metadata)?;
 
@@ -471,6 +477,17 @@ impl Vault {
         self.folders
             .get(&folder_id)
             .ok_or_else(|| Error::InvalidFolder(folder_id.to_string()))
+    }
+
+    /// Site reports about the passkeys in this vault.
+    pub fn passkey_signals(&self) -> &SignalStore {
+        &self.passkey_signals
+    }
+
+    /// Change the site reports stored in this vault.
+    pub fn update_passkey_signals<R>(&mut self, change: impl FnOnce(&mut SignalStore) -> R) -> R {
+        self.metadata_blob = None;
+        change(&mut self.passkey_signals)
     }
 
     pub fn create_folder(&mut self, title: &str) -> &VaultFolder {
@@ -2038,11 +2055,15 @@ pub struct CredentialPlacement {
 pub struct VaultMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<VaultFolderMetadata>,
+    /// Site reports about the passkeys in this vault.
+    #[serde(default, skip_serializing_if = "SignalStore::is_empty")]
+    #[zeroize(skip)]
+    pub passkey_signals: SignalStore,
 }
 
 impl VaultMetadata {
     pub fn is_empty(&self) -> bool {
-        self.folders.is_empty()
+        self.folders.is_empty() && self.passkey_signals.is_empty()
     }
 }
 
@@ -2750,6 +2771,28 @@ mod tests {
         assert!(vault.list_folders().is_empty());
         assert_eq!(vault.get_item("item").unwrap().folder, None);
         assert!(vault.get_item_credential("item", "alpha").is_ok());
+    }
+
+    #[test]
+    fn passkey_reports_persist_in_the_vault_metadata() {
+        use crate::secrets::vaults::passkey_signals::Report;
+
+        let mut vault = test_vault();
+        let folder_id = vault.create_folder("Work").id;
+        populate_caches(&mut vault);
+
+        let mut reports = SignalStore::new();
+        reports.record(
+            Report::Unknown {
+                rp_id: "example.com".into(),
+                credential_id: vec![1],
+            },
+            10,
+        );
+        vault.update_passkey_signals(|store| store.merge(&reports));
+        let vault = reload(&vault);
+        assert_eq!(vault.passkey_signals(), &reports);
+        assert_eq!(vault.get_folder(folder_id).unwrap().title, "Work");
     }
 
     #[test]

@@ -10,8 +10,8 @@ use axo_pass_core::secrets::keychain::generic_password::{
 };
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::*;
 use crate::ssh::canonical_ssh_fingerprint;
+use crate::*;
 
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum PasswordEntryType {

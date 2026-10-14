@@ -19,6 +19,7 @@ use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, Man
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
+use crate::secrets::vaults::passkey_signals::{self, SignalStore};
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
@@ -591,6 +592,22 @@ impl VaultWrapper {
     pub fn list_folders(&self) -> Result<Vec<&VaultFolder>, Error> {
         let vault = self.get_unlocked_vault()?;
         Ok(vault.list_folders())
+    }
+
+    /// Site reports about the passkeys in this vault, combined with the reports
+    /// not yet written into the vaults.
+    pub fn passkey_signals(&self) -> Result<SignalStore, Error> {
+        let vault = self.get_unlocked_vault()?;
+        Ok(passkey_signals::effective(vault.passkey_signals()))
+    }
+
+    /// Change the site reports stored in this vault. The caller saves.
+    pub fn update_passkey_signals<R>(
+        &mut self,
+        change: impl FnOnce(&mut SignalStore) -> R,
+    ) -> Result<R, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        Ok(vault.update_passkey_signals(change))
     }
 
     pub fn create_folder(&mut self, title: &str) -> Result<&VaultFolder, Error> {

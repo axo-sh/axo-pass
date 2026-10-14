@@ -361,6 +361,7 @@ mod tests {
         let cipher = VaultCipher::new(vault.id);
         let metadata = VaultMetadata {
             folders: vec![VaultFolder::new("Work").to_metadata()],
+            ..Default::default()
         };
         vault.set_metadata(&cipher, None, &metadata).unwrap();
 

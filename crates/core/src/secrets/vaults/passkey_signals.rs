@@ -2,29 +2,26 @@
 //!
 //! A site can report that a passkey is unknown to it, list the passkeys it
 //! still accepts for an account, or report a new account name. The AutoFill
-//! extension receives these in the background, with the vault locked, so they
-//! are kept outside the vault in `<app data>/passkey-signals.json`.
+//! extension receives these in the background, with the vault locked.
 //!
-//! The file holds relying party ids, credential ids, user handles, and account
-//! names. The AutoFill identity store already holds the same values. It never
-//! holds key material.
+//! Each vault stores the reports about its own passkeys in its encrypted
+//! metadata. A report that arrives while the vault is locked is held in memory
+//! until the app next unlocks, then written into the vaults with passkeys for
+//! that relying party. A report held in memory is lost if the app quits first.
+//! Readers combine the vault store with the reports held in memory.
 //!
 //! Reports only mark passkeys. A rejected passkey is hidden from AutoFill and
 //! shown with a notice, and a reported name is offered as a suggestion. Nothing
 //! is deleted or renamed until the user acts. Credential ids and user handles
 //! are base64url without padding, as in the passkey record.
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use serde::{Deserialize, Serialize};
 
-use crate::core::dirs::app_data_dir;
 use crate::secrets::vaults::passkey::StoredPasskey;
-use crate::secrets::vaults::vault_wrapper::write_atomic;
 
 /// Most entries kept in each report list. The oldest are dropped first.
 const MAX_ENTRIES: usize = 500;
@@ -126,57 +123,84 @@ pub struct SignalStore {
     dismissed: Vec<DismissEntry>,
 }
 
-/// Location of the store. `AXO_PASS_SIGNALS_PATH` overrides it, for tests.
-pub fn signals_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("AXO_PASS_SIGNALS_PATH") {
-        return PathBuf::from(path);
-    }
-    app_data_dir().join("passkey-signals.json")
+/// Reports received since they were last written into the vaults.
+static PENDING: Mutex<SignalStore> = Mutex::new(SignalStore::new());
+
+/// Hold a report made at `at` until the next unlock.
+pub fn record_pending(report: Report, at: i64) {
+    lock_pending().record(report, at);
 }
 
-/// Serializes changes to the store file within this process. Only the app
-/// writes it.
-static UPDATE_LOCK: Mutex<()> = Mutex::new(());
+/// Reports not yet written into the vaults.
+pub fn pending() -> SignalStore {
+    lock_pending().clone()
+}
+
+/// Drop the pending entries that `applied` holds, after they were written into
+/// the vaults. Entries recorded since then stay pending.
+pub fn clear_pending(applied: &SignalStore) {
+    lock_pending().remove(applied);
+}
+
+/// `vault` combined with the reports held in memory.
+pub fn effective(vault: &SignalStore) -> SignalStore {
+    let mut store = vault.clone();
+    store.merge(&lock_pending());
+    store
+}
+
+fn lock_pending() -> std::sync::MutexGuard<'static, SignalStore> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 impl SignalStore {
-    /// Load the store. A missing or unreadable file gives an empty store, and
-    /// an unreadable one is logged.
-    pub fn load() -> Self {
-        Self::load_from(&signals_path())
-    }
-
-    /// Load the store, apply `change`, and save it.
-    pub fn update<R>(change: impl FnOnce(&mut SignalStore) -> R) -> std::io::Result<R> {
-        let _guard = UPDATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let path = signals_path();
-        let mut store = Self::load_from(&path);
-        let result = change(&mut store);
-        store.save_to(&path)?;
-        Ok(result)
-    }
-
-    pub fn load_from(path: &Path) -> Self {
-        match fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-                log::error!("Ignoring unreadable passkey signals file: {e}");
-                Self::default()
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            Err(e) => {
-                log::error!("Failed to read the passkey signals file: {e}");
-                Self::default()
-            },
+    pub const fn new() -> Self {
+        Self {
+            unknown: Vec::new(),
+            accepted: Vec::new(),
+            renames: Vec::new(),
+            dismissed: Vec::new(),
         }
     }
 
-    pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let text = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        write_atomic(path, text.as_bytes())?;
-        set_owner_only(path)
+    pub fn is_empty(&self) -> bool {
+        self.unknown.is_empty()
+            && self.accepted.is_empty()
+            && self.renames.is_empty()
+            && self.dismissed.is_empty()
+    }
+
+    /// Add the entries of `other`. An entry about the same credential or
+    /// account replaces this one if it is at least as new.
+    pub fn merge(&mut self, other: &SignalStore) {
+        merge_entries(&mut self.unknown, &other.unknown, |a, b| {
+            a.rp_id == b.rp_id && a.credential_id == b.credential_id
+        });
+        merge_entries(&mut self.accepted, &other.accepted, |a, b| {
+            a.rp_id == b.rp_id && a.user_handle == b.user_handle
+        });
+        merge_entries(&mut self.renames, &other.renames, |a, b| {
+            a.rp_id == b.rp_id && a.user_handle == b.user_handle
+        });
+        merge_entries(&mut self.dismissed, &other.dismissed, |a, b| {
+            a.rp_id == b.rp_id && a.credential_id == b.credential_id && a.kind == b.kind
+        });
+    }
+
+    /// Remove the entries equal to one in `other`.
+    pub fn remove(&mut self, other: &SignalStore) {
+        self.unknown.retain(|e| !other.unknown.contains(e));
+        self.accepted.retain(|e| !other.accepted.contains(e));
+        self.renames.retain(|e| !other.renames.contains(e));
+        self.dismissed.retain(|e| !other.dismissed.contains(e));
+    }
+
+    /// Keep only the entries whose relying party passes `keep`.
+    pub fn retain_rp(&mut self, keep: impl Fn(&str) -> bool) {
+        self.unknown.retain(|e| keep(&e.rp_id));
+        self.accepted.retain(|e| keep(&e.rp_id));
+        self.renames.retain(|e| keep(&e.rp_id));
+        self.dismissed.retain(|e| keep(&e.rp_id));
     }
 
     /// Record a report made at `at`. A newer report replaces an older one
@@ -349,9 +373,49 @@ fn trim<T>(entries: &mut Vec<T>) {
     }
 }
 
-fn set_owner_only(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+/// Entries with a report time.
+trait Timed {
+    fn at(&self) -> i64;
+}
+
+impl Timed for UnknownEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+}
+
+impl Timed for AcceptedEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+}
+
+impl Timed for RenameEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+}
+
+impl Timed for DismissEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+}
+
+/// Add `from` to `into`. An entry that `same` matches is replaced if the new
+/// one is at least as new.
+fn merge_entries<T: Clone + Timed>(into: &mut Vec<T>, from: &[T], same: impl Fn(&T, &T) -> bool) {
+    for entry in from {
+        match into.iter().position(|existing| same(existing, entry)) {
+            Some(index) if entry.at() >= into[index].at() => {
+                into.remove(index);
+                into.push(entry.clone());
+            },
+            Some(_) => {},
+            None => into.push(entry.clone()),
+        }
+    }
+    trim(into);
 }
 
 #[cfg(test)]
@@ -493,9 +557,36 @@ mod tests {
     }
 
     #[test]
-    fn the_store_round_trips_through_its_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("signals.json");
+    fn merge_keeps_the_newer_entry() {
+        let unknown = |at| {
+            let mut store = SignalStore::default();
+            store.record(
+                Report::Unknown {
+                    rp_id: RP.into(),
+                    credential_id: vec![1],
+                },
+                at,
+            );
+            store
+        };
+        let mut store = unknown(10);
+        store.merge(&unknown(20));
+        assert_eq!(store.unknown.len(), 1);
+        assert_eq!(store.unknown[0].at, 20);
+
+        store.merge(&unknown(5));
+        assert_eq!(store.unknown.len(), 1);
+        assert_eq!(store.unknown[0].at, 20);
+
+        let mut other = SignalStore::default();
+        other.dismiss(RP, &id(&[1]), DismissKind::Rejection, 25);
+        store.merge(&other);
+        let (a, user) = (id(&[1]), id(&[9]));
+        assert!(!store.status(passkey(&a, &user)).rejected);
+    }
+
+    #[test]
+    fn remove_drops_only_equal_entries() {
         let mut store = SignalStore::default();
         store.record(
             Report::Unknown {
@@ -504,16 +595,34 @@ mod tests {
             },
             10,
         );
-        store.save_to(&path).unwrap();
-
-        assert_eq!(SignalStore::load_from(&path), store);
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-        assert_eq!(
-            SignalStore::load_from(&dir.path().join("missing.json")),
-            SignalStore::default()
+        let applied = store.clone();
+        store.record(
+            Report::Unknown {
+                rp_id: RP.into(),
+                credential_id: vec![2],
+            },
+            20,
         );
+        store.remove(&applied);
+        assert_eq!(store.unknown.len(), 1);
+        assert_eq!(store.unknown[0].credential_id, id(&[2]));
+    }
+
+    #[test]
+    fn retain_rp_keeps_only_the_named_sites() {
+        let mut store = SignalStore::default();
+        for rp_id in [RP, "other.com"] {
+            store.record(
+                Report::Unknown {
+                    rp_id: rp_id.into(),
+                    credential_id: vec![1],
+                },
+                10,
+            );
+        }
+        store.retain_rp(|rp_id| rp_id == RP);
+        assert_eq!(store.unknown.len(), 1);
+        assert_eq!(store.unknown[0].rp_id, RP);
     }
 
     #[test]
