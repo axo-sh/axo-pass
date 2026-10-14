@@ -313,6 +313,16 @@ pub struct AssertPasskeyPayload {
     /// The extension had no account list to offer. If several passkeys match,
     /// the user picks one in the prompt after the vaults unlock.
     pub choose_account: bool,
+    /// Vault of the passkey chosen in the prompt. If set, only this vault is
+    /// unlocked to sign.
+    pub vault_key: Option<String>,
+}
+
+/// Location of the passkey a sign-in signed with.
+struct SignedPasskey {
+    vault_key: String,
+    /// `vault/item/credential` path of the passkey.
+    credential: Option<String>,
 }
 
 /// One passkey offered in the prompt when the user picks the account to sign
@@ -985,7 +995,8 @@ pub(super) async fn authorize_and_serve(
     }
 
     // A sign-in with no account list from the extension asks the user to pick
-    // one here, if several passkeys match.
+    // one here, if several passkeys match. The chosen passkey and its vault
+    // are the only ones used to sign.
     if let Some(VaultPayload::AssertPasskey(assert)) = payload.as_mut()
         && assert.choose_account
     {
@@ -995,47 +1006,56 @@ pub(super) async fn authorize_and_serve(
             tokio::task::spawn_blocking(move || passkey_candidates(&request, candidates_context))
                 .await
                 .unwrap_or_default();
-        if candidates.len() > 1 {
+        let chosen = if candidates.len() > 1 {
             let choose = authorizer.choose_passkey(&prompt, candidates.clone());
-            let chosen = in_flight.unless_abandoned(choose).await.flatten();
-            match chosen.and_then(|index| candidates.get(index)) {
-                Some(account) => {
-                    assert.request.allowed_credentials = vec![account.credential_id.clone()];
-                },
-                None => {
-                    log::debug!("App broker passkey account was not chosen");
-                    record_access(
-                        &prompt,
-                        &actor,
-                        Outcome::Denied,
-                        None,
-                        Some("No account chosen"),
-                    );
-                    authorizer.end(prompt, PromptOutcome::Cancelled).await;
-                    return WireResponse::Cancelled;
-                },
+            match in_flight.unless_abandoned(choose).await {
+                Some(index) => index
+                    .and_then(|index| candidates.get(index))
+                    .map(Some)
+                    .ok_or("No account chosen"),
+                None => Err("Client disconnected during the account choice"),
             }
+        } else {
+            Ok(candidates.first())
+        };
+        match chosen {
+            Ok(Some(account)) => {
+                assert.request.allowed_credentials = vec![account.credential_id.clone()];
+                assert.vault_key = Some(account.vault_key.clone());
+            },
+            Ok(None) => {},
+            Err(message) => {
+                log::debug!("App broker passkey account was not chosen: {message}");
+                record_access(&prompt, &actor, Outcome::Cancelled, None, Some(message));
+                authorizer.end(prompt, PromptOutcome::Cancelled).await;
+                return WireResponse::Cancelled;
+            },
         }
     }
 
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
-    let (result, written_vault) = tokio::task::spawn_blocking(move || {
-        let mut written_vault = None;
-        let result = serve_on_context(job, context, payload, rt, &mut written_vault);
-        (result, written_vault)
+    let (result, signed) = tokio::task::spawn_blocking(move || {
+        let mut signed = None;
+        let result = serve_on_context(job, context, payload, rt, &mut signed);
+        (result, signed)
     })
     .await
     .unwrap_or_else(|e| (Err(format!("Vault task failed: {e}")), None));
     // A sign-in can use any vault, so its prompt names none until the vault
     // it wrote is known. `end` then reloads only that vault.
-    if let Some(vault_key) = written_vault {
-        prompt.vault_key = vault_key;
+    if let Some(signed) = &signed {
+        prompt.vault_key = signed.vault_key.clone();
     }
 
     let (response, outcome) = match result {
         Ok(response) => {
-            record_access(&prompt, &actor, Outcome::Succeeded, Some(&response), None);
+            let mut event =
+                access_event(&prompt, &actor, Outcome::Succeeded, Some(&response), None);
+            if let Some(credential) = signed.and_then(|s| s.credential) {
+                event = event.detail("credential", credential);
+            }
+            audit::record(event);
             (response, PromptOutcome::Succeeded)
         },
         Err(message) => {
@@ -1061,6 +1081,17 @@ fn record_access(
     response: Option<&WireResponse>,
     message: Option<&str>,
 ) {
+    audit::record(access_event(prompt, actor, outcome, response, message));
+}
+
+/// Audit event of one vault access, for [`record_access`].
+fn access_event(
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
+    outcome: Outcome,
+    response: Option<&WireResponse>,
+    message: Option<&str>,
+) -> AuditEvent {
     let vault_key = &prompt.vault_key;
     let (action, subject) = match &prompt.action {
         VaultAction::ListItems => (
@@ -1210,7 +1241,7 @@ fn record_access(
     if let Some(message) = message {
         event = event.message(message.to_string());
     }
-    audit::record(event);
+    event
 }
 
 /// The browser's name and signing team, and the extension the browser reported,
@@ -1256,14 +1287,14 @@ fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
 /// so this does not touch the app's in-memory vault state. The app's own CRUD
 /// re-reads the file before every mutation (`with_unlocked_vault` calls
 /// `unlock` each time), so a later UI edit does not clobber a write made here.
-/// `written_vault` is set to the vault a passkey sign-in wrote, since its
-/// prompt does not name one.
+/// `signed` is set to the passkey a sign-in signed with, since its prompt does
+/// not name a vault.
 fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
     payload: Option<VaultPayload>,
     rt: tokio::runtime::Handle,
-    written_vault: &mut Option<String>,
+    signed: &mut Option<SignedPasskey>,
 ) -> Result<WireResponse, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
@@ -1284,7 +1315,7 @@ fn serve_on_context(
             let Some(VaultPayload::AssertPasskey(p)) = payload else {
                 return Err("Missing passkey assertion payload".to_string());
             };
-            return assert_passkey(p.request, context, &rt, written_vault);
+            return assert_passkey(p.request, p.vault_key.as_deref(), context, &rt, signed);
         },
         VaultAction::ExportVaults { vault_keys } => {
             let Some(VaultPayload::Export(export)) = payload else {
@@ -1803,15 +1834,16 @@ fn create_passkey(
 /// any vault, so each is tried until one holds a passkey for the relying party.
 ///
 /// Passkeys a site reported it no longer accepts are used only if no other
-/// passkey matches. `written_vault` is set to the vault that signed, which
-/// records the use.
+/// passkey matches. If `only_vault` is set, no other vault is unlocked.
+/// `signed` is set to the passkey that signed. Its vault records the use.
 fn assert_passkey(
     request: passkey::AssertPasskeyRequest,
+    only_vault: Option<&str>,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
-    written_vault: &mut Option<String>,
+    signed: &mut Option<SignedPasskey>,
 ) -> Result<WireResponse, String> {
-    let (mut vm, vault_keys) = unlock_for_passkeys(&context);
+    let (mut vm, vault_keys) = unlock_for_passkeys(&context, only_vault);
 
     let mut last_error = None;
     // The first pass skips rejected passkeys. The second allows them.
@@ -1838,7 +1870,13 @@ fn assert_passkey(
             }
             match rt.block_on(passkey::assert_from_wire(vw, request)) {
                 Ok(response) => {
-                    *written_vault = Some(vault_key.clone());
+                    *signed = Some(SignedPasskey {
+                        vault_key: vault_key.clone(),
+                        credential: usable
+                            .iter()
+                            .find(|s| s.passkey.credential_id.as_slice() == &response.credential_id[..])
+                            .map(|s| format!("{vault_key}/{}/{}", s.item_key, s.credential_key)),
+                    });
                     return Ok(WireResponse::PasskeyAsserted {
                         credential_id: b64_encode(&response.credential_id),
                         user_handle: b64_encode(&response.user_handle),
@@ -1862,7 +1900,7 @@ fn passkey_candidates(
     request: &passkey::AssertPasskeyRequest,
     context: ForeignContext,
 ) -> Vec<PasskeyAccountChoice> {
-    let (mut vm, vault_keys) = unlock_for_passkeys(&context);
+    let (mut vm, vault_keys) = unlock_for_passkeys(&context, None);
     let mut found = Vec::new();
     for vault_key in &vault_keys {
         let Some(vw) = vm.get_vault_mut(vault_key) else {
@@ -1892,11 +1930,18 @@ fn passkey_candidates(
     choices
 }
 
-/// Load every vault and unlock it on the app's context. Returns the manager
-/// and the keys of the vaults that unlocked.
-fn unlock_for_passkeys(context: &ForeignContext) -> (VaultsManager, Vec<String>) {
+/// Load the vaults and unlock them on the app's context. If `only` is set,
+/// only that vault is unlocked. Returns the manager and the keys of the vaults
+/// that unlocked.
+fn unlock_for_passkeys(
+    context: &ForeignContext,
+    only: Option<&str>,
+) -> (VaultsManager, Vec<String>) {
     let mut vm = VaultsManager::new();
-    let mut vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+    let mut vault_keys: Vec<String> = vm
+        .iter_vault_keys()
+        .filter(|vault_key| only.is_none_or(|only| only == vault_key))
+        .collect();
     vault_keys.retain(|vault_key| match vm.get_vault_mut(vault_key) {
         Some(vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
             Ok(()) => true,

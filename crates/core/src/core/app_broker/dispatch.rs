@@ -619,6 +619,7 @@ pub(super) async fn serve_request(
                         vault::AssertPasskeyPayload {
                             request,
                             choose_account,
+                            vault_key: None,
                         },
                     )),
                     &in_flight,
