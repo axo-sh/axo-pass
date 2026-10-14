@@ -36,6 +36,10 @@ final class VaultUnlockPromptModel {
   /// read the answer after the evaluation returns.
   private var placement: PasskeyPlacementState?
 
+  /// Resumes the broker when the user picks the account of a passkey sign-in.
+  /// Set while the account list is on screen.
+  private var accountChoice: CheckedContinuation<UInt32?, Never>?
+
   /// Holds the cross-process auth lock during an evaluation. Set by
   /// `VaultsModel` when the broker starts.
   var core: AxoPass?
@@ -110,8 +114,35 @@ final class VaultUnlockPromptModel {
     placement?.answer
   }
 
+  /// Show the passkeys of a sign-in and wait for the user to pick one. Called
+  /// after the evaluation returned, so the vaults are already unlocked. Returns
+  /// an index into `accounts`, or `nil` if the user cancelled.
+  func choosePasskey(prompt: VaultAccessPrompt, accounts: [PasskeyAccountInfo]) async -> UInt32? {
+    guard case .assertPasskey(let rpId, _) = prompt.action else { return nil }
+    finishAccountChoice(nil)
+    return await withCheckedContinuation { (continuation: CheckedContinuation<UInt32?, Never>) in
+      accountChoice = continuation
+      panel.show(
+        PasskeyAccountChoiceView(
+          rpId: rpId,
+          callerChain: prompt.callerChain,
+          appBundleId: VaultUnlockView.connectionBundleId(caller: prompt.caller, appRequester: nil),
+          accounts: accounts,
+          onChoose: { [weak self] index in self?.finishAccountChoice(UInt32(index)) },
+          onCancel: { [weak self] in self?.finishAccountChoice(nil) }))
+    }
+  }
+
+  private func finishAccountChoice(_ index: UInt32?) {
+    let continuation = accountChoice
+    accountChoice = nil
+    continuation?.resume(returning: index)
+  }
+
   /// The access finished, successfully or not.
   func end(prompt: VaultAccessPrompt, outcome: PromptOutcome) {
+    // The broker stops waiting on a client that disconnects mid-choice.
+    finishAccountChoice(nil)
     placement = nil
     showTask?.cancel()
     showTask = nil
@@ -195,6 +226,7 @@ final class VaultUnlockPromptModel {
     case .fillLogin(_, _, let account, _), .updateLoginPassword(_, _, let account): return account
     case .saveLogin(_, let username): return username
     case .createPasskey(_, let userName, _): return userName.isEmpty ? nil : userName
+    case .assertPasskey(_, let userName): return userName
     default: return nil
     }
   }
@@ -250,8 +282,8 @@ final class VaultUnlockPromptModel {
       what = "add the vault at \(path)"
     case .createPasskey(let rpId, _, _):
       what = "create a passkey for \(rpId)"
-    case .assertPasskey(let rpId):
-      what = "sign in to \(rpId) with a passkey"
+    case .assertPasskey(let rpId, let userName):
+      what = userName.map { "sign in to \(rpId) as \($0)" } ?? "sign in to \(rpId) with a passkey"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -348,7 +380,7 @@ final class VaultUnlockPromptModel {
       return [.plain("import \(count) \(count == 1 ? "vault" : "vaults")")]
     case .addVault: return [.plain("add a vault")]
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
-    case .assertPasskey(let rpId): return [.plain("sign in to "), .bold(rpId)]
+    case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]
     }
   }
 }
@@ -432,6 +464,53 @@ private struct PasskeyPlacementCard: View {
   }
 }
 
+/// Account list of a passkey sign-in, shown after the vaults unlock. The vault
+/// is named only if the passkeys span more than one.
+private struct PasskeyAccountChoiceView: View {
+  let rpId: String
+  let callerChain: [ProcessNode]
+  let appBundleId: String?
+  let accounts: [PasskeyAccountInfo]
+  let onChoose: (Int) -> Void
+  let onCancel: () -> Void
+
+  var body: some View {
+    VStack(spacing: 14) {
+      PromptConnection(
+        callerChain: callerChain, fallbackSystemImage: "lock.fill", appBundleId: appBundleId)
+
+      PromptHeadline(.plain("Choose an account for "), .bold(rpId))
+
+      VStack(spacing: 8) {
+        ForEach(Array(accounts.enumerated()), id: \.offset) { index, account in
+          Button {
+            onChoose(index)
+          } label: {
+            PromptSubjectCard(
+              systemImage: "person.badge.key.fill", title: account.userName,
+              detail: spansVaults ? account.vaultKey : nil
+            )
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      HStack {
+        Spacer()
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+      }
+    }
+    .padding(24)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var spansVaults: Bool {
+    Set(accounts.map(\.vaultKey)).count > 1
+  }
+}
+
 private struct VaultUnlockView: View {
   let vaultKey: String
   /// Set for a passkey registration, which asks where to store the passkey.
@@ -452,7 +531,7 @@ private struct VaultUnlockView: View {
     VStack(spacing: 14) {
       PromptConnection(
         callerChain: callerChain, fallbackSystemImage: "lock.fill",
-        appBundleId: isAutofill && appRequester == nil ? Self.safariBundleId : nil)
+        appBundleId: Self.connectionBundleId(caller: caller, appRequester: appRequester))
 
       PromptHeadline(parts: title)
 
@@ -491,10 +570,18 @@ private struct VaultUnlockView: View {
 
   private static let safariBundleId = "com.apple.Safari"
 
+  /// App shown in the connection header in place of the caller chain. An
+  /// AutoFill request from a browser is shown as coming from Safari.
+  static func connectionBundleId(caller: String?, appRequester: String?) -> String? {
+    isAutofill(caller: caller) && appRequester == nil ? safariBundleId : nil
+  }
+
   /// The core names the AutoFill extension as the caller. The extension reports
   /// the app that asked when the system identifies one, and a browser request
   /// is shown as coming from Safari.
-  private var isAutofill: Bool { caller == "AutoFill extension" }
+  private static func isAutofill(caller: String?) -> Bool { caller == "AutoFill extension" }
+
+  private var isAutofill: Bool { Self.isAutofill(caller: caller) }
 
   /// Whether the innermost process is the AutoFill extension. The prompt is
   /// clearly an AutoFill request, so the chain card would only repeat it.
@@ -545,6 +632,10 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
 
   func passkeyPlacement(prompt: VaultAccessPrompt) async -> PasskeyPlacementInfo? {
     await model.passkeyPlacement()
+  }
+
+  func choosePasskey(prompt: VaultAccessPrompt, accounts: [PasskeyAccountInfo]) async -> UInt32? {
+    await model.choosePasskey(prompt: prompt, accounts: accounts)
   }
 
   func endAuthorization(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {

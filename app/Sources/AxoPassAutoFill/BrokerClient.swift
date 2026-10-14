@@ -298,16 +298,18 @@ struct BrokerClient {
   }
 
   /// Ask the app to sign an assertion challenge with a stored passkey. Prompts
-  /// every time.
+  /// every time. With `chooseAccount`, the app asks the user to pick an account
+  /// after the vaults unlock, if several passkeys match.
   static func assertPasskey(
     rpID: String, clientDataHash: Data, allowedCredentialIDs: [Data],
-    prf: PRFAssertionInput? = nil
+    chooseAccount: Bool = false, prf: PRFAssertionInput? = nil
   ) async throws -> Assertion {
     var request: [String: Any] = [
       "request": "assert_passkey",
       "rp_id": rpID,
       "client_data_hash": clientDataHash.base64EncodedString(),
       "allowed_credentials": allowedCredentialIDs.map { $0.base64EncodedString() },
+      "choose_account": chooseAccount,
     ]
     if let prf {
       var input: [String: Any] = [:]
@@ -335,6 +337,22 @@ struct BrokerClient {
       authenticatorData: authenticatorData,
       signature: signature,
       prf: decodePRF(response["prf"]))
+  }
+
+  /// Ask the app for the passkeys of `rpID` from its index. Raises no prompt.
+  /// `nil` means the app has not indexed since it started.
+  static func passkeys(rpID: String) async throws -> [PasskeyAccount]? {
+    let response = try await send(["request": "list_passkeys", "rp_id": rpID])
+    guard response["status"] as? String == "passkeys" else {
+      throw error(from: response, fallback: "Unexpected response to the passkey listing.")
+    }
+    guard response["indexed"] as? Bool == true else { return nil }
+    let entries = response["passkeys"] as? [[String: Any]] ?? []
+    return entries.compactMap { entry in
+      guard let credentialID = decodeBase64(entry["credential_id"]) else { return nil }
+      return PasskeyAccount(
+        credentialID: credentialID, userName: entry["user_name"] as? String ?? "")
+    }
   }
 
   // MARK: - Site reports

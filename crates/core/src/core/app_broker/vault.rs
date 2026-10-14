@@ -28,8 +28,8 @@ use super::in_flight::InFlightRequest;
 use super::login_index::LoginIndex;
 use super::placement::{PasskeyChoices, PasskeyPlacement, PlacementVault};
 use super::wire::{
-    BrowserClient, WirePrfAssertion, WirePrfCredentialValues, WirePrfRegistration,
-    WirePrfRegistrationOutput, WirePrfValues, WireRequest, WireResponse,
+    BrowserClient, WirePasskeyAccount, WirePrfAssertion, WirePrfCredentialValues,
+    WirePrfRegistration, WirePrfRegistrationOutput, WirePrfValues, WireRequest, WireResponse,
 };
 use super::{Authorizers, BrokerError, ConfirmPrompt, PromptOutcome};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
@@ -37,7 +37,7 @@ use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::core::provenance::ProcessNode;
-use crate::secrets::vaults::passkey_signals::{Report, SignalStore};
+use crate::secrets::vaults::passkey_signals::{self, Report};
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
     DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
@@ -173,7 +173,13 @@ pub enum VaultAction {
     /// The AutoFill extension's passkey assertion: sign the challenge with a
     /// stored passkey's private key. The request data travels in
     /// [`AssertPasskeyPayload`].
-    AssertPasskey { rp_id: String },
+    AssertPasskey {
+        rp_id: String,
+        /// Account of the passkey the request names, shown in the prompt. Read
+        /// from the login index. `None` if the request matches several
+        /// indexed passkeys or none.
+        user_name: Option<String>,
+    },
 }
 
 /// The page a login request is for, reduced to what the prompt shows and a
@@ -304,6 +310,18 @@ pub struct CreatePasskeyPayload {
 #[derive(Clone)]
 pub struct AssertPasskeyPayload {
     pub request: passkey::AssertPasskeyRequest,
+    /// The extension had no account list to offer. If several passkeys match,
+    /// the user picks one in the prompt after the vaults unlock.
+    pub choose_account: bool,
+}
+
+/// One passkey offered in the prompt when the user picks the account to sign
+/// in with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeyAccountChoice {
+    pub credential_id: Vec<u8>,
+    pub user_name: String,
+    pub vault_key: String,
 }
 
 /// The password a browser captured for [`VaultAction::SaveLogin`].
@@ -441,6 +459,17 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// and the prompt's default placement applies. The broker checks the answer
     /// against the choices it offered.
     async fn passkey_placement(&self, _prompt: &VaultAccessPrompt) -> Option<PasskeyPlacement> {
+        None
+    }
+
+    /// Ask the user which of `accounts` to sign in with, after `begin` returns
+    /// for a [`VaultAction::AssertPasskey`]. Returns an index into `accounts`.
+    /// `None` means the user cancelled.
+    async fn choose_passkey(
+        &self,
+        _prompt: &VaultAccessPrompt,
+        _accounts: Vec<PasskeyAccountChoice>,
+    ) -> Option<usize> {
         None
     }
 
@@ -694,6 +723,7 @@ pub fn request_assert_passkey(
             .iter()
             .map(|c| b64_encode(c))
             .collect(),
+        choose_account: false,
         prf: request.prf.as_ref().map(|p| WirePrfAssertion {
             eval: p.eval.as_ref().map(WirePrfValues::encode),
             eval_by_credential: p
@@ -748,7 +778,8 @@ fn decode_prf_values(values: &WirePrfValues) -> Result<passkey::PrfValues, Broke
 }
 
 /// Record a site report about a passkey relayed by the AutoFill extension, and
-/// tell the app to refresh. Raises no prompt.
+/// tell the app to refresh. Raises no prompt. The report is held in memory
+/// until the app writes it into the vaults at its next unlock.
 pub(super) async fn record_passkey_report(
     authorizer: &dyn VaultAuthorizer,
     report: Report,
@@ -771,35 +802,21 @@ pub(super) async fn record_passkey_report(
             message: "The system clock is before 1970".to_string(),
         };
     };
-    let stored =
-        tokio::task::spawn_blocking(move || SignalStore::update(|store| store.record(report, at)))
-            .await
-            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+    passkey_signals::record_pending(report, at);
 
-    let outcome = if stored.is_ok() {
-        Outcome::Succeeded
-    } else {
-        Outcome::Failed
-    };
-    let mut event = AuditEvent::new(audit::process_source(), Action::PasskeyReported, outcome)
-        .subject(Subject::new(SubjectKind::Credential, rp_id))
-        .actor(actor)
-        .detail("report", kind)
-        .detail("via", "broker");
-    if let Err(e) = &stored {
-        event = event.message(e.to_string());
-    }
+    let event = AuditEvent::new(
+        audit::process_source(),
+        Action::PasskeyReported,
+        Outcome::Succeeded,
+    )
+    .subject(Subject::new(SubjectKind::Credential, rp_id))
+    .actor(actor)
+    .detail("report", kind)
+    .detail("via", "broker");
     audit::record_async(event).await;
 
-    match stored {
-        Ok(()) => {
-            authorizer.passkey_reports_changed().await;
-            WireResponse::Acknowledged
-        },
-        Err(e) => WireResponse::Failed {
-            message: format!("Failed to record the passkey report: {e}"),
-        },
-    }
+    authorizer.passkey_reports_changed().await;
+    WireResponse::Acknowledged
 }
 
 fn unix_now() -> Option<i64> {
@@ -967,6 +984,40 @@ pub(super) async fn authorize_and_serve(
         }
     }
 
+    // A sign-in with no account list from the extension asks the user to pick
+    // one here, if several passkeys match.
+    if let Some(VaultPayload::AssertPasskey(assert)) = payload.as_mut()
+        && assert.choose_account
+    {
+        let request = assert.request.clone();
+        let candidates_context = context.clone();
+        let candidates =
+            tokio::task::spawn_blocking(move || passkey_candidates(&request, candidates_context))
+                .await
+                .unwrap_or_default();
+        if candidates.len() > 1 {
+            let choose = authorizer.choose_passkey(&prompt, candidates.clone());
+            let chosen = in_flight.unless_abandoned(choose).await.flatten();
+            match chosen.and_then(|index| candidates.get(index)) {
+                Some(account) => {
+                    assert.request.allowed_credentials = vec![account.credential_id.clone()];
+                },
+                None => {
+                    log::debug!("App broker passkey account was not chosen");
+                    record_access(
+                        &prompt,
+                        &actor,
+                        Outcome::Denied,
+                        None,
+                        Some("No account chosen"),
+                    );
+                    authorizer.end(prompt, PromptOutcome::Cancelled).await;
+                    return WireResponse::Cancelled;
+                },
+            }
+        }
+    }
+
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
     let (result, written_vault) = tokio::task::spawn_blocking(move || {
@@ -1076,7 +1127,7 @@ fn record_access(
             Action::PasskeyRegistered,
             Subject::new(SubjectKind::Credential, rp_id.clone()),
         ),
-        VaultAction::AssertPasskey { rp_id } => (
+        VaultAction::AssertPasskey { rp_id, .. } => (
             Action::PasskeyAsserted,
             Subject::new(SubjectKind::Credential, rp_id.clone()),
         ),
@@ -1673,6 +1724,36 @@ fn record_locked_listing(prompt: &VaultAccessPrompt, actor: &Actor, response: &W
     audit::record(event);
 }
 
+/// The passkeys of `rp_id` from the login index, for the AutoFill extension's
+/// account list. `indexed` is false when nothing has been indexed since the app
+/// started. The listing reads no vault, but it is recorded since it tells the
+/// extension which accounts exist for a site.
+pub(super) fn list_passkeys_locked(rp_id: &str, actor: &Actor, index: &LoginIndex) -> WireResponse {
+    let found = index.passkeys_for(rp_id);
+    let indexed = found.is_some();
+    let passkeys: Vec<WirePasskeyAccount> = found
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| WirePasskeyAccount {
+            credential_id: b64_encode(&p.credential_id),
+            user_name: p.user_name,
+        })
+        .collect();
+    let event = AuditEvent::new(
+        audit::process_source(),
+        Action::ItemListed,
+        Outcome::Succeeded,
+    )
+    .subject(Subject::new(SubjectKind::Credential, rp_id.to_string()))
+    .actor(actor.clone())
+    .detail("via", "broker")
+    .detail("login_request", "list_passkeys")
+    .detail("item_count", passkeys.len().to_string())
+    .detail("indexed", indexed.to_string());
+    audit::record(event);
+    WireResponse::Passkeys { passkeys, indexed }
+}
+
 /// The vault a new item from a client is written to: the default vault when it
 /// exists or there are no vaults, otherwise the first one. The broker names
 /// this vault in the prompt, so it is chosen before the prompt rather than
@@ -1730,20 +1811,8 @@ fn assert_passkey(
     rt: &tokio::runtime::Handle,
     written_vault: &mut Option<String>,
 ) -> Result<WireResponse, String> {
-    let mut vm = VaultsManager::new();
-    let mut vault_keys: Vec<String> = vm.iter_vault_keys().collect();
-    vault_keys.retain(|vault_key| match vm.get_vault_mut(vault_key) {
-        Some(vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
-            Ok(()) => true,
-            Err(e) => {
-                log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
-                false
-            },
-        },
-        None => false,
-    });
+    let (mut vm, vault_keys) = unlock_for_passkeys(&context);
 
-    let signals = SignalStore::load();
     let mut last_error = None;
     // The first pass skips rejected passkeys. The second allows them.
     for skip_rejected in [true, false] {
@@ -1751,18 +1820,8 @@ fn assert_passkey(
             let Some(vw) = vm.get_vault_mut(vault_key) else {
                 continue;
             };
-            let candidates: Vec<passkey::StoredPasskey> = passkey::list(vw)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| s.passkey.rp_id == request.rp_id)
-                .filter(|s| {
-                    request.allowed_credentials.is_empty()
-                        || request
-                            .allowed_credentials
-                            .iter()
-                            .any(|id| id.as_slice() == s.passkey.credential_id.as_slice())
-                })
-                .collect();
+            let signals = vw.passkey_signals().unwrap_or_default();
+            let candidates = matching_passkeys(vw, &request);
             let usable: Vec<&passkey::StoredPasskey> = candidates
                 .iter()
                 .filter(|s| !skip_rejected || !signals.rejects(s))
@@ -1794,6 +1853,81 @@ fn assert_passkey(
     }
 
     Err(last_error.unwrap_or_else(|| "No stored passkey matched the request".to_string()))
+}
+
+/// The passkeys `assert_passkey` could sign `request` with, for the user to
+/// pick one. Rejected passkeys are left out unless every match is rejected,
+/// which mirrors the order `assert_passkey` tries them in.
+fn passkey_candidates(
+    request: &passkey::AssertPasskeyRequest,
+    context: ForeignContext,
+) -> Vec<PasskeyAccountChoice> {
+    let (mut vm, vault_keys) = unlock_for_passkeys(&context);
+    let mut found = Vec::new();
+    for vault_key in &vault_keys {
+        let Some(vw) = vm.get_vault_mut(vault_key) else {
+            continue;
+        };
+        let signals = vw.passkey_signals().unwrap_or_default();
+        for stored in matching_passkeys(vw, request) {
+            found.push((vault_key.clone(), signals.rejects(&stored), stored));
+        }
+    }
+    if found.iter().any(|(_, rejected, _)| !rejected) {
+        found.retain(|(_, rejected, _)| !rejected);
+    }
+    let mut choices: Vec<PasskeyAccountChoice> = found
+        .into_iter()
+        .map(|(vault_key, _, stored)| PasskeyAccountChoice {
+            credential_id: stored.passkey.credential_id.as_slice().to_vec(),
+            user_name: stored
+                .passkey
+                .username
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| stored.item_key.clone()),
+            vault_key,
+        })
+        .collect();
+    choices.sort_by_key(|a| a.user_name.to_lowercase());
+    choices
+}
+
+/// Load every vault and unlock it on the app's context. Returns the manager
+/// and the keys of the vaults that unlocked.
+fn unlock_for_passkeys(context: &ForeignContext) -> (VaultsManager, Vec<String>) {
+    let mut vm = VaultsManager::new();
+    let mut vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+    vault_keys.retain(|vault_key| match vm.get_vault_mut(vault_key) {
+        Some(vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
+                false
+            },
+        },
+        None => false,
+    });
+    (vm, vault_keys)
+}
+
+/// Stored passkeys of `vw` for the request relying party that its allow list
+/// permits. An empty allow list permits every passkey of the relying party.
+fn matching_passkeys(
+    vw: &mut VaultWrapper,
+    request: &passkey::AssertPasskeyRequest,
+) -> Vec<passkey::StoredPasskey> {
+    passkey::list(vw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.passkey.rp_id == request.rp_id)
+        .filter(|s| {
+            request.allowed_credentials.is_empty()
+                || request
+                    .allowed_credentials
+                    .iter()
+                    .any(|id| id.as_slice() == s.passkey.credential_id.as_slice())
+        })
+        .collect()
 }
 
 /// Unlock every named vault on the app's context and write the export bundle.

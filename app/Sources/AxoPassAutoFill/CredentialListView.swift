@@ -53,6 +53,9 @@ struct CredentialListView: View {
     case .list(let items):
       list(items)
 
+    case .passkeys(let accounts):
+      passkeyList(accounts)
+
     case .appUnavailable:
       message(
         icon: "bolt.horizontal.circle", title: "Axo Pass is not running",
@@ -113,6 +116,47 @@ struct CredentialListView: View {
         .searchable(text: $filter, prompt: "Filter")
       }
     }
+  }
+
+  /// Passkey account cards. Matches the account list of the app's sign-in prompt.
+  private func passkeyList(_ accounts: [PasskeyAccount]) -> some View {
+    ScrollView {
+      VStack(spacing: 14) {
+        Text("Choose an account for **\(model.host ?? "this site")**")
+          .font(.title3)
+          .multilineTextAlignment(.center)
+        VStack(spacing: 8) {
+          ForEach(accounts) { account in
+            Button {
+              model.onSelectPasskey?(account)
+            } label: {
+              passkeyCard(account)
+            }
+            .buttonStyle(.plain)
+          }
+        }
+      }
+      .padding(24)
+    }
+  }
+
+  private func passkeyCard(_ account: PasskeyAccount) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "person.badge.key.fill")
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .frame(width: 20)
+      Text(account.userName)
+        .font(.body.weight(.medium))
+      Spacer()
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(.quaternary.opacity(0.5))
+    )
+    .contentShape(Rectangle())
   }
 
   private func loginButton(_ item: Login) -> some View {

@@ -86,6 +86,7 @@ pub enum VaultAction {
     /// The AutoFill extension is asserting a passkey for `rp_id`.
     AssertPasskey {
         rp_id: String,
+        user_name: Option<String>,
     },
 }
 
@@ -146,6 +147,25 @@ impl From<app_broker::PasskeyChoices> for PasskeyChoicesInfo {
 pub struct PasskeyPlacementInfo {
     pub vault_key: String,
     pub item_key: Option<String>,
+}
+
+/// One passkey the user may sign in with. Mirrors
+/// [`app_broker::PasskeyAccountChoice`].
+#[derive(uniffi::Record, Clone)]
+pub struct PasskeyAccountInfo {
+    pub credential_id: Vec<u8>,
+    pub user_name: String,
+    pub vault_key: String,
+}
+
+impl From<app_broker::PasskeyAccountChoice> for PasskeyAccountInfo {
+    fn from(choice: app_broker::PasskeyAccountChoice) -> Self {
+        Self {
+            credential_id: choice.credential_id,
+            user_name: choice.user_name,
+            vault_key: choice.vault_key,
+        }
+    }
 }
 
 /// The page a login request is for. Mirrors [`app_broker::LoginPage`], less the
@@ -283,7 +303,9 @@ impl From<app_broker::VaultAction> for VaultAction {
                 user_name,
                 choices: choices.into(),
             },
-            app_broker::VaultAction::AssertPasskey { rp_id } => Self::AssertPasskey { rp_id },
+            app_broker::VaultAction::AssertPasskey { rp_id, user_name } => {
+                Self::AssertPasskey { rp_id, user_name }
+            },
         }
     }
 }
@@ -350,6 +372,16 @@ pub trait VaultPromptDelegate: Send + Sync {
     /// for. Called after `begin_authorization` returns a context. `None` means
     /// the user made no choice, and the prompt's default applies.
     async fn passkey_placement(&self, prompt: VaultAccessPrompt) -> Option<PasskeyPlacementInfo>;
+
+    /// Ask the user which passkey an `AssertPasskey` prompt signs in with.
+    /// Called after `begin_authorization` returns a context, only if several
+    /// passkeys match. Returns an index into `accounts`. `None` means the user
+    /// cancelled.
+    async fn choose_passkey(
+        &self,
+        prompt: VaultAccessPrompt,
+        accounts: Vec<PasskeyAccountInfo>,
+    ) -> Option<u32>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
@@ -442,6 +474,18 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
             vault_key: placement.vault_key,
             item_key: placement.item_key,
         })
+    }
+
+    async fn choose_passkey(
+        &self,
+        prompt: &app_broker::VaultAccessPrompt,
+        accounts: Vec<app_broker::PasskeyAccountChoice>,
+    ) -> Option<usize> {
+        let accounts = accounts.into_iter().map(Into::into).collect();
+        self.delegate
+            .choose_passkey(prompt.clone().into(), accounts)
+            .await
+            .map(|index| index as usize)
     }
 
     async fn end(&self, prompt: app_broker::VaultAccessPrompt, outcome: app_broker::PromptOutcome) {

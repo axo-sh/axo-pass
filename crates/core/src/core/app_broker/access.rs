@@ -22,8 +22,9 @@ pub(super) const UNKNOWN_CLIENT: &str = "Unknown process";
 pub(super) enum RequestScope {
     /// `ap`: every request.
     Agent,
-    /// The AutoFill extension: the login requests, the passkey requests, and
-    /// site reports about passkeys. It cannot read a vault secret by name.
+    /// The AutoFill extension: the login requests, the passkey requests, the
+    /// passkey listing, and site reports about passkeys. It cannot read a vault
+    /// secret by name.
     AutofillExtension,
     /// The browser host: the same requests as the AutoFill extension, plus
     /// password generation and saving. It cannot read a vault secret by name.
@@ -42,16 +43,18 @@ impl RequestScope {
                 | WireRequest::AssertPasskey { .. }
         );
         // Site reports about passkeys arrive only through the system, which
-        // hands them to the AutoFill extension.
-        let passkey_report = matches!(
+        // hands them to the AutoFill extension. Only the extension shows its
+        // own passkey list.
+        let extension_only = matches!(
             request,
-            WireRequest::ReportUnknownPasskey { .. }
+            WireRequest::ListPasskeys { .. }
+                | WireRequest::ReportUnknownPasskey { .. }
                 | WireRequest::ReportAcceptedPasskeys { .. }
                 | WireRequest::ReportPasskeyName { .. }
         );
         match self {
             RequestScope::Agent => true,
-            RequestScope::AutofillExtension => autofill || passkey_report,
+            RequestScope::AutofillExtension => autofill || extension_only,
             RequestScope::BrowserHost => {
                 autofill
                     || matches!(

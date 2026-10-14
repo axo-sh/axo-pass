@@ -578,6 +578,7 @@ pub(super) async fn serve_request(
                 rp_id,
                 client_data_hash,
                 allowed_credentials,
+                choose_account,
                 prf,
                 origin,
                 caller,
@@ -602,7 +603,12 @@ pub(super) async fn serve_request(
                     caller: vouched_caller(scope, &client_id, caller),
                     caller_chain: caller_chain.clone(),
                     client: client_id.clone(),
-                    action: vault::VaultAction::AssertPasskey { rp_id },
+                    action: vault::VaultAction::AssertPasskey {
+                        user_name: authorizers
+                            .logins
+                            .passkey_user_name(&rp_id, &request.allowed_credentials),
+                        rp_id,
+                    },
                 };
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
@@ -610,11 +616,22 @@ pub(super) async fn serve_request(
                     prompt,
                     actor,
                     Some(vault::VaultPayload::AssertPasskey(
-                        vault::AssertPasskeyPayload { request },
+                        vault::AssertPasskeyPayload {
+                            request,
+                            choose_account,
+                        },
                     )),
                     &in_flight,
                 )
                 .await
+            },
+            WireRequest::ListPasskeys { rp_id } => {
+                if let Err(message) = check_rp_id(&rp_id, None) {
+                    log::warn!("App broker refused a passkey listing: {message}");
+                    return Ok(WireResponse::Failed { message });
+                }
+                log::debug!("App broker request: list passkeys for {rp_id}");
+                vault::list_passkeys_locked(&rp_id, &actor, &authorizers.logins)
             },
             WireRequest::ReportUnknownPasskey {
                 rp_id,

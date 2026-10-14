@@ -459,6 +459,11 @@ pub(super) enum WireRequest {
         client_data_hash: String,
         #[serde(default)]
         allowed_credentials: Vec<String>,
+        /// The extension had no account list to offer. If several passkeys
+        /// match, the prompt asks the user to pick one after the vaults
+        /// unlock.
+        #[serde(default)]
+        choose_account: bool,
         /// PRF extension input. Absent when the page did not use PRF.
         #[serde(default)]
         prf: Option<WirePrfAssertion>,
@@ -470,6 +475,13 @@ pub(super) enum WireRequest {
         /// See [`BrowserClient`].
         #[serde(default)]
         client: BrowserClient,
+    },
+
+    /// The AutoFill extension lists the passkeys of `rp_id` from the app's
+    /// index, so the user can pick an account before the sign-in prompt.
+    /// Raises no prompt.
+    ListPasskeys {
+        rp_id: String,
     },
 
     /// The AutoFill extension relays a site report that a passkey is unknown
@@ -543,6 +555,7 @@ impl WireRequest {
             | WireRequest::CreatePasskey { caller, .. }
             | WireRequest::AssertPasskey { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
+            | WireRequest::ListPasskeys { .. }
             | WireRequest::ReportUnknownPasskey { .. }
             | WireRequest::ReportAcceptedPasskeys { .. }
             | WireRequest::ReportPasskeyName { .. }
@@ -666,6 +679,13 @@ pub(super) enum WireResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prf: Option<WirePrfRegistrationOutput>,
     },
+    /// The passkeys in the app's index for a relying party. `indexed` is false
+    /// when the app has not indexed since it started, so an empty list means
+    /// "unknown" rather than "no passkeys".
+    Passkeys {
+        passkeys: Vec<WirePasskeyAccount>,
+        indexed: bool,
+    },
     /// A passkey assertion. Byte fields are standard base64.
     PasskeyAsserted {
         credential_id: String,
@@ -706,6 +726,13 @@ pub(super) enum WireResponse {
 pub(super) fn decode_b64(value: &str) -> std::io::Result<Vec<u8>> {
     b64.decode(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// One passkey offered for a sign-in. `credential_id` is standard base64.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WirePasskeyAccount {
+    pub credential_id: String,
+    pub user_name: String,
 }
 
 /// One or two PRF values. Standard base64. As input these are the page values

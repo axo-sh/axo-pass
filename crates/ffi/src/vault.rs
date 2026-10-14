@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axo_pass_core::audit;
+use axo_pass_core::core::app_broker::IndexedPasskey;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey_signals::{self, SignalStore};
@@ -548,24 +549,21 @@ fn website_origin(url: &str) -> String {
     }
 }
 
-/// Record that the user dismissed what reports so far say about a passkey. A
-/// failure to save is logged, and the report stays shown.
-async fn dismiss_report(summary: &passkey::PasskeySummary, kind: passkey_signals::DismissKind) {
-    let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
-        return;
-    };
+/// Record in the vault of the passkey that the user dismissed what reports so
+/// far say about it. The caller saves the vault.
+fn dismiss_report(
+    vw: &mut VaultWrapper,
+    summary: &passkey::PasskeySummary,
+    kind: passkey_signals::DismissKind,
+) -> Result<(), FfiError> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
     let at = i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX);
-    let rp_id = summary.rp_id.clone();
-    let credential_id = summary.credential_id.clone();
-    let saved = tokio::task::spawn_blocking(move || {
-        SignalStore::update(|store| store.dismiss(&rp_id, &credential_id, kind, at))
-    })
-    .await;
-    match saved {
-        Ok(Ok(())) => {},
-        Ok(Err(e)) => log::error!("Failed to save a passkey report dismissal: {e}"),
-        Err(e) => log::error!("Passkey report dismissal task failed: {e}"),
-    }
+    vw.update_passkey_signals(|store| {
+        store.dismiss(&summary.rp_id, &summary.credential_id, kind, at)
+    })?;
+    Ok(())
 }
 
 /// Audit event for a successful vault change made in the app. Failed changes
@@ -612,7 +610,7 @@ impl AxoPass {
 
             ensure_unlocked(vault)?;
 
-            let signals = SignalStore::load();
+            let signals = vault.passkey_signals().map_err(FfiError::from)?;
             let items = vault.list_items().map_err(FfiError::from)?;
             let mut result: Vec<ItemInfo> = items
                 .into_iter()
@@ -764,12 +762,15 @@ impl AxoPass {
     ///
     /// Only the metadata the identity store needs is read. The private key
     /// stays in the vault until the extension asks for an assertion.
+    ///
+    /// The result also replaces the passkeys of the broker's login index, which
+    /// answers the extension's account list.
     pub async fn list_passkey_identities(&self) -> Result<Vec<PasskeyIdentityInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
+        let index = Arc::clone(&self.login_index);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault_keys: Vec<String> = m.iter_vault_keys().collect();
-            let signals = SignalStore::load();
             let mut identities = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
@@ -779,6 +780,7 @@ impl AxoPass {
                     log::error!("Failed to unlock vault {vault_key} for passkeys: {e}");
                     continue;
                 }
+                let signals = vault.passkey_signals().unwrap_or_default();
                 match passkey::list(vault) {
                     Ok(found) => identities.extend(
                         found.into_iter().filter(|s| !signals.rejects(s)).map(|s| {
@@ -801,6 +803,16 @@ impl AxoPass {
                     Err(e) => log::error!("Failed to list passkeys in {vault_key}: {e}"),
                 }
             }
+            index.replace_passkeys(
+                identities
+                    .iter()
+                    .map(|i| IndexedPasskey {
+                        rp_id: i.rp_id.clone(),
+                        credential_id: i.credential_id.clone(),
+                        user_name: i.user_name.clone(),
+                    })
+                    .collect(),
+            );
             Ok(identities)
         })
         .await
@@ -1806,23 +1818,22 @@ impl AxoPass {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let key = vault_key.clone();
         let (item, cred) = (item_key.clone(), cred_key.clone());
-        let summary = self
-            .edit_vault(vault_key, move |vw| {
-                passkey::rename_account(vw, &item, &cred, &name)?;
-                let value = vw.get_secret(&item, &cred)?;
-                Ok(value.and_then(|v| passkey::summary(v.expose_secret())))
-            })
-            .await?;
-        if let Some(summary) = summary {
-            dismiss_report(&summary, passkey_signals::DismissKind::Rename).await;
-        }
+        self.edit_vault(vault_key, move |vw| {
+            passkey::rename_account(vw, &item, &cred, &name)?;
+            let value = vw.get_secret(&item, &cred)?;
+            if let Some(summary) = value.and_then(|v| passkey::summary(v.expose_secret())) {
+                dismiss_report(vw, &summary, passkey_signals::DismissKind::Rename)?;
+            }
+            Ok(())
+        })
+        .await?;
         audit::record_async(change_event(audit::Action::PasskeyRenamed, &key, subject)).await;
         Ok(())
     }
 
     /// Dismiss what site reports say about a passkey: keep a passkey the site
     /// no longer accepts, or ignore a reported name. A later report marks it
-    /// again. The vault is unchanged.
+    /// again. The dismissal is stored in the vault. The passkey is unchanged.
     pub async fn dismiss_passkey_report(
         &self,
         vault_key: String,
@@ -1830,15 +1841,68 @@ impl AxoPass {
         cred_key: String,
         kind: PasskeyReportKind,
     ) -> Result<(), FfiError> {
-        let summary = self
-            .edit_vault(vault_key, move |vw| {
-                let value = vw.get_secret(&item_key, &cred_key)?;
-                Ok(value.and_then(|v| passkey::summary(v.expose_secret())))
-            })
-            .await?
-            .ok_or_else(|| FfiError::InvalidInput("Not a passkey".to_string()))?;
-        dismiss_report(&summary, kind.into()).await;
-        Ok(())
+        self.edit_vault(vault_key, move |vw| {
+            let value = vw.get_secret(&item_key, &cred_key)?;
+            let summary = value
+                .and_then(|v| passkey::summary(v.expose_secret()))
+                .ok_or_else(|| FfiError::InvalidInput("Not a passkey".to_string()))?;
+            dismiss_report(vw, &summary, kind.into())
+        })
+        .await
+    }
+
+    /// Write the site reports held in memory into the vaults. Each vault takes
+    /// the reports for the relying parties of its passkeys. Reports stay in
+    /// memory if any vault fails to unlock or save. Requires the app to be
+    /// unlocked.
+    pub async fn apply_passkey_reports(&self) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            let reports = passkey_signals::pending();
+            if reports.is_empty() {
+                return Ok(());
+            }
+
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault_keys: Vec<String> = m.iter_vault_keys().collect();
+            let mut complete = true;
+            for vault_key in vault_keys {
+                let Some(vault) = m.get_vault_mut(&vault_key) else {
+                    continue;
+                };
+                if let Err(e) = vault.unlock() {
+                    log::error!("Failed to unlock vault {vault_key} for passkey reports: {e}");
+                    complete = false;
+                    continue;
+                }
+                let rp_ids: std::collections::HashSet<String> = match passkey::list(vault) {
+                    Ok(found) => found.into_iter().map(|s| s.passkey.rp_id).collect(),
+                    Err(e) => {
+                        log::error!("Failed to list passkeys in {vault_key}: {e}");
+                        complete = false;
+                        continue;
+                    },
+                };
+                let mut relevant = reports.clone();
+                relevant.retain_rp(|rp_id| rp_ids.contains(rp_id));
+                if relevant.is_empty() {
+                    continue;
+                }
+                let saved = vault
+                    .update_passkey_signals(|store| store.merge(&relevant))
+                    .and_then(|()| vault.save());
+                if let Err(e) = saved {
+                    log::error!("Failed to save passkey reports in {vault_key}: {e}");
+                    complete = false;
+                }
+            }
+            if complete {
+                passkey_signals::clear_pending(&reports);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
     /// Move every credential of `source_item_key` into `dest_item_key` and

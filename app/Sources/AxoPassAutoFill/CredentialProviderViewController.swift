@@ -72,9 +72,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   }
 
   /// A passkey sign-in where the user picked Axo Pass rather than one of our
-  /// registered identities. The broker asserts with any stored passkey for the
-  /// relying party that `allowedCredentials` permits. With several accounts on
-  /// one site and no allow list, the authenticator picks one.
+  /// registered identities. The passkeys come from the app's index, which
+  /// answers with the vaults locked. If several passkeys match, the user picks
+  /// one here and only that one is allowed. If the app has not indexed since it
+  /// started, the app asks the user to pick after the vaults unlock.
   override func prepareCredentialList(
     for serviceIdentifiers: [ASCredentialServiceIdentifier],
     requestParameters: ASPasskeyCredentialRequestParameters
@@ -84,21 +85,49 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       return
     }
     let rpID = requestParameters.relyingPartyIdentifier
-    let clientDataHash = requestParameters.clientDataHash
+    let allowed = requestParameters.allowedCredentials
     let prf = Self.prfInput(requestParameters.extensionInput?.prf)
-    model.beginFilling(rpID)
     Task { [weak self] in
-      do {
-        let assertion = try await BrokerClient.assertPasskey(
-          rpID: rpID,
-          clientDataHash: clientDataHash,
-          allowedCredentialIDs: requestParameters.allowedCredentials,
-          prf: prf)
-        self?.completeAssertion(
-          rpID: rpID, clientDataHash: clientDataHash, assertion: assertion)
-      } catch {
-        self?.model.report(error)
+      let accounts = await Self.passkeyAccounts(relyingParty: rpID, allowed: allowed)
+      guard let self else { return }
+      let sign = { [weak self] (credentialIDs: [Data], name: String, chooseAccount: Bool) in
+        self?.signPasskey(
+          rpID: rpID, clientDataHash: requestParameters.clientDataHash,
+          allowedCredentialIDs: credentialIDs, chooseAccount: chooseAccount, prf: prf,
+          name: name)
       }
+      guard let accounts else {
+        sign(allowed, rpID, true)
+        return
+      }
+      if accounts.count > 1 {
+        model.onSelectPasskey = { account in
+          sign([account.credentialID], account.userName, false)
+        }
+        model.choosePasskey(rpID: rpID, accounts: accounts)
+      } else {
+        sign(allowed, accounts.first?.userName ?? rpID, false)
+      }
+    }
+  }
+
+  /// Indexed passkeys of `relyingParty` that `allowed` permits. An empty
+  /// `allowed` permits every passkey. Rejected passkeys are not indexed. `nil`
+  /// if the app has not indexed since it started or the listing fails.
+  private static func passkeyAccounts(
+    relyingParty: String, allowed: [Data]
+  ) async -> [PasskeyAccount]? {
+    let indexed: [PasskeyAccount]?
+    do {
+      indexed = try await BrokerClient.passkeys(rpID: relyingParty)
+    } catch {
+      NSLog("AxoPassAutoFill: failed to list passkeys: %@", "\(error)")
+      return nil
+    }
+    return indexed?.compactMap { account in
+      guard allowed.isEmpty || allowed.contains(account.credentialID) else { return nil }
+      guard account.userName.isEmpty else { return account }
+      return PasskeyAccount(credentialID: account.credentialID, userName: relyingParty)
     }
   }
 
@@ -199,18 +228,29 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     if case .assertion(let input) = request.extensionInput {
       prf = Self.prfInput(input.prf)
     }
+    signPasskey(
+      rpID: identity.relyingPartyIdentifier, clientDataHash: request.clientDataHash,
+      allowedCredentialIDs: [identity.credentialID], prf: prf, name: name)
+  }
+
+  /// Ask the app to sign with a passkey of `rpID` and hand the result back to
+  /// the system. `name` is the account shown while the app prompts. With
+  /// `chooseAccount`, the app asks for the account after the vaults unlock.
+  private func signPasskey(
+    rpID: String, clientDataHash: Data, allowedCredentialIDs: [Data],
+    chooseAccount: Bool = false, prf: BrokerClient.PRFAssertionInput?, name: String
+  ) {
     model.beginFilling(name)
     Task { [weak self] in
       do {
         let assertion = try await BrokerClient.assertPasskey(
-          rpID: identity.relyingPartyIdentifier,
-          clientDataHash: request.clientDataHash,
-          allowedCredentialIDs: [identity.credentialID],
+          rpID: rpID,
+          clientDataHash: clientDataHash,
+          allowedCredentialIDs: allowedCredentialIDs,
+          chooseAccount: chooseAccount,
           prf: prf)
         self?.completeAssertion(
-          rpID: identity.relyingPartyIdentifier,
-          clientDataHash: request.clientDataHash,
-          assertion: assertion)
+          rpID: rpID, clientDataHash: clientDataHash, assertion: assertion)
       } catch {
         self?.model.report(error)
       }
@@ -283,7 +323,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
 
   // MARK: - Site reports
 
-  // Sites report through the system with the vault locked. The app records
+  // Sites report through the system with the vault locked. The system calls
+  // these only on macOS 26.2 and later. The app records
   // each report, marks the passkey, and leaves it in the vault. A rejected
   // passkey is also removed from the identity store here, so it is not offered
   // before the app next re-registers identities.
@@ -415,6 +456,14 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   }
 }
 
+/// One passkey offered for a sign-in, as the app's index holds it.
+struct PasskeyAccount: Identifiable, Hashable {
+  let credentialID: Data
+  let userName: String
+
+  var id: Data { credentialID }
+}
+
 /// Drives the extension's UI. The controller owns the AuthenticationServices
 /// side; this holds only what is on screen.
 @MainActor
@@ -423,6 +472,7 @@ final class CredentialListModel {
   enum State {
     case loading
     case list(LoginList)
+    case passkeys([PasskeyAccount])
     case filling(String)
     case appUnavailable
     case configuration(() -> Void)
@@ -449,8 +499,11 @@ final class CredentialListModel {
   /// The name of the app that asked, when the system identifies one. `nil`
   /// means a browser.
   private(set) var requester: String?
+  /// Passkeys offered for a sign-in. Retry shows them again.
+  private var passkeys: [PasskeyAccount]?
 
   var onSelect: ((Login) -> Void)?
+  var onSelectPasskey: ((PasskeyAccount) -> Void)?
   var onCancel: (() -> Void)?
   var onOpenApp: (() -> Void)?
 
@@ -500,6 +553,13 @@ final class CredentialListModel {
     onSelect?(login)
   }
 
+  /// Show the passkeys of `rpID` for the user to pick one.
+  func choosePasskey(rpID: String, accounts: [PasskeyAccount]) {
+    service = rpID
+    passkeys = accounts
+    state = .passkeys(accounts)
+  }
+
   func beginFilling(_ account: String) {
     state = .filling(account)
   }
@@ -521,6 +581,10 @@ final class CredentialListModel {
   }
 
   func retry() {
+    if let passkeys {
+      state = .passkeys(passkeys)
+      return
+    }
     load(service: service, requester: requester, purpose: purpose)
   }
 }

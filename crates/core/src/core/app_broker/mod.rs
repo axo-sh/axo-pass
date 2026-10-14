@@ -53,7 +53,7 @@ pub use keychain::{
     BrokerPasswordEntry, KeychainLister, SystemKeychain, request_delete_managed_key,
     request_keychain_passwords,
 };
-pub use login_index::LoginIndex;
+pub use login_index::{IndexedPasskey, LoginIndex};
 pub use placement::{PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault};
 pub use server::serve;
 pub use ssh::{
@@ -61,11 +61,11 @@ pub use ssh::{
     request_authorize_key_use, request_signature, request_ssh_passphrase,
 };
 pub use vault::{
-    BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, ResolvePurpose,
-    VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireExportMode, WireImportIdentity,
-    WireLogin, request_add_external_vault, request_assert_passkey, request_create_passkey,
-    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
-    request_vault_secret, request_write_vault_secret,
+    BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, PasskeyAccountChoice,
+    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireExportMode,
+    WireImportIdentity, WireLogin, request_add_external_vault, request_assert_passkey,
+    request_create_passkey, request_export_vaults, request_import_vaults, request_resolve_secrets,
+    request_vault_items, request_vault_secret, request_write_vault_secret,
 };
 
 /// The AutoFill credential provider extension, staged under `Contents/PlugIns`.

@@ -782,6 +782,7 @@ fn the_autofill_scope_allows_only_autofill_requests() {
         r#"{"request":"generate_totp","url":"https://example.com","frame_url":"https://example.com","record_id":"r"}"#,
         r#"{"request":"create_passkey","rp_id":"example.com","user_handle":"","user_name":"u","user_display_name":"u","client_data_hash":"","algorithms":[-7]}"#,
         r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#,
+        r#"{"request":"list_passkeys","rp_id":"example.com"}"#,
         r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
         r#"{"request":"report_accepted_passkeys","rp_id":"example.com","user_handle":"CQ==","credential_ids":["AQ=="]}"#,
         r#"{"request":"report_passkey_name","rp_id":"example.com","user_handle":"CQ==","name":"ada"}"#,
@@ -909,6 +910,7 @@ fn the_browser_host_scope_adds_generation_and_saving_to_the_autofill_requests() 
         r#"{"request":"sign","key_label":"k","data":"aGk="}"#,
         r#"{"request":"get_passphrase","key_id":"k"}"#,
         r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
+        r#"{"request":"list_passkeys","rp_id":"example.com"}"#,
     ];
     for line in autofill.iter().chain(&browser_only) {
         let request = parse(line);
@@ -1078,6 +1080,58 @@ async fn locked_listing_answers_from_the_index_without_a_prompt() {
         assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
         assert!(broker.authorizer.peers.lock().unwrap().is_empty());
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passkey_listing_answers_from_the_index_without_a_prompt() {
+    use super::IndexedPasskey;
+
+    let broker =
+        TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
+    let line = r#"{"request":"list_passkeys","rp_id":"example.com"}"#;
+
+    // Nothing is indexed before the app's first unlock.
+    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    assert!(matches!(
+        &response,
+        WireResponse::Passkeys { passkeys, indexed: false } if passkeys.is_empty()
+    ));
+
+    let passkey = |rp_id: &str, id: u8, user_name: &str| IndexedPasskey {
+        rp_id: rp_id.to_string(),
+        credential_id: vec![id],
+        user_name: user_name.to_string(),
+    };
+    broker.logins.replace_passkeys(vec![
+        passkey("example.com", 1, "wobby"),
+        passkey("other.com", 2, "ada"),
+        passkey("example.com", 3, "webby"),
+    ]);
+    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    let WireResponse::Passkeys { passkeys, indexed } = response else {
+        panic!("unexpected response");
+    };
+    assert!(indexed);
+    let found: Vec<_> = passkeys
+        .iter()
+        .map(|p| (p.credential_id.as_str(), p.user_name.as_str()))
+        .collect();
+    assert_eq!(found, [("Aw==", "webby"), ("AQ==", "wobby")]);
+
+    assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+    assert!(broker.authorizer.peers.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passkey_listing_refuses_a_public_suffix() {
+    let broker =
+        TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
+    broker.logins.replace_passkeys(Vec::new());
+    let line = r#"{"request":"list_passkeys","rp_id":"github.io"}"#;
+    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    assert!(
+        matches!(&response, WireResponse::Failed { message } if message.contains("public suffix"))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
