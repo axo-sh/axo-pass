@@ -227,7 +227,7 @@ impl From<RelatedHost> for SshRelatedHost {
 
 /// The canonical `SHA256:...` form of a fingerprint that may arrive without
 /// the prefix.
-fn canonical_ssh_fingerprint(fingerprint: &str) -> String {
+pub(crate) fn canonical_ssh_fingerprint(fingerprint: &str) -> String {
     if fingerprint.starts_with("SHA256:") {
         fingerprint.to_string()
     } else {

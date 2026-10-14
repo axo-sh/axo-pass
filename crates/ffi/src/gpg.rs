@@ -1,3 +1,5 @@
+use axo_pass_core::age::recipients::delete_recipient as delete_age_recipient;
+use axo_pass_core::audit;
 use axo_pass_core::gpg::agent_conf::{self, State as CoreAgentConfState};
 use axo_pass_core::gpg::key_overview::{
     GpgCapability as CoreGpgCapability, GpgKeyOverview, GpgSecretState as CoreGpgSecretState,
@@ -9,6 +11,7 @@ use axo_pass_core::secrets::keychain::generic_password::{
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::*;
+use crate::ssh::canonical_ssh_fingerprint;
 
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum PasswordEntryType {
@@ -394,21 +397,62 @@ impl AxoPass {
             .map(|entries| entries.into_iter().map(PasswordEntryInfo::from).collect())
     }
 
-    /// Delete a generic keychain-managed password entry.
+    /// Delete a generic keychain-managed password entry. Records a
+    /// `gpg.passphrase_deleted`, `ssh.passphrase_deleted`, or `age.key_delete`
+    /// audit event. Entries of type `Other` are not recorded.
     pub async fn delete_password(
         &self,
         password_type: PasswordEntryType,
         key_id: String,
     ) -> Result<(), FfiError> {
-        tokio::task::spawn_blocking(move || {
+        if password_type == PasswordEntryType::AgeKey {
+            return tokio::task::spawn_blocking(move || delete_age_recipient(&key_id, None))
+                .await
+                .map_err(|e| FfiError::Internal(e.to_string()))?
+                .map_err(FfiError::from);
+        }
+
+        let id = key_id.clone();
+        let result = tokio::task::spawn_blocking(move || {
             let entry = PasswordEntry {
                 password_type: password_type.into(),
-                key_id,
+                key_id: id,
             };
             entry.delete().map_err(FfiError::from)
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))?;
+
+        let (action, subject) = match password_type {
+            PasswordEntryType::GpgKey => (
+                audit::Action::GpgPassphraseDeleted,
+                audit::Subject::new(audit::SubjectKind::GpgKey, key_id),
+            ),
+            PasswordEntryType::SshKey => {
+                let fingerprint = canonical_ssh_fingerprint(&key_id);
+                (
+                    audit::Action::SshPassphraseDeleted,
+                    audit::Subject::new(audit::SubjectKind::SshKey, fingerprint.clone())
+                        .fingerprint(fingerprint),
+                )
+            },
+            PasswordEntryType::AgeKey | PasswordEntryType::Other => return result,
+        };
+        let mut event = audit::AuditEvent::new(
+            audit::process_source(),
+            action,
+            if result.is_ok() {
+                audit::Outcome::Succeeded
+            } else {
+                audit::Outcome::Failed
+            },
+        )
+        .subject(subject);
+        if let Err(e) = &result {
+            event = event.message(e.to_string());
+        }
+        audit::record(event);
+        result
     }
 
     /// Read a saved key passphrase back from the keychain, prompting for Touch

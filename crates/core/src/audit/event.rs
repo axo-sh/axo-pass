@@ -256,6 +256,8 @@ pub enum Action {
     SshAppGrantRemove,
     #[serde(rename = "ssh.session_bind")]
     SshSessionBind,
+    #[serde(rename = "ssh.passphrase_deleted")]
+    SshPassphraseDeleted,
     #[serde(rename = "ssh.agent_start")]
     SshAgentStart,
     #[serde(rename = "ssh.agent_stop")]
@@ -269,6 +271,8 @@ pub enum Action {
     GpgMessage,
     #[serde(rename = "gpg.passphrase_saved")]
     GpgPassphraseSaved,
+    #[serde(rename = "gpg.passphrase_deleted")]
+    GpgPassphraseDeleted,
     #[serde(rename = "gpg.agent_conf_changed")]
     GpgAgentConfChanged,
 
@@ -373,12 +377,14 @@ impl Action {
             Action::SshAppGrantAdd => "ssh.app_grant_add",
             Action::SshAppGrantRemove => "ssh.app_grant_remove",
             Action::SshSessionBind => "ssh.session_bind",
+            Action::SshPassphraseDeleted => "ssh.passphrase_deleted",
             Action::SshAgentStart => "ssh.agent_start",
             Action::SshAgentStop => "ssh.agent_stop",
             Action::GpgPassphrase => "gpg.passphrase",
             Action::GpgConfirm => "gpg.confirm",
             Action::GpgMessage => "gpg.message",
             Action::GpgPassphraseSaved => "gpg.passphrase_saved",
+            Action::GpgPassphraseDeleted => "gpg.passphrase_deleted",
             Action::GpgAgentConfChanged => "gpg.agent_conf_changed",
             Action::AgeDecrypt => "age.decrypt",
             Action::AgeEncrypt => "age.encrypt",
@@ -425,7 +431,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 56] = [
+    pub const ALL: [Action; 58] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -434,6 +440,7 @@ impl Action {
         Action::SshManagedKeyDelete,
         Action::SshAppGrantAdd,
         Action::SshAppGrantRemove,
+        Action::SshPassphraseDeleted,
         Action::SshSessionBind,
         Action::SshAgentStart,
         Action::SshAgentStop,
@@ -441,6 +448,7 @@ impl Action {
         Action::GpgConfirm,
         Action::GpgMessage,
         Action::GpgPassphraseSaved,
+        Action::GpgPassphraseDeleted,
         Action::GpgAgentConfChanged,
         Action::AgeDecrypt,
         Action::AgeEncrypt,
@@ -505,12 +513,14 @@ impl Action {
             Action::SshSessionBind => {
                 "Bound an SSH connection to the server's host key, for destination constraints."
             },
+            Action::SshPassphraseDeleted => "Deleted a saved SSH key passphrase from the keychain.",
             Action::SshAgentStart => "Started the SSH agent.",
             Action::SshAgentStop => "Stopped the SSH agent.",
             Action::GpgPassphrase => "Gave gpg-agent the passphrase of a GPG key through pinentry.",
             Action::GpgConfirm => "Asked for confirmation on behalf of gpg-agent.",
             Action::GpgMessage => "Showed a message on behalf of gpg-agent.",
             Action::GpgPassphraseSaved => "Saved a GPG key passphrase in the keychain.",
+            Action::GpgPassphraseDeleted => "Deleted a saved GPG key passphrase from the keychain.",
             Action::GpgAgentConfChanged => {
                 "Set Axo Pass as the pinentry program in gpg-agent.conf."
             },
@@ -582,6 +592,7 @@ impl Action {
             | Action::SshManagedKeyDelete
             | Action::SshAppGrantAdd
             | Action::SshAppGrantRemove
+            | Action::SshPassphraseDeleted
             | Action::SshSessionBind
             | Action::SshAgentStart
             | Action::SshAgentStop => Category::Ssh,
@@ -589,6 +600,7 @@ impl Action {
             | Action::GpgConfirm
             | Action::GpgMessage
             | Action::GpgPassphraseSaved
+            | Action::GpgPassphraseDeleted
             | Action::GpgAgentConfChanged => Category::Gpg,
             Action::AgeDecrypt
             | Action::AgeEncrypt
@@ -655,7 +667,9 @@ impl Action {
             | Action::SshManagedKeyDelete
             | Action::SshAppGrantAdd
             | Action::SshAppGrantRemove
+            | Action::SshPassphraseDeleted
             | Action::GpgPassphraseSaved
+            | Action::GpgPassphraseDeleted
             | Action::GpgAgentConfChanged
             | Action::AgeKeyCreate
             | Action::AgeKeyDelete

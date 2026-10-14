@@ -365,6 +365,7 @@ private struct GpgKeyDetail: View {
     switch action {
     case "gpg.passphrase": return "Passphrase requested"
     case "gpg.passphrase_saved": return "Passphrase saved"
+    case "gpg.passphrase_deleted": return "Passphrase deleted"
     case "gpg.confirm": return "Confirmation requested"
     case "gpg.message": return "Message shown"
     case "gpg.agent_conf_changed": return "Agent config changed"

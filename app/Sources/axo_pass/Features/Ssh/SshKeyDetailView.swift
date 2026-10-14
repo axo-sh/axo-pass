@@ -426,6 +426,7 @@ private struct SshKeyDetail: View {
     switch action {
     case "ssh.sign": return "Signed"
     case "ssh.passphrase": return "Passphrase requested"
+    case "ssh.passphrase_deleted": return "Passphrase deleted"
     case "ssh.key_add": return "Added to agent"
     case "ssh.key_remove": return "Removed from agent"
     case "ssh.session_bind": return "Session bound"
