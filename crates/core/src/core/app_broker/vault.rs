@@ -10,7 +10,7 @@
 //!
 //! The app verifies the peer before it serves a request, so it holds the full
 //! provenance for the process that asked. It is therefore the process that
-//! records the `secret.read`, `vault.items_listed`, `vault.exported`,
+//! records the `credential.read`, `item.listed`, `vault.exported`,
 //! `vault.imported` and `vault.linked` events, the same way the SSH agent
 //! records `ssh.sign`. Export and import also emit the per-vault events that
 //! the core records internally, sourced to the app.
@@ -898,40 +898,40 @@ fn record_access(
     let vault_key = &prompt.vault_key;
     let (action, subject) = match &prompt.action {
         VaultAction::ListItems => (
-            Action::VaultItemsListed,
+            Action::ItemListed,
             Subject::new(SubjectKind::Vault, vault_key.clone()),
         ),
         VaultAction::ReadSecret {
             item_key,
             credential_key,
         } => (
-            Action::SecretRead,
+            Action::CredentialRead,
             Subject::new(
                 SubjectKind::Credential,
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
         VaultAction::ListLogins { page, .. } => (
-            Action::VaultItemsListed,
+            Action::ItemListed,
             Subject::new(SubjectKind::Vault, page.host.clone()),
         ),
         VaultAction::FillLogin { record_id, .. } | VaultAction::GenerateTotp { record_id, .. } => (
-            Action::SecretRead,
+            Action::CredentialRead,
             Subject::new(SubjectKind::Credential, record_id.clone()),
         ),
         VaultAction::SaveLogin { .. } => (
-            Action::VaultItemCreated,
+            Action::ItemCreated,
             Subject::new(SubjectKind::Vault, vault_key.clone()),
         ),
         VaultAction::UpdateLoginPassword { record_id, .. } => (
-            Action::VaultItemUpdated,
+            Action::ItemUpdated,
             Subject::new(SubjectKind::Credential, record_id.clone()),
         ),
         VaultAction::ResolveSecrets { purpose, .. } => {
             let action = match purpose {
-                ResolvePurpose::Exec => Action::SecretExec,
-                ResolvePurpose::Inject => Action::SecretInject,
-                ResolvePurpose::Read => Action::SecretRead,
+                ResolvePurpose::Exec => Action::CredentialExec,
+                ResolvePurpose::Inject => Action::CredentialInject,
+                ResolvePurpose::Read => Action::CredentialRead,
             };
             (action, Subject::new(SubjectKind::Vault, vault_key.clone()))
         },
@@ -939,7 +939,7 @@ fn record_access(
             item_key,
             credential_key,
         } => (
-            Action::VaultItemUpdated,
+            Action::ItemUpdated,
             Subject::new(
                 SubjectKind::Credential,
                 format!("{vault_key}/{item_key}/{credential_key}"),
@@ -967,11 +967,11 @@ fn record_access(
         ),
     };
 
-    // A write that created the item records `vault.item_created` instead. The
+    // A write that created the item records `item.created` instead. The
     // serve step reports which through the response.
     let action = match (&prompt.action, response) {
         (VaultAction::WriteSecret { .. }, Some(WireResponse::VaultWritten { created: true })) => {
-            Action::VaultItemCreated
+            Action::ItemCreated
         },
         _ => action,
     };
@@ -1538,7 +1538,7 @@ fn record_locked_listing(prompt: &VaultAccessPrompt, actor: &Actor, response: &W
     };
     let mut event = AuditEvent::new(
         audit::process_source(),
-        Action::VaultItemsListed,
+        Action::ItemListed,
         Outcome::Succeeded,
     )
     .subject(Subject::new(SubjectKind::Vault, page.host.clone()))

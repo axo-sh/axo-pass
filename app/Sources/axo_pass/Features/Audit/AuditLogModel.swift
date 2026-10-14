@@ -24,11 +24,14 @@ final class AuditLogModel {
   var query: String = "" {
     didSet { if oldValue != query { scheduleReload() } }
   }
-  var source: AuditSourceKind? = nil {
-    didSet { if oldValue != source { Task { await reload() } } }
+  var requester: AuditRequesterKind? = nil {
+    didSet { if oldValue != requester { Task { await reload() } } }
   }
-  var actionGroup: AuditActionGroup = .all {
-    didSet { if oldValue != actionGroup { Task { await reload() } } }
+  var category: AuditCategory? = nil {
+    didSet { if oldValue != category { Task { await reload() } } }
+  }
+  var kind: AuditActionKind? = nil {
+    didSet { if oldValue != kind { Task { await reload() } } }
   }
 
   private var reloadTask: Task<Void, Never>? = nil
@@ -37,8 +40,10 @@ final class AuditLogModel {
     AuditFilterInput(
       sinceRfc3339: nil,
       untilRfc3339: nil,
-      actions: actionGroup.actions,
-      sources: source.map { [$0] } ?? [],
+      actions: [],
+      categories: category.map { [$0] } ?? [],
+      kind: kind,
+      requesters: requester.map { [$0] } ?? [],
       outcomes: [],
       query: query.isEmpty ? nil : query,
       limit: Self.pageSize,
@@ -82,58 +87,41 @@ final class AuditLogModel {
   }
 }
 
-/// The coarse action filter offered in the toolbar.
-enum AuditActionGroup: String, CaseIterable, Identifiable {
-  case all
-  case ssh
-  case gpg
-  case age
-  case secrets
-  case vault
-  case auth
-
-  var id: String { rawValue }
+extension AuditCategory: CaseIterable {
+  /// Categories in toolbar order.
+  public static var allCases: [AuditCategory] {
+    [.ssh, .gpg, .age, .vault, .item, .credential, .passkey, .grant, .broker]
+  }
 
   var label: String {
     switch self {
-    case .all: return "All events"
     case .ssh: return "SSH"
     case .gpg: return "GPG"
     case .age: return "Age"
-    case .secrets: return "Secrets"
-    case .vault: return "Vault"
-    case .auth: return "Grants"
+    case .vault: return "Vaults"
+    case .item: return "Items"
+    case .credential: return "Credentials"
+    case .passkey: return "Passkeys"
+    case .grant: return "Grants"
+    case .broker: return "Broker"
     }
   }
+}
 
-  /// The dotted action strings this group selects. Empty means no constraint.
-  var actions: [String] {
+extension AuditRequesterKind: CaseIterable {
+  /// Requesters in toolbar order.
+  public static var allCases: [AuditRequesterKind] {
+    [.app, .cli, .browser, .autofill, .sshGpgClient, .other]
+  }
+
+  var label: String {
     switch self {
-    case .all:
-      return []
-    case .ssh:
-      return [
-        "ssh.sign", "ssh.passphrase", "ssh.key_add", "ssh.key_remove",
-        "ssh.managed_key_create", "ssh.managed_key_delete", "ssh.app_grant_add",
-        "ssh.app_grant_remove", "ssh.session_bind", "ssh.agent_start", "ssh.agent_stop",
-      ]
-    case .gpg:
-      return [
-        "gpg.passphrase", "gpg.confirm", "gpg.message", "gpg.passphrase_saved",
-        "gpg.agent_conf_changed",
-      ]
-    case .age:
-      return ["age.encrypt", "age.decrypt", "age.key_create", "age.key_delete"]
-    case .secrets:
-      return ["secret.read", "secret.inject", "secret.exec"]
-    case .vault:
-      return [
-        "vault.unlock", "vault.lock", "vault.autolock", "vault.items_listed", "vault.item_created",
-        "vault.item_updated", "vault.item_deleted", "vault.created", "vault.exported",
-        "vault.imported",
-      ]
-    case .auth:
-      return ["auth.grant_created", "auth.grant_reused", "auth.grant_expired"]
+    case .app: return "App"
+    case .cli: return "CLI"
+    case .browser: return "Browser"
+    case .autofill: return "AutoFill"
+    case .sshGpgClient: return "SSH & GPG clients"
+    case .other: return "Other"
     }
   }
 }
@@ -175,6 +163,7 @@ struct AuditLogRow: Identifiable, Hashable {
     case .sshKey: return "SSH key"
     case .gpgKey: return "GPG key"
     case .credential: return "Credential"
+    case .item: return "Item"
     case .vault: return "Vault"
     case .ageIdentity: return "age identity"
     case nil: return nil
@@ -193,6 +182,8 @@ struct AuditLogRow: Identifiable, Hashable {
     case .failed: return "Failed"
     }
   }
+
+  var requesterText: String { record.requester.label }
 
   var sourceText: String {
     switch record.source {

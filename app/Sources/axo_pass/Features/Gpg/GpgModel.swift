@@ -183,8 +183,10 @@ final class GpgModel {
       let filter = AuditFilterInput(
         sinceRfc3339: nil,
         untilRfc3339: nil,
-        actions: AuditActionGroup.gpg.actions,
-        sources: [],
+        actions: [],
+        categories: [.gpg],
+        kind: nil,
+        requesters: [],
         outcomes: [],
         query: keygrip,
         limit: limit,

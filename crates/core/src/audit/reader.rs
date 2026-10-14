@@ -7,7 +7,7 @@ use std::fs;
 
 use time::OffsetDateTime;
 
-use crate::audit::event::{Action, AuditEvent, Outcome, Source};
+use crate::audit::event::{Action, ActionKind, AuditEvent, Category, Outcome, Requester};
 use crate::audit::writer::audit_dir;
 
 /// Narrows a `read`. Every field is optional; an empty filter returns
@@ -17,7 +17,9 @@ pub struct AuditFilter {
     pub since: Option<OffsetDateTime>,
     pub until: Option<OffsetDateTime>,
     pub actions: Vec<Action>,
-    pub sources: Vec<Source>,
+    pub categories: Vec<Category>,
+    pub kind: Option<ActionKind>,
+    pub requesters: Vec<Requester>,
     pub outcomes: Vec<Outcome>,
     /// Case-insensitive substring match on caller, subject id/label and
     /// message.
@@ -51,7 +53,15 @@ impl AuditFilter {
         if !self.actions.is_empty() && !self.actions.contains(&event.action) {
             return false;
         }
-        if !self.sources.is_empty() && !self.sources.contains(&event.source) {
+        if !self.categories.is_empty() && !self.categories.contains(&event.action.category()) {
+            return false;
+        }
+        if let Some(kind) = self.kind
+            && event.action.kind() != kind
+        {
+            return false;
+        }
+        if !self.requesters.is_empty() && !self.requesters.contains(&event.requester()) {
             return false;
         }
         if !self.outcomes.is_empty() && !self.outcomes.contains(&event.outcome) {

@@ -39,8 +39,8 @@ mod reader;
 mod writer;
 
 pub use event::{
-    Action, Actor, AuditEvent, Outcome, SCHEMA_VERSION, Source, Subject, SubjectKind,
-    parse_rfc3339, process_source, set_process_source,
+    Action, ActionKind, Actor, AuditEvent, Category, Outcome, Requester, SCHEMA_VERSION, Source,
+    Subject, SubjectKind, parse_rfc3339, process_source, set_process_source,
 };
 pub use reader::{AuditFilter, AuditPage, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};
@@ -179,11 +179,29 @@ mod tests {
         });
         assert_eq!(by_action.events.len(), 2);
 
-        let by_source = read(&AuditFilter {
-            sources: vec![Source::Agent],
+        let by_requester = read(&AuditFilter {
+            requesters: vec![Requester::SshGpgClient],
             ..Default::default()
         });
-        assert_eq!(by_source.events.len(), 1);
+        assert_eq!(by_requester.events.len(), 1);
+
+        let by_category = read(&AuditFilter {
+            categories: vec![Category::Gpg],
+            ..Default::default()
+        });
+        assert_eq!(by_category.events.len(), 1);
+
+        let by_kind = read(&AuditFilter {
+            kind: Some(ActionKind::Access),
+            ..Default::default()
+        });
+        assert_eq!(by_kind.events.len(), 3);
+
+        let changes = read(&AuditFilter {
+            kind: Some(ActionKind::Change),
+            ..Default::default()
+        });
+        assert_eq!(changes.events.len(), 0);
 
         let by_outcome = read(&AuditFilter {
             outcomes: vec![Outcome::Denied],
@@ -209,6 +227,90 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(offset.events.len(), 2);
+    }
+
+    #[test]
+    fn requester_is_derived_from_source_actor_and_subject() {
+        let actor = |executable: &str| Actor {
+            executable: Some(executable.to_string()),
+            ..Default::default()
+        };
+        let app = |action| AuditEvent::new(Source::App, action, Outcome::Succeeded);
+        let ssh_key = || Subject::new(SubjectKind::SshKey, "SHA256:abc");
+        let ap = "/Applications/Axo Pass.app/Contents/MacOS/ap";
+
+        assert_eq!(app(Action::ItemCreated).requester(), Requester::App);
+        assert_eq!(
+            app(Action::CredentialRead).actor(actor(ap)).requester(),
+            Requester::Cli
+        );
+        assert_eq!(
+            app(Action::ItemListed)
+                .actor(actor(
+                    "/Applications/Axo Pass.app/Contents/MacOS/AxoPassBrowserHost"
+                ))
+                .requester(),
+            Requester::Browser
+        );
+        assert_eq!(
+            app(Action::PasskeyAsserted)
+                .actor(actor(
+                    "/Applications/Axo Pass.app/Contents/PlugIns/AxoPassAutoFill.appex/Contents/MacOS/AxoPassAutoFill"
+                ))
+                .requester(),
+            Requester::Autofill
+        );
+        assert_eq!(
+            app(Action::AuthGrantReused)
+                .actor(actor(ap))
+                .subject(ssh_key())
+                .requester(),
+            Requester::SshGpgClient
+        );
+        assert_eq!(
+            app(Action::SshManagedKeyDelete)
+                .actor(actor(ap))
+                .subject(ssh_key())
+                .requester(),
+            Requester::Cli
+        );
+        assert_eq!(
+            app(Action::BrokerPeerRejected)
+                .actor(actor("/usr/bin/nc"))
+                .requester(),
+            Requester::Other
+        );
+        assert_eq!(
+            event(Action::CredentialRead, Outcome::Succeeded).requester(),
+            Requester::Cli
+        );
+        assert_eq!(
+            AuditEvent::new(Source::Agent, Action::SshSign, Outcome::Succeeded).requester(),
+            Requester::SshGpgClient
+        );
+        assert_eq!(
+            AuditEvent::new(Source::Agent, Action::SshAgentStart, Outcome::Succeeded).requester(),
+            Requester::Cli
+        );
+    }
+
+    #[test]
+    fn category_matches_the_action_namespace() {
+        let cases = [
+            (Action::SshSign, Category::Ssh, "ssh"),
+            (Action::GpgMessage, Category::Gpg, "gpg"),
+            (Action::AgeEncrypt, Category::Age, "age"),
+            (Action::VaultExported, Category::Vault, "vault"),
+            (Action::ItemListed, Category::Item, "item"),
+            (Action::CredentialExec, Category::Credential, "credential"),
+            (Action::PasskeyMoved, Category::Passkey, "passkey"),
+            (Action::AuthGrantExpired, Category::Grant, "auth"),
+            (Action::BrokerPeerRejected, Category::Broker, "broker"),
+        ];
+        for (action, category, namespace) in cases {
+            assert_eq!(action.category(), category);
+            assert!(action.as_str().starts_with(&format!("{namespace}.")));
+        }
     }
 
     #[test]

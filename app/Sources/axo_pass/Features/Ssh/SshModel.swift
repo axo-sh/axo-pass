@@ -184,8 +184,10 @@ final class SshModel {
     let filter = AuditFilterInput(
       sinceRfc3339: nil,
       untilRfc3339: nil,
-      actions: AuditActionGroup.ssh.actions,
-      sources: [],
+      actions: [],
+      categories: [.ssh],
+      kind: nil,
+      requesters: [],
       outcomes: [],
       query: fingerprintSha256,
       limit: limit,

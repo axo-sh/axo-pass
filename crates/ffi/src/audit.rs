@@ -25,14 +25,87 @@ impl From<audit::Source> for AuditSourceKind {
     }
 }
 
-impl From<AuditSourceKind> for audit::Source {
-    fn from(s: AuditSourceKind) -> Self {
-        match s {
-            AuditSourceKind::Agent => Self::Agent,
-            AuditSourceKind::Pinentry => Self::Pinentry,
-            AuditSourceKind::App => Self::App,
-            AuditSourceKind::Cli => Self::Cli,
-            AuditSourceKind::Askpass => Self::Askpass,
+/// Who asked for an event. See `audit::Requester`.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditRequesterKind {
+    App,
+    Cli,
+    Browser,
+    Autofill,
+    SshGpgClient,
+    Other,
+}
+
+impl From<audit::Requester> for AuditRequesterKind {
+    fn from(r: audit::Requester) -> Self {
+        match r {
+            audit::Requester::App => Self::App,
+            audit::Requester::Cli => Self::Cli,
+            audit::Requester::Browser => Self::Browser,
+            audit::Requester::Autofill => Self::Autofill,
+            audit::Requester::SshGpgClient => Self::SshGpgClient,
+            audit::Requester::Other => Self::Other,
+        }
+    }
+}
+
+impl From<AuditRequesterKind> for audit::Requester {
+    fn from(r: AuditRequesterKind) -> Self {
+        match r {
+            AuditRequesterKind::App => Self::App,
+            AuditRequesterKind::Cli => Self::Cli,
+            AuditRequesterKind::Browser => Self::Browser,
+            AuditRequesterKind::Autofill => Self::Autofill,
+            AuditRequesterKind::SshGpgClient => Self::SshGpgClient,
+            AuditRequesterKind::Other => Self::Other,
+        }
+    }
+}
+
+/// Action category. See `audit::Category`.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditCategory {
+    Ssh,
+    Gpg,
+    Age,
+    Vault,
+    Item,
+    Credential,
+    Passkey,
+    Grant,
+    Broker,
+}
+
+impl From<AuditCategory> for audit::Category {
+    fn from(c: AuditCategory) -> Self {
+        match c {
+            AuditCategory::Ssh => Self::Ssh,
+            AuditCategory::Gpg => Self::Gpg,
+            AuditCategory::Age => Self::Age,
+            AuditCategory::Vault => Self::Vault,
+            AuditCategory::Item => Self::Item,
+            AuditCategory::Credential => Self::Credential,
+            AuditCategory::Passkey => Self::Passkey,
+            AuditCategory::Grant => Self::Grant,
+            AuditCategory::Broker => Self::Broker,
+        }
+    }
+}
+
+/// What an action does. See `audit::ActionKind`.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum AuditActionKind {
+    Access,
+    Change,
+    Other,
+}
+
+impl From<AuditActionKind> for audit::ActionKind {
+    fn from(k: AuditActionKind) -> Self {
+        match k {
+            AuditActionKind::Access => Self::Access,
+            AuditActionKind::Change => Self::Change,
+            AuditActionKind::Other => Self::Other,
         }
     }
 }
@@ -72,6 +145,7 @@ pub enum AuditSubjectKind {
     SshKey,
     GpgKey,
     Credential,
+    Item,
     Vault,
     AgeIdentity,
 }
@@ -82,6 +156,7 @@ impl From<audit::SubjectKind> for AuditSubjectKind {
             audit::SubjectKind::SshKey => Self::SshKey,
             audit::SubjectKind::GpgKey => Self::GpgKey,
             audit::SubjectKind::Credential => Self::Credential,
+            audit::SubjectKind::Item => Self::Item,
             audit::SubjectKind::Vault => Self::Vault,
             audit::SubjectKind::AgeIdentity => Self::AgeIdentity,
         }
@@ -94,7 +169,10 @@ pub struct AuditEventRecord {
     pub id: String,
     /// RFC 3339 timestamp.
     pub at: String,
+    /// Process that wrote the event.
     pub source: AuditSourceKind,
+    /// Who asked for the event.
+    pub requester: AuditRequesterKind,
     /// Dotted action string, e.g. `ssh.sign`.
     pub action: String,
     pub outcome: AuditOutcomeKind,
@@ -115,6 +193,7 @@ pub struct AuditEventRecord {
 impl From<audit::AuditEvent> for AuditEventRecord {
     fn from(e: audit::AuditEvent) -> Self {
         let at = e.at_rfc3339();
+        let requester = e.requester().into();
         let action = e.action.as_str().to_string();
         let (subject_kind, subject_id, subject_label, subject_fingerprint) = match e.subject {
             Some(s) => (Some(s.kind.into()), Some(s.id), s.label, s.fingerprint),
@@ -125,6 +204,7 @@ impl From<audit::AuditEvent> for AuditEventRecord {
             id: e.id.to_string(),
             at,
             source: e.source.into(),
+            requester,
             action,
             outcome: e.outcome.into(),
             subject_kind,
@@ -150,7 +230,9 @@ pub struct AuditFilterInput {
     pub until_rfc3339: Option<String>,
     /// Dotted action strings. Unknown values are ignored.
     pub actions: Vec<String>,
-    pub sources: Vec<AuditSourceKind>,
+    pub categories: Vec<AuditCategory>,
+    pub kind: Option<AuditActionKind>,
+    pub requesters: Vec<AuditRequesterKind>,
     pub outcomes: Vec<AuditOutcomeKind>,
     pub query: Option<String>,
     pub limit: Option<u32>,
@@ -173,7 +255,9 @@ impl From<AuditFilterInput> for audit::AuditFilter {
                 .iter()
                 .filter_map(|a| audit::Action::parse(a))
                 .collect(),
-            sources: input.sources.into_iter().map(Into::into).collect(),
+            categories: input.categories.into_iter().map(Into::into).collect(),
+            kind: input.kind.map(Into::into),
+            requesters: input.requesters.into_iter().map(Into::into).collect(),
             outcomes: input.outcomes.into_iter().map(Into::into).collect(),
             query: input.query.filter(|q| !q.is_empty()),
             limit: input.limit.map(|l| l as usize),

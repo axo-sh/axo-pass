@@ -78,8 +78,10 @@ final class AgeModel {
     let filter = AuditFilterInput(
       sinceRfc3339: nil,
       untilRfc3339: nil,
-      actions: AuditActionGroup.age.actions,
-      sources: [],
+      actions: [],
+      categories: [.age],
+      kind: nil,
+      requesters: [],
       outcomes: [],
       query: name,
       limit: limit,

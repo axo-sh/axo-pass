@@ -52,6 +52,8 @@ struct AuditLogWindow: View {
       TableColumn("Action") { Text($0.action).font(.system(.body, design: .monospaced)) }
         .width(min: 120, ideal: 150)
       TableColumn("Subject", value: \.subjectText)
+      TableColumn("Requester", value: \.requesterText)
+        .width(min: 80, ideal: 110)
       TableColumn("Caller", value: \.callerText)
       TableColumn("Outcome") { row in
         Text(row.outcomeText)
@@ -69,17 +71,27 @@ struct AuditLogWindow: View {
   @ToolbarContentBuilder
   private var toolbarContent: some ToolbarContent {
     ToolbarItemGroup(placement: .primaryAction) {
-      Picker("Source", selection: $model.source) {
-        Text("All sources").tag(AuditSourceKind?.none)
-        Text("SSH agent").tag(AuditSourceKind?.some(.agent))
-        Text("pinentry").tag(AuditSourceKind?.some(.pinentry))
-        Text("App").tag(AuditSourceKind?.some(.app))
-        Text("CLI").tag(AuditSourceKind?.some(.cli))
-        Text("askpass").tag(AuditSourceKind?.some(.askpass))
+      Picker("Kind", selection: $model.kind) {
+        Text("All").tag(AuditActionKind?.none)
+        Text("Access").tag(AuditActionKind?.some(.access))
+        Text("Changes").tag(AuditActionKind?.some(.change))
+      }
+      .pickerStyle(.segmented)
+
+      Picker("Category", selection: $model.category) {
+        Text("All categories").tag(AuditCategory?.none)
+        Divider()
+        ForEach(AuditCategory.allCases, id: \.self) {
+          Text($0.label).tag(AuditCategory?.some($0))
+        }
       }
 
-      Picker("Events", selection: $model.actionGroup) {
-        ForEach(AuditActionGroup.allCases) { Text($0.label).tag($0) }
+      Picker("Requester", selection: $model.requester) {
+        Text("All requesters").tag(AuditRequesterKind?.none)
+        Divider()
+        ForEach(AuditRequesterKind.allCases, id: \.self) {
+          Text($0.label).tag(AuditRequesterKind?.some($0))
+        }
       }
 
       Button {
@@ -133,8 +145,9 @@ private struct AuditEventInspector: View {
         VStack(alignment: .leading, spacing: 8) {
           InsetGroupedSection {
             LabeledContent("Time", value: row.timeText)
-            LabeledContent("Source", value: row.sourceText)
             LabeledContent("Action", value: row.action)
+            LabeledContent("Requester", value: row.requesterText)
+            LabeledContent("Recorded by", value: row.sourceText)
             LabeledContent("Outcome", value: row.outcomeText)
             if let message = row.record.message, !message.isEmpty {
               LabeledContent("Message", value: message)

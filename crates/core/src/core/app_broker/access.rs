@@ -2,14 +2,11 @@
 //! policies, the request scopes, and the identities that prompts and audit
 //! events name.
 
-use super::AUTOFILL_EXTENSION_NAME;
 use super::vault::ClientIdentity;
 use super::wire::{BrowserClient, WireRequest};
+use super::{AGENT_EXECUTABLE_NAME, AUTOFILL_EXTENSION_NAME, BROWSER_HOST_EXECUTABLE_NAME};
 use crate::audit;
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
-
-/// The agent ships inside the app bundle, beside the app's own executable.
-const AGENT_EXECUTABLE_NAME: &str = "ap";
 
 /// How prompts, grants, and audit events name a request that arrived through
 /// the AutoFill extension.
@@ -18,9 +15,6 @@ pub(super) const AUTOFILL_CALLER: &str = "AutoFill extension";
 /// What a prompt calls a request from a browser host that could not verify the
 /// browser that started it.
 pub(super) const UNKNOWN_CLIENT: &str = "Unknown process";
-
-/// The browser native messaging host, staged beside the app's own executable.
-const BROWSER_HOST_EXECUTABLE_NAME: &str = "AxoPassBrowserHost";
 
 /// Which requests a client may send. Checked after the peer is verified and
 /// before the request is dispatched.

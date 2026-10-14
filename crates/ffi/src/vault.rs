@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axo_pass_core::audit;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::{
-    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, TextField,
-    VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, VaultWrapper,
-    Website, autofill, display_order, passkey, totp,
+    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
+    TextField, VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
+    VaultWrapper, Website, autofill, display_order, passkey, totp,
 };
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
@@ -431,6 +432,81 @@ fn parse_ids(ids: &[String]) -> Result<Vec<Uuid>, FfiError> {
     ids.iter().map(|id| parse_id(id)).collect()
 }
 
+/// Audit subject for a vault.
+fn vault_subject(vault_key: &str) -> audit::Subject {
+    audit::Subject::new(audit::SubjectKind::Vault, vault_key)
+}
+
+/// Audit subject for an item, named `vault/item`.
+fn item_subject(vault_key: &str, item_key: &str) -> audit::Subject {
+    audit::Subject::new(audit::SubjectKind::Item, format!("{vault_key}/{item_key}"))
+}
+
+/// Audit subject for a credential, named `vault/item/credential`.
+fn credential_subject(vault_key: &str, item_key: &str, cred_key: &str) -> audit::Subject {
+    audit::Subject::new(
+        audit::SubjectKind::Credential,
+        format!("{vault_key}/{item_key}/{cred_key}"),
+    )
+}
+
+/// Audit subject for an item looked up by id. `found` is the item key and
+/// title. The id stands in for the key if the item was not found.
+fn item_subject_by_id(
+    vault_key: &str,
+    item_id: &str,
+    found: Option<(String, String)>,
+) -> audit::Subject {
+    match found {
+        Some((item_key, title)) => item_subject(vault_key, &item_key).label(title),
+        None => item_subject(vault_key, item_id),
+    }
+}
+
+/// Audit subject for a credential looked up by id. `found` is the credential
+/// key and title. The id stands in for the key if the credential was not
+/// found.
+fn credential_subject_by_id(
+    vault_key: &str,
+    item_key: &str,
+    cred_id: &str,
+    found: Option<(String, String)>,
+) -> audit::Subject {
+    match found {
+        Some((cred_key, title)) => credential_subject(vault_key, item_key, &cred_key).label(title),
+        None => credential_subject(vault_key, item_key, cred_id),
+    }
+}
+
+/// Website origin for an audit detail, as `scheme://host`. The path and query
+/// are dropped because they can carry tokens. The host is normalized as in
+/// autofill matching, without a leading `www.`. A URL that does not parse is
+/// recorded as `invalid`.
+fn website_origin(url: &str) -> String {
+    match Site::parse(url) {
+        Some(site) => {
+            let scheme = if site.secure { "https" } else { "http" };
+            format!("{scheme}://{}", site.host)
+        },
+        None => "invalid".to_string(),
+    }
+}
+
+/// Audit event for a successful vault change made in the app. Failed changes
+/// and reads in the app are not recorded. A passkey move that leaves the
+/// passkey in both vaults is the one exception. Details carry keys, titles,
+/// and counts, never values.
+fn change_event(
+    action: audit::Action,
+    vault_key: &str,
+    subject: audit::Subject,
+) -> audit::AuditEvent {
+    audit::AuditEvent::new(audit::process_source(), action, audit::Outcome::Succeeded)
+        .subject(subject)
+        .detail("vault", vault_key)
+        .detail("via", "app")
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl AxoPass {
     /// List all known vaults. Does not require authentication.
@@ -752,10 +828,22 @@ impl AxoPass {
         cred_key: String,
         history_id: String,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let id = history_id.clone();
+        self.edit_vault(vault_key.clone(), move |vw| {
             Ok(vw.restore_history_value(&item_key, &cred_key, parse_id(&history_id)?)?)
         })
-        .await
+        .await?;
+        audit::record_async(
+            change_event(
+                audit::Action::CredentialHistoryRestored,
+                &vault_key,
+                subject,
+            )
+            .detail("history_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete a previous value of a credential permanently.
@@ -766,10 +854,18 @@ impl AxoPass {
         cred_key: String,
         history_id: String,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let id = history_id.clone();
+        self.edit_vault(vault_key.clone(), move |vw| {
             Ok(vw.purge_history(&item_key, &cred_key, parse_id(&history_id)?)?)
         })
-        .await
+        .await?;
+        audit::record_async(
+            change_event(audit::Action::CredentialHistoryPurged, &vault_key, subject)
+                .detail("history_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Retrieve a credential secret's decrypted title as raw bytes (same
@@ -805,16 +901,23 @@ impl AxoPass {
         vault_key: String,
     ) -> Result<VaultInfo, FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let info = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vw = m.add_vault(name, &vault_key).map_err(FfiError::from)?;
-            Ok(VaultInfo {
+            Ok::<_, FfiError>(VaultInfo {
                 key: vw.key.clone(),
                 name: vw.vault_name().map(|s| s.to_string()),
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(change_event(
+            audit::Action::VaultCreated,
+            &info.key,
+            vault_subject(&info.key).maybe_label(info.name.clone()),
+        ))
+        .await;
+        Ok(info)
     }
 
     /// Rename a vault and/or change its key. Does not require the vault to be
@@ -826,42 +929,70 @@ impl AxoPass {
         new_name: Option<String>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let key = vault_key.clone();
+        let (renamed, rekeyed) = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vw = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
 
+            let mut renamed = None;
             if new_name.as_deref() != vw.vault_name()
                 && let Some(new_name) = new_name
             {
-                vw.set_vault_name(new_name).map_err(FfiError::from)?;
+                vw.set_vault_name(new_name.clone())
+                    .map_err(FfiError::from)?;
                 vw.save().map_err(FfiError::from)?;
+                renamed = Some(new_name);
             }
 
+            let mut rekeyed = None;
             if new_vault_key.as_deref() != Some(vault_key.as_str())
                 && let Some(new_vault_key) = new_vault_key
             {
                 m.update_vault_key(&vault_key, &new_vault_key)
                     .map_err(FfiError::from)?;
+                rekeyed = Some(new_vault_key);
             }
 
-            Ok(())
+            Ok::<_, FfiError>((renamed, rekeyed))
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+
+        if renamed.is_some() || rekeyed.is_some() {
+            audit::record_async(
+                change_event(audit::Action::VaultUpdated, &key, vault_subject(&key))
+                    .maybe_detail("new_name", renamed)
+                    .maybe_detail("new_key", rekeyed),
+            )
+            .await;
+        }
+        Ok(())
     }
 
     /// Delete a vault (moved to Trash, not permanently deleted). Mirrors
     /// `delete_vault` in the Tauri app.
     pub async fn delete_vault(&self, vault_key: String) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let key = vault_key.clone();
+        let name = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            m.delete_vault(&vault_key).map_err(FfiError::from)
+            let name = m
+                .get_vault(&vault_key)
+                .and_then(|vw| vw.vault_name().map(str::to_string));
+            m.delete_vault(&vault_key).map_err(FfiError::from)?;
+            Ok::<_, FfiError>(name)
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(change_event(
+            audit::Action::VaultDeleted,
+            &key,
+            vault_subject(&key).maybe_label(name),
+        ))
+        .await;
+        Ok(())
     }
 
     /// Create or rename an item within a vault.
@@ -872,16 +1003,27 @@ impl AxoPass {
         item_title: String,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let subject = item_subject(&vault_key, &item_key).label(item_title.clone());
+        let (key, title) = (vault_key.clone(), item_title.clone());
+        let previous_title = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.add_item(&item_key, &item_title)
-                    .map_err(FfiError::from)?;
-                Ok(())
+                let previous_title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
+                vw.add_item(&item_key, &item_title)?;
+                Ok::<_, FfiError>(previous_title)
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let event = match previous_title {
+            None => change_event(audit::Action::ItemCreated, &key, subject),
+            Some(previous) if previous != title => {
+                change_event(audit::Action::ItemUpdated, &key, subject).detail("changed", "title")
+            },
+            Some(_) => return Ok(()),
+        };
+        audit::record_async(event).await;
+        Ok(())
     }
 
     /// List a vault's deleted items, most recently deleted first.
@@ -944,30 +1086,78 @@ impl AxoPass {
         item_id: String,
         new_key: Option<String>,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
-            Ok(vw.restore_item(parse_id(&item_id)?, new_key)?)
-        })
-        .await
+        let id = item_id.clone();
+        let restored = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                let id = parse_id(&item_id)?;
+                vw.restore_item(id, new_key)?;
+                Ok(vw
+                    .get_item_overview_by_id(id)?
+                    .map(|i| (i.key.clone(), i.title.clone())))
+            })
+            .await?;
+        audit::record_async(
+            change_event(
+                audit::Action::ItemRestored,
+                &vault_key,
+                item_subject_by_id(&vault_key, &id, restored),
+            )
+            .detail("item_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete a deleted item permanently, with its credentials.
     pub async fn purge_item(&self, vault_key: String, item_id: String) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| Ok(vw.purge_item(parse_id(&item_id)?)?))
-            .await
+        let id = item_id.clone();
+        let purged = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                let id = parse_id(&item_id)?;
+                let purged = vw
+                    .list_deleted_items()?
+                    .into_iter()
+                    .find(|d| d.item.id == id)
+                    .map(|d| (d.item.key.clone(), d.item.title.clone()));
+                vw.purge_item(id)?;
+                Ok(purged)
+            })
+            .await?;
+        audit::record_async(
+            change_event(
+                audit::Action::ItemPurged,
+                &vault_key,
+                item_subject_by_id(&vault_key, &id, purged),
+            )
+            .detail("item_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete an item (and all its credentials) from a vault. It stays
     /// recoverable with `restore_item` until purged.
     pub async fn delete_item(&self, vault_key: String, item_key: String) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let subject = item_subject(&vault_key, &item_key);
+        let key = vault_key.clone();
+        let title = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.delete_item(&item_key).map_err(FfiError::from)
+                let title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
+                vw.delete_item(&item_key)?;
+                Ok::<_, FfiError>(title)
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(change_event(
+            audit::Action::ItemDeleted,
+            &key,
+            subject.maybe_label(title),
+        ))
+        .await;
+        Ok(())
     }
 
     /// Create a credential within an item. Fails if the key is already taken.
@@ -981,6 +1171,8 @@ impl AxoPass {
         kind: Option<FieldKindInfo>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
+        let subject = credential_subject(&vault_key, &item_key, &cred_key).label(title.clone());
+        let key = vault_key.clone();
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
@@ -999,7 +1191,14 @@ impl AxoPass {
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(change_event(
+            audit::Action::CredentialCreated,
+            &key,
+            subject,
+        ))
+        .await;
+        Ok(())
     }
 
     /// Create or update a credential's title/value within an item.
@@ -1013,33 +1212,55 @@ impl AxoPass {
         kind: Option<FieldKindInfo>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key).label(title.clone());
+        let key = vault_key.clone();
+        let changed = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
+                let previous = vw
+                    .get_secret_overview(&item_key, &cred_key)?
+                    .map(|o| (o.title.clone(), o.kind.clone()));
                 // `None` keeps an existing credential's kind, so an edit that
                 // only touches the title or value does not reset it. A new
                 // credential with no kind given falls back to the default.
                 let kind = match kind {
                     Some(info) => FieldKind::try_from(info)?,
-                    None => vw
-                        .get_secret_overview(&item_key, &cred_key)
-                        .ok()
-                        .flatten()
-                        .map(|o| o.kind.clone())
+                    None => previous
+                        .as_ref()
+                        .map(|(_, kind)| kind.clone())
                         .unwrap_or_default(),
                 };
+                // Changed fields of an existing credential. The value is
+                // always written, so it is always listed.
+                let changed = previous.map(|(previous_title, previous_kind)| {
+                    let mut changed = vec!["value"];
+                    if previous_title != title {
+                        changed.push("title");
+                    }
+                    if previous_kind != kind {
+                        changed.push("kind");
+                    }
+                    changed.join(",")
+                });
                 vw.add_secret(
                     &item_key,
                     &cred_key,
                     &title,
                     kind,
                     SecretString::from(value),
-                )
-                .map_err(FfiError::from)
+                )?;
+                Ok::<_, FfiError>(changed)
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let event = match changed {
+            None => change_event(audit::Action::CredentialCreated, &key, subject),
+            Some(changed) => change_event(audit::Action::CredentialUpdated, &key, subject)
+                .detail("changed", changed),
+        };
+        audit::record_async(event).await;
+        Ok(())
     }
 
     /// Change the key, title, or kind of a credential without resubmitting its
@@ -1053,7 +1274,18 @@ impl AxoPass {
         title: Option<String>,
         kind: Option<FieldKindInfo>,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let changed = [
+            new_key.as_ref().map(|_| "key"),
+            title.as_ref().map(|_| "title"),
+            kind.as_ref().map(|_| "kind"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",");
+        let renamed_to = new_key.clone();
+        self.edit_vault(vault_key.clone(), move |vw| {
             let update = CredentialUpdate {
                 key: new_key,
                 title,
@@ -1061,7 +1293,16 @@ impl AxoPass {
             };
             Ok(vw.update_credential(&item_key, &cred_key, update)?)
         })
-        .await
+        .await?;
+        if !changed.is_empty() {
+            audit::record_async(
+                change_event(audit::Action::CredentialUpdated, &vault_key, subject)
+                    .detail("changed", changed)
+                    .maybe_detail("new_key", renamed_to),
+            )
+            .await;
+        }
+        Ok(())
     }
 
     /// List the deleted credentials of a vault's live items, most recently
@@ -1132,10 +1373,29 @@ impl AxoPass {
         cred_id: String,
         new_key: Option<String>,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
-            Ok(vw.restore_item_credential(&item_key, parse_id(&cred_id)?, new_key)?)
-        })
-        .await
+        let (item, id) = (item_key.clone(), cred_id.clone());
+        let restored = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                let id = parse_id(&cred_id)?;
+                vw.restore_item_credential(&item_key, id, new_key)?;
+                Ok(vw.get_item_overview(&item_key)?.and_then(|i| {
+                    i.credentials
+                        .values()
+                        .find(|c| c.id == id)
+                        .map(|c| (c.key.clone(), c.title.clone()))
+                }))
+            })
+            .await?;
+        audit::record_async(
+            change_event(
+                audit::Action::CredentialRestored,
+                &vault_key,
+                credential_subject_by_id(&vault_key, &item, &id, restored),
+            )
+            .detail("credential_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete a deleted credential permanently.
@@ -1145,10 +1405,34 @@ impl AxoPass {
         item_key: String,
         cred_id: String,
     ) -> Result<(), FfiError> {
-        self.edit_vault(vault_key, move |vw| {
-            Ok(vw.purge_item_credential(&item_key, parse_id(&cred_id)?)?)
-        })
-        .await
+        let (item, id) = (item_key.clone(), cred_id.clone());
+        let purged = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                let id = parse_id(&cred_id)?;
+                let purged = vw
+                    .list_all_deleted()?
+                    .into_iter()
+                    .find(|d| d.item.key == item_key && d.credential.credential.id == id)
+                    .map(|d| {
+                        (
+                            d.credential.credential.key.clone(),
+                            d.credential.credential.title.clone(),
+                        )
+                    });
+                vw.purge_item_credential(&item_key, id)?;
+                Ok(purged)
+            })
+            .await?;
+        audit::record_async(
+            change_event(
+                audit::Action::CredentialPurged,
+                &vault_key,
+                credential_subject_by_id(&vault_key, &item, &id, purged),
+            )
+            .detail("credential_id", id),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete a single credential from an item. It stays recoverable with
@@ -1160,15 +1444,27 @@ impl AxoPass {
         cred_key: String,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let key = vault_key.clone();
+        let title = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
-                vw.delete_item_credential(&item_key, &cred_key)
-                    .map_err(FfiError::from)
+                let title = vw
+                    .get_secret_overview(&item_key, &cred_key)?
+                    .map(|o| o.title.clone());
+                vw.delete_item_credential(&item_key, &cred_key)?;
+                Ok::<_, FfiError>(title)
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(change_event(
+            audit::Action::CredentialDeleted,
+            &key,
+            subject.maybe_label(title),
+        ))
+        .await;
+        Ok(())
     }
 
     /// Create a login from a website, an optional username, and a password.
@@ -1184,7 +1480,8 @@ impl AxoPass {
         title: Option<String>,
     ) -> Result<String, FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let key = vault_key.clone();
+        let created_key = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
                 autofill::create_login(
@@ -1199,7 +1496,17 @@ impl AxoPass {
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(
+            change_event(
+                audit::Action::ItemCreated,
+                &key,
+                item_subject(&key, &created_key),
+            )
+            .detail("login", "true"),
+        )
+        .await;
+        Ok(created_key)
     }
 
     /// The current one-time code of a `totp` credential.
@@ -1252,7 +1559,15 @@ impl AxoPass {
         role: String,
         cred_key: Option<String>,
     ) -> Result<(), FfiError> {
+        let role_name = role.clone();
         let role = parse_role(&role)?;
+        // A cleared role names the item. A set role names the credential.
+        let subject = match &cred_key {
+            Some(cred_key) => credential_subject(&vault_key, &item_key, cred_key),
+            None => item_subject(&vault_key, &item_key),
+        };
+        let cleared = cred_key.is_none();
+        let key = vault_key.clone();
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
@@ -1261,7 +1576,14 @@ impl AxoPass {
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let mut event = change_event(audit::Action::CredentialRoleChanged, &key, subject)
+            .detail("role", role_name);
+        if cleared {
+            event = event.detail("cleared", "true");
+        }
+        audit::record_async(event).await;
+        Ok(())
     }
 
     /// Replace the websites an item applies to.
@@ -1275,6 +1597,14 @@ impl AxoPass {
             .into_iter()
             .map(Website::try_from)
             .collect::<Result<Vec<_>, _>>()?;
+        let origins = websites
+            .iter()
+            .map(|w| website_origin(&w.url))
+            .collect::<Vec<_>>()
+            .join(",");
+        let website_count = websites.len().to_string();
+        let subject = item_subject(&vault_key, &item_key);
+        let key = vault_key.clone();
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
@@ -1283,7 +1613,14 @@ impl AxoPass {
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(
+            change_event(audit::Action::ItemWebsitesChanged, &key, subject)
+                .detail("origins", origins)
+                .detail("website_count", website_count),
+        )
+        .await;
+        Ok(())
     }
 
     /// Give an item with no autofill data the roles and websites its
@@ -1293,15 +1630,21 @@ impl AxoPass {
         vault_key: String,
         item_key: String,
     ) -> Result<bool, FfiError> {
+        let subject = item_subject(&vault_key, &item_key);
+        let key = vault_key.clone();
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let converted = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
                 autofill::convert_to_login(vw, &item_key).map_err(FfiError::from)
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        if converted {
+            audit::record_async(change_event(audit::Action::ItemConverted, &key, subject)).await;
+        }
+        Ok(converted)
     }
 
     /// Move a passkey to another item, which may be in another vault. With no
@@ -1319,7 +1662,15 @@ impl AxoPass {
         dest_item_key: Option<String>,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
-        tokio::task::spawn_blocking(move || {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let key = vault_key.clone();
+        let dest_vault = dest_vault_key.clone();
+        let dest_item = dest_item_key
+            .clone()
+            .unwrap_or_else(|| "new_login".to_string());
+        // `None` if there was nothing to move. Otherwise the result of removing
+        // the source, after the destination was written.
+        let moved = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let target = match dest_item_key {
                 Some(key) => PasskeyTarget::Item(key),
@@ -1327,13 +1678,13 @@ impl AxoPass {
             };
             if vault_key == dest_vault_key {
                 if target == PasskeyTarget::Item(item_key.clone()) {
-                    return Ok(());
+                    return Ok(None);
                 }
                 return m.with_unlocked_vault(&vault_key, |vw| {
                     let record = passkey::read_record(vw, &item_key, &cred_key)?;
                     passkey::write_record(vw, &record, &target)?;
                     passkey::remove_record(vw, &item_key, &cred_key)?;
-                    Ok::<_, FfiError>(())
+                    Ok::<_, FfiError>(Some(Ok(())))
                 });
             }
             let record = m.with_unlocked_vault(&vault_key, |vw| {
@@ -1342,12 +1693,29 @@ impl AxoPass {
             m.with_unlocked_vault(&dest_vault_key, |vw| {
                 passkey::write_record(vw, &record, &target).map_err(FfiError::from)
             })?;
-            m.with_unlocked_vault(&vault_key, |vw| {
+            let removed = m.with_unlocked_vault(&vault_key, |vw| {
                 passkey::remove_record(vw, &item_key, &cred_key).map_err(FfiError::from)
-            })
+            });
+            Ok(Some(removed))
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let Some(removed) = moved else {
+            return Ok(());
+        };
+        let mut event = change_event(audit::Action::PasskeyMoved, &key, subject)
+            .detail("dest_vault", dest_vault)
+            .detail("dest_item", dest_item);
+        // The destination holds the passkey even if removing the source failed,
+        // so that is recorded as a failed move.
+        if let Err(e) = &removed {
+            event.outcome = audit::Outcome::Failed;
+            event = event
+                .detail("source_removed", "false")
+                .message(e.to_string());
+        }
+        audit::record_async(event).await;
+        removed
     }
 
     /// Move every credential of `source_item_key` into `dest_item_key` and
@@ -1359,6 +1727,9 @@ impl AxoPass {
         dest_item_key: String,
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
+        let subject = item_subject(&vault_key, &dest_item_key);
+        let key = vault_key.clone();
+        let source_item = source_item_key.clone();
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.with_unlocked_vault(&vault_key, |vw| {
@@ -1366,7 +1737,13 @@ impl AxoPass {
             })
         })
         .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(
+            change_event(audit::Action::ItemMerged, &key, subject)
+                .detail("source_item", source_item),
+        )
+        .await;
+        Ok(())
     }
 
     /// Set the display order of an item's credentials, keeping each in its

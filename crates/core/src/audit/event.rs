@@ -6,6 +6,7 @@
 //! ids and vault file keys must never appear in any field.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use crate::core::app_broker::{
+    AGENT_EXECUTABLE_NAME, AUTOFILL_EXTENSION_NAME, BROWSER_HOST_EXECUTABLE_NAME,
+};
 use crate::core::provenance::ProcessNode;
 
 /// The current schema version. Bump when a field changes meaning.
@@ -119,6 +123,51 @@ impl AuditEvent {
     pub fn at_rfc3339(&self) -> String {
         self.at.format(&Rfc3339).unwrap_or_default()
     }
+
+    /// Who asked for the event. An app event is named by the verified peer
+    /// executable in its actor. The SSH agent and pinentry also run as `ap`, so
+    /// an `ap` event that uses or grants an SSH or GPG key names an SSH or GPG
+    /// client. An `ap` event that changes a key names the CLI.
+    pub fn requester(&self) -> Requester {
+        match self.source {
+            Source::Cli => return Requester::Cli,
+            // `ap ssh-agent start` and `stop` run the agent lifecycle.
+            Source::Agent
+                if matches!(self.action, Action::SshAgentStart | Action::SshAgentStop) =>
+            {
+                return Requester::Cli;
+            },
+            Source::Agent | Source::Pinentry | Source::Askpass => return Requester::SshGpgClient,
+            Source::App => {},
+        }
+        let Some(actor) = &self.actor else {
+            return Requester::App;
+        };
+        let executable = actor
+            .executable
+            .as_deref()
+            .and_then(|path| Path::new(path).file_name())
+            .and_then(|name| name.to_str());
+        let key_subject = matches!(
+            &self.subject,
+            Some(Subject {
+                kind: SubjectKind::SshKey | SubjectKind::GpgKey,
+                ..
+            })
+        );
+        match executable {
+            Some(AGENT_EXECUTABLE_NAME)
+                if key_subject && self.action.kind() != ActionKind::Change =>
+            {
+                Requester::SshGpgClient
+            },
+            Some(AGENT_EXECUTABLE_NAME) => Requester::Cli,
+            Some(BROWSER_HOST_EXECUTABLE_NAME) => Requester::Browser,
+            Some(AUTOFILL_EXTENSION_NAME) => Requester::Autofill,
+            _ if key_subject => Requester::SshGpgClient,
+            _ => Requester::Other,
+        }
+    }
 }
 
 /// Parse an RFC 3339 timestamp, for filter inputs crossing the FFI boundary.
@@ -220,12 +269,6 @@ pub enum Action {
     #[serde(rename = "gpg.agent_conf_changed")]
     GpgAgentConfChanged,
 
-    #[serde(rename = "secret.read")]
-    SecretRead,
-    #[serde(rename = "secret.inject")]
-    SecretInject,
-    #[serde(rename = "secret.exec")]
-    SecretExec,
     #[serde(rename = "age.decrypt")]
     AgeDecrypt,
     #[serde(rename = "age.encrypt")]
@@ -241,26 +284,67 @@ pub enum Action {
     VaultLock,
     #[serde(rename = "vault.autolock")]
     VaultAutolock,
-    #[serde(rename = "vault.items_listed")]
-    VaultItemsListed,
-    #[serde(rename = "vault.item_created")]
-    VaultItemCreated,
-    #[serde(rename = "vault.item_updated")]
-    VaultItemUpdated,
-    #[serde(rename = "vault.item_deleted")]
-    VaultItemDeleted,
     #[serde(rename = "vault.created")]
     VaultCreated,
+    #[serde(rename = "vault.updated")]
+    VaultUpdated,
+    #[serde(rename = "vault.deleted")]
+    VaultDeleted,
     #[serde(rename = "vault.linked")]
     VaultLinked,
     #[serde(rename = "vault.exported")]
     VaultExported,
     #[serde(rename = "vault.imported")]
     VaultImported,
+
+    #[serde(rename = "item.listed")]
+    ItemListed,
+    #[serde(rename = "item.created")]
+    ItemCreated,
+    #[serde(rename = "item.updated")]
+    ItemUpdated,
+    #[serde(rename = "item.deleted")]
+    ItemDeleted,
+    #[serde(rename = "item.restored")]
+    ItemRestored,
+    #[serde(rename = "item.purged")]
+    ItemPurged,
+    #[serde(rename = "item.merged")]
+    ItemMerged,
+    #[serde(rename = "item.websites_changed")]
+    ItemWebsitesChanged,
+    #[serde(rename = "item.converted")]
+    ItemConverted,
+
+    #[serde(rename = "credential.read")]
+    CredentialRead,
+    #[serde(rename = "credential.exec")]
+    CredentialExec,
+    #[serde(rename = "credential.inject")]
+    CredentialInject,
+    #[serde(rename = "credential.created")]
+    CredentialCreated,
+    #[serde(rename = "credential.updated")]
+    CredentialUpdated,
+    #[serde(rename = "credential.deleted")]
+    CredentialDeleted,
+    #[serde(rename = "credential.restored")]
+    CredentialRestored,
+    #[serde(rename = "credential.purged")]
+    CredentialPurged,
+    #[serde(rename = "credential.history_restored")]
+    CredentialHistoryRestored,
+    #[serde(rename = "credential.history_purged")]
+    CredentialHistoryPurged,
+    #[serde(rename = "credential.role_changed")]
+    CredentialRoleChanged,
+
     #[serde(rename = "passkey.registered")]
     PasskeyRegistered,
     #[serde(rename = "passkey.asserted")]
     PasskeyAsserted,
+    #[serde(rename = "passkey.moved")]
+    PasskeyMoved,
 
     #[serde(rename = "auth.grant_created")]
     AuthGrantCreated,
@@ -293,9 +377,6 @@ impl Action {
             Action::GpgMessage => "gpg.message",
             Action::GpgPassphraseSaved => "gpg.passphrase_saved",
             Action::GpgAgentConfChanged => "gpg.agent_conf_changed",
-            Action::SecretRead => "secret.read",
-            Action::SecretInject => "secret.inject",
-            Action::SecretExec => "secret.exec",
             Action::AgeDecrypt => "age.decrypt",
             Action::AgeEncrypt => "age.encrypt",
             Action::AgeKeyCreate => "age.key_create",
@@ -303,16 +384,35 @@ impl Action {
             Action::VaultUnlock => "vault.unlock",
             Action::VaultLock => "vault.lock",
             Action::VaultAutolock => "vault.autolock",
-            Action::VaultItemsListed => "vault.items_listed",
-            Action::VaultItemCreated => "vault.item_created",
-            Action::VaultItemUpdated => "vault.item_updated",
-            Action::VaultItemDeleted => "vault.item_deleted",
             Action::VaultCreated => "vault.created",
+            Action::VaultUpdated => "vault.updated",
+            Action::VaultDeleted => "vault.deleted",
             Action::VaultLinked => "vault.linked",
             Action::VaultExported => "vault.exported",
             Action::VaultImported => "vault.imported",
+            Action::ItemListed => "item.listed",
+            Action::ItemCreated => "item.created",
+            Action::ItemUpdated => "item.updated",
+            Action::ItemDeleted => "item.deleted",
+            Action::ItemRestored => "item.restored",
+            Action::ItemPurged => "item.purged",
+            Action::ItemMerged => "item.merged",
+            Action::ItemWebsitesChanged => "item.websites_changed",
+            Action::ItemConverted => "item.converted",
+            Action::CredentialRead => "credential.read",
+            Action::CredentialExec => "credential.exec",
+            Action::CredentialInject => "credential.inject",
+            Action::CredentialCreated => "credential.created",
+            Action::CredentialUpdated => "credential.updated",
+            Action::CredentialDeleted => "credential.deleted",
+            Action::CredentialRestored => "credential.restored",
+            Action::CredentialPurged => "credential.purged",
+            Action::CredentialHistoryRestored => "credential.history_restored",
+            Action::CredentialHistoryPurged => "credential.history_purged",
+            Action::CredentialRoleChanged => "credential.role_changed",
             Action::PasskeyRegistered => "passkey.registered",
             Action::PasskeyAsserted => "passkey.asserted",
+            Action::PasskeyMoved => "passkey.moved",
             Action::AuthGrantCreated => "auth.grant_created",
             Action::AuthGrantReused => "auth.grant_reused",
             Action::AuthGrantExpired => "auth.grant_expired",
@@ -324,6 +424,175 @@ impl Action {
     pub fn parse(s: &str) -> Option<Self> {
         serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
     }
+
+    /// Category of the action, matching the namespace of its dotted form.
+    pub fn category(&self) -> Category {
+        match self {
+            Action::SshSign
+            | Action::SshPassphrase
+            | Action::SshKeyAdd
+            | Action::SshKeyRemove
+            | Action::SshManagedKeyCreate
+            | Action::SshManagedKeyDelete
+            | Action::SshAppGrantAdd
+            | Action::SshAppGrantRemove
+            | Action::SshSessionBind
+            | Action::SshAgentStart
+            | Action::SshAgentStop => Category::Ssh,
+            Action::GpgPassphrase
+            | Action::GpgConfirm
+            | Action::GpgMessage
+            | Action::GpgPassphraseSaved
+            | Action::GpgAgentConfChanged => Category::Gpg,
+            Action::AgeDecrypt
+            | Action::AgeEncrypt
+            | Action::AgeKeyCreate
+            | Action::AgeKeyDelete => Category::Age,
+            Action::VaultUnlock
+            | Action::VaultLock
+            | Action::VaultAutolock
+            | Action::VaultCreated
+            | Action::VaultUpdated
+            | Action::VaultDeleted
+            | Action::VaultLinked
+            | Action::VaultExported
+            | Action::VaultImported => Category::Vault,
+            Action::ItemListed
+            | Action::ItemCreated
+            | Action::ItemUpdated
+            | Action::ItemDeleted
+            | Action::ItemRestored
+            | Action::ItemPurged
+            | Action::ItemMerged
+            | Action::ItemWebsitesChanged
+            | Action::ItemConverted => Category::Item,
+            Action::CredentialRead
+            | Action::CredentialExec
+            | Action::CredentialInject
+            | Action::CredentialCreated
+            | Action::CredentialUpdated
+            | Action::CredentialDeleted
+            | Action::CredentialRestored
+            | Action::CredentialPurged
+            | Action::CredentialHistoryRestored
+            | Action::CredentialHistoryPurged
+            | Action::CredentialRoleChanged => Category::Credential,
+            Action::PasskeyRegistered | Action::PasskeyAsserted | Action::PasskeyMoved => {
+                Category::Passkey
+            },
+            Action::AuthGrantCreated | Action::AuthGrantReused | Action::AuthGrantExpired => {
+                Category::Grant
+            },
+            Action::BrokerPeerRejected => Category::Broker,
+        }
+    }
+
+    /// Whether the action uses a key or secret, changes stored state, or
+    /// neither.
+    pub fn kind(&self) -> ActionKind {
+        match self {
+            Action::SshSign
+            | Action::SshPassphrase
+            | Action::GpgPassphrase
+            | Action::GpgConfirm
+            | Action::AgeDecrypt
+            | Action::AgeEncrypt
+            | Action::VaultExported
+            | Action::ItemListed
+            | Action::CredentialRead
+            | Action::CredentialExec
+            | Action::CredentialInject
+            | Action::PasskeyAsserted => ActionKind::Access,
+            Action::SshKeyAdd
+            | Action::SshKeyRemove
+            | Action::SshManagedKeyCreate
+            | Action::SshManagedKeyDelete
+            | Action::SshAppGrantAdd
+            | Action::SshAppGrantRemove
+            | Action::GpgPassphraseSaved
+            | Action::GpgAgentConfChanged
+            | Action::AgeKeyCreate
+            | Action::AgeKeyDelete
+            | Action::VaultCreated
+            | Action::VaultUpdated
+            | Action::VaultDeleted
+            | Action::VaultLinked
+            | Action::VaultImported
+            | Action::ItemCreated
+            | Action::ItemUpdated
+            | Action::ItemDeleted
+            | Action::ItemRestored
+            | Action::ItemPurged
+            | Action::ItemMerged
+            | Action::ItemWebsitesChanged
+            | Action::ItemConverted
+            | Action::CredentialCreated
+            | Action::CredentialUpdated
+            | Action::CredentialDeleted
+            | Action::CredentialRestored
+            | Action::CredentialPurged
+            | Action::CredentialHistoryRestored
+            | Action::CredentialHistoryPurged
+            | Action::CredentialRoleChanged
+            | Action::PasskeyRegistered
+            | Action::PasskeyMoved => ActionKind::Change,
+            Action::SshSessionBind
+            | Action::SshAgentStart
+            | Action::SshAgentStop
+            | Action::GpgMessage
+            | Action::VaultUnlock
+            | Action::VaultLock
+            | Action::VaultAutolock
+            | Action::AuthGrantCreated
+            | Action::AuthGrantReused
+            | Action::AuthGrantExpired
+            | Action::BrokerPeerRejected => ActionKind::Other,
+        }
+    }
+}
+
+/// Action category. Each category is one namespace of the dotted action form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Ssh,
+    Gpg,
+    Age,
+    Vault,
+    Item,
+    Credential,
+    Passkey,
+    Grant,
+    Broker,
+}
+
+/// What an action does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionKind {
+    /// Uses a key or secret, or reveals what a vault holds.
+    Access,
+    /// Changes stored keys, vaults, items, or credentials.
+    Change,
+    /// Vault state, agent lifecycle, grants, and rejected peers.
+    Other,
+}
+
+/// Who asked for an event. Derived from the source, actor, and subject.
+/// `Source` names the process that wrote the event, which for a broker request
+/// is the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requester {
+    /// The app itself, with no other process involved.
+    App,
+    /// An `ap` command.
+    Cli,
+    /// The browser extension, through the native messaging host.
+    Browser,
+    /// The AutoFill credential provider extension.
+    Autofill,
+    /// A process using an SSH or GPG key, such as `git` or `ssh`.
+    SshGpgClient,
+    /// Any other process, such as a rejected broker peer.
+    Other,
 }
 
 /// The kind of thing a `Subject` names.
@@ -333,6 +602,7 @@ pub enum SubjectKind {
     SshKey,
     GpgKey,
     Credential,
+    Item,
     Vault,
     AgeIdentity,
 }
@@ -342,8 +612,8 @@ pub enum SubjectKind {
 pub struct Subject {
     pub kind: SubjectKind,
 
-    /// A stable identifier: key label, keygrip, `vault/item/credential`, or a
-    /// vault key.
+    /// A stable identifier: key label, keygrip, `vault/item/credential`,
+    /// `vault/item`, or a vault key.
     pub id: String,
 
     /// A comment or title, when there is one.

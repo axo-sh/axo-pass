@@ -107,7 +107,7 @@ impl AxoPass {
         if let Some(message) = message {
             event = event.message(message);
         }
-        audit::record(event);
+        audit::record_async(event).await;
         result
     }
 

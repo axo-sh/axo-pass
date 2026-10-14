@@ -1,6 +1,7 @@
 use std::io::{IsTerminal, Read, Write};
 use std::str::FromStr;
 
+use axo_pass_core::audit::{self, Action, Actor, Outcome};
 use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef, WireLogin};
 use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
@@ -13,6 +14,8 @@ use clml::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
+
+use super::local_audit;
 
 /// Resolves backslash escapes in a user-supplied delimiter so shells that
 /// cannot type control characters literally can still pass one. Handles `\n`,
@@ -356,10 +359,13 @@ impl ItemCommand {
             caller.as_deref(),
         ) {
             Ok(values) => values,
-            Err(BrokerError::Unavailable) => triples
-                .iter()
-                .map(|(v, i, c)| Self::read_locally(v, i, c).map(Some))
-                .collect::<Result<Vec<_>, _>>()?,
+            Err(BrokerError::Unavailable) => {
+                let actor = local_audit::caller_actor();
+                triples
+                    .iter()
+                    .map(|(v, i, c)| Self::read_locally(v, i, c, actor.as_ref()).map(Some))
+                    .collect::<Result<Vec<_>, _>>()?
+            },
             Err(e) => return Err(format!("Failed to read secret: {e}")),
         };
 
@@ -404,9 +410,30 @@ impl ItemCommand {
         vault_key: &str,
         item_key: &str,
         credential_key: &str,
+        actor: Option<&Actor>,
     ) -> Result<SecretString, String> {
         let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
-        match vw.get_secret(item_key, credential_key) {
+        let result = vw.get_secret(item_key, credential_key);
+        let subject = local_audit::credential_subject(vault_key, item_key, credential_key);
+        audit::record(match &result {
+            Ok(secret) => local_audit::local_event(
+                Action::CredentialRead,
+                Outcome::Succeeded,
+                vault_key,
+                subject,
+                actor,
+            )
+            .detail("found", secret.is_some().to_string()),
+            Err(e) => local_audit::local_event(
+                Action::CredentialRead,
+                Outcome::Failed,
+                vault_key,
+                subject,
+                actor,
+            )
+            .message(e.to_string()),
+        });
+        match result {
             Ok(Some(secret)) => Ok(SecretString::from(secret.expose_secret().to_owned())),
             Ok(None) => Err(cformat!(
                 "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
@@ -572,6 +599,28 @@ impl ItemCommand {
         login: &LoginOptions,
     ) -> Result<(), String> {
         let mut vw = Self::unlock_vault(Some(vault_key.to_string()))?;
+        // A write that creates the item records `item.created`, as the
+        // broker does.
+        let created = vw
+            .get_item_overview(item_key)
+            .map_err(|e| format!("Failed to get item: {e}"))?
+            .is_none();
+        let action = if created {
+            Action::ItemCreated
+        } else {
+            Action::ItemUpdated
+        };
+        let subject = local_audit::credential_subject(vault_key, item_key, credential_key);
+        let actor = local_audit::caller_actor();
+        let event = local_audit::local_event(
+            action,
+            Outcome::Succeeded,
+            vault_key,
+            subject,
+            actor.as_ref(),
+        )
+        .detail("created", created.to_string());
+
         if login.is_login() {
             let title = login.title.as_deref().unwrap_or(item_key);
             write_login(
@@ -589,6 +638,7 @@ impl ItemCommand {
             .map_err(|e| format!("Failed to write login: {e}"))?;
             vw.save()
                 .map_err(|e| format!("Failed to save vault: {e}"))?;
+            audit::record(event.detail("login_request", "save"));
             return Ok(());
         }
         vw.add_secret(
@@ -601,6 +651,7 @@ impl ItemCommand {
         .map_err(|e| format!("Failed to add secret: {e}"))?;
         vw.save()
             .map_err(|e| format!("Failed to save vault: {e}"))?;
+        audit::record(event);
         Ok(())
     }
 }
