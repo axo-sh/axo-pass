@@ -1127,6 +1127,25 @@ impl Vault {
         Ok(cred)
     }
 
+    /// Record when a credential was last used. Only its metadata blob is
+    /// re-encrypted. The value and its history are unchanged.
+    pub fn mark_credential_used(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        at: i64,
+    ) -> Result<(), Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let cred = self
+            .items
+            .get_mut(&item_id)
+            .and_then(|item| item.credentials.get_mut(&cred_id))
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        cred.last_used_at = Some(at);
+        self.cred_blobs.remove(&cred_id);
+        Ok(())
+    }
+
     /// Mark a credential as deleted. Its key is free for reuse. The
     /// encrypted value is kept unchanged.
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
@@ -1871,6 +1890,9 @@ pub struct VaultItemCredentialOverview {
     /// Section of the item the credential is shown in. `None` for a
     /// credential outside any section.
     pub section: Option<Uuid>,
+    /// Unix seconds of the last use, for credentials whose use is recorded.
+    /// Only passkey sign-ins set it.
+    pub last_used_at: Option<i64>,
 }
 
 impl VaultItemCredentialOverview {
@@ -1884,6 +1906,7 @@ impl VaultItemCredentialOverview {
             kind,
             position: None,
             section: None,
+            last_used_at: None,
         })
     }
 
@@ -1895,6 +1918,7 @@ impl VaultItemCredentialOverview {
             kind: metadata.kind.clone(),
             position: metadata.position,
             section: metadata.section,
+            last_used_at: metadata.last_used_at,
         }
     }
 
@@ -1905,6 +1929,7 @@ impl VaultItemCredentialOverview {
             kind: self.kind.clone(),
             position: self.position,
             section: self.section,
+            last_used_at: self.last_used_at,
         }
     }
 }
@@ -2066,6 +2091,9 @@ pub struct VaultCredentialMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     pub section: Option<Uuid>,
+    /// Unix seconds of the last use. Absent until the first recorded use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<i64>,
 }
 
 #[cfg(test)]
@@ -2175,6 +2203,7 @@ mod tests {
             kind,
             position: None,
             section: None,
+            last_used_at: None,
         }
     }
 
@@ -2848,6 +2877,25 @@ mod tests {
         assert_eq!(cred.kind, new_kind);
         let secret = vault
             .get_item_credential_secret("item", "renamed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(secret.expose_secret(), "secret");
+    }
+
+    #[test]
+    fn marking_a_credential_used_persists_without_history() {
+        let mut vault = vault_with_credentials("item", &["alpha"]);
+        populate_caches(&mut vault);
+        vault
+            .mark_credential_used("item", "alpha", 1_750_000_000)
+            .unwrap();
+
+        let vault = reload(&vault);
+        let cred = vault.get_item_credential("item", "alpha").unwrap();
+        assert_eq!(cred.last_used_at, Some(1_750_000_000));
+        assert!(vault.list_history("item", "alpha").unwrap().is_empty());
+        let secret = vault
+            .get_item_credential_secret("item", "alpha")
             .unwrap()
             .unwrap();
         assert_eq!(secret.expose_secret(), "secret");

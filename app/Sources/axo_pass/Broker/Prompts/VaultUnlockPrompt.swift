@@ -284,9 +284,10 @@ final class VaultUnlockPromptModel {
       .updateLoginPassword(_, let recordId, _):
       id = recordId
     case .listLogins: id = "logins"
-    // The vault key changes to the user's choice before the prompt ends, so it
-    // cannot name the grant.
-    case .createPasskey: id = "passkey"
+    // The vault key changes before the prompt ends, so it cannot name the
+    // grant. A registration takes the user's choice, and a sign-in takes the
+    // vault that signed.
+    case .createPasskey, .assertPasskey: id = "passkey"
     default: id = prompt.vaultKey
     }
     let subject = GrantSubject(kind: .vault, id: id, label: nil)

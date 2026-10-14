@@ -8,6 +8,9 @@ use super::ssh::{ManagedIdentity, SignPurpose};
 use super::{age, keychain, vault};
 use crate::core::provenance::ProcessNode;
 use crate::secrets::password::PasswordPolicy;
+use crate::secrets::vaults::passkey::{
+    PrfAssertionInput, PrfRegistrationInput, PrfRegistrationOutput, PrfValues,
+};
 use crate::secrets::vaults::totp::TotpCode;
 use crate::secrets::vaults::{LoginSummary, OtherLogin};
 
@@ -433,6 +436,9 @@ pub(super) enum WireRequest {
         algorithms: Vec<i64>,
         #[serde(default)]
         excluded_credentials: Vec<String>,
+        /// PRF extension input. Absent when the page did not use PRF.
+        #[serde(default)]
+        prf: Option<WirePrfRegistration>,
         /// The page's origin, when the client knows it. A request that
         /// carries one is refused unless `rp_id` is valid for it. Safari
         /// sends none: the system has already bound the relying party id to
@@ -453,6 +459,9 @@ pub(super) enum WireRequest {
         client_data_hash: String,
         #[serde(default)]
         allowed_credentials: Vec<String>,
+        /// PRF extension input. Absent when the page did not use PRF.
+        #[serde(default)]
+        prf: Option<WirePrfAssertion>,
         /// See [`WireRequest::CreatePasskey`]'s origin.
         #[serde(default)]
         origin: Option<String>,
@@ -461,6 +470,29 @@ pub(super) enum WireRequest {
         /// See [`BrowserClient`].
         #[serde(default)]
         client: BrowserClient,
+    },
+
+    /// The AutoFill extension relays a site report that a passkey is unknown
+    /// to it. Raises no prompt. `credential_id` is standard base64.
+    ReportUnknownPasskey {
+        rp_id: String,
+        credential_id: String,
+    },
+
+    /// The AutoFill extension relays the passkeys a site accepts for one
+    /// account. Raises no prompt. Byte fields are standard base64.
+    ReportAcceptedPasskeys {
+        rp_id: String,
+        user_handle: String,
+        credential_ids: Vec<String>,
+    },
+
+    /// The AutoFill extension relays a new account name a site reported.
+    /// Raises no prompt. `user_handle` is standard base64.
+    ReportPasskeyName {
+        rp_id: String,
+        user_handle: String,
+        name: String,
     },
 
     /// gpg's `CONFIRM`: a yes/no question with no secret attached.
@@ -511,6 +543,9 @@ impl WireRequest {
             | WireRequest::CreatePasskey { caller, .. }
             | WireRequest::AssertPasskey { caller, .. } => caller.as_deref(),
             WireRequest::ListIdentities
+            | WireRequest::ReportUnknownPasskey { .. }
+            | WireRequest::ReportAcceptedPasskeys { .. }
+            | WireRequest::ReportPasskeyName { .. }
             | WireRequest::Confirm { .. }
             | WireRequest::Message { .. } => None,
         }
@@ -627,6 +662,9 @@ pub(super) enum WireResponse {
     PasskeyRegistered {
         credential_id: String,
         attestation_object: String,
+        /// Present when the request carried PRF input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prf: Option<WirePrfRegistrationOutput>,
     },
     /// A passkey assertion. Byte fields are standard base64.
     PasskeyAsserted {
@@ -634,6 +672,10 @@ pub(super) enum WireResponse {
         user_handle: String,
         authenticator_data: String,
         signature: String,
+        /// PRF results. Present when the request carried PRF input and the
+        /// passkey has a PRF secret.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prf: Option<WirePrfValues>,
     },
     /// Saved age keys, public halves only.
     AgeKeys {
@@ -664,4 +706,98 @@ pub(super) enum WireResponse {
 pub(super) fn decode_b64(value: &str) -> std::io::Result<Vec<u8>> {
     b64.decode(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// One or two PRF values. Standard base64. As input these are the page values
+/// before hashing. As output they are the PRF results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WirePrfValues {
+    pub first: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second: Option<String>,
+}
+
+/// PRF input of a registration. Its presence asks whether PRF is supported.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct WirePrfRegistration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval: Option<WirePrfValues>,
+}
+
+/// PRF input of an assertion.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct WirePrfAssertion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval: Option<WirePrfValues>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eval_by_credential: Vec<WirePrfCredentialValues>,
+}
+
+/// PRF input for one credential. Standard base64.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WirePrfCredentialValues {
+    pub credential_id: String,
+    pub first: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second: Option<String>,
+}
+
+/// PRF output of a registration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WirePrfRegistrationOutput {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<WirePrfValues>,
+}
+
+impl WirePrfValues {
+    pub(super) fn decode(&self) -> std::io::Result<PrfValues> {
+        Ok(PrfValues {
+            first: decode_b64(&self.first)?,
+            second: self.second.as_deref().map(decode_b64).transpose()?,
+        })
+    }
+
+    pub(super) fn encode(values: &PrfValues) -> Self {
+        Self {
+            first: b64.encode(&values.first),
+            second: values.second.as_ref().map(|s| b64.encode(s)),
+        }
+    }
+}
+
+impl WirePrfRegistration {
+    pub(super) fn decode(&self) -> std::io::Result<PrfRegistrationInput> {
+        Ok(PrfRegistrationInput {
+            eval: self.eval.as_ref().map(WirePrfValues::decode).transpose()?,
+        })
+    }
+}
+
+impl WirePrfAssertion {
+    pub(super) fn decode(&self) -> std::io::Result<PrfAssertionInput> {
+        let mut eval_by_credential = Vec::with_capacity(self.eval_by_credential.len());
+        for entry in &self.eval_by_credential {
+            eval_by_credential.push((
+                decode_b64(&entry.credential_id)?,
+                PrfValues {
+                    first: decode_b64(&entry.first)?,
+                    second: entry.second.as_deref().map(decode_b64).transpose()?,
+                },
+            ));
+        }
+        Ok(PrfAssertionInput {
+            eval: self.eval.as_ref().map(WirePrfValues::decode).transpose()?,
+            eval_by_credential,
+        })
+    }
+}
+
+impl WirePrfRegistrationOutput {
+    pub(super) fn encode(output: &PrfRegistrationOutput) -> Self {
+        Self {
+            enabled: output.enabled,
+            results: output.results.as_ref().map(WirePrfValues::encode),
+        }
+    }
 }

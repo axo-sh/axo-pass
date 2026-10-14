@@ -377,6 +377,7 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
             | app_broker::VaultAction::SaveLogin { .. }
             | app_broker::VaultAction::UpdateLoginPassword { .. }
             | app_broker::VaultAction::CreatePasskey { .. }
+            | app_broker::VaultAction::AssertPasskey { .. }
             | app_broker::VaultAction::ImportVaults { .. }
             | app_broker::VaultAction::AddVault { .. }
     )
@@ -384,14 +385,18 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
 
 /// The vault keys a mutating action wrote to, when the prompt names them.
 /// `WriteSecret`, `SaveLogin`, and `CreatePasskey` carry the real key, which
-/// for a registration is the vault the user chose. The password update, import
-/// and add actions do not, so they return an empty list and every vault is
-/// relocked.
+/// for a registration is the vault the user chose. A passkey sign-in records
+/// its use in the vault that signed, which the broker fills in once it is
+/// known. The password update, import and add actions do not, so they return
+/// an empty list and every vault is relocked.
 fn changed_vault_keys(prompt: &app_broker::VaultAccessPrompt) -> Vec<String> {
     match &prompt.action {
         app_broker::VaultAction::WriteSecret { .. }
         | app_broker::VaultAction::SaveLogin { .. }
         | app_broker::VaultAction::CreatePasskey { .. } => {
+            vec![prompt.vault_key.clone()]
+        },
+        app_broker::VaultAction::AssertPasskey { .. } if !prompt.vault_key.is_empty() => {
             vec![prompt.vault_key.clone()]
         },
         _ => Vec::new(),
@@ -460,5 +465,11 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
             }
             self.delegate.vaults_changed(changed_keys).await;
         }
+    }
+
+    /// The vaults are unchanged, so nothing is relocked. The empty list makes
+    /// the app reload what it shows and re-register AutoFill identities.
+    async fn passkey_reports_changed(&self) {
+        self.delegate.vaults_changed(Vec::new()).await;
     }
 }

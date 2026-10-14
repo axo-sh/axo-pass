@@ -18,15 +18,23 @@
 //! The app raises its own Touch ID prompt to unlock the vault for the request,
 //! so by the time this code has a decrypted vault the user has already
 //! approved; [`PromptedUser`] reports that rather than asking twice.
+//!
+//! Every passkey created here supports the WebAuthn PRF extension. A random
+//! secret is stored in the record at registration, and PRF results are
+//! HMAC-SHA-256 of that secret over the hashed page input.
+
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as B64URL};
 use coset::{CborSerializable, CoseKey};
+use passkey_authenticator::extensions::HmacSecretConfig;
 use passkey_authenticator::{
     Authenticator, CredentialStore, DiscoverabilitySupport, StoreInfo, UiHint, UserCheck,
     UserValidationMethod,
 };
+use passkey_types::ctap2::extensions::{AuthenticatorPrfInputs, AuthenticatorPrfValues};
 use passkey_types::ctap2::make_credential::{
     PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity,
 };
@@ -35,7 +43,7 @@ use passkey_types::webauthn::{
     PublicKeyCredentialDescriptor, PublicKeyCredentialParameters, PublicKeyCredentialType,
     PublicKeyCredentialUserEntity as WebauthnUserEntity,
 };
-use passkey_types::{Bytes, Passkey};
+use passkey_types::{Bytes, CredentialExtensions, Passkey, StoredHmacSecret};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -70,7 +78,7 @@ pub async fn create(
     request: make_credential::Request,
     target: PasskeyTarget,
 ) -> Result<make_credential::Response, Error> {
-    let mut authenticator = Authenticator::new(AAGUID, VaultStore::new(vw, target), PromptedUser);
+    let mut authenticator = authenticator(VaultStore::new(vw, target));
     let response = authenticator
         .make_credential(request)
         .await
@@ -82,21 +90,23 @@ pub async fn create(
 }
 
 /// Assert an existing passkey in an unlocked vault. Passkeys are synced, so
-/// their signature counter stays 0 and an assertion writes nothing to the
-/// vault.
+/// their signature counter stays 0 and the stored record is never changed.
 pub async fn assert(
     vw: &mut VaultWrapper,
     request: get_assertion::Request,
 ) -> Result<get_assertion::Response, Error> {
-    let mut authenticator = Authenticator::new(
-        AAGUID,
-        VaultStore::new(vw, PasskeyTarget::NewLogin),
-        PromptedUser,
-    );
+    let mut authenticator = authenticator(VaultStore::new(vw, PasskeyTarget::NewLogin));
     authenticator
         .get_assertion(request)
         .await
         .map_err(status_error)
+}
+
+/// The authenticator with PRF enabled. PRF secrets are only used after user
+/// verification, which every request here performs.
+fn authenticator(store: VaultStore<'_>) -> Authenticator<VaultStore<'_>, PromptedUser> {
+    Authenticator::new(AAGUID, store, PromptedUser)
+        .hmac_secret(HmacSecretConfig::new_with_uv_only().enable_on_make_credential())
 }
 
 /// A passkey with the vault coordinates it was read from.
@@ -171,6 +181,8 @@ pub struct CreatePasskeyRequest {
     /// Credential ids the relying party already holds for this user. A match
     /// makes the authenticator refuse, so the browser does not double-register.
     pub excluded_credentials: Vec<Vec<u8>>,
+    /// PRF extension input. `None` when the page did not use the extension.
+    pub prf: Option<PrfRegistrationInput>,
     /// Where in the vault the passkey is stored.
     pub target: PasskeyTarget,
 }
@@ -181,6 +193,8 @@ pub struct CreatePasskeyResponse {
     pub credential_id: Vec<u8>,
     /// CBOR-encoded WebAuthn attestation object.
     pub attestation_object: Vec<u8>,
+    /// PRF extension output. `None` when the request carried no PRF input.
+    pub prf: Option<PrfRegistrationOutput>,
 }
 
 /// A WebAuthn assertion request, as it crosses the broker socket.
@@ -191,6 +205,8 @@ pub struct AssertPasskeyRequest {
     /// Credential ids the relying party will accept. Empty means any passkey
     /// for the relying party.
     pub allowed_credentials: Vec<Vec<u8>>,
+    /// PRF extension input. `None` when the page did not use the extension.
+    pub prf: Option<PrfAssertionInput>,
 }
 
 /// The result of an assertion, ready for `ASPasskeyAssertionCredential`.
@@ -201,6 +217,99 @@ pub struct AssertPasskeyResponse {
     /// Serialized authenticator data.
     pub authenticator_data: Vec<u8>,
     pub signature: Vec<u8>,
+    /// PRF results. `None` when the request carried no PRF input or the
+    /// passkey has no PRF secret.
+    pub prf: Option<PrfValues>,
+    /// Where the passkey that signed is stored.
+    pub item_key: String,
+    pub credential_key: String,
+}
+
+// MARK: - PRF
+
+/// One or two PRF values. As input these are the page values before hashing.
+/// As output they are the 32-byte PRF results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrfValues {
+    pub first: Vec<u8>,
+    pub second: Option<Vec<u8>>,
+}
+
+/// PRF input of a registration. Its presence asks whether PRF is supported.
+/// `eval` also asks for results immediately.
+#[derive(Debug, Clone, Default)]
+pub struct PrfRegistrationInput {
+    pub eval: Option<PrfValues>,
+}
+
+/// PRF output of a registration.
+#[derive(Debug, Clone)]
+pub struct PrfRegistrationOutput {
+    pub enabled: bool,
+    pub results: Option<PrfValues>,
+}
+
+/// PRF input of an assertion. A per-credential entry for the signing
+/// credential takes precedence over `eval`.
+#[derive(Debug, Clone, Default)]
+pub struct PrfAssertionInput {
+    pub eval: Option<PrfValues>,
+    pub eval_by_credential: Vec<(Vec<u8>, PrfValues)>,
+}
+
+/// Salt for one PRF input, as WebAuthn defines it:
+/// SHA-256("WebAuthn PRF" || 0x00 || input). The page input arrives
+/// unhashed, so the hash is applied here.
+fn prf_salt(input: &[u8]) -> [u8; 32] {
+    let mut data = Vec::with_capacity(13 + input.len());
+    data.extend_from_slice(b"WebAuthn PRF");
+    data.push(0);
+    data.extend_from_slice(input);
+    passkey_types::crypto::sha256(&data)
+}
+
+fn prf_salts(values: &PrfValues) -> AuthenticatorPrfValues {
+    AuthenticatorPrfValues {
+        first: prf_salt(&values.first),
+        second: values.second.as_deref().map(prf_salt),
+    }
+}
+
+fn prf_results(values: AuthenticatorPrfValues) -> PrfValues {
+    PrfValues {
+        first: values.first.to_vec(),
+        second: values.second.map(|b| b.to_vec()),
+    }
+}
+
+impl PrfRegistrationInput {
+    fn to_ctap(&self) -> make_credential::ExtensionInputs {
+        make_credential::ExtensionInputs {
+            hmac_secret: Some(true),
+            hmac_secret_mc: None,
+            prf: Some(AuthenticatorPrfInputs {
+                eval: self.eval.as_ref().map(prf_salts),
+                eval_by_credential: None,
+            }),
+        }
+    }
+}
+
+impl PrfAssertionInput {
+    fn to_ctap(&self) -> get_assertion::ExtensionInputs {
+        let by_credential: HashMap<Bytes, AuthenticatorPrfValues> = self
+            .eval_by_credential
+            .iter()
+            .map(|(id, values)| (Bytes::from(id.clone()), prf_salts(values)))
+            .collect();
+        get_assertion::ExtensionInputs {
+            hmac_secret: None,
+            prf: Some(AuthenticatorPrfInputs {
+                eval: self.eval.as_ref().map(prf_salts),
+                eval_by_credential: (!by_credential.is_empty()).then_some(by_credential),
+            }),
+        }
+    }
 }
 
 /// Map a COSE algorithm identifier to the `coset` enum. Only the algorithms the
@@ -267,7 +376,15 @@ pub async fn create_from_wire(
         },
         pub_key_cred_params: params,
         exclude_list: descriptors(req.excluded_credentials),
-        extensions: None,
+        // A PRF secret is created for every passkey, so a page can use PRF at
+        // sign-in even if it did not ask at registration.
+        extensions: Some(match &req.prf {
+            Some(prf) => prf.to_ctap(),
+            None => make_credential::ExtensionInputs {
+                hmac_secret: Some(true),
+                ..Default::default()
+            },
+        }),
         options: get_assertion::Options {
             rk: true,
             up: true,
@@ -286,15 +403,30 @@ pub async fn create_from_wire(
         .ok_or_else(|| {
             Error::Passkey("Registration response carries no attested credential data".to_string())
         })?;
+    let prf = req.prf.as_ref().map(|_| {
+        let output = response
+            .unsigned_extension_outputs
+            .as_ref()
+            .and_then(|outputs| outputs.prf.clone());
+        PrfRegistrationOutput {
+            enabled: output.as_ref().is_some_and(|o| o.enabled),
+            results: output.and_then(|o| o.results).map(prf_results),
+        }
+    });
     Ok(CreatePasskeyResponse {
         credential_id,
         attestation_object: response.as_webauthn_bytes().to_vec(),
+        prf,
     })
 }
 
 /// Assert an existing passkey in an unlocked vault from a broker request. The
 /// user handle is read back from the stored record rather than the CTAP2
 /// response, which omits it for a non-discoverable assertion.
+///
+/// The passkey's last use is recorded in its credential metadata, and the
+/// vault is saved. A failure to save is logged and does not fail the
+/// sign-in.
 pub async fn assert_from_wire(
     vw: &mut VaultWrapper,
     req: AssertPasskeyRequest,
@@ -303,7 +435,7 @@ pub async fn assert_from_wire(
         rp_id: req.rp_id.clone(),
         client_data_hash: req.client_data_hash.into(),
         allow_list: descriptors(req.allowed_credentials),
-        extensions: None,
+        extensions: req.prf.as_ref().map(PrfAssertionInput::to_ctap),
         options: get_assertion::Options {
             rk: true,
             up: true,
@@ -319,17 +451,43 @@ pub async fn assert_from_wire(
         .map(|d| d.id.as_slice().to_vec())
         .ok_or_else(|| Error::Passkey("Assertion response names no credential".to_string()))?;
 
-    let user_handle = list(vw)?
+    let stored = list(vw)?
         .into_iter()
         .find(|s| s.passkey.credential_id.as_slice() == credential_id.as_slice())
-        .and_then(|s| s.passkey.user_handle.map(|h| h.as_slice().to_vec()))
+        .ok_or_else(|| Error::Passkey("The signing passkey is not in the vault".to_string()))?;
+    let user_handle = stored
+        .passkey
+        .user_handle
+        .as_ref()
+        .map(|h| h.as_slice().to_vec())
         .unwrap_or_default();
+
+    if let Some(now) = now_unix() {
+        let marked = vw
+            .mark_credential_used(&stored.item_key, &stored.credential_key, now)
+            .and_then(|()| vw.save());
+        if let Err(e) = marked {
+            log::error!(
+                "Failed to record the use of passkey {}/{}: {e}",
+                stored.item_key,
+                stored.credential_key
+            );
+        }
+    }
+
+    let prf = response
+        .unsigned_extension_outputs
+        .and_then(|outputs| outputs.prf)
+        .map(|output| prf_results(output.results));
 
     Ok(AssertPasskeyResponse {
         credential_id,
         user_handle,
         authenticator_data: response.auth_data.to_vec(),
         signature: response.signature.as_slice().to_vec(),
+        prf,
+        item_key: stored.item_key,
+        credential_key: stored.credential_key,
     })
 }
 
@@ -356,6 +514,10 @@ struct StoredRecord {
     created_at: Option<i64>,
     /// Standard base64 of the CBOR-encoded COSE key, private half included.
     key: String,
+    /// Standard base64 of the PRF secret, used only after user verification.
+    /// Absent for passkeys created before PRF support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prf_secret: Option<String>,
 }
 
 /// Passkey details to display. Excludes key and the user handle.
@@ -368,6 +530,11 @@ pub struct PasskeySummary {
     pub user_display_name: Option<String>,
     /// Unix seconds when the passkey was registered, when recorded.
     pub created_at: Option<i64>,
+    /// The passkey has a PRF secret.
+    pub prf: bool,
+    /// base64url of the user handle, no padding. Used to match site reports,
+    /// not shown.
+    pub user_handle: Option<String>,
 }
 
 /// Read the displayable fields of a stored passkey record. `None` when the
@@ -380,6 +547,8 @@ pub fn summary(value: &str) -> Option<PasskeySummary> {
         username: record.username,
         user_display_name: record.user_display_name,
         created_at: record.created_at,
+        prf: record.prf_secret.is_some(),
+        user_handle: record.user_handle,
     })
 }
 
@@ -408,6 +577,11 @@ fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
         counter: passkey.counter,
         created_at,
         key: B64.encode(key),
+        prf_secret: passkey
+            .extensions
+            .hmac_secret
+            .as_ref()
+            .map(|secret| B64.encode(&secret.cred_with_uv)),
     };
     serde_json::to_string(&record)
         .map_err(|e| Error::Passkey(format!("Failed to encode the passkey: {e}")))
@@ -432,6 +606,15 @@ fn decode(value: &str) -> Result<Passkey, Error> {
         ),
         None => None,
     };
+    let hmac_secret = match &record.prf_secret {
+        Some(secret) => Some(StoredHmacSecret {
+            cred_with_uv: B64
+                .decode(secret)
+                .map_err(|e| Error::Passkey(format!("Failed to decode the PRF secret: {e}")))?,
+            cred_without_uv: None,
+        }),
+        None => None,
+    };
 
     Ok(Passkey {
         key,
@@ -441,7 +624,7 @@ fn decode(value: &str) -> Result<Passkey, Error> {
         username: record.username,
         user_display_name: record.user_display_name,
         counter: record.counter,
-        extensions: Default::default(),
+        extensions: CredentialExtensions { hmac_secret },
     })
 }
 
@@ -588,6 +771,48 @@ pub fn remove_record(
         .id;
     vw.delete_item_credential(item_key, credential_key)?;
     vw.purge_item_credential(item_key, cred_id)
+}
+
+/// Set the account name of the passkey at `item_key`/`credential_key`, as a
+/// site reported it. The record username, display name, and credential title
+/// all take the new name. The replaced record is not kept as a previous value,
+/// since it differs only in the name. The caller saves the vault.
+pub fn rename_account(
+    vw: &mut VaultWrapper,
+    item_key: &str,
+    credential_key: &str,
+    name: &str,
+) -> Result<(), Error> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(Error::Passkey("The new account name is empty".to_string()));
+    }
+    let record = read_record(vw, item_key, credential_key)?;
+    let mut stored: StoredRecord = serde_json::from_str(record.value.expose_secret())
+        .map_err(|e| Error::Passkey(format!("Failed to parse the passkey: {e}")))?;
+    stored.username = Some(name.to_string());
+    stored.user_display_name = Some(name.to_string());
+    let value = serde_json::to_string(&stored)
+        .map_err(|e| Error::Passkey(format!("Failed to encode the passkey: {e}")))?;
+
+    let before: Vec<Uuid> = vw
+        .list_history(item_key, credential_key)?
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    vw.add_secret(
+        item_key,
+        credential_key,
+        name,
+        FieldKind::Passkey,
+        SecretString::from(value),
+    )?;
+    for entry in vw.list_history(item_key, credential_key)? {
+        if !before.contains(&entry.id) {
+            vw.purge_history(item_key, credential_key, entry.id)?;
+        }
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -1107,6 +1332,214 @@ mod tests {
             asserted.auth_data.flags,
             Flags::UP | Flags::UV | Flags::BE | Flags::BS
         );
+    }
+
+    fn prf_assertion(prf: Option<PrfAssertionInput>) -> get_assertion::Request {
+        get_assertion::Request {
+            rp_id: "example.com".into(),
+            client_data_hash: vec![7u8; 32].into(),
+            allow_list: None,
+            extensions: prf.as_ref().map(PrfAssertionInput::to_ctap),
+            options: get_assertion::Options {
+                rk: true,
+                up: true,
+                uv: true,
+            },
+            pin_auth: None,
+            pin_protocol: None,
+        }
+    }
+
+    fn prf_output(response: get_assertion::Response) -> Option<PrfValues> {
+        response
+            .unsigned_extension_outputs
+            .and_then(|o| o.prf)
+            .map(|o| prf_results(o.results))
+    }
+
+    #[test]
+    fn prf_salts_are_hashed_with_the_webauthn_context() {
+        let mut data = b"WebAuthn PRF\0".to_vec();
+        data.extend_from_slice(b"hello");
+        assert_eq!(prf_salt(b"hello"), passkey_types::crypto::sha256(&data));
+    }
+
+    #[tokio::test]
+    async fn prf_results_are_stable_and_match_registration() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let eval = PrfValues {
+            first: b"first input".to_vec(),
+            second: Some(b"second input".to_vec()),
+        };
+        let mut request = registration("example.com", "ada");
+        request.extensions = Some(
+            PrfRegistrationInput {
+                eval: Some(eval.clone()),
+            }
+            .to_ctap(),
+        );
+        let created = authenticator(VaultStore::new(&mut vw, PasskeyTarget::NewLogin))
+            .make_credential(request)
+            .await
+            .unwrap();
+        let made = created
+            .unsigned_extension_outputs
+            .and_then(|o| o.prf)
+            .unwrap();
+        assert!(made.enabled);
+        let at_registration = prf_results(made.results.unwrap());
+        assert_eq!(at_registration.first.len(), 32);
+
+        let input = PrfAssertionInput {
+            eval: Some(eval),
+            eval_by_credential: Vec::new(),
+        };
+        let first = prf_output(
+            assert(&mut vw, prf_assertion(Some(input.clone())))
+                .await
+                .unwrap(),
+        );
+        let second = prf_output(assert(&mut vw, prf_assertion(Some(input))).await.unwrap());
+        assert_eq!(first.as_ref(), Some(&at_registration));
+        assert_eq!(first, second);
+
+        let other = prf_output(
+            assert(
+                &mut vw,
+                prf_assertion(Some(PrfAssertionInput {
+                    eval: Some(PrfValues {
+                        first: b"other".to_vec(),
+                        second: None,
+                    }),
+                    eval_by_credential: Vec::new(),
+                })),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_ne!(other.first, at_registration.first);
+        assert_eq!(other.second, None);
+
+        // The secret is in the stored record, so it survives a reload.
+        let stored = list(&vw).unwrap().remove(0);
+        let value = vw
+            .get_secret(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        assert!(summary(value.expose_secret()).unwrap().prf);
+    }
+
+    #[tokio::test]
+    async fn per_credential_prf_input_takes_precedence() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut request = registration("example.com", "ada");
+        request.extensions = Some(make_credential::ExtensionInputs {
+            hmac_secret: Some(true),
+            ..Default::default()
+        });
+        authenticator(VaultStore::new(&mut vw, PasskeyTarget::NewLogin))
+            .make_credential(request)
+            .await
+            .unwrap();
+        let credential_id = list(&vw).unwrap()[0].passkey.credential_id.to_vec();
+
+        let specific = PrfValues {
+            first: b"specific".to_vec(),
+            second: None,
+        };
+        let by_credential = prf_output(
+            assert(
+                &mut vw,
+                prf_assertion(Some(PrfAssertionInput {
+                    eval: Some(PrfValues {
+                        first: b"general".to_vec(),
+                        second: None,
+                    }),
+                    eval_by_credential: vec![(credential_id, specific.clone())],
+                })),
+            )
+            .await
+            .unwrap(),
+        );
+        let direct = prf_output(
+            assert(
+                &mut vw,
+                prf_assertion(Some(PrfAssertionInput {
+                    eval: Some(specific),
+                    eval_by_credential: Vec::new(),
+                })),
+            )
+            .await
+            .unwrap(),
+        );
+        assert!(by_credential.is_some());
+        assert_eq!(by_credential, direct);
+    }
+
+    #[tokio::test]
+    async fn a_passkey_without_a_prf_secret_returns_no_prf_results() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        // Registered without PRF, as passkeys were before PRF support.
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        let value = vw
+            .get_secret(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        assert!(!summary(value.expose_secret()).unwrap().prf);
+
+        let response = assert(
+            &mut vw,
+            prf_assertion(Some(PrfAssertionInput {
+                eval: Some(PrfValues {
+                    first: b"input".to_vec(),
+                    second: None,
+                }),
+                eval_by_credential: Vec::new(),
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(prf_output(response), None);
+    }
+
+    #[tokio::test]
+    async fn renaming_an_account_keeps_the_key_and_adds_no_history() {
+        let mut vw = VaultWrapper::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+
+        rename_account(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            " lovelace ",
+        )
+        .unwrap();
+
+        let renamed = list(&vw).unwrap().remove(0);
+        assert_eq!(renamed.passkey.username.as_deref(), Some("lovelace"));
+        assert_eq!(
+            renamed.passkey.user_display_name.as_deref(),
+            Some("lovelace")
+        );
+        assert_eq!(renamed.passkey.credential_id, stored.passkey.credential_id);
+        assert_eq!(
+            renamed.passkey.key.clone().to_vec().unwrap(),
+            stored.passkey.key.clone().to_vec().unwrap()
+        );
+        let overview = vw
+            .get_secret_overview(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(overview.title, "lovelace");
+        assert!(
+            vw.list_history(&stored.item_key, &stored.credential_key)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(rename_account(&mut vw, &stored.item_key, &stored.credential_key, " ").is_err());
     }
 
     #[tokio::test]

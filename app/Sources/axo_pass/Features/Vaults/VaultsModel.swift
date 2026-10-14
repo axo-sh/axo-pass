@@ -1429,6 +1429,35 @@ final class VaultsModel {
     return true
   }
 
+  /// Give a passkey the account name its site reported.
+  func applyPasskeyName(vaultKey: String, itemKey: String, credKey: String, name: String) async {
+    actionError = nil
+    do {
+      try await core.applyPasskeyName(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, name: name)
+    } catch {
+      actionError = String(describing: error)
+      return
+    }
+    await loadItems(for: vaultKey)
+  }
+
+  /// Dismiss a site report about a passkey. Keeping a passkey the site no
+  /// longer accepts offers it in AutoFill again.
+  func dismissPasskeyReport(
+    vaultKey: String, itemKey: String, credKey: String, kind: PasskeyReportKind
+  ) async {
+    actionError = nil
+    do {
+      try await core.dismissPasskeyReport(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, kind: kind)
+    } catch {
+      actionError = String(describing: error)
+      return
+    }
+    await loadItems(for: vaultKey)
+  }
+
   /// The items of a vault as last loaded, without loading. Empty when the
   /// vault is not cached.
   func cachedItems(in vaultKey: String) -> [ItemInfo] {

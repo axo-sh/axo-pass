@@ -1,5 +1,6 @@
 import AppKit
 import AuthenticationServices
+import CryptoKit
 import SwiftUI
 
 /// The AutoFill credential provider.
@@ -84,13 +85,15 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
     let rpID = requestParameters.relyingPartyIdentifier
     let clientDataHash = requestParameters.clientDataHash
+    let prf = Self.prfInput(requestParameters.extensionInput?.prf)
     model.beginFilling(rpID)
     Task { [weak self] in
       do {
         let assertion = try await BrokerClient.assertPasskey(
           rpID: rpID,
           clientDataHash: clientDataHash,
-          allowedCredentialIDs: requestParameters.allowedCredentials)
+          allowedCredentialIDs: requestParameters.allowedCredentials,
+          prf: prf)
         self?.completeAssertion(
           rpID: rpID, clientDataHash: clientDataHash, assertion: assertion)
       } catch {
@@ -157,6 +160,10 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
     }
 
     let name = identity.userName.isEmpty ? identity.relyingPartyIdentifier : identity.userName
+    var prf: BrokerClient.PRFRegistrationInput?
+    if case .registration(let input) = request.extensionInput, let input = input.prf {
+      prf = BrokerClient.PRFRegistrationInput(values: input.inputValues.map(Self.prfValues))
+    }
     model.beginFilling(name)
     Task { [weak self] in
       do {
@@ -168,7 +175,8 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
           userDisplayName: identity.userName,
           clientDataHash: request.clientDataHash,
           algorithms: request.supportedAlgorithms.map(\.rawValue),
-          excludedCredentials: (request.excludedCredentials ?? []).map(\.credentialID))
+          excludedCredentials: (request.excludedCredentials ?? []).map(\.credentialID),
+          prf: prf)
         self?.completeRegistration(
           rpID: identity.relyingPartyIdentifier,
           clientDataHash: request.clientDataHash,
@@ -187,13 +195,18 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
       return
     }
     let name = identity.userName.isEmpty ? identity.relyingPartyIdentifier : identity.userName
+    var prf: BrokerClient.PRFAssertionInput?
+    if case .assertion(let input) = request.extensionInput {
+      prf = Self.prfInput(input.prf)
+    }
     model.beginFilling(name)
     Task { [weak self] in
       do {
         let assertion = try await BrokerClient.assertPasskey(
           rpID: identity.relyingPartyIdentifier,
           clientDataHash: request.clientDataHash,
-          allowedCredentialIDs: [identity.credentialID])
+          allowedCredentialIDs: [identity.credentialID],
+          prf: prf)
         self?.completeAssertion(
           rpID: identity.relyingPartyIdentifier,
           clientDataHash: request.clientDataHash,
@@ -207,25 +220,134 @@ final class CredentialProviderViewController: ASCredentialProviderViewController
   private func completeRegistration(
     rpID: String, clientDataHash: Data, registration: BrokerClient.Registration
   ) {
+    var extensionOutput: ASPasskeyRegistrationCredentialExtensionOutput?
+    if let prf = registration.prf {
+      let output: ASAuthorizationPublicKeyCredentialPRFRegistrationOutput
+      if let results = prf.results {
+        output = ASAuthorizationPublicKeyCredentialPRFRegistrationOutput(
+          first: SymmetricKey(data: results.first),
+          second: results.second.map { SymmetricKey(data: $0) })
+      } else {
+        output = prf.enabled ? .supported : .unsupported
+      }
+      extensionOutput = ASPasskeyRegistrationCredentialExtensionOutput(prf: output)
+    }
     let credential = ASPasskeyRegistrationCredential(
       relyingParty: rpID,
       clientDataHash: clientDataHash,
       credentialID: registration.credentialID,
-      attestationObject: registration.attestationObject)
+      attestationObject: registration.attestationObject,
+      extensionOutput: extensionOutput)
     extensionContext.completeRegistrationRequest(using: credential, completionHandler: nil)
   }
 
   private func completeAssertion(
     rpID: String, clientDataHash: Data, assertion: BrokerClient.Assertion
   ) {
+    let extensionOutput = assertion.prf.map { prf in
+      ASPasskeyAssertionCredentialExtensionOutput(
+        prf: ASAuthorizationPublicKeyCredentialPRFAssertionOutput(
+          first: SymmetricKey(data: prf.first),
+          second: prf.second.map { SymmetricKey(data: $0) }))
+    }
     let credential = ASPasskeyAssertionCredential(
       userHandle: assertion.userHandle,
       relyingParty: rpID,
       signature: assertion.signature,
       clientDataHash: clientDataHash,
       authenticatorData: assertion.authenticatorData,
-      credentialID: assertion.credentialID)
+      credentialID: assertion.credentialID,
+      extensionOutput: extensionOutput)
     extensionContext.completeAssertionRequest(using: credential, completionHandler: nil)
+  }
+
+  // MARK: - PRF
+
+  // The system passes PRF inputs as the page gave them, unhashed. The app
+  // applies the WebAuthn PRF hash.
+
+  private static func prfValues(
+    _ values: ASAuthorizationPublicKeyCredentialPRFAssertionInput.InputValues
+  ) -> BrokerClient.PRFValues {
+    BrokerClient.PRFValues(first: values.saltInput1, second: values.saltInput2)
+  }
+
+  private static func prfInput(
+    _ input: ASAuthorizationPublicKeyCredentialPRFAssertionInput?
+  ) -> BrokerClient.PRFAssertionInput? {
+    guard let input else { return nil }
+    return BrokerClient.PRFAssertionInput(
+      values: input.inputValues.map(prfValues),
+      perCredential: (input.perCredentialInputValues ?? [:]).mapValues(prfValues))
+  }
+
+  // MARK: - Site reports
+
+  // Sites report through the system with the vault locked. The app records
+  // each report, marks the passkey, and leaves it in the vault. A rejected
+  // passkey is also removed from the identity store here, so it is not offered
+  // before the app next re-registers identities.
+
+  override func reportUnknownPublicKeyCredential(
+    forRelyingParty relyingParty: String, credentialID: Data
+  ) {
+    Task {
+      do {
+        try await BrokerClient.reportUnknownPasskey(rpID: relyingParty, credentialID: credentialID)
+      } catch {
+        NSLog("AxoPassAutoFill: failed to relay a passkey report: %@", "\(error)")
+      }
+      await Self.removeIdentities(relyingParty: relyingParty) { $0.credentialID == credentialID }
+    }
+  }
+
+  override func reportAllAcceptedPublicKeyCredentials(
+    forRelyingParty relyingParty: String, userHandle: Data, acceptedCredentialIDs: [Data]
+  ) {
+    Task {
+      do {
+        try await BrokerClient.reportAcceptedPasskeys(
+          rpID: relyingParty, userHandle: userHandle, credentialIDs: acceptedCredentialIDs)
+      } catch {
+        NSLog("AxoPassAutoFill: failed to relay a passkey report: %@", "\(error)")
+      }
+      await Self.removeIdentities(relyingParty: relyingParty) {
+        $0.userHandle == userHandle && !acceptedCredentialIDs.contains($0.credentialID)
+      }
+    }
+  }
+
+  override func reportPublicKeyCredentialUpdate(
+    forRelyingParty relyingParty: String, userHandle: Data, newName: String
+  ) {
+    Task {
+      do {
+        try await BrokerClient.reportPasskeyName(
+          rpID: relyingParty, userHandle: userHandle, name: newName)
+      } catch {
+        NSLog("AxoPassAutoFill: failed to relay a passkey report: %@", "\(error)")
+      }
+    }
+  }
+
+  /// Remove the passkey identities of `relyingParty` that match `shouldRemove`
+  /// from the system's identity store.
+  private static func removeIdentities(
+    relyingParty: String, where shouldRemove: (ASPasskeyCredentialIdentity) -> Bool
+  ) async {
+    let store = ASCredentialIdentityStore.shared
+    let identities = await store.credentialIdentities(
+      forService: nil, credentialIdentityTypes: .passkey)
+    let stale: [any ASCredentialIdentity] = identities.filter { identity in
+      guard let passkey = identity as? ASPasskeyCredentialIdentity else { return false }
+      return passkey.relyingPartyIdentifier == relyingParty && shouldRemove(passkey)
+    }
+    guard !stale.isEmpty else { return }
+    do {
+      try await store.removeCredentialIdentities(stale)
+    } catch {
+      NSLog("AxoPassAutoFill: failed to remove passkey identities: %@", "\(error)")
+    }
   }
 
   /// Ask the app to fill the login and hand the result back to the system.

@@ -352,6 +352,10 @@ pub enum Action {
     PasskeyAsserted,
     #[serde(rename = "passkey.moved")]
     PasskeyMoved,
+    #[serde(rename = "passkey.reported")]
+    PasskeyReported,
+    #[serde(rename = "passkey.renamed")]
+    PasskeyRenamed,
 
     #[serde(rename = "auth.grant_created")]
     AuthGrantCreated,
@@ -422,6 +426,8 @@ impl Action {
             Action::PasskeyRegistered => "passkey.registered",
             Action::PasskeyAsserted => "passkey.asserted",
             Action::PasskeyMoved => "passkey.moved",
+            Action::PasskeyReported => "passkey.reported",
+            Action::PasskeyRenamed => "passkey.renamed",
             Action::AuthGrantCreated => "auth.grant_created",
             Action::AuthGrantReused => "auth.grant_reused",
             Action::AuthGrantExpired => "auth.grant_expired",
@@ -431,7 +437,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 58] = [
+    pub const ALL: [Action; 60] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -486,6 +492,8 @@ impl Action {
         Action::PasskeyRegistered,
         Action::PasskeyAsserted,
         Action::PasskeyMoved,
+        Action::PasskeyReported,
+        Action::PasskeyRenamed,
         Action::AuthGrantCreated,
         Action::AuthGrantReused,
         Action::AuthGrantExpired,
@@ -572,6 +580,10 @@ impl Action {
             Action::PasskeyRegistered => "Created a passkey for a website.",
             Action::PasskeyAsserted => "Signed in to a website with a passkey.",
             Action::PasskeyMoved => "Moved a passkey to another item.",
+            Action::PasskeyReported => {
+                "A website reported that a passkey is unknown, listed the passkeys it accepts, or reported a new account name."
+            },
+            Action::PasskeyRenamed => "Applied an account name a website reported to a passkey.",
             Action::AuthGrantCreated => "Approved access that can be reused for a short time.",
             Action::AuthGrantReused => "Used an earlier approval, so no prompt was shown.",
             Action::AuthGrantExpired => "An earlier approval ran out.",
@@ -635,9 +647,11 @@ impl Action {
             | Action::CredentialHistoryRestored
             | Action::CredentialHistoryPurged
             | Action::CredentialRoleChanged => Category::Credential,
-            Action::PasskeyRegistered | Action::PasskeyAsserted | Action::PasskeyMoved => {
-                Category::Passkey
-            },
+            Action::PasskeyRegistered
+            | Action::PasskeyAsserted
+            | Action::PasskeyMoved
+            | Action::PasskeyReported
+            | Action::PasskeyRenamed => Category::Passkey,
             Action::AuthGrantCreated | Action::AuthGrantReused | Action::AuthGrantExpired => {
                 Category::Grant
             },
@@ -695,7 +709,8 @@ impl Action {
             | Action::CredentialHistoryPurged
             | Action::CredentialRoleChanged
             | Action::PasskeyRegistered
-            | Action::PasskeyMoved => ActionKind::Change,
+            | Action::PasskeyMoved
+            | Action::PasskeyRenamed => ActionKind::Change,
             Action::SshSessionBind
             | Action::SshAgentStart
             | Action::SshAgentStop
@@ -706,6 +721,7 @@ impl Action {
             | Action::AuthGrantCreated
             | Action::AuthGrantReused
             | Action::AuthGrantExpired
+            | Action::PasskeyReported
             | Action::BrokerPeerRejected => ActionKind::Other,
         }
     }

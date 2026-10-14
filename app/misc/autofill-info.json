@@ -4,7 +4,8 @@
       "ASCredentialProviderExtensionCapabilities": {
         "ProvidesPasswords": true,
         "ProvidesPasskeys": true,
-        "ProvidesOneTimeCodes": true
+        "ProvidesOneTimeCodes": true,
+        "SupportsCredentialUpdate": true
       },
       "ASCredentialProviderExtensionShowsConfigurationUI": true
     }

@@ -67,7 +67,7 @@ fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> 
 /// Write a file by way of a temp file in the same directory. The data is
 /// synced before the temp file is renamed over `path`, so `path` holds either
 /// the old or the new contents after a crash.
-fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path has no parent directory"))?;
@@ -424,6 +424,17 @@ impl VaultWrapper {
         let vault = self.get_unlocked_vault_mut()?;
         vault.update_item_credential(item_key, cred_key, update)?;
         Ok(())
+    }
+
+    /// Record when a credential was last used. The value is unchanged.
+    pub fn mark_credential_used(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        at: i64,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.mark_credential_used(item_key, cred_key, at)
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {

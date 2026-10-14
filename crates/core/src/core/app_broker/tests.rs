@@ -782,6 +782,9 @@ fn the_autofill_scope_allows_only_autofill_requests() {
         r#"{"request":"generate_totp","url":"https://example.com","frame_url":"https://example.com","record_id":"r"}"#,
         r#"{"request":"create_passkey","rp_id":"example.com","user_handle":"","user_name":"u","user_display_name":"u","client_data_hash":"","algorithms":[-7]}"#,
         r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#,
+        r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
+        r#"{"request":"report_accepted_passkeys","rp_id":"example.com","user_handle":"CQ==","credential_ids":["AQ=="]}"#,
+        r#"{"request":"report_passkey_name","rp_id":"example.com","user_handle":"CQ==","name":"ada"}"#,
     ];
     let refused = [
         r#"{"request":"list_identities"}"#,
@@ -905,6 +908,7 @@ fn the_browser_host_scope_adds_generation_and_saving_to_the_autofill_requests() 
         r#"{"request":"list_keychain_passwords"}"#,
         r#"{"request":"sign","key_label":"k","data":"aGk="}"#,
         r#"{"request":"get_passphrase","key_id":"k"}"#,
+        r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
     ];
     for line in autofill.iter().chain(&browser_only) {
         let request = parse(line);

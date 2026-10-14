@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axo_pass_core::audit;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
+use axo_pass_core::secrets::vaults::passkey_signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
     TextField, VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
@@ -38,6 +39,8 @@ pub struct CredentialInfo {
     /// "totp", or none. The password role decides the credential is concealed,
     /// whatever its kind.
     pub role: Option<String>,
+    /// Unix seconds of the last recorded use. Only passkey sign-ins set it.
+    pub last_used_at: Option<i64>,
     /// Only present for passkeys; contains passkey credential details for
     /// display.
     pub passkey: Option<PasskeyInfo>,
@@ -54,6 +57,59 @@ pub struct PasskeyInfo {
     pub user_display_name: Option<String>,
     /// Unix seconds when the passkey was registered, when recorded.
     pub created_at: Option<i64>,
+    /// The passkey supports the WebAuthn PRF extension.
+    pub prf: bool,
+    /// The site reported that it no longer accepts this passkey. It is not
+    /// offered in AutoFill.
+    pub site_rejected: bool,
+    /// A new account name the site reported, when it differs from the stored
+    /// one.
+    pub suggested_name: Option<String>,
+}
+
+/// What the user dismissed about a passkey site report.
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum PasskeyReportKind {
+    /// Keep a passkey the site no longer accepts.
+    Rejection,
+    /// Ignore a reported account name.
+    Rename,
+}
+
+impl From<PasskeyReportKind> for passkey_signals::DismissKind {
+    fn from(kind: PasskeyReportKind) -> Self {
+        match kind {
+            PasskeyReportKind::Rejection => passkey_signals::DismissKind::Rejection,
+            PasskeyReportKind::Rename => passkey_signals::DismissKind::Rename,
+        }
+    }
+}
+
+/// Passkey details for display, with what site reports say about it.
+fn passkey_info(summary: passkey::PasskeySummary, signals: &SignalStore) -> PasskeyInfo {
+    let status = signals.status(passkey_ref(&summary));
+    PasskeyInfo {
+        rp_id: summary.rp_id,
+        credential_id: summary.credential_id,
+        username: summary.username,
+        user_display_name: summary.user_display_name,
+        created_at: summary.created_at,
+        prf: summary.prf,
+        site_rejected: status.rejected,
+        suggested_name: status.suggested_name,
+    }
+}
+
+fn passkey_ref(summary: &passkey::PasskeySummary) -> passkey_signals::PasskeyRef<'_> {
+    passkey_signals::PasskeyRef {
+        rp_id: &summary.rp_id,
+        credential_id: &summary.credential_id,
+        user_handle: summary.user_handle.as_deref(),
+        current_name: summary
+            .user_display_name
+            .as_deref()
+            .or(summary.username.as_deref()),
+    }
 }
 
 /// A previous value of a credential. The value is not included. Read it with
@@ -492,6 +548,26 @@ fn website_origin(url: &str) -> String {
     }
 }
 
+/// Record that the user dismissed what reports so far say about a passkey. A
+/// failure to save is logged, and the report stays shown.
+async fn dismiss_report(summary: &passkey::PasskeySummary, kind: passkey_signals::DismissKind) {
+    let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return;
+    };
+    let at = i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX);
+    let rp_id = summary.rp_id.clone();
+    let credential_id = summary.credential_id.clone();
+    let saved = tokio::task::spawn_blocking(move || {
+        SignalStore::update(|store| store.dismiss(&rp_id, &credential_id, kind, at))
+    })
+    .await;
+    match saved {
+        Ok(Ok(())) => {},
+        Ok(Err(e)) => log::error!("Failed to save a passkey report dismissal: {e}"),
+        Err(e) => log::error!("Passkey report dismissal task failed: {e}"),
+    }
+}
+
 /// Audit event for a successful vault change made in the app. Failed changes
 /// and reads in the app are not recorded. A passkey move that leaves the
 /// passkey in both vaults is the one exception. Details carry keys, titles,
@@ -536,6 +612,7 @@ impl AxoPass {
 
             ensure_unlocked(vault)?;
 
+            let signals = SignalStore::load();
             let items = vault.list_items().map_err(FfiError::from)?;
             let mut result: Vec<ItemInfo> = items
                 .into_iter()
@@ -568,13 +645,7 @@ impl AxoPass {
                                 .then(|| vault.get_secret(&item.key, &c.key).ok().flatten())
                                 .flatten()
                                 .and_then(|value| passkey::summary(value.expose_secret()))
-                                .map(|s| PasskeyInfo {
-                                    rp_id: s.rp_id,
-                                    credential_id: s.credential_id,
-                                    username: s.username,
-                                    user_display_name: s.user_display_name,
-                                    created_at: s.created_at,
-                                });
+                                .map(|s| passkey_info(s, &signals));
                             CredentialInfo {
                                 id: c.id.to_string(),
                                 key: c.key.clone(),
@@ -583,6 +654,7 @@ impl AxoPass {
                                 position: c.position,
                                 section_id: c.section.map(|id| id.to_string()),
                                 role: role.map(str::to_string),
+                                last_used_at: c.last_used_at,
                                 passkey,
                             }
                         })
@@ -687,7 +759,8 @@ impl AxoPass {
 
     /// List every stored passkey across every vault, for registering
     /// `ASPasskeyCredentialIdentity` entries with the system. Requires the app
-    /// to be unlocked; a vault that fails to unlock is skipped.
+    /// to be unlocked; a vault that fails to unlock is skipped. Passkeys a
+    /// site reported it no longer accepts are left out.
     ///
     /// Only the metadata the identity store needs is read. The private key
     /// stays in the vault until the extension asks for an assertion.
@@ -696,6 +769,7 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault_keys: Vec<String> = m.iter_vault_keys().collect();
+            let signals = SignalStore::load();
             let mut identities = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
@@ -706,22 +780,24 @@ impl AxoPass {
                     continue;
                 }
                 match passkey::list(vault) {
-                    Ok(found) => identities.extend(found.into_iter().map(|s| {
-                        PasskeyIdentityInfo {
-                            vault_key: vault_key.clone(),
-                            record_id: s.record_id(),
-                            item_key: s.item_key,
-                            credential_key: s.credential_key,
-                            rp_id: s.passkey.rp_id,
-                            credential_id: s.passkey.credential_id.as_slice().to_vec(),
-                            user_name: s.passkey.username.unwrap_or_default(),
-                            user_handle: s
-                                .passkey
-                                .user_handle
-                                .map(|h| h.as_slice().to_vec())
-                                .unwrap_or_default(),
-                        }
-                    })),
+                    Ok(found) => identities.extend(
+                        found.into_iter().filter(|s| !signals.rejects(s)).map(|s| {
+                            PasskeyIdentityInfo {
+                                vault_key: vault_key.clone(),
+                                record_id: s.record_id(),
+                                item_key: s.item_key,
+                                credential_key: s.credential_key,
+                                rp_id: s.passkey.rp_id,
+                                credential_id: s.passkey.credential_id.as_slice().to_vec(),
+                                user_name: s.passkey.username.unwrap_or_default(),
+                                user_handle: s
+                                    .passkey
+                                    .user_handle
+                                    .map(|h| h.as_slice().to_vec())
+                                    .unwrap_or_default(),
+                            }
+                        }),
+                    ),
                     Err(e) => log::error!("Failed to list passkeys in {vault_key}: {e}"),
                 }
             }
@@ -1716,6 +1792,53 @@ impl AxoPass {
         }
         audit::record_async(event).await;
         removed
+    }
+
+    /// Set the account name of a passkey to `name`, as its site reported. The
+    /// report is then settled, so the suggestion is no longer shown.
+    pub async fn apply_passkey_name(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        name: String,
+    ) -> Result<(), FfiError> {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let key = vault_key.clone();
+        let (item, cred) = (item_key.clone(), cred_key.clone());
+        let summary = self
+            .edit_vault(vault_key, move |vw| {
+                passkey::rename_account(vw, &item, &cred, &name)?;
+                let value = vw.get_secret(&item, &cred)?;
+                Ok(value.and_then(|v| passkey::summary(v.expose_secret())))
+            })
+            .await?;
+        if let Some(summary) = summary {
+            dismiss_report(&summary, passkey_signals::DismissKind::Rename).await;
+        }
+        audit::record_async(change_event(audit::Action::PasskeyRenamed, &key, subject)).await;
+        Ok(())
+    }
+
+    /// Dismiss what site reports say about a passkey: keep a passkey the site
+    /// no longer accepts, or ignore a reported name. A later report marks it
+    /// again. The vault is unchanged.
+    pub async fn dismiss_passkey_report(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        kind: PasskeyReportKind,
+    ) -> Result<(), FfiError> {
+        let summary = self
+            .edit_vault(vault_key, move |vw| {
+                let value = vw.get_secret(&item_key, &cred_key)?;
+                Ok(value.and_then(|v| passkey::summary(v.expose_secret())))
+            })
+            .await?
+            .ok_or_else(|| FfiError::InvalidInput("Not a passkey".to_string()))?;
+        dismiss_report(&summary, kind.into()).await;
+        Ok(())
     }
 
     /// Move every credential of `source_item_key` into `dest_item_key` and

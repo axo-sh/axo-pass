@@ -211,10 +211,38 @@ struct BrokerClient {
     return code
   }
 
+  /// One or two PRF values. As input these are the page values, which the app
+  /// hashes. As output they are the 32-byte PRF results.
+  struct PRFValues {
+    let first: Data
+    let second: Data?
+  }
+
+  /// PRF input of a passkey registration. Its presence asks whether PRF is
+  /// supported. `values` also asks for results.
+  struct PRFRegistrationInput {
+    let values: PRFValues?
+  }
+
+  /// PRF input of a passkey assertion. A per-credential entry for the signing
+  /// passkey takes precedence over `values`.
+  struct PRFAssertionInput {
+    let values: PRFValues?
+    let perCredential: [Data: PRFValues]
+  }
+
+  /// PRF output of a passkey registration.
+  struct PRFRegistrationOutput {
+    let enabled: Bool
+    let results: PRFValues?
+  }
+
   /// One registered passkey, as the broker reports it.
   struct Registration {
     let credentialID: Data
     let attestationObject: Data
+    /// Present when the request carried PRF input.
+    let prf: PRFRegistrationOutput?
   }
 
   /// One passkey assertion, as the broker reports it.
@@ -223,13 +251,17 @@ struct BrokerClient {
     let userHandle: Data
     let authenticatorData: Data
     let signature: Data
+    /// Present when the request carried PRF input and the passkey supports
+    /// PRF.
+    let prf: PRFValues?
   }
 
   /// Ask the app to register a passkey against an unlocked vault. Prompts every
   /// time.
   static func registerPasskey(
     rpID: String, rpName: String?, userHandle: Data, userName: String, userDisplayName: String,
-    clientDataHash: Data, algorithms: [Int], excludedCredentials: [Data]
+    clientDataHash: Data, algorithms: [Int], excludedCredentials: [Data],
+    prf: PRFRegistrationInput? = nil
   ) async throws -> Registration {
     var request: [String: Any] = [
       "request": "create_passkey",
@@ -242,6 +274,11 @@ struct BrokerClient {
       "excluded_credentials": excludedCredentials.map { $0.base64EncodedString() },
     ]
     if let rpName { request["rp_name"] = rpName }
+    if let prf {
+      var input: [String: Any] = [:]
+      if let values = prf.values { input["eval"] = encode(values) }
+      request["prf"] = input
+    }
     let response = try await send(request)
     guard response["status"] as? String == "passkey_registered" else {
       throw error(from: response, fallback: "Unexpected response to the passkey registration.")
@@ -251,20 +288,38 @@ struct BrokerClient {
     else {
       throw BrokerError.failed("The passkey registration response was incomplete.")
     }
-    return Registration(credentialID: credentialID, attestationObject: attestationObject)
+    let prfOutput = (response["prf"] as? [String: Any]).map { output in
+      PRFRegistrationOutput(
+        enabled: output["enabled"] as? Bool ?? false,
+        results: decodePRF(output["results"]))
+    }
+    return Registration(
+      credentialID: credentialID, attestationObject: attestationObject, prf: prfOutput)
   }
 
   /// Ask the app to sign an assertion challenge with a stored passkey. Prompts
   /// every time.
   static func assertPasskey(
-    rpID: String, clientDataHash: Data, allowedCredentialIDs: [Data]
+    rpID: String, clientDataHash: Data, allowedCredentialIDs: [Data],
+    prf: PRFAssertionInput? = nil
   ) async throws -> Assertion {
-    let response = try await send([
+    var request: [String: Any] = [
       "request": "assert_passkey",
       "rp_id": rpID,
       "client_data_hash": clientDataHash.base64EncodedString(),
       "allowed_credentials": allowedCredentialIDs.map { $0.base64EncodedString() },
-    ])
+    ]
+    if let prf {
+      var input: [String: Any] = [:]
+      if let values = prf.values { input["eval"] = encode(values) }
+      input["eval_by_credential"] = prf.perCredential.map { credentialID, values in
+        var entry = encode(values)
+        entry["credential_id"] = credentialID.base64EncodedString()
+        return entry
+      }
+      request["prf"] = input
+    }
+    let response = try await send(request)
     guard response["status"] as? String == "passkey_asserted" else {
       throw error(from: response, fallback: "Unexpected response to the passkey assertion.")
     }
@@ -278,7 +333,61 @@ struct BrokerClient {
       credentialID: credentialID,
       userHandle: decodeBase64(response["user_handle"]) ?? Data(),
       authenticatorData: authenticatorData,
-      signature: signature)
+      signature: signature,
+      prf: decodePRF(response["prf"]))
+  }
+
+  // MARK: - Site reports
+
+  /// Relay a site report that it does not know a passkey. Raises no prompt.
+  static func reportUnknownPasskey(rpID: String, credentialID: Data) async throws {
+    try await report([
+      "request": "report_unknown_passkey",
+      "rp_id": rpID,
+      "credential_id": credentialID.base64EncodedString(),
+    ])
+  }
+
+  /// Relay the passkeys a site accepts for one account. Raises no prompt.
+  static func reportAcceptedPasskeys(
+    rpID: String, userHandle: Data, credentialIDs: [Data]
+  ) async throws {
+    try await report([
+      "request": "report_accepted_passkeys",
+      "rp_id": rpID,
+      "user_handle": userHandle.base64EncodedString(),
+      "credential_ids": credentialIDs.map { $0.base64EncodedString() },
+    ])
+  }
+
+  /// Relay a new account name a site reported. Raises no prompt.
+  static func reportPasskeyName(rpID: String, userHandle: Data, name: String) async throws {
+    try await report([
+      "request": "report_passkey_name",
+      "rp_id": rpID,
+      "user_handle": userHandle.base64EncodedString(),
+      "name": name,
+    ])
+  }
+
+  private static func report(_ request: [String: Any]) async throws {
+    let response = try await send(request)
+    guard response["status"] as? String == "acknowledged" else {
+      throw error(from: response, fallback: "Unexpected response to the passkey report.")
+    }
+  }
+
+  private static func encode(_ values: PRFValues) -> [String: Any] {
+    var encoded: [String: Any] = ["first": values.first.base64EncodedString()]
+    if let second = values.second { encoded["second"] = second.base64EncodedString() }
+    return encoded
+  }
+
+  private static func decodePRF(_ value: Any?) -> PRFValues? {
+    guard let values = value as? [String: Any], let first = decodeBase64(values["first"]) else {
+      return nil
+    }
+    return PRFValues(first: first, second: decodeBase64(values["second"]))
   }
 
   private static func decodeBase64(_ value: Any?) -> Data? {

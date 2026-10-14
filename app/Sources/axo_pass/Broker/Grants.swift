@@ -129,6 +129,11 @@ final class Grant {
   /// requests.
   let policy: GrantPolicy
 
+  var isEveryUse: Bool {
+    if case .everyUse = policy { return true }
+    return false
+  }
+
   /// When the user approved. Set once and never refreshed: a reused approval
   /// reports success too, so refreshing this would turn the absolute bound into
   /// a second idle timer. Nil until the first approval, so a context is not
@@ -195,6 +200,17 @@ final class AuthorizationGrants {
       AuditBridge.recordGrant(key, .expired, peer: grant.lastPeer)
       forget(key)
     }
+    // Drop a grant that `end` did not settle. Its context may already be
+    // evaluated, and an evaluated context passes again without a prompt. An
+    // `.everyUse` grant with nothing in flight is one of these, since `end`
+    // forgets it. So is any grant with nothing in flight and no approval
+    // recorded, which would otherwise never expire.
+    if let grant = grants[key], grant.inFlight == 0,
+      grant.approvedAt == nil || grant.isEveryUse
+    {
+      log("unsettled approval for \(key), prompting again")
+      forget(key)
+    }
 
     let existing = grants[key]
     let grant = existing ?? newGrant(for: key, policy: policy)
@@ -209,8 +225,9 @@ final class AuthorizationGrants {
       log("reusing approval for \(key)")
       AuditBridge.recordGrant(key, .reused, peer: peer)
     } else {
-      // A grant with no approval yet: an earlier prompt is still on screen or
-      // was cancelled. Its context is evaluated again, so this request prompts.
+      // A grant with no approval yet and a request in flight: an earlier prompt
+      // is still on screen. Its context is evaluated again, so this request
+      // shares that prompt.
       log("unapproved grant for \(key) (\(grant.inFlight) in flight), prompting")
     }
 

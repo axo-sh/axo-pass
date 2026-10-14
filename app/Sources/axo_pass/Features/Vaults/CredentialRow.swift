@@ -48,6 +48,8 @@ struct CredentialRow: View {
   /// Another passkey on the item has the same site and account.
   var isDuplicatePasskey: Bool = false
 
+  @Environment(VaultsModel.self) private var model
+
   @State private var confirmingPasskeyDelete: Bool = false
   @State private var showingPasskeyDetails: Bool = false
   @State private var hoveringValue: Bool = false
@@ -386,16 +388,20 @@ struct CredentialRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
-        if isDuplicatePasskey {
-          Text("Duplicate")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.orange)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(.orange.opacity(0.15), in: Capsule())
+        if cred.passkey?.siteRejected == true {
+          PasskeyBadge(text: "Not accepted", color: .red)
+            .help(
+              "\(cred.passkey?.rpId ?? "The site") reported that it no longer accepts this passkey. It is not offered in AutoFill."
+            )
+        } else if isDuplicatePasskey {
+          PasskeyBadge(text: "Duplicate", color: .orange)
             .help(
               "Another passkey on this login has the same site and account. The site uses one of them, so the other is likely unused."
             )
+        }
+        if cred.passkey?.suggestedName != nil {
+          PasskeyBadge(text: "New name", color: .blue)
+            .help("The site reported a new account name.")
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -413,6 +419,8 @@ struct CredentialRow: View {
   /// passkey shares.
   private var passkeyDetails: some View {
     VStack(alignment: .leading, spacing: 12) {
+      passkeyReports
+
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
         passkeyDetail("Site", cred.passkey?.rpId)
         passkeyDetail("Account", cred.passkey?.username)
@@ -420,6 +428,7 @@ struct CredentialRow: View {
           passkeyDetail("Name", cred.passkey?.userDisplayName)
         }
         passkeyDetail("Created", passkeyCreated)
+        passkeyDetail("Last used", passkeyLastUsed ?? "Never")
         passkeyDetail("Credential ID", cred.passkey?.credentialId, monospaced: true)
         passkeyDetail("Reference", reference, monospaced: true)
       }
@@ -447,6 +456,46 @@ struct CredentialRow: View {
     }
   }
 
+  /// Site reports about the passkey, with the actions that settle them.
+  @ViewBuilder
+  private var passkeyReports: some View {
+    let site = cred.passkey?.rpId ?? "The site"
+    if cred.passkey?.siteRejected == true {
+      PasskeyNotice(
+        systemImage: "exclamationmark.triangle.fill", color: .red,
+        message:
+          "\(site) reported that it no longer accepts this passkey, so it is not offered in AutoFill. It may have been removed from your account there."
+      ) {
+        Button("Keep") { dismissReport(.rejection) }
+          .help("Keep this passkey and offer it in AutoFill again")
+        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+      }
+    }
+    if let name = cred.passkey?.suggestedName {
+      PasskeyNotice(
+        systemImage: "person.text.rectangle", color: .blue,
+        message: "\(site) reported a new account name: \(name)."
+      ) {
+        Button("Ignore") { dismissReport(.rename) }
+        Button("Use New Name") {
+          let (vaultKey, itemKey, credKey) = (vaultKey, itemKey, cred.key)
+          Task {
+            await model.applyPasskeyName(
+              vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, name: name)
+          }
+        }
+      }
+    }
+  }
+
+  private func dismissReport(_ kind: PasskeyReportKind) {
+    let (vaultKey, itemKey, credKey) = (vaultKey, itemKey, cred.key)
+    Task {
+      await model.dismissPasskeyReport(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, kind: kind)
+    }
+  }
+
   /// Authenticator property of a passkey, with an explanation shown on hover.
   private struct PasskeyProperty {
     let label: String
@@ -454,12 +503,13 @@ struct CredentialRow: View {
     let help: String
   }
 
-  /// Properties of the Axo Pass authenticator. They are the same for every
-  /// passkey it creates, so they are not read from the record. The
+  /// Properties of the Axo Pass authenticator. PRF support is read from the
+  /// record. The rest are the same for every passkey it creates. The
   /// authenticator supports ES256 only, sets the UP, UV, BE, and BS flags, and
   /// returns "none" attestation.
   private var passkeyProperties: [PasskeyProperty] {
-    [
+    let prf = cred.passkey?.prf == true
+    return [
       PasskeyProperty(
         label: "Storage",
         value: "Software key in this vault",
@@ -500,6 +550,13 @@ struct CredentialRow: View {
         value: "ES256 (P-256)",
         help: "ECDSA over the P-256 curve with SHA-256."
       ),
+      PasskeyProperty(
+        label: "PRF",
+        value: prf ? "Supported" : "Not supported",
+        help: prf
+          ? "Sites can derive encryption keys from this passkey with the WebAuthn PRF extension, after user verification."
+          : "This passkey was created before Axo Pass supported the WebAuthn PRF extension. Create a new passkey on the site to use PRF."
+      ),
     ]
   }
 
@@ -533,9 +590,13 @@ struct CredentialRow: View {
     return cred.title
   }
 
-  /// When the passkey was created, or its site for a record that predates
-  /// creation times.
+  /// When the passkey was last used, or when it was created, or its site for a
+  /// record that predates creation times.
   private var passkeySubtitle: String? {
+    if let lastUsed = cred.lastUsedAt {
+      let date = Date(timeIntervalSince1970: TimeInterval(lastUsed))
+      return "Used \(date.formatted(.relative(presentation: .named)))"
+    }
     if let created = passkeyCreated { return "Created \(created)" }
     return cred.passkey?.rpId
   }
@@ -544,6 +605,12 @@ struct CredentialRow: View {
     guard let createdAt = cred.passkey?.createdAt else { return nil }
     return Date(timeIntervalSince1970: TimeInterval(createdAt))
       .formatted(date: .abbreviated, time: .omitted)
+  }
+
+  private var passkeyLastUsed: String? {
+    guard let lastUsed = cred.lastUsedAt else { return nil }
+    return Date(timeIntervalSince1970: TimeInterval(lastUsed))
+      .formatted(date: .abbreviated, time: .shortened)
   }
 
   // MARK: - Login field
@@ -729,6 +796,48 @@ struct CredentialRow: View {
     }
     onQuickSaveValue(value)
     cancelQuickEdit()
+  }
+}
+
+/// Small colored label beside a passkey account.
+private struct PasskeyBadge: View {
+  let text: String
+  let color: Color
+
+  var body: some View {
+    Text(text)
+      .font(.caption.weight(.medium))
+      .foregroundStyle(color)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 1)
+      .background(color.opacity(0.15), in: Capsule())
+  }
+}
+
+/// Site report shown at the top of the passkey details, with its actions.
+private struct PasskeyNotice<Actions: View>: View {
+  let systemImage: String
+  let color: Color
+  let message: String
+  @ViewBuilder let actions: () -> Actions
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label {
+        Text(message)
+          .fixedSize(horizontal: false, vertical: true)
+      } icon: {
+        Image(systemName: systemImage).foregroundStyle(color)
+      }
+      .font(.callout)
+      HStack {
+        Spacer()
+        actions()
+      }
+      .controlSize(.small)
+    }
+    .padding(10)
+    .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
   }
 }
 

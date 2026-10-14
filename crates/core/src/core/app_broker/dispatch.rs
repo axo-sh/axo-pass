@@ -13,6 +13,7 @@ use super::{
 use crate::core::provenance::PeerIdentity;
 use crate::secrets::vaults::autofill::check_rp_id;
 use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest, PasskeyTarget};
+use crate::secrets::vaults::passkey_signals::Report;
 
 /// Serve one request from a verified peer, whichever transport carried it.
 ///
@@ -521,6 +522,7 @@ pub(super) async fn serve_request(
                 client_data_hash,
                 algorithms,
                 excluded_credentials,
+                prf,
                 origin,
                 caller,
                 client: _,
@@ -529,6 +531,7 @@ pub(super) async fn serve_request(
                     log::warn!("App broker refused a passkey registration: {message}");
                     return Ok(WireResponse::Failed { message });
                 }
+                let prf = prf.as_ref().map(|p| p.decode()).transpose()?;
                 let mut excluded = Vec::with_capacity(excluded_credentials.len());
                 for c in &excluded_credentials {
                     excluded.push(decode_b64(c)?);
@@ -543,6 +546,7 @@ pub(super) async fn serve_request(
                     client_data_hash: decode_b64(&client_data_hash)?,
                     algorithms,
                     excluded_credentials: excluded,
+                    prf,
                     // Replaced with the user's choice once the prompt is
                     // answered.
                     target: PasskeyTarget::NewLogin,
@@ -574,6 +578,7 @@ pub(super) async fn serve_request(
                 rp_id,
                 client_data_hash,
                 allowed_credentials,
+                prf,
                 origin,
                 caller,
                 client: _,
@@ -590,6 +595,7 @@ pub(super) async fn serve_request(
                     rp_id: rp_id.clone(),
                     client_data_hash: decode_b64(&client_data_hash)?,
                     allowed_credentials: allowed,
+                    prf: prf.as_ref().map(|p| p.decode()).transpose()?,
                 };
                 let prompt = vault::VaultAccessPrompt {
                     vault_key: String::new(),
@@ -609,6 +615,44 @@ pub(super) async fn serve_request(
                     &in_flight,
                 )
                 .await
+            },
+            WireRequest::ReportUnknownPasskey {
+                rp_id,
+                credential_id,
+            } => {
+                let report = Report::Unknown {
+                    rp_id,
+                    credential_id: decode_b64(&credential_id)?,
+                };
+                vault::record_passkey_report(&*authorizers.vault, report, actor).await
+            },
+            WireRequest::ReportAcceptedPasskeys {
+                rp_id,
+                user_handle,
+                credential_ids,
+            } => {
+                let mut ids = Vec::with_capacity(credential_ids.len());
+                for id in &credential_ids {
+                    ids.push(decode_b64(id)?);
+                }
+                let report = Report::AllAccepted {
+                    rp_id,
+                    user_handle: decode_b64(&user_handle)?,
+                    credential_ids: ids,
+                };
+                vault::record_passkey_report(&*authorizers.vault, report, actor).await
+            },
+            WireRequest::ReportPasskeyName {
+                rp_id,
+                user_handle,
+                name,
+            } => {
+                let report = Report::Renamed {
+                    rp_id,
+                    user_handle: decode_b64(&user_handle)?,
+                    name,
+                };
+                vault::record_passkey_report(&*authorizers.vault, report, actor).await
             },
             WireRequest::ListAgeKeys { .. } => {
                 log::debug!("App broker request: list age keys");

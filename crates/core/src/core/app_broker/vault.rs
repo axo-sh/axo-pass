@@ -27,13 +27,17 @@ use super::client::send_request;
 use super::in_flight::InFlightRequest;
 use super::login_index::LoginIndex;
 use super::placement::{PasskeyChoices, PasskeyPlacement, PlacementVault};
-use super::wire::{BrowserClient, WireRequest, WireResponse};
+use super::wire::{
+    BrowserClient, WirePrfAssertion, WirePrfCredentialValues, WirePrfRegistration,
+    WirePrfRegistrationOutput, WirePrfValues, WireRequest, WireResponse,
+};
 use super::{Authorizers, BrokerError, ConfirmPrompt, PromptOutcome};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::core::provenance::ProcessNode;
+use crate::secrets::vaults::passkey_signals::{Report, SignalStore};
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
     DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
@@ -443,6 +447,10 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
     async fn end(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
+
+    /// A site report about a passkey was recorded. The app refreshes what it
+    /// shows and what it offers in AutoFill. The vaults are unchanged.
+    async fn passkey_reports_changed(&self) {}
 }
 
 /// Ask the app to unlock a vault and return its item overview. Blocking: it may
@@ -640,6 +648,9 @@ pub fn request_create_passkey(
             .iter()
             .map(|c| b64_encode(c))
             .collect(),
+        prf: request.prf.as_ref().map(|p| WirePrfRegistration {
+            eval: p.eval.as_ref().map(WirePrfValues::encode),
+        }),
         origin: None,
         caller: caller.map(String::from),
         client: BrowserClient::default(),
@@ -648,9 +659,18 @@ pub fn request_create_passkey(
         WireResponse::PasskeyRegistered {
             credential_id,
             attestation_object,
+            prf,
         } => Ok(passkey::CreatePasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             attestation_object: b64_decode(&attestation_object)?,
+            prf: prf
+                .map(|p| -> Result<_, BrokerError> {
+                    Ok(passkey::PrfRegistrationOutput {
+                        enabled: p.enabled,
+                        results: p.results.as_ref().map(decode_prf_values).transpose()?,
+                    })
+                })
+                .transpose()?,
         }),
         WireResponse::Cancelled => Err(BrokerError::Cancelled),
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
@@ -674,6 +694,18 @@ pub fn request_assert_passkey(
             .iter()
             .map(|c| b64_encode(c))
             .collect(),
+        prf: request.prf.as_ref().map(|p| WirePrfAssertion {
+            eval: p.eval.as_ref().map(WirePrfValues::encode),
+            eval_by_credential: p
+                .eval_by_credential
+                .iter()
+                .map(|(id, values)| WirePrfCredentialValues {
+                    credential_id: b64_encode(id),
+                    first: b64_encode(&values.first),
+                    second: values.second.as_deref().map(b64_encode),
+                })
+                .collect(),
+        }),
         origin: None,
         caller: caller.map(String::from),
         client: BrowserClient::default(),
@@ -684,11 +716,16 @@ pub fn request_assert_passkey(
             user_handle,
             authenticator_data,
             signature,
+            prf,
         } => Ok(passkey::AssertPasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             user_handle: b64_decode(&user_handle)?,
             authenticator_data: b64_decode(&authenticator_data)?,
             signature: b64_decode(&signature)?,
+            prf: prf.as_ref().map(decode_prf_values).transpose()?,
+            // The wire does not carry where the passkey is stored.
+            item_key: String::new(),
+            credential_key: String::new(),
         }),
         WireResponse::Cancelled => Err(BrokerError::Cancelled),
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
@@ -701,6 +738,75 @@ pub fn request_assert_passkey(
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn decode_prf_values(values: &WirePrfValues) -> Result<passkey::PrfValues, BrokerError> {
+    Ok(passkey::PrfValues {
+        first: b64_decode(&values.first)?,
+        second: values.second.as_deref().map(b64_decode).transpose()?,
+    })
+}
+
+/// Record a site report about a passkey relayed by the AutoFill extension, and
+/// tell the app to refresh. Raises no prompt.
+pub(super) async fn record_passkey_report(
+    authorizer: &dyn VaultAuthorizer,
+    report: Report,
+    actor: Actor,
+) -> WireResponse {
+    let (rp_id, kind) = match &report {
+        Report::Unknown { rp_id, .. } => (rp_id.clone(), "unknown"),
+        Report::AllAccepted { rp_id, .. } => (rp_id.clone(), "all_accepted"),
+        Report::Renamed { rp_id, .. } => (rp_id.clone(), "renamed"),
+    };
+    if rp_id.trim().is_empty() {
+        return WireResponse::Failed {
+            message: "The report names no website".to_string(),
+        };
+    }
+    log::debug!("App broker request: passkey report {kind} for {rp_id}");
+
+    let Some(at) = unix_now() else {
+        return WireResponse::Failed {
+            message: "The system clock is before 1970".to_string(),
+        };
+    };
+    let stored =
+        tokio::task::spawn_blocking(move || SignalStore::update(|store| store.record(report, at)))
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())));
+
+    let outcome = if stored.is_ok() {
+        Outcome::Succeeded
+    } else {
+        Outcome::Failed
+    };
+    let mut event = AuditEvent::new(audit::process_source(), Action::PasskeyReported, outcome)
+        .subject(Subject::new(SubjectKind::Credential, rp_id))
+        .actor(actor)
+        .detail("report", kind)
+        .detail("via", "broker");
+    if let Err(e) = &stored {
+        event = event.message(e.to_string());
+    }
+    audit::record_async(event).await;
+
+    match stored {
+        Ok(()) => {
+            authorizer.passkey_reports_changed().await;
+            WireResponse::Acknowledged
+        },
+        Err(e) => WireResponse::Failed {
+            message: format!("Failed to record the passkey report: {e}"),
+        },
+    }
+}
+
+fn unix_now() -> Option<i64> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    i64::try_from(elapsed.as_secs()).ok()
 }
 
 fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
@@ -863,9 +969,18 @@ pub(super) async fn authorize_and_serve(
 
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
-    let result = tokio::task::spawn_blocking(move || serve_on_context(job, context, payload, rt))
-        .await
-        .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
+    let (result, written_vault) = tokio::task::spawn_blocking(move || {
+        let mut written_vault = None;
+        let result = serve_on_context(job, context, payload, rt, &mut written_vault);
+        (result, written_vault)
+    })
+    .await
+    .unwrap_or_else(|e| (Err(format!("Vault task failed: {e}")), None));
+    // A sign-in can use any vault, so its prompt names none until the vault
+    // it wrote is known. `end` then reloads only that vault.
+    if let Some(vault_key) = written_vault {
+        prompt.vault_key = vault_key;
+    }
 
     let (response, outcome) = match result {
         Ok(response) => {
@@ -1090,11 +1205,14 @@ fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
 /// so this does not touch the app's in-memory vault state. The app's own CRUD
 /// re-reads the file before every mutation (`with_unlocked_vault` calls
 /// `unlock` each time), so a later UI edit does not clobber a write made here.
+/// `written_vault` is set to the vault a passkey sign-in wrote, since its
+/// prompt does not name one.
 fn serve_on_context(
     prompt: VaultAccessPrompt,
     context: ForeignContext,
     payload: Option<VaultPayload>,
     rt: tokio::runtime::Handle,
+    written_vault: &mut Option<String>,
 ) -> Result<WireResponse, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
@@ -1115,7 +1233,7 @@ fn serve_on_context(
             let Some(VaultPayload::AssertPasskey(p)) = payload else {
                 return Err("Missing passkey assertion payload".to_string());
             };
-            return assert_passkey(p.request, context, &rt);
+            return assert_passkey(p.request, context, &rt, written_vault);
         },
         VaultAction::ExportVaults { vault_keys } => {
             let Some(VaultPayload::Export(export)) = payload else {
@@ -1596,44 +1714,82 @@ fn create_passkey(
     Ok(WireResponse::PasskeyRegistered {
         credential_id: b64_encode(&response.credential_id),
         attestation_object: b64_encode(&response.attestation_object),
+        prf: response.prf.as_ref().map(WirePrfRegistrationOutput::encode),
     })
 }
 
 /// Sign an assertion challenge with a stored passkey. The credential may be in
 /// any vault, so each is tried until one holds a passkey for the relying party.
+///
+/// Passkeys a site reported it no longer accepts are used only if no other
+/// passkey matches. `written_vault` is set to the vault that signed, which
+/// records the use.
 fn assert_passkey(
     request: passkey::AssertPasskeyRequest,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
+    written_vault: &mut Option<String>,
 ) -> Result<WireResponse, String> {
     let mut vm = VaultsManager::new();
-    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
-
-    let mut last_error = None;
-    for vault_key in vault_keys {
-        let Some(vw) = vm.get_vault_mut(&vault_key) else {
-            continue;
-        };
-        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
-            log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
-            continue;
-        }
-        let holds_credential = passkey::list(vw)
-            .map(|passkeys| passkeys.iter().any(|s| s.passkey.rp_id == request.rp_id))
-            .unwrap_or(false);
-        if !holds_credential {
-            continue;
-        }
-        match rt.block_on(passkey::assert_from_wire(vw, request.clone())) {
-            Ok(response) => {
-                return Ok(WireResponse::PasskeyAsserted {
-                    credential_id: b64_encode(&response.credential_id),
-                    user_handle: b64_encode(&response.user_handle),
-                    authenticator_data: b64_encode(&response.authenticator_data),
-                    signature: b64_encode(&response.signature),
-                });
+    let mut vault_keys: Vec<String> = vm.iter_vault_keys().collect();
+    vault_keys.retain(|vault_key| match vm.get_vault_mut(vault_key) {
+        Some(vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
+            Ok(()) => true,
+            Err(e) => {
+                log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
+                false
             },
-            Err(e) => last_error = Some(e.to_string()),
+        },
+        None => false,
+    });
+
+    let signals = SignalStore::load();
+    let mut last_error = None;
+    // The first pass skips rejected passkeys. The second allows them.
+    for skip_rejected in [true, false] {
+        for vault_key in &vault_keys {
+            let Some(vw) = vm.get_vault_mut(vault_key) else {
+                continue;
+            };
+            let candidates: Vec<passkey::StoredPasskey> = passkey::list(vw)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| s.passkey.rp_id == request.rp_id)
+                .filter(|s| {
+                    request.allowed_credentials.is_empty()
+                        || request
+                            .allowed_credentials
+                            .iter()
+                            .any(|id| id.as_slice() == s.passkey.credential_id.as_slice())
+                })
+                .collect();
+            let usable: Vec<&passkey::StoredPasskey> = candidates
+                .iter()
+                .filter(|s| !skip_rejected || !signals.rejects(s))
+                .collect();
+            if usable.is_empty() {
+                continue;
+            }
+            let mut request = request.clone();
+            if usable.len() < candidates.len() {
+                request.allowed_credentials = usable
+                    .iter()
+                    .map(|s| s.passkey.credential_id.as_slice().to_vec())
+                    .collect();
+            }
+            match rt.block_on(passkey::assert_from_wire(vw, request)) {
+                Ok(response) => {
+                    *written_vault = Some(vault_key.clone());
+                    return Ok(WireResponse::PasskeyAsserted {
+                        credential_id: b64_encode(&response.credential_id),
+                        user_handle: b64_encode(&response.user_handle),
+                        authenticator_data: b64_encode(&response.authenticator_data),
+                        signature: b64_encode(&response.signature),
+                        prf: response.prf.as_ref().map(WirePrfValues::encode),
+                    });
+                },
+                Err(e) => last_error = Some(e.to_string()),
+            }
         }
     }
 
