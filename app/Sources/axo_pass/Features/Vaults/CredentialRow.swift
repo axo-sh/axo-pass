@@ -348,10 +348,31 @@ struct CredentialRow: View {
 
   // MARK: - Passkey
 
-  /// One line: the account, when it was created, and a details popover. The
-  /// fields come from the item listing, so showing a passkey never decrypts
-  /// its private key into the app.
+  /// Account, creation date, and a disclosure chevron. Clicking the line
+  /// expands the passkey details below it. The fields come from the item
+  /// listing, so showing a passkey never decrypts its private key into the app.
   private var passkeyView: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.15)) { showingPasskeyDetails.toggle() }
+      } label: {
+        passkeySummaryLine
+      }
+      .buttonStyle(.plain)
+      .help(showingPasskeyDetails ? "Hide passkey details" : "Show passkey details")
+
+      if showingPasskeyDetails {
+        passkeyDetails
+          .padding(.leading, loginFieldLabelWidth + 12)
+          .padding(.bottom, 4)
+          .transition(.opacity)
+      }
+    }
+    .contentShape(.rect)
+    .contextMenu { cardMenu }
+  }
+
+  private var passkeySummaryLine: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       LoginFieldLabel(fieldLabel ?? "Passkey")
       HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -379,22 +400,17 @@ struct CredentialRow: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      Button {
-        showingPasskeyDetails = true
-      } label: {
-        Label("Passkey Details", systemImage: "info.circle")
-          .labelStyle(.iconOnly)
-      }
-      .buttonStyle(.borderless)
-      .help("Passkey details")
-      .popover(isPresented: $showingPasskeyDetails, arrowEdge: .trailing) {
-        passkeyDetails
-      }
+      Image(systemName: "chevron.right")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .rotationEffect(.degrees(showingPasskeyDetails ? 90 : 0))
+        .frame(width: 10, height: 10)
     }
     .contentShape(.rect)
-    .contextMenu { cardMenu }
   }
 
+  /// Passkey record fields, then the authenticator properties every Axo Pass
+  /// passkey shares.
   private var passkeyDetails: some View {
     VStack(alignment: .leading, spacing: 12) {
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
@@ -412,28 +428,85 @@ struct CredentialRow: View {
           .font(.caption)
           .foregroundStyle(.red)
       }
+
+      Divider()
+
+      Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+        ForEach(passkeyProperties, id: \.label) { property in
+          passkeyDetail(property.label, property.value, help: property.help)
+        }
+      }
+
       HStack {
         Button(justCopiedReference ? "Copied" : "Copy Reference", action: copyReference)
+        Button("Move to…", action: onMove)
         Spacer()
-        Button("Move to…") {
-          showingPasskeyDetails = false
-          onMove()
-        }
-        Button("Delete…", role: .destructive) {
-          showingPasskeyDetails = false
-          confirmingPasskeyDelete = true
-        }
+        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
       }
       .controlSize(.small)
     }
-    .padding(14)
-    .frame(width: 360)
+  }
+
+  /// Authenticator property of a passkey, with an explanation shown on hover.
+  private struct PasskeyProperty {
+    let label: String
+    let value: String
+    let help: String
+  }
+
+  /// Properties of the Axo Pass authenticator. They are the same for every
+  /// passkey it creates, so they are not read from the record. The
+  /// authenticator supports ES256 only, sets the UP, UV, BE, and BS flags, and
+  /// returns "none" attestation.
+  private var passkeyProperties: [PasskeyProperty] {
+    [
+      PasskeyProperty(
+        label: "Storage",
+        value: "Software key in this vault",
+        help:
+          "The private key is encrypted with the rest of the vault. It is not bound to the Secure Enclave or a security key."
+      ),
+      PasskeyProperty(
+        label: "Copyable",
+        value: "Yes",
+        help:
+          "The passkey is included in vault exports and bundles, and can be moved to another item or vault."
+      ),
+      PasskeyProperty(
+        label: "Syncable",
+        value: "Yes",
+        help:
+          "Sites see the backup eligible and backed up flags, so they treat this passkey as synced rather than device-bound."
+      ),
+      PasskeyProperty(
+        label: "User presence",
+        value: "Yes",
+        help: "Each use is approved in Axo Pass, and sites see the user present flag."
+      ),
+      PasskeyProperty(
+        label: "User verified",
+        value: "Yes",
+        help:
+          "Each use requires the vault unlock approval, and sites see the user verified flag."
+      ),
+      PasskeyProperty(
+        label: "Attestation",
+        value: "None",
+        help:
+          "Sites receive no attestation statement. The Axo Pass AAGUID is sent but is not signed, so sites cannot verify it."
+      ),
+      PasskeyProperty(
+        label: "Algorithm",
+        value: "ES256 (P-256)",
+        help: "ECDSA over the P-256 curve with SHA-256."
+      ),
+    ]
   }
 
   @ViewBuilder
-  private func passkeyDetail(_ label: String, _ value: String?, monospaced: Bool = false)
-    -> some View
-  {
+  private func passkeyDetail(
+    _ label: String, _ value: String?, monospaced: Bool = false, help: String? = nil
+  ) -> some View {
     if let value, !value.isEmpty {
       GridRow {
         Text(label)
@@ -444,7 +517,9 @@ struct CredentialRow: View {
           .textSelection(.enabled)
           .lineLimit(1)
           .truncationMode(.middle)
+          .help(help ?? "")
       }
+      .font(.callout)
     }
   }
 

@@ -446,7 +446,9 @@ struct CredentialOutline: NSViewRepresentable {
     }
 
     /// Row content at its natural height, top aligned. Height changes are
-    /// reported so the row resizes.
+    /// reported so the row resizes. Zero minimum height limits the frame to
+    /// the row height. Content taller than the row extends below it until the
+    /// row resizes, instead of being centered by the hosting view.
     private func rootView(for node: OutlineNode, row: Int) -> AnyView {
       AnyView(
         content(for: node, row: row)
@@ -457,7 +459,7 @@ struct CredentialOutline: NSViewRepresentable {
             guard let node else { return }
             self?.contentHeightChanged($0, node: node)
           }
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
           .ignoresSafeArea()
           .id(ObjectIdentifier(node))
       )

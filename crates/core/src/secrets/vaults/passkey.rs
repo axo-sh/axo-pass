@@ -1063,6 +1063,52 @@ mod tests {
         assert_eq!(stored(&vw), record);
     }
 
+    /// Flags the app shows in the passkey details. Sites see every passkey as
+    /// user present, user verified, backup eligible, and backed up.
+    #[tokio::test]
+    async fn registrations_and_assertions_report_synced_verified_flags() {
+        use passkey_types::ctap2::Flags;
+
+        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut authenticator = Authenticator::new(
+            AAGUID,
+            VaultStore::new(&mut vw, PasskeyTarget::NewLogin),
+            PromptedUser,
+        );
+        let created = authenticator
+            .make_credential(registration("example.com", "ada"))
+            .await
+            .unwrap();
+        assert_eq!(created.fmt, "none");
+        assert_eq!(
+            created.auth_data.flags,
+            Flags::UP | Flags::UV | Flags::BE | Flags::BS | Flags::AT
+        );
+
+        let asserted = assert(
+            &mut vw,
+            get_assertion::Request {
+                rp_id: "example.com".into(),
+                client_data_hash: vec![7u8; 32].into(),
+                allow_list: None,
+                extensions: None,
+                options: get_assertion::Options {
+                    rk: true,
+                    up: true,
+                    uv: true,
+                },
+                pin_auth: None,
+                pin_protocol: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            asserted.auth_data.flags,
+            Flags::UP | Flags::UV | Flags::BE | Flags::BS
+        );
+    }
+
     #[tokio::test]
     async fn a_registration_records_when_it_was_created() {
         let mut vw = VaultWrapper::new_for_test("personal");
