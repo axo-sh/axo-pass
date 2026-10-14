@@ -725,20 +725,20 @@ pub fn add_passkey_login(
 /// source item.
 ///
 /// - credentials move with their values and previous values, and keep their
-/// ids.
+///   ids.
 /// - credentials whose key and value equal one already in the destination stay
-/// in the source and are not moved, so merging two logins for the same account
-/// does not leave two usernames.
+///   in the source and are not moved, so merging two logins for the same
+///   account does not leave two usernames.
 /// - keys already present in the destination are given a numeric suffix.
 /// - a credential in a source section goes in the destination section with the
-/// same title, which is created if missing.
+///   same title, which is created if missing.
 /// - source's roles are only added to the destination unless already present
 /// - websites are added unless already present
 /// - uncategorized destinations take the source's category.
 /// - source passkeys that stay in the source are purged, so a restored source
-/// does not give a second copy of a passkey.
+///   does not give a second copy of a passkey.
 /// - the source goes to the deleted items with the credentials that stayed and
-/// its own deleted credentials. With neither, it is purged.
+///   its own deleted credentials. With neither, it is purged.
 /// - caller is responsible for saving the vault.
 pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> Result<(), Error> {
     use secrecy::ExposeSecret;
