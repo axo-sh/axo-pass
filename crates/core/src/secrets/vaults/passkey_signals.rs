@@ -171,20 +171,22 @@ impl SignalStore {
     }
 
     /// Add the entries of `other`. An entry about the same credential or
-    /// account replaces this one if it is at least as new.
-    pub fn merge(&mut self, other: &SignalStore) {
-        merge_entries(&mut self.unknown, &other.unknown, |a, b| {
+    /// account replaces this one if it is at least as new. Returns whether the
+    /// store changed.
+    pub fn merge(&mut self, other: &SignalStore) -> bool {
+        let unknown = merge_entries(&mut self.unknown, &other.unknown, |a, b| {
             a.rp_id == b.rp_id && a.credential_id == b.credential_id
         });
-        merge_entries(&mut self.accepted, &other.accepted, |a, b| {
+        let accepted = merge_entries(&mut self.accepted, &other.accepted, |a, b| {
             a.rp_id == b.rp_id && a.user_handle == b.user_handle
         });
-        merge_entries(&mut self.renames, &other.renames, |a, b| {
+        let renames = merge_entries(&mut self.renames, &other.renames, |a, b| {
             a.rp_id == b.rp_id && a.user_handle == b.user_handle
         });
-        merge_entries(&mut self.dismissed, &other.dismissed, |a, b| {
+        let dismissed = merge_entries(&mut self.dismissed, &other.dismissed, |a, b| {
             a.rp_id == b.rp_id && a.credential_id == b.credential_id && a.kind == b.kind
         });
+        unknown || accepted || renames || dismissed
     }
 
     /// Remove the entries equal to one in `other`.
@@ -403,19 +405,29 @@ impl Timed for DismissEntry {
 }
 
 /// Add `from` to `into`. An entry that `same` matches is replaced if the new
-/// one is at least as new.
-fn merge_entries<T: Clone + Timed>(into: &mut Vec<T>, from: &[T], same: impl Fn(&T, &T) -> bool) {
+/// one is at least as new and differs. Returns whether `into` changed.
+fn merge_entries<T: Clone + PartialEq + Timed>(
+    into: &mut Vec<T>,
+    from: &[T],
+    same: impl Fn(&T, &T) -> bool,
+) -> bool {
+    let mut changed = false;
     for entry in from {
         match into.iter().position(|existing| same(existing, entry)) {
-            Some(index) if entry.at() >= into[index].at() => {
+            Some(index) if entry.at() >= into[index].at() && into[index] != *entry => {
                 into.remove(index);
                 into.push(entry.clone());
+                changed = true;
             },
             Some(_) => {},
-            None => into.push(entry.clone()),
+            None => {
+                into.push(entry.clone());
+                changed = true;
+            },
         }
     }
     trim(into);
+    changed
 }
 
 #[cfg(test)]
@@ -570,17 +582,18 @@ mod tests {
             store
         };
         let mut store = unknown(10);
-        store.merge(&unknown(20));
+        assert!(store.merge(&unknown(20)));
         assert_eq!(store.unknown.len(), 1);
         assert_eq!(store.unknown[0].at, 20);
 
-        store.merge(&unknown(5));
+        assert!(!store.merge(&unknown(5)));
+        assert!(!store.merge(&unknown(20)));
         assert_eq!(store.unknown.len(), 1);
         assert_eq!(store.unknown[0].at, 20);
 
         let mut other = SignalStore::default();
         other.dismiss(RP, &id(&[1]), DismissKind::Rejection, 25);
-        store.merge(&other);
+        assert!(store.merge(&other));
         let (a, user) = (id(&[1]), id(&[9]));
         assert!(!store.status(passkey(&a, &user)).rejected);
     }

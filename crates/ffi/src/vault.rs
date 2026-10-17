@@ -1853,8 +1853,8 @@ impl AxoPass {
 
     /// Write the site reports held in memory into the vaults. Each vault takes
     /// the reports for the relying parties of its passkeys. Reports stay in
-    /// memory if any vault fails to unlock or save. Requires the app to be
-    /// unlocked.
+    /// memory if any vault fails to unlock or save. A vault is saved only if
+    /// its reports changed. Requires the app to be unlocked.
     pub async fn apply_passkey_reports(&self) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
@@ -1888,9 +1888,10 @@ impl AxoPass {
                 if relevant.is_empty() {
                     continue;
                 }
+                // A vault that already holds every report is not saved again.
                 let saved = vault
                     .update_passkey_signals(|store| store.merge(&relevant))
-                    .and_then(|()| vault.save());
+                    .and_then(|changed| if changed { vault.save() } else { Ok(()) });
                 if let Err(e) = saved {
                     log::error!("Failed to save passkey reports in {vault_key}: {e}");
                     complete = false;
