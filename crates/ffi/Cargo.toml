@@ -22,4 +22,4 @@ secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uniffi = { version = "0.32", features = ["cli", "tokio"] }
-uuid = "1.26.0"
+uuid = "1.28.0"
