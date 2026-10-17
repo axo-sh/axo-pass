@@ -676,13 +676,14 @@ impl<'a> VaultStore<'a> {
             item_title,
             credential_title,
             &self.target,
-        )
+        )?;
+        Ok(())
     }
 }
 
 /// Write a passkey record into `target` in an unlocked vault, creating a login
-/// item for the relying party when the target is a new login. The caller saves
-/// the vault.
+/// item for the relying party when the target is a new login. Returns the item
+/// key. The caller saves the vault.
 fn store_passkey(
     vw: &mut VaultWrapper,
     cred: &Passkey,
@@ -690,7 +691,7 @@ fn store_passkey(
     item_title: Option<&str>,
     credential_title: &str,
     target: &PasskeyTarget,
-) -> Result<(), Error> {
+) -> Result<String, Error> {
     let item_key = match target {
         PasskeyTarget::Item(key) => {
             if vw.get_item_overview(key)?.is_none() {
@@ -709,14 +710,16 @@ fn store_passkey(
         credential_title,
         FieldKind::Passkey,
         SecretString::from(value),
-    )
+    )?;
+    Ok(item_key)
 }
 
-/// A stored passkey's raw record and credential title, read so it can move to
-/// another item or vault.
+/// Raw record, credential title, and last-used time of a stored passkey, read
+/// so it can move to another item or vault.
 pub struct PasskeyRecord {
     pub value: SecretString,
     pub title: String,
+    pub last_used_at: Option<i64>,
 }
 
 /// Read the passkey at `item_key`/`credential_key`. Fails when the credential
@@ -731,18 +734,20 @@ pub fn read_record(
         .filter(|cred| matches!(cred.kind, FieldKind::Passkey))
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
     let title = overview.title.clone();
+    let last_used_at = overview.last_used_at;
     let value = vw
         .get_secret(item_key, credential_key)?
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
     Ok(PasskeyRecord {
         value: SecretString::from(value.expose_secret().clone()),
         title,
+        last_used_at,
     })
 }
 
-/// Store a record read by [`read_record`] in `target`. The record must decode,
-/// so a damaged value is refused rather than copied. The caller saves the
-/// vault.
+/// Store a record read by [`read_record`] in `target`, with its last-used
+/// time. The record must decode, so a damaged value is refused rather than
+/// copied. The caller saves the vault.
 pub fn write_record(
     vw: &mut VaultWrapper,
     record: &PasskeyRecord,
@@ -750,7 +755,12 @@ pub fn write_record(
 ) -> Result<(), Error> {
     let value = record.value.expose_secret().to_string();
     let cred = decode(&value)?;
-    store_passkey(vw, &cred, value, None, &record.title, target)
+    let item_key = store_passkey(vw, &cred, value, None, &record.title, target)?;
+    if let Some(at) = record.last_used_at {
+        let credential_key = VaultStore::credential_key(&cred.credential_id);
+        vw.mark_credential_used(&item_key, &credential_key, at)?;
+    }
+    Ok(())
 }
 
 /// Remove the passkey at `item_key`/`credential_key` after it was copied by
@@ -1169,12 +1179,22 @@ mod tests {
         let mut source = VaultWrapper::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
+        source
+            .mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
+            .unwrap();
         let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
 
         let mut dest = VaultWrapper::new_for_test("work");
         write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
 
         let moved = list(&dest).unwrap().remove(0);
+        let last_used = |vw: &VaultWrapper| {
+            vw.get_secret_overview(&moved.item_key, &moved.credential_key)
+                .unwrap()
+                .unwrap()
+                .last_used_at
+        };
+        assert_eq!(last_used(&dest), Some(1_750_000_000));
         assert_eq!(moved.credential_key, stored.credential_key);
         assert_eq!(moved.passkey.credential_id, stored.passkey.credential_id);
         assert_eq!(
