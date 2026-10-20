@@ -12,9 +12,17 @@ struct RevealableSecureField: View {
   var body: some View {
     HStack(spacing: 6) {
       field
-        .textFieldStyle(.roundedBorder)
+        .textFieldStyle(.plain)
         .focused(focus)
         .onSubmit(onSubmit)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+          RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(.tint, lineWidth: 2)
+            .opacity(focus.wrappedValue ? 1 : 0)
+        )
 
       Button {
         revealed.toggle()
@@ -32,7 +40,7 @@ struct RevealableSecureField: View {
   @ViewBuilder
   private var field: some View {
     if revealed {
-      TextField(title, text: $text)
+      TextField(title, text: $text).font(.system(.body, design: .monospaced))
     } else {
       SecureField(title, text: $text)
     }

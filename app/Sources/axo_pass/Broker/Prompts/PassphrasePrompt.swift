@@ -312,15 +312,15 @@ private struct PinentryTranscript: View {
     VStack(alignment: .leading, spacing: 6) {
       switch prompt.kind {
       case .gpg:
-        line(label: "#", text: "gpg-agent — request", labelColor: .secondary, textColor: .secondary)
+        line(label: "#", text: "gpg: request", labelColor: .secondary, textColor: .secondary)
           + Text(" ").font(monoFont)
           + Text("NEED_PASSPHRASE").font(monoFont.weight(.semibold)).foregroundStyle(
             Color.accentColor)
       case .ssh:
         line(
-          label: "#", text: "SSH_ASKPASS — request", labelColor: .secondary, textColor: .secondary)
+          label: "#", text: "ssh: request", labelColor: .secondary, textColor: .secondary)
       case .age:
-        line(label: "#", text: "age — unlock key", labelColor: .secondary, textColor: .secondary)
+        line(label: "#", text: "age: unlock key", labelColor: .secondary, textColor: .secondary)
       }
 
       if let keyId = prompt.keyId, !keyId.isEmpty {
