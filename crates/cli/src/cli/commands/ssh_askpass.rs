@@ -23,7 +23,7 @@ use axo_pass_core::audit::{
 };
 use axo_pass_core::core::app_broker::{self, BrokerError, PassphraseKind, PassphrasePrompt};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::ssh::askpass::key_id_from_prompt;
+use axo_pass_core::ssh::askpass::{key_comment_from_prompt, key_id_from_prompt};
 use secrecy::ExposeSecret;
 
 pub async fn run(prompt: String) {
@@ -42,7 +42,7 @@ pub async fn run(prompt: String) {
     let request = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
         key_id: key_id.clone(),
-        description: None,
+        description: key_comment_from_prompt(&prompt),
         prompt: Some(prompt),
         error_message: None,
         caller: caller.clone(),

@@ -565,6 +565,7 @@ pub fn request_ssh_passphrase(
     let request = WireRequest::GetSshPassphrase {
         key_id: prompt.key_id.clone(),
         prompt: prompt.prompt.clone().unwrap_or_default(),
+        description: prompt.description.clone(),
         caller: prompt.caller.clone(),
         caller_chain: prompt.caller_chain.clone(),
     };

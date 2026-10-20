@@ -135,13 +135,14 @@ pub(super) async fn serve_request(
             WireRequest::GetSshPassphrase {
                 key_id,
                 prompt,
+                description,
                 caller,
                 caller_chain: _,
             } => {
                 let prompt = PassphrasePrompt {
                     kind: PassphraseKind::Ssh,
                     key_id,
-                    description: None,
+                    description,
                     prompt: Some(prompt),
                     error_message: None,
                     caller,

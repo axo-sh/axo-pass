@@ -95,7 +95,7 @@ fn request_passphrase(
     let prompt = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
         key_id: Some(compute_sha256_fingerprint(key.public_key.key_data())),
-        description: None,
+        description: Some(key.public_key.comment().to_string()).filter(|c| !c.is_empty()),
         prompt: Some(format!(
             "Enter passphrase for key '{}':",
             key.path.display()

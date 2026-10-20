@@ -205,10 +205,11 @@ private struct PassphraseUnlockView: View {
       PromptHeadline(parts: title)
 
       VStack(spacing: 8) {
-        PinentryTranscript(prompt: prompt)
+        KeyInfoBox(prompt: prompt)
         CallerChainView(
           chain: prompt.callerChain,
           summary: PromptCaller.requesterName(chain: prompt.callerChain))
+        PinentryTranscript(prompt: prompt)
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
@@ -236,10 +237,11 @@ private struct PassphraseEntryView: View {
       PromptHeadline(parts: title)
 
       VStack(spacing: 8) {
-        PinentryTranscript(prompt: prompt)
+        KeyInfoBox(prompt: prompt)
         CallerChainView(
           chain: prompt.callerChain,
           summary: PromptCaller.requesterName(chain: prompt.callerChain))
+        PinentryTranscript(prompt: prompt)
       }
 
       VStack(alignment: .leading, spacing: 12) {
@@ -278,6 +280,109 @@ private struct PassphraseEntryView: View {
   }
 }
 
+/// Details of the key being unlocked, collapsed by default.
+private struct KeyInfoBox: View {
+  let prompt: PassphrasePrompt
+
+  private var keyId: String? {
+    guard let keyId = prompt.keyId, !keyId.isEmpty else { return nil }
+    return keyId
+  }
+
+  private var description: String? {
+    let text = prompt.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return text.isEmpty ? nil : text
+  }
+
+  private var keyIdLabel: String {
+    switch prompt.kind {
+    case .ssh: "Fingerprint"
+    case .gpg: "Key grip"
+    case .age: "Key"
+    }
+  }
+
+  private var kindName: String {
+    switch prompt.kind {
+    case .ssh: "SSH key"
+    case .gpg: "OpenPGP key"
+    case .age: "age key"
+    }
+  }
+
+  /// Key comment for SSH, or the quoted user ID in gpg's description.
+  private var label: String? {
+    guard let description else { return nil }
+    guard prompt.kind == .gpg else { return description }
+    return description.split(separator: "\n")
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .first { $0.count > 1 && $0.hasPrefix("\"") && $0.hasSuffix("\"") }
+      .map { String($0.dropFirst().dropLast()) }
+  }
+
+  /// Short identifier shown under the label.
+  private var shortId: String? {
+    switch prompt.kind {
+    case .ssh:
+      return keyId.map { "SHA256:" + $0.prefix(8) }
+    case .gpg:
+      if let description,
+        let match = description.firstMatch(of: #/ID ([0-9A-Fa-f]+)/#)
+      {
+        return "ID " + match.1
+      }
+      return keyId.map { String($0.prefix(8)) }
+    case .age:
+      return keyId.map { String($0.prefix(8)) }
+    }
+  }
+
+  private var subtitle: String {
+    ([label == nil ? nil : kindName] + [shortId]).compactMap { $0 }.joined(separator: " · ")
+  }
+
+  /// Key path named in ssh's "Enter passphrase for ..." prompt text.
+  private var keyPath: String? {
+    guard prompt.kind == .ssh, var text = prompt.prompt else { return nil }
+    guard let range = text.range(of: "Enter passphrase for ", options: .caseInsensitive) else {
+      return nil
+    }
+    text = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    if let suffix = text.range(of: " (will confirm each use)") {
+      text = String(text[..<suffix.lowerBound])
+    }
+    if text.hasSuffix(":") { text.removeLast() }
+    if text.hasPrefix("key ") { text.removeFirst(4) }
+    text = text.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+    return text.hasPrefix("/") ? text : nil
+  }
+
+  /// Labeled values shown when the card is expanded.
+  private var rows: [PromptDetailRow] {
+    var rows: [PromptDetailRow] = []
+    if prompt.kind == .gpg, let description {
+      rows.append(PromptDetailRow(label: "Details", value: description))
+    }
+    if let keyPath {
+      rows.append(PromptDetailRow(label: "Path", value: keyPath))
+    }
+    if let keyId {
+      rows.append(PromptDetailRow(label: keyIdLabel, value: keyId))
+    }
+    return rows
+  }
+
+  var body: some View {
+    if keyId != nil || description != nil {
+      PromptSubjectCard(
+        systemImage: "key.fill",
+        title: label ?? kindName,
+        detail: subtitle.isEmpty ? nil : subtitle,
+        rows: rows)
+    }
+  }
+}
+
 /// A terminal-styled snippet of the request that triggered this prompt: the
 /// key grip or fingerprint, any rejected-passphrase error, and the prompt
 /// text gpg (or ssh) itself asked for.
@@ -312,27 +417,11 @@ private struct PinentryTranscript: View {
     VStack(alignment: .leading, spacing: 6) {
       switch prompt.kind {
       case .gpg:
-        line(label: "#", text: "gpg: request", labelColor: .secondary, textColor: .secondary)
-          + Text(" ").font(monoFont)
-          + Text("NEED_PASSPHRASE").font(monoFont.weight(.semibold)).foregroundStyle(
-            Color.accentColor)
+        line(label: "#", text: "gpg", labelColor: .secondary, textColor: .secondary)
       case .ssh:
-        line(
-          label: "#", text: "ssh: request", labelColor: .secondary, textColor: .secondary)
+        line(label: "#", text: "ssh", labelColor: .secondary, textColor: .secondary)
       case .age:
-        line(label: "#", text: "age: unlock key", labelColor: .secondary, textColor: .secondary)
-      }
-
-      if let keyId = prompt.keyId, !keyId.isEmpty {
-        Text(keyId)
-          .font(monoFont)
-          .foregroundStyle(.primary)
-      }
-
-      if let description = prompt.description, !description.isEmpty {
-        Text(description.trimmingCharacters(in: .whitespacesAndNewlines))
-          .font(monoFont)
-          .foregroundStyle(.primary)
+        line(label: "#", text: "age", labelColor: .secondary, textColor: .secondary)
       }
 
       if let errorMessage = prompt.errorMessage, !errorMessage.isEmpty {

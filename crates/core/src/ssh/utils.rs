@@ -72,6 +72,28 @@ pub fn get_ssh_key_fingerprint(key_path: &str) -> Option<String> {
     }
 }
 
+/// Comment of the key at `key_path`, such as `user@host`.
+///
+/// An encrypted private key stores its comment in the encrypted section, so the
+/// `.pub` file next to it is read first.
+pub fn get_ssh_key_comment(key_path: &str) -> Option<String> {
+    let public_comment = fs::read_to_string(format!("{key_path}.pub"))
+        .ok()
+        .and_then(|data| {
+            let comment = data
+                .split_whitespace()
+                .skip(2)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!comment.is_empty()).then_some(comment)
+        });
+    public_comment.or_else(|| {
+        let data = fs::read_to_string(key_path).ok()?;
+        let comment = PrivateKey::from_openssh(data).ok()?.comment().to_string();
+        (!comment.is_empty()).then_some(comment)
+    })
+}
+
 pub fn compute_sha256_fingerprint(public_key: &KeyData) -> String {
     // custom method to generate without the prefix
     let fp = public_key.fingerprint(ssh_key::HashAlg::Sha256);

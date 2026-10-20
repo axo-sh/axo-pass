@@ -115,6 +115,9 @@ pub(super) enum WireRequest {
         key_id: Option<String>,
         /// ssh's own prompt text.
         prompt: String,
+        /// Comment of the key, shown as its name in the prompt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller.
         caller: Option<String>,
         /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.

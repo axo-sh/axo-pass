@@ -88,7 +88,7 @@ final class SigningPromptModel {
       guard !Task.isCancelled else { return }
       self?.showPanel(
         key: key, keyName: keyName, keyFingerprint: comment == nil ? nil : fingerprint,
-        managed: managed, callerChain: callerChain, purpose: purpose,
+        fullFingerprint: fingerprint, managed: managed, callerChain: callerChain, purpose: purpose,
         grantCandidate: grantCandidate, grantChoice: grantChoice, view: grant.view)
     }
 
@@ -183,14 +183,15 @@ final class SigningPromptModel {
   /// `keyFingerprint` is shown next to `keyName`, and is nil when `keyName`
   /// is already derived from the fingerprint.
   private func showPanel(
-    key: GrantKey, keyName: String, keyFingerprint: String?, managed: Bool,
-    callerChain: [ProcessNode], purpose: SshSignPurpose?, grantCandidate: SshGrantApp?,
-    grantChoice: GrantChoice, view: LAAuthenticationView
+    key: GrantKey, keyName: String, keyFingerprint: String?, fullFingerprint: String?,
+    managed: Bool, callerChain: [ProcessNode], purpose: SshSignPurpose?,
+    grantCandidate: SshGrantApp?, grantChoice: GrantChoice, view: LAAuthenticationView
   ) {
     let content = SigningPromptView(
       caller: key.caller,
       keyName: keyName,
       keyFingerprint: keyFingerprint,
+      fullFingerprint: fullFingerprint,
       managed: managed,
       callerChain: callerChain,
       purpose: purpose,
@@ -280,6 +281,8 @@ private struct SigningPromptView: View {
   let caller: String?
   let keyName: String
   let keyFingerprint: String?
+  /// Fingerprint listed in the expanded key card.
+  let fullFingerprint: String?
   let managed: Bool
   let callerChain: [ProcessNode]
   let purpose: SshSignPurpose?
@@ -296,7 +299,8 @@ private struct SigningPromptView: View {
       PromptHeadline(parts: title)
 
       VStack(spacing: 8) {
-        PromptSubjectCard(systemImage: "key.fill", title: keyName, detail: keyDetail)
+        PromptSubjectCard(
+          systemImage: "key.fill", title: keyName, detail: keyDetail, rows: keyRows)
         CallerChainView(
           chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
       }
@@ -344,6 +348,14 @@ private struct SigningPromptView: View {
 
   private var appName: String? {
     grantCandidate?.displayName ?? PromptCaller.appName(caller: caller, chain: callerChain)
+  }
+
+  private var keyRows: [PromptDetailRow] {
+    guard let fullFingerprint, !fullFingerprint.isEmpty else { return [] }
+    let body =
+      fullFingerprint.hasPrefix("SHA256:")
+      ? String(fullFingerprint.dropFirst("SHA256:".count)) : fullFingerprint
+    return [PromptDetailRow(label: "Fingerprint", value: body)]
   }
 
   private var keyDetail: String {

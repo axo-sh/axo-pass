@@ -140,16 +140,28 @@ struct PromptHeadline: View {
   }
 }
 
+/// Labeled line of secondary information in an expanded `PromptSubjectCard`.
+struct PromptDetailRow: Identifiable {
+  let label: String
+  let value: String
+
+  var id: String { label }
+}
+
 /// Rounded card showing the symbol, title, and detail of what a prompt grants
-/// access to. When `items` is non-empty, clicking the card expands a list of
-/// them, such as the secrets requested by a vault read.
+/// access to. When `items` or `rows` is non-empty, clicking the card expands
+/// them. Items are monospaced, such as the secrets requested by a vault read.
+/// Rows are small labeled values, such as the path and fingerprint of a key.
 struct PromptSubjectCard: View {
   let systemImage: String
   let title: String
   let detail: String?
   var items: [String] = []
+  var rows: [PromptDetailRow] = []
 
   @State private var expanded = false
+
+  private var expandable: Bool { !items.isEmpty || !rows.isEmpty }
 
   /// Number of items shown before the list scrolls.
   private static let visibleItems = 6
@@ -159,7 +171,7 @@ struct PromptSubjectCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      if items.isEmpty {
+      if !expandable {
         header
       } else {
         Button {
@@ -171,7 +183,12 @@ struct PromptSubjectCard: View {
 
         if expanded {
           Divider()
-          list
+          if !rows.isEmpty {
+            rowList
+          }
+          if !items.isEmpty {
+            list
+          }
         }
       }
     }
@@ -194,7 +211,7 @@ struct PromptSubjectCard: View {
         }
       }
       Spacer()
-      if !items.isEmpty {
+      if expandable {
         Image(systemName: "chevron.right")
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
@@ -203,6 +220,25 @@ struct PromptSubjectCard: View {
       }
     }
     .padding(12)
+  }
+
+  private var rowList: some View {
+    ScrollView(.horizontal, showsIndicators: true) {
+      VStack(alignment: .leading, spacing: 8) {
+        ForEach(rows) { row in
+          VStack(alignment: .leading, spacing: 1) {
+            Text(row.label)
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+            Text(row.value)
+              .font(.body)
+          }
+        }
+      }
+      .fixedSize(horizontal: true, vertical: false)
+      .padding(12)
+      .textSelection(.enabled)
+    }
   }
 
   @ViewBuilder

@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::utils::get_ssh_key_fingerprint;
+use super::utils::{get_ssh_key_comment, get_ssh_key_fingerprint};
 
 /// Absolute path to the bundled `ap-ssh-askpass` wrapper.
 ///
@@ -44,6 +44,11 @@ pub fn extract_key_path(prompt: &str) -> Option<String> {
 /// The keychain fingerprint for the key an askpass prompt names, if any.
 pub fn key_id_from_prompt(prompt: &str) -> Option<String> {
     extract_key_path(prompt).and_then(|path| get_ssh_key_fingerprint(&path))
+}
+
+/// The comment of the key an askpass prompt names, if any.
+pub fn key_comment_from_prompt(prompt: &str) -> Option<String> {
+    extract_key_path(prompt).and_then(|path| get_ssh_key_comment(&path))
 }
 
 #[cfg(test)]
