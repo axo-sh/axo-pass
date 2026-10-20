@@ -1874,7 +1874,9 @@ fn assert_passkey(
                         vault_key: vault_key.clone(),
                         credential: usable
                             .iter()
-                            .find(|s| s.passkey.credential_id.as_slice() == &response.credential_id[..])
+                            .find(|s| {
+                                s.passkey.credential_id.as_slice() == &response.credential_id[..]
+                            })
                             .map(|s| format!("{vault_key}/{}/{}", s.item_key, s.credential_key)),
                     });
                     return Ok(WireResponse::PasskeyAsserted {
