@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
-use axo_pass_core::age::recipients::resolve_recipient;
-use axo_pass_core::core::app_broker::{self, BrokerError, WireExportMode};
+use axo_pass_core::core::app_broker::{self, WireExportMode};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::{ExportMode, WorkFactor};
@@ -108,8 +107,7 @@ impl VaultExportCommand {
 
 /// Resolve a managed age recipient by name to its `age1...` public string.
 /// `ap` holds no keychain entitlements, so the recipient list comes from the
-/// app; this raises no prompt, as only the public half is read. A build with no
-/// broker to reach resolves from the keychain directly.
+/// app; this raises no prompt, as only the public half is read.
 fn resolve_managed_recipient(name: &str) -> Result<String, String> {
     let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
     match app_broker::request_age_keys(caller.as_deref()) {
@@ -118,9 +116,6 @@ fn resolve_managed_recipient(name: &str) -> Result<String, String> {
             .find(|k| k.name == name)
             .map(|k| k.recipient)
             .ok_or_else(|| format!("No age key named {name}")),
-        Err(BrokerError::Unavailable) => resolve_recipient(name)
-            .map(|r| r.to_string())
-            .map_err(|e| format!("Failed to resolve recipient '{name}': {e}")),
         Err(e) => Err(format!("Failed to resolve recipient '{name}': {e}")),
     }
 }

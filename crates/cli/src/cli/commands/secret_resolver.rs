@@ -5,18 +5,14 @@
 //! invocation may pull many secrets across several vaults, so the references
 //! are gathered up front and resolved in a single broker request that raises
 //! one prompt. A build that is not staged in an app bundle has no broker to
-//! reach and resolves locally through a [`VaultsManager`].
+//! reach and fails.
 
 use std::collections::HashMap;
 
-use axo_pass_core::audit::{self, Action, Outcome};
-use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef};
+use axo_pass_core::core::app_broker::{self, ResolvePurpose, VaultRef};
 use axo_pass_core::core::interpolate::{ResolvedSecret, SecretRef, SecretResolver};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::VaultsManager;
 use secrecy::ExposeSecret;
-
-use super::local_audit;
 
 /// A `(vault, item, credential)` triple, the key a resolved value is cached
 /// under. References that repeat resolve once.
@@ -74,7 +70,6 @@ impl BrokerSecretResolver {
         let values =
             match app_broker::request_resolve_secrets(&wire, self.purpose, caller.as_deref()) {
                 Ok(values) => values,
-                Err(BrokerError::Unavailable) => return self.prepare_locally(&distinct),
                 Err(e) => return Err(format!("Failed to resolve secrets: {e}")),
             };
 
@@ -84,33 +79,6 @@ impl BrokerSecretResolver {
                 None => ResolvedSecret::NotFound,
             };
             self.resolved.insert(key_of(r), resolved);
-        }
-        Ok(())
-    }
-
-    fn prepare_locally(&mut self, distinct: &[&SecretRef]) -> Result<(), String> {
-        let mut vaults = VaultsManager::new();
-        let owned: Vec<SecretRef> = distinct.iter().map(|r| (*r).clone()).collect();
-        let resolved = vaults.resolve_all(&owned)?;
-        let action = match self.purpose {
-            ResolvePurpose::Exec => Action::CredentialExec,
-            ResolvePurpose::Inject => Action::CredentialInject,
-            ResolvePurpose::Read => Action::CredentialRead,
-        };
-        let actor = local_audit::caller_actor();
-        for (r, value) in owned.iter().zip(resolved) {
-            let subject =
-                local_audit::credential_subject(&r.vault_key, &r.item_key, &r.credential_key);
-            let outcome = match value {
-                ResolvedSecret::Error => Outcome::Failed,
-                _ => Outcome::Succeeded,
-            };
-            let found = matches!(value, ResolvedSecret::Found(_));
-            audit::record(
-                local_audit::local_event(action, outcome, &r.vault_key, subject, actor.as_ref())
-                    .detail("found", found.to_string()),
-            );
-            self.resolved.insert(key_of(r), value);
         }
         Ok(())
     }

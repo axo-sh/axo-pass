@@ -1,19 +1,15 @@
 use std::io::{IsTerminal, Read, Write};
 use std::str::FromStr;
 
-use axo_pass_core::audit::{self, Action, Actor, Outcome};
-use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRef, WireLogin};
-use axo_pass_core::core::dirs::vaults_dir;
+use axo_pass_core::core::app_broker::{self, ResolvePurpose, VaultRef, WireLogin};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::password::PasswordPolicy;
-use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
+use axo_pass_core::secrets::vaults::DEFAULT_VAULT;
 use clap::{Parser, Subcommand};
 use clml::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
 use secrecy::{ExposeSecret, SecretString};
-
-use super::local_audit;
 
 /// Resolves backslash escapes in a user-supplied delimiter so shells that
 /// cannot type control characters literally can still pass one. Handles `\n`,
@@ -191,19 +187,10 @@ impl ItemCommand {
         }
     }
 
-    fn unlock_vault(vault_key: Option<String>) -> Result<VaultWrapper, String> {
-        let mut vw = VaultWrapper::load(&vaults_dir(), vault_key)
-            .map_err(|e| format!("Failed to load vault: {e}"))?;
-        vw.unlock()
-            .map_err(|e| format!("Failed to unlock vault: {e}"))?;
-        Ok(vw)
-    }
-
     /// Show one item's overview through the app broker, never a secret value.
     /// `ap` holds no keychain entitlements, so the app unlocks the vault and
     /// returns the listing, which is filtered here to the one item. A build
-    /// that is not staged in an app bundle has no broker to reach and unlocks
-    /// locally.
+    /// that is not staged in an app bundle has no broker to reach and fails.
     fn cmd_get_item(&self, item_reference: &ItemReference) -> Result<(), String> {
         let item_reference = item_reference.clone();
         let vault_key = item_reference
@@ -236,34 +223,8 @@ impl ItemCommand {
                     &credentials,
                 )
             },
-            Err(BrokerError::Unavailable) => {
-                self.get_item_locally(&vault_key, &item_key, credential_key.as_deref())
-            },
             Err(e) => Err(format!("Failed to get item: {e}")),
         }
-    }
-
-    fn get_item_locally(
-        &self,
-        vault_key: &str,
-        item_key: &str,
-        credential_key: Option<&str>,
-    ) -> Result<(), String> {
-        let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
-        let Some(item) = vw
-            .get_item_overview(item_key)
-            .map_err(|e| format!("Failed to get item: {e}"))?
-        else {
-            return Err(cformat!(
-                "<blue>{item_key}</blue> not found in vault <blue>{vault_key}</blue>",
-            ));
-        };
-        let credentials: Vec<(String, String)> = item
-            .credentials
-            .values()
-            .map(|cred| (cred.key.clone(), cred.title.clone()))
-            .collect();
-        Self::print_item(vault_key, item_key, credential_key, &credentials)
     }
 
     /// Render an item overview: every credential, or the detail for one named
@@ -313,7 +274,7 @@ impl ItemCommand {
     /// Read one or more secrets through the app broker. `ap` holds no
     /// keychain entitlements, so the app unlocks the vault and returns the
     /// value. A build that is not staged in an app bundle has no broker to
-    /// reach and unlocks locally. Values are printed joined by `delimiter`.
+    /// reach and fails. Values are printed joined by `delimiter`.
     ///
     /// Every reference is resolved in one broker request, so a multi-reference
     /// read raises a single prompt rather than one per reference.
@@ -357,13 +318,6 @@ impl ItemCommand {
             caller.as_deref(),
         ) {
             Ok(values) => values,
-            Err(BrokerError::Unavailable) => {
-                let actor = local_audit::caller_actor();
-                triples
-                    .iter()
-                    .map(|(v, i, c)| Self::read_locally(v, i, c, actor.as_ref()).map(Some))
-                    .collect::<Result<Vec<_>, _>>()?
-            },
             Err(e) => return Err(format!("Failed to read secret: {e}")),
         };
 
@@ -404,45 +358,9 @@ impl ItemCommand {
         Ok(())
     }
 
-    fn read_locally(
-        vault_key: &str,
-        item_key: &str,
-        credential_key: &str,
-        actor: Option<&Actor>,
-    ) -> Result<SecretString, String> {
-        let vw = Self::unlock_vault(Some(vault_key.to_string()))?;
-        let result = vw.get_secret(item_key, credential_key);
-        let subject = local_audit::credential_subject(vault_key, item_key, credential_key);
-        audit::record(match &result {
-            Ok(secret) => local_audit::local_event(
-                Action::CredentialRead,
-                Outcome::Succeeded,
-                vault_key,
-                subject,
-                actor,
-            )
-            .detail("found", secret.is_some().to_string()),
-            Err(e) => local_audit::local_event(
-                Action::CredentialRead,
-                Outcome::Failed,
-                vault_key,
-                subject,
-                actor,
-            )
-            .message(e.to_string()),
-        });
-        match result {
-            Ok(Some(secret)) => Ok(SecretString::from(secret.expose_secret().to_owned())),
-            Ok(None) => Err(cformat!(
-                "<blue>{item_key}/{credential_key}</blue> not found in vault <blue>{vault_key}</blue>",
-            )),
-            Err(e) => Err(format!("Failed to get secret: {e}")),
-        }
-    }
-
     /// List items through the app broker. `ap` holds no keychain entitlements,
     /// so the app unlocks the vault and returns the overview. A build that is
-    /// not staged in an app bundle has no broker to reach and unlocks locally.
+    /// not staged in an app bundle has no broker to reach and fails.
     fn cmd_list_items(&self) -> Result<(), String> {
         let vault_key = self
             .vault
@@ -454,7 +372,6 @@ impl ItemCommand {
 
         let items = match app_broker::request_vault_items(&vault_key, caller.as_deref()) {
             Ok(items) => items,
-            Err(BrokerError::Unavailable) => return self.list_items_locally(),
             Err(e) => return Err(format!("Failed to list items: {e}")),
         };
 
@@ -464,35 +381,6 @@ impl ItemCommand {
         let mut has_items = false;
         for item in &items {
             for cred in &item.credentials {
-                cprintln!(
-                    "  {} <dim>axo://{vault_key}/{}/{}</dim>",
-                    cred.title,
-                    item.key,
-                    cred.key
-                );
-                has_items = true;
-            }
-        }
-        if !has_items {
-            println!("<no items>");
-        }
-
-        Ok(())
-    }
-
-    fn list_items_locally(&self) -> Result<(), String> {
-        let vw = Self::unlock_vault(self.vault.clone())?;
-        let vault_key = vw.key.clone();
-        cprintln!("<green>Vault</green>: <blue>{vault_key}</blue>");
-
-        let mut items = vw
-            .list_items()
-            .map_err(|e| format!("Failed to list items: {e}"))?;
-        items.sort_by_key(|item| item.title.to_lowercase());
-
-        let mut has_items = false;
-        for item in &items {
-            for cred in item.credentials.values() {
                 cprintln!(
                     "  {} <dim>axo://{vault_key}/{}/{}</dim>",
                     cred.title,

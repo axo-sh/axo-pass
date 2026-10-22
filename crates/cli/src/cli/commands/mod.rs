@@ -4,7 +4,6 @@ pub mod exec;
 pub mod inject;
 pub mod item;
 pub mod keychain;
-pub mod local_audit;
 pub mod pinentry;
 pub mod secret_resolver;
 pub mod ssh_agent;

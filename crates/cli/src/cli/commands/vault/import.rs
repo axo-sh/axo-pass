@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
-use axo_pass_core::age::recipients::resolve_identity;
 use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::VaultsManager;
@@ -272,8 +271,7 @@ impl ImportIdentityFlags {
 
 /// Unlock a managed age identity by name, returning its `AGE-SECRET-KEY-1...`
 /// string. `ap` holds no keychain entitlements, so the app unlocks it behind a
-/// biometric prompt. A build with no broker to reach unlocks from the keychain
-/// directly.
+/// biometric prompt.
 fn resolve_managed_identity(name: &str) -> Result<String, String> {
     let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
     match app_broker::request_age_identity(name, caller.as_deref()) {
@@ -281,9 +279,6 @@ fn resolve_managed_identity(name: &str) -> Result<String, String> {
         Err(BrokerError::Failed(m)) if m.starts_with("No age key named") => {
             Err(format!("No age key named {name}"))
         },
-        Err(BrokerError::Unavailable) => resolve_identity(name)
-            .map(|id| id.to_string().expose_secret().to_string())
-            .map_err(|e| format!("Failed to resolve identity '{name}': {e}")),
         Err(e) => Err(format!("Failed to resolve identity '{name}': {e}")),
     }
 }
