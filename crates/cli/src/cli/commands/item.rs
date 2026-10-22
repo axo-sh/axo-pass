@@ -6,9 +6,7 @@ use axo_pass_core::core::app_broker::{self, BrokerError, ResolvePurpose, VaultRe
 use axo_pass_core::core::dirs::vaults_dir;
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::password::PasswordPolicy;
-use axo_pass_core::secrets::vaults::{
-    DEFAULT_VAULT, FieldKind, LoginWrite, MatchKind, VaultWrapper, write_login,
-};
+use axo_pass_core::secrets::vaults::{DEFAULT_VAULT, VaultWrapper};
 use clap::{Parser, Subcommand};
 use clml::{cformat, cprintln};
 use inquire::Password;
@@ -514,7 +512,7 @@ impl ItemCommand {
     /// Write one credential's secret value through the app broker. `ap` holds
     /// no keychain entitlements, so the app unlocks the vault, writes the
     /// value and saves. A build that is not staged in an app bundle has no
-    /// broker to reach and writes locally.
+    /// broker to reach and fails.
     fn cmd_set_item(
         &self,
         item_reference: &ItemReference,
@@ -581,77 +579,10 @@ impl ItemCommand {
             caller.as_deref(),
         ) {
             Ok(_) => {},
-            Err(BrokerError::Unavailable) => {
-                Self::set_item_locally(&vault_key, &item_key, &credential_key, secret, &login)?
-            },
             Err(e) => return Err(format!("Failed to set secret: {e}")),
         }
 
         println!("Added item: axo://{vault_key}/{item_key}/{credential_key}");
-        Ok(())
-    }
-
-    fn set_item_locally(
-        vault_key: &str,
-        item_key: &str,
-        credential_key: &str,
-        secret: SecretString,
-        login: &LoginOptions,
-    ) -> Result<(), String> {
-        let mut vw = Self::unlock_vault(Some(vault_key.to_string()))?;
-        // A write that creates the item records `item.created`, as the
-        // broker does.
-        let created = vw
-            .get_item_overview(item_key)
-            .map_err(|e| format!("Failed to get item: {e}"))?
-            .is_none();
-        let action = if created {
-            Action::ItemCreated
-        } else {
-            Action::ItemUpdated
-        };
-        let subject = local_audit::credential_subject(vault_key, item_key, credential_key);
-        let actor = local_audit::caller_actor();
-        let event = local_audit::local_event(
-            action,
-            Outcome::Succeeded,
-            vault_key,
-            subject,
-            actor.as_ref(),
-        )
-        .detail("created", created.to_string());
-
-        if login.is_login() {
-            let title = login.title.as_deref().unwrap_or(item_key);
-            write_login(
-                &mut vw,
-                LoginWrite {
-                    item_key,
-                    title,
-                    password_key: credential_key,
-                    password: secret,
-                    username: login.username.as_deref(),
-                    websites: &login.websites,
-                    match_kind: MatchKind::Domain,
-                },
-            )
-            .map_err(|e| format!("Failed to write login: {e}"))?;
-            vw.save()
-                .map_err(|e| format!("Failed to save vault: {e}"))?;
-            audit::record(event.detail("login_request", "save"));
-            return Ok(());
-        }
-        vw.add_secret(
-            item_key,
-            credential_key,
-            credential_key,
-            FieldKind::default(),
-            secret,
-        )
-        .map_err(|e| format!("Failed to add secret: {e}"))?;
-        vw.save()
-            .map_err(|e| format!("Failed to save vault: {e}"))?;
-        audit::record(event);
         Ok(())
     }
 }

@@ -45,7 +45,7 @@ impl VaultImportCommand {
         let wire_identity = self.import_encryption.wire_identity()?;
         let import_identity = ImportIdentity::try_from(wire_identity.clone())?;
 
-        let mut vm = VaultsManager::new();
+        let vm = VaultsManager::new();
         let bundle = vm
             .open_bundle(&self.import_path, import_identity)
             .map_err(|e| format!("Failed to open bundle: {e}"))?;
@@ -112,9 +112,6 @@ impl VaultImportCommand {
             caller.as_deref(),
         ) {
             Ok(keys) => keys,
-            Err(BrokerError::Unavailable) => vm
-                .import_bundle(bundle, &selection)
-                .map_err(|e| format!("Failed to import bundle: {e}"))?,
             Err(e) => return Err(format!("Failed to import bundle: {e}")),
         };
 

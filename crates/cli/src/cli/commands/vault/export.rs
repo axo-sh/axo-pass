@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use axo_pass_core::age::recipients::resolve_recipient;
 use axo_pass_core::core::app_broker::{self, BrokerError, WireExportMode};
 use axo_pass_core::core::provenance::Provenance;
+use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::vault_export::{ExportMode, WorkFactor};
-use axo_pass_core::secrets::vaults::{ExportProgress, VaultsManager};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;
@@ -42,7 +42,7 @@ pub struct VaultExportCommand {
 
 impl VaultExportCommand {
     pub fn execute(&self) -> Result<(), String> {
-        let mut vm = VaultsManager::new();
+        let vm = VaultsManager::new();
 
         let mut vault_keys = if self.vault.is_empty() {
             select_vaults(vm.vault_labels())?
@@ -95,13 +95,6 @@ impl VaultExportCommand {
             caller.as_deref(),
         ) {
             Ok(_) => {},
-            Err(BrokerError::Unavailable) => Self::export_locally(
-                &mut vm,
-                &vault_keys,
-                &export_path,
-                export_mode,
-                !self.exclude_passkeys,
-            )?,
             Err(e) => return Err(format!("Failed to export vaults: {e}")),
         }
 
@@ -110,33 +103,6 @@ impl VaultExportCommand {
         let path = export_path.display();
         cprintln!("Exported <blue>{count}</blue> {noun} to <blue>{path}</blue>");
         Ok(())
-    }
-
-    fn export_locally(
-        vm: &mut VaultsManager,
-        vault_keys: &[String],
-        export_path: &Path,
-        export_mode: ExportMode,
-        include_passkeys: bool,
-    ) -> Result<(), String> {
-        vm.export_bundle(
-            vault_keys,
-            export_path,
-            export_mode,
-            include_passkeys,
-            |p| match p {
-                ExportProgress::Vault { index, total } => {
-                    cprintln!("<dim>Collecting vault {index}/{total}</dim>");
-                },
-                ExportProgress::DerivingKey => {
-                    cprintln!("<dim>Deriving key</dim>");
-                },
-                ExportProgress::Writing => {
-                    cprintln!("<dim>Writing bundle</dim>");
-                },
-            },
-        )
-        .map_err(|e| format!("Failed to export vaults: {e}"))
     }
 }
 
