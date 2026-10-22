@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
 
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::core::dirs::app_data_dir;
+use crate::core::files::write_atomic;
 use crate::core::updates::{UpdateCheckRecord, UpdateCheckResult};
 
 const CONFIG_FILENAME: &str = "config.toml";
@@ -84,14 +85,19 @@ impl AppConfig {
         }
     }
 
+    /// Save the config atomically. An interrupted save leaves the previous
+    /// file, since a truncated file makes [`APP_CONFIG`] fail at launch.
     pub fn save(&self) -> Result<(), io::Error> {
-        let path = Self::config_path();
+        self.save_to(&Self::config_path())
+    }
+
+    fn save_to(&self, path: &Path) -> Result<(), io::Error> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let contents = toml::to_string_pretty(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(path, contents)
+        write_atomic(path, contents.as_bytes())
     }
 
     pub fn record_update_check(&mut self, result: UpdateCheckResult) {
@@ -155,6 +161,25 @@ mod tests {
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
         assert_eq!(parsed.ssh_autoload, config.ssh_autoload);
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_previous_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILENAME);
+        let config = AppConfig::default();
+        config.save_to(&path).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+
+        // A directory at the temp path makes the write fail before the rename.
+        fs::create_dir(dir.path().join(format!(".{CONFIG_FILENAME}.tmp"))).unwrap();
+        let mut changed = config.clone();
+        changed.update_check_disabled = Some(true);
+        assert!(changed.save_to(&path).is_err());
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let parsed: AppConfig = toml::from_str(&before).unwrap();
+        assert_eq!(parsed.id, config.id);
     }
 
     #[test]
