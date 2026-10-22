@@ -1,7 +1,5 @@
 use regex::Regex;
 
-use crate::secrets::vaults::VaultsManager;
-
 /// One `axo://vault/item/credential` reference found in the input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRef {
@@ -23,8 +21,7 @@ pub enum ResolvedSecret {
 /// Resolves the `axo://` references in one `interpolate_secrets` call.
 ///
 /// The whole batch is resolved at once so a broker-backed resolver can raise a
-/// single prompt for an invocation that pulls many secrets. A local resolver
-/// ([`VaultsManager`]) just walks the list.
+/// single prompt for an invocation that pulls many secrets.
 pub trait SecretResolver {
     /// Resolve every reference, positionally. The returned vector has the same
     /// length and order as `refs`. `Err` is a hard failure of the resolver
@@ -32,25 +29,6 @@ pub trait SecretResolver {
     /// does not resolve is [`ResolvedSecret::NotFound`] or
     /// [`ResolvedSecret::Error`].
     fn resolve_all(&mut self, refs: &[SecretRef]) -> Result<Vec<ResolvedSecret>, String>;
-}
-
-impl SecretResolver for VaultsManager {
-    fn resolve_all(&mut self, refs: &[SecretRef]) -> Result<Vec<ResolvedSecret>, String> {
-        Ok(refs
-            .iter()
-            .map(|r| match self.get_secret_by_url(&r.url) {
-                Ok(Some(secret)) => ResolvedSecret::Found(secret),
-                Ok(None) => {
-                    log::warn!("Secret not found for reference: {}", r.url);
-                    ResolvedSecret::NotFound
-                },
-                Err(e) => {
-                    log::error!("Error fetching secret for reference {}: {e:?}", r.url);
-                    ResolvedSecret::Error
-                },
-            })
-            .collect())
-    }
 }
 
 fn axo_url_re() -> Regex {
@@ -121,7 +99,7 @@ mod tests {
             ),
             // missing credential segment — regex requires all three path components
             ("axo://vault/item", "axo://vault/item"),
-            // replace url with ERROR (vault doesn't exist)
+            // replace url with ERROR (resolver fails the reference)
             ("axo://nonexistent-vault/my-item/my-cred", "ERROR"),
             // only url is replaced
             (
@@ -136,11 +114,15 @@ mod tests {
             ("axo://vault/item/cred.", "ERROR."),
         ];
 
-        // todo: have a way to create a test vault
-        let mut vaults = VaultsManager::default();
+        struct Failing;
+        impl SecretResolver for Failing {
+            fn resolve_all(&mut self, refs: &[SecretRef]) -> Result<Vec<ResolvedSecret>, String> {
+                Ok(refs.iter().map(|_| ResolvedSecret::Error).collect())
+            }
+        }
         for (input, expected) in cases {
             assert_eq!(
-                interpolate_secrets(input, &mut vaults).unwrap(),
+                interpolate_secrets(input, &mut Failing).unwrap(),
                 *expected,
                 "input: {input:?}",
             );

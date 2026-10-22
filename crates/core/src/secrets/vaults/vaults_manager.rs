@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use secrecy::ExposeSecret;
 use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
@@ -321,30 +320,5 @@ impl VaultsManager {
             .output()
             .map_err(Error::VaultDeleteError)?;
         Ok(())
-    }
-
-    pub fn get_secret_by_url(&mut self, item_url: &str) -> Result<Option<String>, Error> {
-        let Ok(u) = url::Url::parse(item_url) else {
-            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
-        };
-        if u.scheme() != "axo" {
-            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
-        }
-        let Some(vault_key) = u.host_str() else {
-            return Err(Error::InvalidVaultItemReference(item_url.to_string()));
-        };
-        let Some(vault) = self.vaults.get_mut(vault_key) else {
-            return Err(Error::VaultNotFound(vault_key.to_string()));
-        };
-        vault.unlock().inspect_err(|e| {
-            log::error!("Error unlocking vault {vault_key}: {e:?}");
-        })?;
-        match vault.get_secret_by_url(u) {
-            Ok(secret) => Ok(secret.map(|s| s.expose_secret().to_string())),
-            Err(e) => {
-                log::error!("Error retrieving {item_url}: {e:?}");
-                Err(Error::SecretRetrievalFailed(item_url.to_string(), e.into()))
-            },
-        }
     }
 }

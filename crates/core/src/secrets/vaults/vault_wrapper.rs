@@ -7,7 +7,6 @@ use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{SecretBox, SecretString};
 use time::OffsetDateTime;
-use url::Url;
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
@@ -386,20 +385,6 @@ impl VaultWrapper {
     ) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.purge_history(item_key, cred_key, history_id)
-    }
-
-    pub fn get_secret_by_url(&self, url: Url) -> Result<Option<SecretBox<String>>, Error> {
-        let mut segments = url
-            .path_segments()
-            .ok_or(Error::InvalidVaultItemReference("invalid url".to_string()))?;
-        let item_key = segments.next().ok_or(Error::InvalidVaultItemReference(
-            "missing item key".to_string(),
-        ))?;
-        let credential_key = segments.next().ok_or(Error::InvalidVaultItemReference(
-            "missing credential key".to_string(),
-        ))?;
-        log::debug!("Parsed reference {item_key}/{credential_key}");
-        self.get_secret(item_key, credential_key)
     }
 
     pub fn get_secret_overview(

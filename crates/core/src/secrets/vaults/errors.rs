@@ -47,9 +47,6 @@ pub enum Error {
     #[error("Failed to delete vault: {0}")]
     VaultDeleteError(#[source] std::io::Error),
 
-    #[error("Invalid vault item reference: {0}")]
-    InvalidVaultItemReference(String),
-
     #[error("Passkey operation failed: {0}")]
     Passkey(String),
 
@@ -58,9 +55,6 @@ pub enum Error {
 
     #[error("Could not retrieve key from keychain: {0}")]
     KeyRetrievalFailed(KeychainError),
-
-    #[error("Could not retrieve secret {0} from vault: {1}")]
-    SecretRetrievalFailed(String, #[source] anyhow::Error),
 
     #[error("Invalid vault key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidVaultKey(String),
