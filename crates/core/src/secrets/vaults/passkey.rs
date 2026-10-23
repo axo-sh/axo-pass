@@ -1,7 +1,7 @@
 //! WebAuthn passkeys stored as vault credentials.
 //!
 //! The CTAP2 authenticator itself comes from `passkey-authenticator`; this
-//! module supplies the two traits it needs. [`VaultStore`] is the
+//! module supplies the two traits it needs. [`PasskeyCredentialStore`] is the
 //! `CredentialStore`, backed by an unlocked vault, and [`PromptedUser`] is the
 //! `UserValidationMethod`.
 //!
@@ -78,7 +78,7 @@ pub async fn create(
     request: make_credential::Request,
     target: PasskeyTarget,
 ) -> Result<make_credential::Response, Error> {
-    let mut authenticator = authenticator(VaultStore::new(vw, target));
+    let mut authenticator = authenticator(PasskeyCredentialStore::new(vw, target));
     let response = authenticator
         .make_credential(request)
         .await
@@ -95,7 +95,7 @@ pub async fn assert(
     vw: &mut VaultWrapper,
     request: get_assertion::Request,
 ) -> Result<get_assertion::Response, Error> {
-    let mut authenticator = authenticator(VaultStore::new(vw, PasskeyTarget::NewLogin));
+    let mut authenticator = authenticator(PasskeyCredentialStore::new(vw, PasskeyTarget::NewLogin));
     authenticator
         .get_assertion(request)
         .await
@@ -104,7 +104,9 @@ pub async fn assert(
 
 /// The authenticator with PRF enabled. PRF secrets are only used after user
 /// verification, which every request here performs.
-fn authenticator(store: VaultStore<'_>) -> Authenticator<VaultStore<'_>, PromptedUser> {
+fn authenticator(
+    store: PasskeyCredentialStore<'_>,
+) -> Authenticator<PasskeyCredentialStore<'_>, PromptedUser> {
     Authenticator::new(AAGUID, store, PromptedUser)
         .hmac_secret(HmacSecretConfig::new_with_uv_only().enable_on_make_credential())
 }
@@ -635,13 +637,13 @@ fn decode(value: &str) -> Result<Passkey, Error> {
 /// Holds the unlocked vault for the length of one request. Writes are staged
 /// into the in-memory vault and flushed by [`create`] / [`assert`], so a failed
 /// request leaves nothing behind on disk.
-struct VaultStore<'a> {
+struct PasskeyCredentialStore<'a> {
     vw: &'a mut VaultWrapper,
     /// Where a new passkey goes. Read by `save_credential` only.
     target: PasskeyTarget,
 }
 
-impl<'a> VaultStore<'a> {
+impl<'a> PasskeyCredentialStore<'a> {
     fn new(vw: &'a mut VaultWrapper, target: PasskeyTarget) -> Self {
         Self { vw, target }
     }
@@ -703,7 +705,7 @@ fn store_passkey(
             autofill::add_passkey_login(vw, &cred.rp_id, item_title, cred.username.as_deref())?
         },
     };
-    let credential_key = VaultStore::credential_key(&cred.credential_id);
+    let credential_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
     vw.add_secret(
         &item_key,
         &credential_key,
@@ -757,7 +759,7 @@ pub fn write_record(
     let cred = decode(&value)?;
     let item_key = store_passkey(vw, &cred, value, None, &record.title, target)?;
     if let Some(at) = record.last_used_at {
-        let credential_key = VaultStore::credential_key(&cred.credential_id);
+        let credential_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
         vw.mark_credential_used(&item_key, &credential_key, at)?;
     }
     Ok(())
@@ -826,7 +828,7 @@ pub fn rename_account(
 }
 
 #[async_trait]
-impl CredentialStore for VaultStore<'_> {
+impl CredentialStore for PasskeyCredentialStore<'_> {
     type PasskeyItem = Passkey;
 
     async fn find_credentials(
@@ -1078,7 +1080,7 @@ mod tests {
             &[0x01, 0x02],
         ];
         for id in ids {
-            let key = VaultStore::credential_key(id);
+            let key = PasskeyCredentialStore::credential_key(id);
             assert_eq!(
                 normalized_key(&key).as_deref(),
                 Some(key.as_str()),
@@ -1086,7 +1088,9 @@ mod tests {
             );
         }
         assert_eq!(
-            VaultStore::credential_key(&[0xd3, 0x4f, 0xb9, 0x01, 0x22, 0x7e, 0x80, 0x11, 0x5a]),
+            PasskeyCredentialStore::credential_key(&[
+                0xd3, 0x4f, 0xb9, 0x01, 0x22, 0x7e, 0x80, 0x11, 0x5a
+            ]),
             "passkey-d34fb901227e8011"
         );
     }
@@ -1121,8 +1125,11 @@ mod tests {
 
     /// Register without saving, since a test vault has no path to write to.
     async fn register(vw: &mut VaultWrapper, target: PasskeyTarget, user: &str) {
-        let mut authenticator =
-            Authenticator::new(AAGUID, VaultStore::new(vw, target), PromptedUser);
+        let mut authenticator = Authenticator::new(
+            AAGUID,
+            PasskeyCredentialStore::new(vw, target),
+            PromptedUser,
+        );
         authenticator
             .make_credential(registration("example.com", user))
             .await
@@ -1255,7 +1262,7 @@ mod tests {
         let mut vw = VaultWrapper::new_for_test("personal");
         let mut authenticator = Authenticator::new(
             AAGUID,
-            VaultStore::new(&mut vw, PasskeyTarget::Item("gone".into())),
+            PasskeyCredentialStore::new(&mut vw, PasskeyTarget::Item("gone".into())),
             PromptedUser,
         );
         assert!(
@@ -1317,7 +1324,7 @@ mod tests {
         let mut vw = VaultWrapper::new_for_test("personal");
         let mut authenticator = Authenticator::new(
             AAGUID,
-            VaultStore::new(&mut vw, PasskeyTarget::NewLogin),
+            PasskeyCredentialStore::new(&mut vw, PasskeyTarget::NewLogin),
             PromptedUser,
         );
         let created = authenticator
@@ -1398,10 +1405,13 @@ mod tests {
             }
             .to_ctap(),
         );
-        let created = authenticator(VaultStore::new(&mut vw, PasskeyTarget::NewLogin))
-            .make_credential(request)
-            .await
-            .unwrap();
+        let created = authenticator(PasskeyCredentialStore::new(
+            &mut vw,
+            PasskeyTarget::NewLogin,
+        ))
+        .make_credential(request)
+        .await
+        .unwrap();
         let made = created
             .unsigned_extension_outputs
             .and_then(|o| o.prf)
@@ -1458,10 +1468,13 @@ mod tests {
             hmac_secret: Some(true),
             ..Default::default()
         });
-        authenticator(VaultStore::new(&mut vw, PasskeyTarget::NewLogin))
-            .make_credential(request)
-            .await
-            .unwrap();
+        authenticator(PasskeyCredentialStore::new(
+            &mut vw,
+            PasskeyTarget::NewLogin,
+        ))
+        .make_credential(request)
+        .await
+        .unwrap();
         let credential_id = list(&vw).unwrap()[0].passkey.credential_id.to_vec();
 
         let specific = PrfValues {
