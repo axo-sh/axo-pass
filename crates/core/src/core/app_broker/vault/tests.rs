@@ -1,14 +1,31 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::thread;
 
+use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
-use super::*;
+use super::super::PromptOutcome;
+use super::super::in_flight::InFlightRequest;
+use super::super::login_index::LoginIndex;
+use super::super::placement::PasskeyChoices;
+use super::super::wire::WireResponse;
+use super::audit::access_event;
+use super::logins::{save_login, serve_logins, update_login_password};
+use super::serve::{AccessIds, Served, authorize_and_serve, serve_on_context};
+use super::{
+    AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, LoginPage,
+    ResolvePurpose, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt, VaultAction,
+    VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
+};
 use crate::audit::test_support::test_dir;
-use crate::secrets::vaults::FieldKind;
+use crate::audit::{self, Action, Actor, AuditEvent, Outcome, SubjectIds};
+use crate::core::auth::{AuthContext, ForeignContext};
+use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
+use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill, passkey};
 
 /// Vault `personal` in the vaults directory and external vault `shared` in
 /// another directory, served through a [`VaultCatalog`] that unlocks with the
