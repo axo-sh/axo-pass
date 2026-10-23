@@ -53,6 +53,7 @@ use uuid::Uuid;
 
 use super::storage::txn::VaultWriter;
 use super::{Error, FieldKind, VaultHandle, autofill};
+use crate::audit::SubjectIds;
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
 /// random constant, per the WebAuthn spec: it names the model, never the
@@ -800,20 +801,21 @@ pub fn read_record(
 
 /// Store a record read by [`read_record`] in `target`, with its last-used
 /// time. The record must decode, so a damaged value is refused rather than
-/// copied. The caller saves the vault.
+/// copied. The caller saves the vault. Returns the audit ids of the stored
+/// passkey.
 pub fn write_record(
     vw: &mut VaultHandle,
     record: &PasskeyRecord,
     target: &PasskeyTarget,
-) -> Result<(), Error> {
+) -> Result<SubjectIds, Error> {
     let value = record.value.expose_secret().to_string();
     let cred = decode(&value)?;
     let item_key = store_passkey(vw, &cred, value, None, &record.title, target)?;
+    let credential_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
     if let Some(at) = record.last_used_at {
-        let credential_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
         vw.mark_credential_used(&item_key, &credential_key, at)?;
     }
-    Ok(())
+    vw.credential_ids(&item_key, &credential_key)
 }
 
 /// Remove the passkey at `item_key`/`credential_key` after it was copied by

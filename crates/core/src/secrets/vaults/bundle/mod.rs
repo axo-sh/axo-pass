@@ -14,7 +14,7 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
-use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
+use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::AuthContext;
 pub use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
@@ -209,9 +209,9 @@ impl ImportableBundle {
         // each vault so a damaged one is refused before anything is written
         let managed_key = get_vault_encryption_key_on(auth_context)?;
         let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
-        let mut audit_rows: Vec<(String, Option<String>)> = Vec::with_capacity(planned.len());
+        let mut audit_rows: Vec<(Uuid, String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
-            audit_rows.push((p.key.clone(), p.prepared.name.clone()));
+            audit_rows.push((p.prepared.id, p.key.clone(), p.prepared.name.clone()));
             let raw_file_key = p.prepared.raw_file_key.expose_secret();
             let enc_file_key = VaultFileKey::Personal(
                 managed_key
@@ -252,7 +252,7 @@ impl ImportableBundle {
         }
 
         let count = audit_rows.len();
-        for (key, name) in audit_rows {
+        for (id, key, name) in audit_rows {
             audit::record(
                 AuditEvent::new(
                     audit::process_source(),
@@ -260,6 +260,7 @@ impl ImportableBundle {
                     Outcome::Succeeded,
                 )
                 .subject(Subject::new(SubjectKind::Vault, key).maybe_label(name))
+                .subject_ids(SubjectIds::vault(id))
                 .detail("vault_count", count.to_string()),
             );
         }

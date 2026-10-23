@@ -40,7 +40,7 @@ mod writer;
 
 pub use event::{
     Action, ActionKind, Actor, AuditEvent, Category, Outcome, Requester, SCHEMA_VERSION, Source,
-    Subject, SubjectKind, parse_rfc3339, process_source, set_process_source,
+    Subject, SubjectIds, SubjectKind, parse_rfc3339, process_source, set_process_source,
 };
 pub use reader::{AuditFilter, AuditPage, DetailId, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};
@@ -106,6 +106,7 @@ mod tests {
     use serde_json::Value;
     use time::OffsetDateTime;
     use time::ext::NumericalDuration;
+    use uuid::Uuid;
 
     use super::test_support::test_dir;
     use super::*;
@@ -227,6 +228,28 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(offset.events.len(), 2);
+    }
+
+    #[test]
+    fn entity_ids_are_recorded_in_detail_and_found_by_the_detail_id_filter() {
+        let _t = test_dir();
+        let (vault_id, item_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let named = event(Action::ItemUpdated, Outcome::Succeeded)
+            .subject_ids(SubjectIds::item(vault_id, item_id));
+        assert_eq!(named.detail["vault_id"], vault_id.to_string());
+        assert_eq!(named.detail["item_id"], item_id.to_string());
+        assert!(!named.detail.contains_key("credential_id"));
+        record(named);
+
+        let none = event(Action::ItemListed, Outcome::Denied).subject_ids(SubjectIds::default());
+        assert!(none.detail.is_empty());
+        record(none);
+
+        let found = read(&AuditFilter {
+            detail_id: Some(DetailId::new("item_id", item_id.to_string())),
+            ..Default::default()
+        });
+        assert_eq!(found.events.len(), 1);
     }
 
     #[test]

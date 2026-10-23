@@ -11,7 +11,6 @@ use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::bundle::{ExportMode, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key, normalized_key,
 };
@@ -252,15 +251,15 @@ impl VaultCatalog {
     /// Retained versions of a vault, newest first.
     pub fn list_versions(&self, key: &str) -> Result<Vec<RetainedVersion>, Error> {
         let vh = self.load(key)?;
-        self.files.list_versions(VaultHeader::peek(&vh.path)?.id)
+        self.files.list_versions(vh.peek_vault_id()?)
     }
 
-    /// Delete every retained version of a vault. Returns the number of
-    /// versions deleted.
-    pub fn erase_versions(&self, key: &str) -> Result<usize, Error> {
+    /// Delete every retained version of a vault. Returns the vault id and the
+    /// number of versions deleted.
+    pub fn erase_versions(&self, key: &str) -> Result<(Uuid, usize), Error> {
         let vh = self.load(key)?;
-        let id = VaultHeader::peek(&vh.path)?.id;
-        self.files.erase_versions(id, &vh.path)
+        let id = vh.peek_vault_id()?;
+        Ok((id, self.files.erase_versions(id, &vh.path)?))
     }
 
     /// Move a file to the Trash with the macOS 15+ `trash` command, instead of

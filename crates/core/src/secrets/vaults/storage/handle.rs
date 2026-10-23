@@ -8,7 +8,7 @@ use secrecy::{SecretBox, SecretString};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
+use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
@@ -18,7 +18,7 @@ use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
@@ -500,6 +500,35 @@ impl VaultHandle {
         Ok(self.get_unlocked_vault()?.id())
     }
 
+    /// This vault's id. A locked vault is read from its file header, without
+    /// verifying it.
+    pub fn peek_vault_id(&self) -> Result<Uuid, Error> {
+        match self.vault_id() {
+            Err(Error::VaultLocked) => Ok(VaultHeader::peek(&self.path)?.id),
+            other => other,
+        }
+    }
+
+    /// Audit ids of this vault and of item `item_key`. The item id is `None` if
+    /// there is no such item.
+    pub fn item_ids(&self, item_key: &str) -> Result<SubjectIds, Error> {
+        let vault_id = self.vault_id()?;
+        Ok(match self.get_item_overview(item_key)? {
+            Some(item) => SubjectIds::item(vault_id, item.id),
+            None => SubjectIds::vault(vault_id),
+        })
+    }
+
+    /// Audit ids of this vault, item `item_key`, and its credential
+    /// `cred_key`. Ids of entities that do not exist are `None`.
+    pub fn credential_ids(&self, item_key: &str, cred_key: &str) -> Result<SubjectIds, Error> {
+        let ids = self.item_ids(item_key)?;
+        Ok(SubjectIds {
+            credential_id: self.get_secret_overview(item_key, cred_key)?.map(|c| c.id),
+            ..ids
+        })
+    }
+
     /// Reorder an item's credentials, keeping each in its current section.
     pub fn reorder_credentials(
         &mut self,
@@ -704,6 +733,10 @@ pub fn export_bundle(
                 Subject::new(SubjectKind::Vault, vw.key.clone())
                     .maybe_label(vw.vault_name().map(str::to_string)),
             )
+            .subject_ids(SubjectIds {
+                vault_id: vw.vault_id().ok(),
+                ..SubjectIds::default()
+            })
             .detail("bundle", bundle_id.clone())
             .detail("vault_count", total.to_string()),
         );
@@ -806,5 +839,37 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
             .map_err(Error::KeyCreationFailed)
         },
         Err(e) => Err(Error::KeyRetrievalFailed(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_ids_name_the_vault_item_and_credential_that_exist() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        vw.add_item("item", "Item").unwrap();
+        vw.add_secret(
+            "item",
+            "cred",
+            "Cred",
+            FieldKind::default(),
+            SecretString::from("value".to_string()),
+        )
+        .unwrap();
+        let vault_id = vw.vault_id().unwrap();
+        let item_id = vw.get_item_overview("item").unwrap().unwrap().id;
+        let cred_id = vw.get_secret_overview("item", "cred").unwrap().unwrap().id;
+
+        assert_eq!(
+            vw.credential_ids("item", "cred").unwrap(),
+            SubjectIds::credential(vault_id, item_id, cred_id)
+        );
+        assert_eq!(
+            vw.credential_ids("item", "missing").unwrap(),
+            SubjectIds::item(vault_id, item_id)
+        );
+        assert_eq!(vw.item_ids("missing").unwrap(), SubjectIds::vault(vault_id));
     }
 }

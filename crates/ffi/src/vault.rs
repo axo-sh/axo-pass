@@ -589,14 +589,16 @@ fn dismiss_report(
 /// Audit event for a successful vault change made in the app. Failed changes
 /// and reads in the app are not recorded. A passkey move that leaves the
 /// passkey in both vaults is the one exception. Details carry keys, titles,
-/// and counts, never values.
+/// and counts, never values. `ids` are the ids of the subject.
 fn change_event(
     action: audit::Action,
     vault_key: &str,
     subject: audit::Subject,
+    ids: audit::SubjectIds,
 ) -> audit::AuditEvent {
     audit::AuditEvent::new(audit::process_source(), action, audit::Outcome::Succeeded)
         .subject(subject)
+        .subject_ids(ids)
         .detail("vault", vault_key)
         .detail("via", "app")
 }
@@ -938,15 +940,18 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let id = history_id.clone();
-        self.edit_vault(vault_key.clone(), move |vw| {
-            Ok(vw.restore_history_value(&item_key, &cred_key, parse_id(&history_id)?)?)
-        })
-        .await?;
+        let ids = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                vw.restore_history_value(&item_key, &cred_key, parse_id(&history_id)?)?;
+                Ok(vw.credential_ids(&item_key, &cred_key)?)
+            })
+            .await?;
         audit::record_async(
             change_event(
                 audit::Action::CredentialHistoryRestored,
                 &vault_key,
                 subject,
+                ids,
             )
             .detail("history_id", id),
         )
@@ -964,13 +969,20 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let id = history_id.clone();
-        self.edit_vault(vault_key.clone(), move |vw| {
-            Ok(vw.purge_history(&item_key, &cred_key, parse_id(&history_id)?)?)
-        })
-        .await?;
+        let ids = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                vw.purge_history(&item_key, &cred_key, parse_id(&history_id)?)?;
+                Ok(vw.credential_ids(&item_key, &cred_key)?)
+            })
+            .await?;
         audit::record_async(
-            change_event(audit::Action::CredentialHistoryPurged, &vault_key, subject)
-                .detail("history_id", id),
+            change_event(
+                audit::Action::CredentialHistoryPurged,
+                &vault_key,
+                subject,
+                ids,
+            )
+            .detail("history_id", id),
         )
         .await;
         Ok(())
@@ -1012,17 +1024,20 @@ impl AxoPass {
         let info = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vw = m.add_vault(name, &vault_key).map_err(FfiError::from)?;
-            Ok::<_, FfiError>(VaultInfo {
+            let info = VaultInfo {
                 key: vw.key.clone(),
                 name: vw.vault_name().map(|s| s.to_string()),
-            })
+            };
+            Ok::<_, FfiError>((info, audit::SubjectIds::vault(vw.vault_id()?)))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let (info, ids) = info;
         audit::record_async(change_event(
             audit::Action::VaultCreated,
             &info.key,
             vault_subject(&info.key).maybe_label(info.name.clone()),
+            ids,
         ))
         .await;
         Ok(info)
@@ -1036,7 +1051,7 @@ impl AxoPass {
         new_vault_key: Option<String>,
         new_name: Option<String>,
     ) -> Result<(), FfiError> {
-        let (renamed, rekeyed) = self
+        let (renamed, rekeyed, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let mut renamed = None;
                 if new_name.as_deref() != vw.vault_name()
@@ -1054,7 +1069,7 @@ impl AxoPass {
                     rekeyed = Some(new_vault_key);
                 }
 
-                Ok((renamed, rekeyed))
+                Ok((renamed, rekeyed, audit::SubjectIds::vault(vw.vault_id()?)))
             })
             .await?;
 
@@ -1064,6 +1079,7 @@ impl AxoPass {
                     audit::Action::VaultUpdated,
                     &vault_key,
                     vault_subject(&vault_key),
+                    ids,
                 )
                 .maybe_detail("new_name", renamed)
                 .maybe_detail("new_key", rekeyed),
@@ -1101,7 +1117,7 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         let version = name.clone();
-        let (key, vault_name) = tokio::task::spawn_blocking(move || {
+        let (key, vault_name, vault_id) = tokio::task::spawn_blocking(move || {
             VaultsManager::restore_version(&manager, &vault_key, &version)
         })
         .await
@@ -1111,6 +1127,7 @@ impl AxoPass {
                 audit::Action::VaultVersionRestored,
                 &key,
                 vault_subject(&key).maybe_label(vault_name),
+                audit::SubjectIds::vault(vault_id),
             )
             .detail("version", name),
         )
@@ -1124,7 +1141,7 @@ impl AxoPass {
     pub async fn erase_vault_versions(&self, vault_key: String) -> Result<u32, FfiError> {
         let store = self.store()?;
         let key = vault_key.clone();
-        let count = tokio::task::spawn_blocking(move || store.erase_versions(&key))
+        let (vault_id, count) = tokio::task::spawn_blocking(move || store.erase_versions(&key))
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))??;
         audit::record_async(
@@ -1132,6 +1149,7 @@ impl AxoPass {
                 audit::Action::VaultVersionsErased,
                 &vault_key,
                 vault_subject(&vault_key),
+                audit::SubjectIds::vault(vault_id),
             )
             .detail("version_count", count.to_string()),
         )
@@ -1144,13 +1162,13 @@ impl AxoPass {
     pub async fn delete_vault(&self, vault_key: String) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         let key = vault_key.clone();
-        let name = tokio::task::spawn_blocking(move || {
+        let (name, vault_id) = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let name = m
-                .get_vault(&vault_key)
-                .and_then(|vw| vw.vault_name().map(str::to_string));
+            let vw = m.get_or_create_vault_mut(&vault_key)?;
+            let name = vw.vault_name().map(str::to_string);
+            let vault_id = vw.peek_vault_id()?;
             m.delete_vault(&vault_key).map_err(FfiError::from)?;
-            Ok::<_, FfiError>(name)
+            Ok::<_, FfiError>((name, vault_id))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
@@ -1158,6 +1176,7 @@ impl AxoPass {
             audit::Action::VaultDeleted,
             &key,
             vault_subject(&key).maybe_label(name),
+            audit::SubjectIds::vault(vault_id),
         ))
         .await;
         Ok(())
@@ -1172,17 +1191,18 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = item_subject(&vault_key, &item_key).label(item_title.clone());
         let (key, title) = (vault_key.clone(), item_title.clone());
-        let previous_title = self
+        let (previous_title, ids) = self
             .edit_vault(vault_key, move |vw| {
                 let previous_title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
                 vw.add_item(&item_key, &item_title)?;
-                Ok(previous_title)
+                Ok((previous_title, vw.item_ids(&item_key)?))
             })
             .await?;
         let event = match previous_title {
-            None => change_event(audit::Action::ItemCreated, &key, subject),
+            None => change_event(audit::Action::ItemCreated, &key, subject, ids),
             Some(previous) if previous != title => {
-                change_event(audit::Action::ItemUpdated, &key, subject).detail("changed", "title")
+                change_event(audit::Action::ItemUpdated, &key, subject, ids)
+                    .detail("changed", "title")
             },
             Some(_) => return Ok(()),
         };
@@ -1251,23 +1271,22 @@ impl AxoPass {
         new_key: Option<String>,
     ) -> Result<(), FfiError> {
         let id = item_id.clone();
-        let restored = self
+        let (restored, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let id = parse_id(&item_id)?;
                 vw.restore_item(id, new_key)?;
-                Ok(vw
+                let restored = vw
                     .get_item_overview_by_id(id)?
-                    .map(|i| (i.key.clone(), i.title.clone())))
+                    .map(|i| (i.key.clone(), i.title.clone()));
+                Ok((restored, audit::SubjectIds::item(vw.vault_id()?, id)))
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::ItemRestored,
-                &vault_key,
-                item_subject_by_id(&vault_key, &id, restored),
-            )
-            .detail("item_id", id),
-        )
+        audit::record_async(change_event(
+            audit::Action::ItemRestored,
+            &vault_key,
+            item_subject_by_id(&vault_key, &id, restored),
+            ids,
+        ))
         .await;
         Ok(())
     }
@@ -1275,7 +1294,7 @@ impl AxoPass {
     /// Delete a deleted item permanently, with its credentials.
     pub async fn purge_item(&self, vault_key: String, item_id: String) -> Result<(), FfiError> {
         let id = item_id.clone();
-        let purged = self
+        let (purged, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let id = parse_id(&item_id)?;
                 let purged = vw
@@ -1284,17 +1303,15 @@ impl AxoPass {
                     .find(|d| d.item.id == id)
                     .map(|d| (d.item.key.clone(), d.item.title.clone()));
                 vw.purge_item(id)?;
-                Ok(purged)
+                Ok((purged, audit::SubjectIds::item(vw.vault_id()?, id)))
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::ItemPurged,
-                &vault_key,
-                item_subject_by_id(&vault_key, &id, purged),
-            )
-            .detail("item_id", id),
-        )
+        audit::record_async(change_event(
+            audit::Action::ItemPurged,
+            &vault_key,
+            item_subject_by_id(&vault_key, &id, purged),
+            ids,
+        ))
         .await;
         Ok(())
     }
@@ -1303,17 +1320,19 @@ impl AxoPass {
     /// recoverable with `restore_item` until purged.
     pub async fn delete_item(&self, vault_key: String, item_key: String) -> Result<(), FfiError> {
         let subject = item_subject(&vault_key, &item_key);
-        let title = self
+        let (title, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
+                let ids = vw.item_ids(&item_key)?;
                 vw.delete_item(&item_key)?;
-                Ok(title)
+                Ok((title, ids))
             })
             .await?;
         audit::record_async(change_event(
             audit::Action::ItemDeleted,
             &vault_key,
             subject.maybe_label(title),
+            ids,
         ))
         .await;
         Ok(())
@@ -1331,25 +1350,27 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key).label(title.clone());
         let key = vault_key.clone();
-        self.edit_vault(vault_key, move |vw| {
-            let kind = match kind {
-                Some(info) => FieldKind::try_from(info)?,
-                None => FieldKind::default(),
-            };
-            vw.add_new_secret(
-                &item_key,
-                &cred_key,
-                &title,
-                kind,
-                SecretString::from(value),
-            )
-            .map_err(FfiError::from)
-        })
-        .await?;
+        let ids = self
+            .edit_vault(vault_key, move |vw| {
+                let kind = match kind {
+                    Some(info) => FieldKind::try_from(info)?,
+                    None => FieldKind::default(),
+                };
+                vw.add_new_secret(
+                    &item_key,
+                    &cred_key,
+                    &title,
+                    kind,
+                    SecretString::from(value),
+                )?;
+                Ok(vw.credential_ids(&item_key, &cred_key)?)
+            })
+            .await?;
         audit::record_async(change_event(
             audit::Action::CredentialCreated,
             &key,
             subject,
+            ids,
         ))
         .await;
         Ok(())
@@ -1367,7 +1388,7 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key).label(title.clone());
         let key = vault_key.clone();
-        let changed = self
+        let (changed, ids) = self
             .edit_vault(vault_key, move |vw| {
                 let previous = vw
                     .get_secret_overview(&item_key, &cred_key)?
@@ -1401,12 +1422,12 @@ impl AxoPass {
                     kind,
                     SecretString::from(value),
                 )?;
-                Ok(changed)
+                Ok((changed, vw.credential_ids(&item_key, &cred_key)?))
             })
             .await?;
         let event = match changed {
-            None => change_event(audit::Action::CredentialCreated, &key, subject),
-            Some(changed) => change_event(audit::Action::CredentialUpdated, &key, subject)
+            None => change_event(audit::Action::CredentialCreated, &key, subject, ids),
+            Some(changed) => change_event(audit::Action::CredentialUpdated, &key, subject, ids)
                 .detail("changed", changed),
         };
         audit::record_async(event).await;
@@ -1435,18 +1456,21 @@ impl AxoPass {
         .collect::<Vec<_>>()
         .join(",");
         let renamed_to = new_key.clone();
-        self.edit_vault(vault_key.clone(), move |vw| {
-            let update = CredentialUpdate {
-                key: new_key,
-                title,
-                kind: kind.map(FieldKind::try_from).transpose()?,
-            };
-            Ok(vw.update_credential(&item_key, &cred_key, update)?)
-        })
-        .await?;
+        let ids = self
+            .edit_vault(vault_key.clone(), move |vw| {
+                let ids = vw.credential_ids(&item_key, &cred_key)?;
+                let update = CredentialUpdate {
+                    key: new_key,
+                    title,
+                    kind: kind.map(FieldKind::try_from).transpose()?,
+                };
+                vw.update_credential(&item_key, &cred_key, update)?;
+                Ok(ids)
+            })
+            .await?;
         if !changed.is_empty() {
             audit::record_async(
-                change_event(audit::Action::CredentialUpdated, &vault_key, subject)
+                change_event(audit::Action::CredentialUpdated, &vault_key, subject, ids)
                     .detail("changed", changed)
                     .maybe_detail("new_key", renamed_to),
             )
@@ -1524,26 +1548,29 @@ impl AxoPass {
         new_key: Option<String>,
     ) -> Result<(), FfiError> {
         let (item, id) = (item_key.clone(), cred_id.clone());
-        let restored = self
+        let (restored, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let id = parse_id(&cred_id)?;
                 vw.restore_item_credential(&item_key, id, new_key)?;
-                Ok(vw.get_item_overview(&item_key)?.and_then(|i| {
+                let restored = vw.get_item_overview(&item_key)?.and_then(|i| {
                     i.credentials
                         .values()
                         .find(|c| c.id == id)
                         .map(|c| (c.key.clone(), c.title.clone()))
-                }))
+                });
+                let ids = audit::SubjectIds {
+                    credential_id: Some(id),
+                    ..vw.item_ids(&item_key)?
+                };
+                Ok((restored, ids))
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::CredentialRestored,
-                &vault_key,
-                credential_subject_by_id(&vault_key, &item, &id, restored),
-            )
-            .detail("credential_id", id),
-        )
+        audit::record_async(change_event(
+            audit::Action::CredentialRestored,
+            &vault_key,
+            credential_subject_by_id(&vault_key, &item, &id, restored),
+            ids,
+        ))
         .await;
         Ok(())
     }
@@ -1556,7 +1583,7 @@ impl AxoPass {
         cred_id: String,
     ) -> Result<(), FfiError> {
         let (item, id) = (item_key.clone(), cred_id.clone());
-        let purged = self
+        let (purged, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let id = parse_id(&cred_id)?;
                 let purged = vw
@@ -1570,17 +1597,19 @@ impl AxoPass {
                         )
                     });
                 vw.purge_item_credential(&item_key, id)?;
-                Ok(purged)
+                let ids = audit::SubjectIds {
+                    credential_id: Some(id),
+                    ..vw.item_ids(&item_key)?
+                };
+                Ok((purged, ids))
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::CredentialPurged,
-                &vault_key,
-                credential_subject_by_id(&vault_key, &item, &id, purged),
-            )
-            .detail("credential_id", id),
-        )
+        audit::record_async(change_event(
+            audit::Action::CredentialPurged,
+            &vault_key,
+            credential_subject_by_id(&vault_key, &item, &id, purged),
+            ids,
+        ))
         .await;
         Ok(())
     }
@@ -1595,19 +1624,21 @@ impl AxoPass {
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let key = vault_key.clone();
-        let title = self
+        let (title, ids) = self
             .edit_vault(vault_key, move |vw| {
                 let title = vw
                     .get_secret_overview(&item_key, &cred_key)?
                     .map(|o| o.title.clone());
+                let ids = vw.credential_ids(&item_key, &cred_key)?;
                 vw.delete_item_credential(&item_key, &cred_key)?;
-                Ok(title)
+                Ok((title, ids))
             })
             .await?;
         audit::record_async(change_event(
             audit::Action::CredentialDeleted,
             &key,
             subject.maybe_label(title),
+            ids,
         ))
         .await;
         Ok(())
@@ -1626,17 +1657,18 @@ impl AxoPass {
         title: Option<String>,
     ) -> Result<String, FfiError> {
         let key = vault_key.clone();
-        let created_key = self
+        let (created_key, ids) = self
             .edit_vault(vault_key, move |vw| {
-                autofill::create_login(
+                let created_key = autofill::create_login(
                     vw,
                     &website,
                     username.as_deref(),
                     SecretString::from(password),
                     item_key.as_deref(),
                     title.as_deref(),
-                )
-                .map_err(FfiError::from)
+                )?;
+                let ids = vw.item_ids(&created_key)?;
+                Ok((created_key, ids))
             })
             .await?;
         audit::record_async(
@@ -1644,6 +1676,7 @@ impl AxoPass {
                 audit::Action::ItemCreated,
                 &key,
                 item_subject(&key, &created_key),
+                ids,
             )
             .detail("login", "true"),
         )
@@ -1710,11 +1743,16 @@ impl AxoPass {
         };
         let cleared = cred_key.is_none();
         let key = vault_key.clone();
-        self.edit_vault(vault_key, move |vw| {
-            autofill::set_role(vw, &item_key, role, cred_key.as_deref()).map_err(FfiError::from)
-        })
-        .await?;
-        let mut event = change_event(audit::Action::CredentialRoleChanged, &key, subject)
+        let ids = self
+            .edit_vault(vault_key, move |vw| {
+                autofill::set_role(vw, &item_key, role, cred_key.as_deref())?;
+                Ok(match &cred_key {
+                    Some(cred_key) => vw.credential_ids(&item_key, cred_key)?,
+                    None => vw.item_ids(&item_key)?,
+                })
+            })
+            .await?;
+        let mut event = change_event(audit::Action::CredentialRoleChanged, &key, subject, ids)
             .detail("role", role_name);
         if cleared {
             event = event.detail("cleared", "true");
@@ -1742,12 +1780,14 @@ impl AxoPass {
         let website_count = websites.len().to_string();
         let subject = item_subject(&vault_key, &item_key);
         let key = vault_key.clone();
-        self.edit_vault(vault_key, move |vw| {
-            autofill::set_websites(vw, &item_key, websites).map_err(FfiError::from)
-        })
-        .await?;
+        let ids = self
+            .edit_vault(vault_key, move |vw| {
+                autofill::set_websites(vw, &item_key, websites)?;
+                Ok(vw.item_ids(&item_key)?)
+            })
+            .await?;
         audit::record_async(
-            change_event(audit::Action::ItemWebsitesChanged, &key, subject)
+            change_event(audit::Action::ItemWebsitesChanged, &key, subject, ids)
                 .detail("origins", origins)
                 .detail("website_count", website_count),
         )
@@ -1764,13 +1804,20 @@ impl AxoPass {
     ) -> Result<bool, FfiError> {
         let subject = item_subject(&vault_key, &item_key);
         let key = vault_key.clone();
-        let converted = self
+        let (converted, ids) = self
             .edit_vault(vault_key, move |vw| {
-                autofill::convert_to_login(vw, &item_key).map_err(FfiError::from)
+                let converted = autofill::convert_to_login(vw, &item_key)?;
+                Ok((converted, vw.item_ids(&item_key)?))
             })
             .await?;
         if converted {
-            audit::record_async(change_event(audit::Action::ItemConverted, &key, subject)).await;
+            audit::record_async(change_event(
+                audit::Action::ItemConverted,
+                &key,
+                subject,
+                ids,
+            ))
+            .await;
         }
         Ok(converted)
     }
@@ -1796,8 +1843,9 @@ impl AxoPass {
         let dest_item = dest_item_key
             .clone()
             .unwrap_or_else(|| "new_login".to_string());
-        // `None` if there was nothing to move. Otherwise the result of removing
-        // the source, after the destination was written.
+        // `None` if there was nothing to move. Otherwise the ids of the source
+        // and the stored passkey, and the result of removing the source, after
+        // the destination was written.
         let moved = tokio::task::spawn_blocking(move || {
             let target = match dest_item_key {
                 Some(key) => PasskeyTarget::Item(key),
@@ -1809,33 +1857,41 @@ impl AxoPass {
                 }
                 return VaultsManager::write_vault(&manager, &vault_key, |vw| {
                     let record = passkey::read_record(vw, &item_key, &cred_key)?;
-                    passkey::write_record(vw, &record, &target)?;
+                    let source = vw.credential_ids(&item_key, &cred_key)?;
+                    let dest = passkey::write_record(vw, &record, &target)?;
                     passkey::remove_record(vw, &item_key, &cred_key)?;
-                    Ok::<_, FfiError>(Some(Ok(())))
+                    Ok::<_, FfiError>(Some((source, dest, Ok(()))))
                 });
             }
             // An add in a transaction on the destination, then a remove in a
             // transaction on the source, so no transaction holds two vaults'
             // locks. A failure between the two leaves the passkey in both.
-            let record = VaultsManager::write_vault(&manager, &vault_key, |vw| {
-                passkey::read_record(vw, &item_key, &cred_key).map_err(FfiError::from)
+            let (record, source) = VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                let record = passkey::read_record(vw, &item_key, &cred_key)?;
+                Ok::<_, FfiError>((record, vw.credential_ids(&item_key, &cred_key)?))
             })?;
-            VaultsManager::write_vault(&manager, &dest_vault_key, |vw| {
+            let dest = VaultsManager::write_vault(&manager, &dest_vault_key, |vw| {
                 passkey::write_record(vw, &record, &target).map_err(FfiError::from)
             })?;
             let removed = VaultsManager::write_vault(&manager, &vault_key, |vw| {
                 passkey::remove_record(vw, &item_key, &cred_key).map_err(FfiError::from)
             });
-            Ok(Some(removed))
+            Ok(Some((source, dest, removed)))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
-        let Some(removed) = moved else {
+        let Some((source, dest, removed)) = moved else {
             return Ok(());
         };
-        let mut event = change_event(audit::Action::PasskeyMoved, &key, subject)
+        let mut event = change_event(audit::Action::PasskeyMoved, &key, subject, source)
             .detail("dest_vault", dest_vault)
-            .detail("dest_item", dest_item);
+            .detail("dest_item", dest_item)
+            .maybe_detail("dest_vault_id", dest.vault_id.map(|id| id.to_string()))
+            .maybe_detail("dest_item_id", dest.item_id.map(|id| id.to_string()))
+            .maybe_detail(
+                "dest_credential_id",
+                dest.credential_id.map(|id| id.to_string()),
+            );
         // The destination holds the passkey even if removing the source failed,
         // so that is recorded as a failed move.
         if let Err(e) = &removed {
@@ -1860,16 +1916,23 @@ impl AxoPass {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let key = vault_key.clone();
         let (item, cred) = (item_key.clone(), cred_key.clone());
-        self.edit_vault(vault_key, move |vw| {
-            passkey::rename_account(vw, &item, &cred, &name)?;
-            let value = vw.get_secret(&item, &cred)?;
-            if let Some(summary) = value.and_then(|v| passkey::summary(v.expose_secret())) {
-                dismiss_report(vw, &summary, signals::DismissKind::Rename)?;
-            }
-            Ok(())
-        })
-        .await?;
-        audit::record_async(change_event(audit::Action::PasskeyRenamed, &key, subject)).await;
+        let ids = self
+            .edit_vault(vault_key, move |vw| {
+                passkey::rename_account(vw, &item, &cred, &name)?;
+                let value = vw.get_secret(&item, &cred)?;
+                if let Some(summary) = value.and_then(|v| passkey::summary(v.expose_secret())) {
+                    dismiss_report(vw, &summary, signals::DismissKind::Rename)?;
+                }
+                Ok(vw.credential_ids(&item, &cred)?)
+            })
+            .await?;
+        audit::record_async(change_event(
+            audit::Action::PasskeyRenamed,
+            &key,
+            subject,
+            ids,
+        ))
+        .await;
         Ok(())
     }
 
@@ -1951,13 +2014,17 @@ impl AxoPass {
         let subject = item_subject(&vault_key, &dest_item_key);
         let key = vault_key.clone();
         let source_item = source_item_key.clone();
-        self.edit_vault(vault_key, move |vw| {
-            autofill::merge_items(vw, &source_item_key, &dest_item_key).map_err(FfiError::from)
-        })
-        .await?;
+        let (ids, source) = self
+            .edit_vault(vault_key, move |vw| {
+                let source = vw.item_ids(&source_item_key)?;
+                autofill::merge_items(vw, &source_item_key, &dest_item_key)?;
+                Ok((vw.item_ids(&dest_item_key)?, source))
+            })
+            .await?;
         audit::record_async(
-            change_event(audit::Action::ItemMerged, &key, subject)
-                .detail("source_item", source_item),
+            change_event(audit::Action::ItemMerged, &key, subject, ids)
+                .detail("source_item", source_item)
+                .maybe_detail("source_item_id", source.item_id.map(|id| id.to_string())),
         )
         .await;
         Ok(())

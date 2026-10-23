@@ -61,6 +61,38 @@ pub struct AuditEvent {
     pub message: Option<String>,
 }
 
+/// Ids of the vault, item, and credential an event names. Ids stay the same
+/// across renames and moves, unlike the key path in the subject.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SubjectIds {
+    pub vault_id: Option<Uuid>,
+    pub item_id: Option<Uuid>,
+    pub credential_id: Option<Uuid>,
+}
+
+impl SubjectIds {
+    pub fn vault(vault_id: Uuid) -> Self {
+        Self {
+            vault_id: Some(vault_id),
+            ..Self::default()
+        }
+    }
+
+    pub fn item(vault_id: Uuid, item_id: Uuid) -> Self {
+        Self {
+            item_id: Some(item_id),
+            ..Self::vault(vault_id)
+        }
+    }
+
+    pub fn credential(vault_id: Uuid, item_id: Uuid, credential_id: Uuid) -> Self {
+        Self {
+            credential_id: Some(credential_id),
+            ..Self::item(vault_id, item_id)
+        }
+    }
+}
+
 impl AuditEvent {
     /// Start a new event, stamped now with a fresh id.
     pub fn new(source: Source, action: Action, outcome: Outcome) -> Self {
@@ -117,6 +149,13 @@ impl AuditEvent {
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
         self
+    }
+
+    /// Record the vault, item, and credential ids of the subject in `detail`.
+    pub fn subject_ids(self, ids: SubjectIds) -> Self {
+        self.maybe_detail("vault_id", ids.vault_id.map(|id| id.to_string()))
+            .maybe_detail("item_id", ids.item_id.map(|id| id.to_string()))
+            .maybe_detail("credential_id", ids.credential_id.map(|id| id.to_string()))
     }
 
     /// The timestamp as an RFC 3339 string.
