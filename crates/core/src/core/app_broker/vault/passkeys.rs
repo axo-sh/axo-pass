@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
+use super::super::in_flight::InFlightRequest;
 use super::super::login_index::LoginIndex;
 use super::super::placement::{PasskeyChoices, PlacementVault};
 use super::super::wire::{
-    WirePasskeyAccount, WirePrfRegistrationOutput, WirePrfValues, WireResponse,
+    WirePasskeyAccount, WirePrfRegistrationOutput, WirePrfValues, WireResponse, b64_encode,
 };
 use super::logins::write_vault_key;
-use super::requests::b64_encode;
 use super::serve::{AccessIds, Served, open_vault};
-use super::{PasskeyAccountChoice, VaultAuthorizer};
+use super::{PasskeyAccountChoice, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultPayload};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::vaults::passkey::signals::{self, Report};
@@ -134,13 +134,20 @@ pub(in super::super) fn list_passkeys_locked(
 pub(super) fn create_passkey(
     vaults: &VaultCatalog,
     vault_key: &str,
-    request: passkey::CreatePasskeyRequest,
+    payload: Option<VaultPayload>,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
 ) -> Result<Served, String> {
+    let Some(VaultPayload::CreatePasskey(payload)) = payload else {
+        return Err("Missing passkey registration payload".to_string());
+    };
     let mut vh = open_vault(vaults, vault_key, context)?;
     let response = rt
-        .block_on(passkey::create_from_wire(vaults.files(), &mut vh, request))
+        .block_on(passkey::create_from_wire(
+            vaults.files(),
+            &mut vh,
+            payload.request,
+        ))
         .map_err(|e| format!("Failed to register the passkey: {e}"))?;
     Ok(Served::new(
         WireResponse::PasskeyRegistered {
@@ -161,12 +168,16 @@ pub(super) fn create_passkey(
 /// audit ids are those of the passkey that signed.
 pub(super) fn assert_passkey(
     vaults: &VaultCatalog,
-    request: passkey::AssertPasskeyRequest,
-    only_vault: Option<&str>,
+    payload: Option<VaultPayload>,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
     signed: &mut Option<SignedPasskey>,
 ) -> Result<Served, String> {
+    let Some(VaultPayload::AssertPasskey(payload)) = payload else {
+        return Err("Missing passkey assertion payload".to_string());
+    };
+    let request = payload.request;
+    let only_vault = payload.vault_key.as_deref();
     let mut unlocked = unlock_for_passkeys(vaults, &context, only_vault);
 
     let mut last_error = None;
@@ -225,10 +236,104 @@ pub(super) fn assert_passkey(
     Err(last_error.unwrap_or_else(|| "No stored passkey matched the request".to_string()))
 }
 
+/// A passkey step that ended the request before the vault was served.
+pub(super) struct Ended {
+    /// Response to send to the client.
+    pub(super) response: WireResponse,
+    /// Reason recorded in the audit event.
+    pub(super) message: String,
+}
+
+/// Store a registration where the user chose in the prompt. The choice is
+/// checked against what the prompt offered. Returns the response to send if the
+/// choice is refused.
+pub(super) async fn choose_placement(
+    authorizer: &dyn VaultAuthorizer,
+    prompt: &mut VaultAccessPrompt,
+    payload: &mut Option<VaultPayload>,
+) -> Option<Ended> {
+    let VaultAction::CreatePasskey { choices, .. } = &prompt.action else {
+        return None;
+    };
+    let chosen = match authorizer.passkey_placement(prompt).await {
+        Some(placement) => choices.validate(placement),
+        None => Ok(choices.default_placement()),
+    };
+    match chosen {
+        Ok(placement) => {
+            prompt.vault_key = placement.vault_key.clone();
+            if let Some(VaultPayload::CreatePasskey(create)) = payload.as_mut() {
+                create.request.target = placement.target();
+            }
+            None
+        },
+        Err(message) => Some(Ended {
+            response: WireResponse::Failed {
+                message: message.clone(),
+            },
+            message,
+        }),
+    }
+}
+
+/// Ask the user which passkey to sign in with. A sign-in with no account list
+/// from the extension asks here, if several passkeys match. The chosen passkey
+/// and its vault are the only ones used to sign. Returns the response to send
+/// if no account is chosen.
+pub(super) async fn choose_account(
+    authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
+    context: ForeignContext,
+    prompt: &VaultAccessPrompt,
+    payload: &mut Option<VaultPayload>,
+    in_flight: &InFlightRequest,
+) -> Option<Ended> {
+    let Some(VaultPayload::AssertPasskey(assert)) = payload.as_mut() else {
+        return None;
+    };
+    if !assert.choose_account {
+        return None;
+    }
+    let request = assert.request.clone();
+    let candidates_vaults = vaults.clone();
+    let candidates = tokio::task::spawn_blocking(move || {
+        passkey_candidates(&candidates_vaults, &request, context)
+    })
+    .await
+    .unwrap_or_default();
+    let chosen = if candidates.len() > 1 {
+        let choose = authorizer.choose_passkey(prompt, candidates.clone());
+        match in_flight.unless_abandoned(choose).await {
+            Some(index) => index
+                .and_then(|index| candidates.get(index))
+                .map(Some)
+                .ok_or("No account chosen"),
+            None => Err("Client disconnected during the account choice"),
+        }
+    } else {
+        Ok(candidates.first())
+    };
+    match chosen {
+        Ok(Some(account)) => {
+            assert.request.allowed_credentials = vec![account.credential_id.clone()];
+            assert.vault_key = Some(account.vault_key.clone());
+            None
+        },
+        Ok(None) => None,
+        Err(message) => {
+            log::debug!("App broker passkey account was not chosen: {message}");
+            Some(Ended {
+                response: WireResponse::Cancelled,
+                message: message.to_string(),
+            })
+        },
+    }
+}
+
 /// The passkeys `assert_passkey` could sign `request` with, for the user to
 /// pick one. Rejected passkeys are left out unless every match is rejected,
 /// which mirrors the order `assert_passkey` tries them in.
-pub(super) fn passkey_candidates(
+fn passkey_candidates(
     vaults: &VaultCatalog,
     request: &passkey::AssertPasskeyRequest,
     context: ForeignContext,

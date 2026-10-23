@@ -1,18 +1,32 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::super::BrokerError;
 use super::super::client::send_request;
 use super::super::wire::{
-    BrowserClient, WirePrfAssertion, WirePrfCredentialValues, WirePrfRegistration, WirePrfValues,
-    WireRequest, WireResponse,
+    BrowserClient, WireExportMode, WireImportIdentity, WirePrfAssertion, WirePrfCredentialValues,
+    WirePrfRegistration, WirePrfValues, WireRequest, WireResponse, b64_decode, b64_encode,
+    decode_prf_values,
 };
-use super::{
-    BrokerVaultItem, ResolvePurpose, VaultRef, WireExportMode, WireImportIdentity, WireLogin,
-};
+use super::{BrokerVaultItem, ResolvePurpose, VaultRef, WireLogin};
 use crate::audit::SubjectIds;
 use crate::secrets::vaults::passkey;
+
+/// Send `request` and read the response with `accept`. `accept` returns
+/// `Ok(None)` for a response it does not expect, which becomes a failure naming
+/// `what`. A cancelled or failed response maps to the matching error without
+/// `accept`.
+fn exchange<T>(
+    request: &WireRequest,
+    what: &str,
+    accept: impl FnOnce(WireResponse) -> Result<Option<T>, BrokerError>,
+) -> Result<T, BrokerError> {
+    match send_request(request)? {
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        response => accept(response)?
+            .ok_or_else(|| BrokerError::Failed(format!("Unexpected response to {what}"))),
+    }
+}
 
 /// Ask the app to unlock a vault and return its item overview. Blocking: it may
 /// wait for the user to answer a prompt, so call it from a thread that can
@@ -25,14 +39,10 @@ pub fn request_vault_items(
         vault_key: vault_key.to_string(),
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultItems { items } => Ok(items),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault listing".to_string(),
-        )),
-    }
+    exchange(&request, "vault listing", |response| match response {
+        WireResponse::VaultItems { items } => Ok(Some(items)),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to unlock a vault and return one credential's secret. `None`
@@ -50,14 +60,10 @@ pub fn request_vault_secret(
         credential_key: credential_key.to_string(),
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultSecret { value } => Ok(value.map(SecretString::from)),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault secret read".to_string(),
-        )),
-    }
+    exchange(&request, "vault secret read", |response| match response {
+        WireResponse::VaultSecret { value } => Ok(Some(value.map(SecretString::from))),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to resolve many `axo://` references at once, behind one prompt.
@@ -73,17 +79,15 @@ pub fn request_resolve_secrets(
         purpose,
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::ResolvedSecrets { values } => Ok(values
-            .into_iter()
-            .map(|v| v.map(SecretString::from))
-            .collect()),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to secret resolution".to_string(),
+    exchange(&request, "secret resolution", |response| match response {
+        WireResponse::ResolvedSecrets { values } => Ok(Some(
+            values
+                .into_iter()
+                .map(|v| v.map(SecretString::from))
+                .collect(),
         )),
-    }
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to unlock a vault and write one credential's secret value,
@@ -107,14 +111,10 @@ pub fn request_write_vault_secret(
         login,
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultWritten { created } => Ok(created),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault secret write".to_string(),
-        )),
-    }
+    exchange(&request, "vault secret write", |response| match response {
+        WireResponse::VaultWritten { created } => Ok(Some(created)),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to unlock every named vault and write an encrypted bundle to
@@ -133,14 +133,10 @@ pub fn request_export_vaults(
         exclude_passkeys: !include_passkeys,
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultsExported { count } => Ok(count),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault export".to_string(),
-        )),
-    }
+    exchange(&request, "vault export", |response| match response {
+        WireResponse::VaultsExported { count } => Ok(Some(count)),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to import the selected vaults from a bundle, re-wrapping each
@@ -159,14 +155,10 @@ pub fn request_import_vaults(
         selection: selection.to_vec(),
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultsImported { keys } => Ok(keys),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault import".to_string(),
-        )),
-    }
+    exchange(&request, "vault import", |response| match response {
+        WireResponse::VaultsImported { keys } => Ok(Some(keys)),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to unlock the vault at `path` to validate it, then register it
@@ -180,14 +172,10 @@ pub fn request_add_external_vault(
         path: path.to_string(),
         caller: caller.map(String::from),
     };
-    match send_request(&request)? {
-        WireResponse::VaultLinked { vault_key, name } => Ok((vault_key, name)),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to vault add".to_string(),
-        )),
-    }
+    exchange(&request, "vault add", |response| match response {
+        WireResponse::VaultLinked { vault_key, name } => Ok(Some((vault_key, name))),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to register a passkey against an unlocked vault and return the
@@ -216,12 +204,12 @@ pub fn request_create_passkey(
         caller: caller.map(String::from),
         client: BrowserClient::default(),
     };
-    match send_request(&wire)? {
+    exchange(&wire, "passkey registration", |response| match response {
         WireResponse::PasskeyRegistered {
             credential_id,
             attestation_object,
             prf,
-        } => Ok(passkey::CreatePasskeyResponse {
+        } => Ok(Some(passkey::CreatePasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             attestation_object: b64_decode(&attestation_object)?,
             prf: prf
@@ -234,13 +222,9 @@ pub fn request_create_passkey(
                 .transpose()?,
             // The wire does not carry where the passkey is stored.
             ids: SubjectIds::default(),
-        }),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to passkey registration".to_string(),
-        )),
-    }
+        })),
+        _ => Ok(None),
+    })
 }
 
 /// Ask the app to sign an assertion challenge with a stored passkey. Blocking,
@@ -274,14 +258,14 @@ pub fn request_assert_passkey(
         caller: caller.map(String::from),
         client: BrowserClient::default(),
     };
-    match send_request(&wire)? {
+    exchange(&wire, "passkey assertion", |response| match response {
         WireResponse::PasskeyAsserted {
             credential_id,
             user_handle,
             authenticator_data,
             signature,
             prf,
-        } => Ok(passkey::AssertPasskeyResponse {
+        } => Ok(Some(passkey::AssertPasskeyResponse {
             credential_id: b64_decode(&credential_id)?,
             user_handle: b64_decode(&user_handle)?,
             authenticator_data: b64_decode(&authenticator_data)?,
@@ -290,27 +274,7 @@ pub fn request_assert_passkey(
             // The wire does not carry where the passkey is stored.
             item_key: String::new(),
             credential_key: String::new(),
-        }),
-        WireResponse::Cancelled => Err(BrokerError::Cancelled),
-        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
-        _ => Err(BrokerError::Failed(
-            "Unexpected response to passkey assertion".to_string(),
-        )),
-    }
-}
-
-pub(super) fn b64_encode(bytes: &[u8]) -> String {
-    b64.encode(bytes)
-}
-
-pub(super) fn decode_prf_values(values: &WirePrfValues) -> Result<passkey::PrfValues, BrokerError> {
-    Ok(passkey::PrfValues {
-        first: b64_decode(&values.first)?,
-        second: values.second.as_deref().map(b64_decode).transpose()?,
+        })),
+        _ => Ok(None),
     })
-}
-
-pub(super) fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
-    b64.decode(value)
-        .map_err(|e| BrokerError::Failed(format!("Malformed base64 in passkey response: {e}")))
 }

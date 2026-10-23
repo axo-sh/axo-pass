@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use secrecy::ExposeSecret;
-
 use super::super::in_flight::InFlightRequest;
 use super::super::wire::WireResponse;
 use super::super::{Authorizers, PromptOutcome};
-use super::audit::{access_event, record_access};
+use super::audit::{access_event, record_access, record_failure};
 use super::logins::serve_logins;
 use super::manage::{add_external_vault, export_vaults, import_vaults};
-use super::passkeys::{SignedPasskey, assert_passkey, create_passkey, passkey_candidates};
-use super::secrets::{collect_items, resolve_secrets, write_secret};
+use super::passkeys::{
+    Ended, SignedPasskey, assert_passkey, choose_account, choose_placement, create_passkey,
+};
+use super::secrets::{list_items, read_secret, resolve_secrets, write_vault_secret};
 use super::{VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultPayload};
 use crate::audit::{self, Actor, Outcome, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
@@ -59,14 +59,7 @@ async fn authorize(
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");
-            record_access(
-                prompt,
-                actor,
-                Outcome::Denied,
-                None,
-                &AccessIds::None,
-                Some(&message),
-            );
+            record_failure(prompt, actor, Outcome::Denied, &message);
             authorizer
                 .end(prompt.clone(), PromptOutcome::Failed(message.clone()))
                 .await;
@@ -189,83 +182,20 @@ pub(in super::super) async fn authorize_and_serve(
         Err(response) => return response,
     };
 
-    // A registration is stored where the user chose in the prompt. The choice
-    // is checked against what the prompt offered.
-    if let VaultAction::CreatePasskey { choices, .. } = &prompt.action {
-        let chosen = match authorizer.passkey_placement(&prompt).await {
-            Some(placement) => choices.validate(placement),
-            None => Ok(choices.default_placement()),
-        };
-        match chosen {
-            Ok(placement) => {
-                prompt.vault_key = placement.vault_key.clone();
-                if let Some(VaultPayload::CreatePasskey(create)) = payload.as_mut() {
-                    create.request.target = placement.target();
-                }
-            },
-            Err(message) => {
-                record_access(
-                    &prompt,
-                    &actor,
-                    Outcome::Failed,
-                    None,
-                    &AccessIds::None,
-                    Some(&message),
-                );
-                authorizer
-                    .end(prompt, PromptOutcome::Failed(message.clone()))
-                    .await;
-                return WireResponse::Failed { message };
-            },
-        }
+    if let Some(ended) = choose_placement(authorizer, &mut prompt, &mut payload).await {
+        return end_early(authorizer, prompt, &actor, ended).await;
     }
-
-    // A sign-in with no account list from the extension asks the user to pick
-    // one here, if several passkeys match. The chosen passkey and its vault
-    // are the only ones used to sign.
-    if let Some(VaultPayload::AssertPasskey(assert)) = payload.as_mut()
-        && assert.choose_account
+    if let Some(ended) = choose_account(
+        authorizer,
+        vaults,
+        context.clone(),
+        &prompt,
+        &mut payload,
+        in_flight,
+    )
+    .await
     {
-        let request = assert.request.clone();
-        let candidates_context = context.clone();
-        let candidates_vaults = vaults.clone();
-        let candidates = tokio::task::spawn_blocking(move || {
-            passkey_candidates(&candidates_vaults, &request, candidates_context)
-        })
-        .await
-        .unwrap_or_default();
-        let chosen = if candidates.len() > 1 {
-            let choose = authorizer.choose_passkey(&prompt, candidates.clone());
-            match in_flight.unless_abandoned(choose).await {
-                Some(index) => index
-                    .and_then(|index| candidates.get(index))
-                    .map(Some)
-                    .ok_or("No account chosen"),
-                None => Err("Client disconnected during the account choice"),
-            }
-        } else {
-            Ok(candidates.first())
-        };
-        match chosen {
-            Ok(Some(account)) => {
-                assert.request.allowed_credentials = vec![account.credential_id.clone()];
-                assert.vault_key = Some(account.vault_key.clone());
-            },
-            Ok(None) => {},
-            Err(message) => {
-                log::debug!("App broker passkey account was not chosen: {message}");
-                record_access(
-                    &prompt,
-                    &actor,
-                    Outcome::Cancelled,
-                    None,
-                    &AccessIds::None,
-                    Some(message),
-                );
-                authorizer.end(prompt, PromptOutcome::Cancelled).await;
-                return WireResponse::Cancelled;
-            },
-        }
+        return end_early(authorizer, prompt, &actor, ended).await;
     }
 
     let job = prompt.clone();
@@ -301,14 +231,7 @@ pub(in super::super) async fn authorize_and_serve(
             (response, PromptOutcome::Succeeded)
         },
         Err(message) => {
-            record_access(
-                &prompt,
-                &actor,
-                Outcome::Failed,
-                None,
-                &AccessIds::None,
-                Some(&message),
-            );
+            record_failure(&prompt, &actor, Outcome::Failed, &message);
             (
                 WireResponse::Failed {
                     message: message.clone(),
@@ -319,6 +242,26 @@ pub(in super::super) async fn authorize_and_serve(
     };
     authorizer.end(prompt, outcome).await;
     response
+}
+
+/// Record a request that a passkey step ended, take the prompt down, and
+/// return the response to send. A failed response ends the prompt as failed.
+/// Any other response ends it as cancelled.
+async fn end_early(
+    authorizer: &dyn VaultAuthorizer,
+    prompt: VaultAccessPrompt,
+    actor: &Actor,
+    ended: Ended,
+) -> WireResponse {
+    let (outcome, prompt_outcome) = match &ended.response {
+        WireResponse::Failed { message } => {
+            (Outcome::Failed, PromptOutcome::Failed(message.clone()))
+        },
+        _ => (Outcome::Cancelled, PromptOutcome::Cancelled),
+    };
+    record_failure(&prompt, actor, outcome, &ended.message);
+    authorizer.end(prompt, prompt_outcome).await;
+    ended.response
 }
 
 /// Load the vault from disk and serve the request on the app's context.
@@ -337,106 +280,48 @@ pub(super) fn serve_on_context(
     rt: tokio::runtime::Handle,
     signed: &mut Option<SignedPasskey>,
 ) -> Result<Served, String> {
-    match &prompt.action {
-        VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(vaults, refs, context),
+    let vault_key = prompt.vault_key;
+    match prompt.action {
+        VaultAction::ListItems => list_items(vaults, &vault_key, payload, context),
+        VaultAction::ReadSecret {
+            item_key,
+            credential_key,
+        } => read_secret(
+            vaults,
+            &vault_key,
+            &item_key,
+            &credential_key,
+            payload,
+            context,
+        ),
+        VaultAction::WriteSecret {
+            item_key,
+            credential_key,
+        } => write_vault_secret(
+            vaults,
+            &vault_key,
+            &item_key,
+            &credential_key,
+            payload,
+            context,
+        ),
+        VaultAction::ResolveSecrets { refs, .. } => resolve_secrets(vaults, &refs, context),
         VaultAction::ListLogins { .. }
         | VaultAction::FillLogin { .. }
         | VaultAction::GenerateTotp { .. }
         | VaultAction::SaveLogin { .. }
         | VaultAction::UpdateLoginPassword { .. } => {
-            return Err("Login requests are served by serve_logins".to_string());
+            Err("Login requests are served by serve_logins".to_string())
         },
         VaultAction::CreatePasskey { .. } => {
-            let Some(VaultPayload::CreatePasskey(p)) = payload else {
-                return Err("Missing passkey registration payload".to_string());
-            };
-            return create_passkey(vaults, &prompt.vault_key, p.request, context, &rt);
+            create_passkey(vaults, &vault_key, payload, context, &rt)
         },
-        VaultAction::AssertPasskey { .. } => {
-            let Some(VaultPayload::AssertPasskey(p)) = payload else {
-                return Err("Missing passkey assertion payload".to_string());
-            };
-            return assert_passkey(
-                vaults,
-                p.request,
-                p.vault_key.as_deref(),
-                context,
-                &rt,
-                signed,
-            );
-        },
+        VaultAction::AssertPasskey { .. } => assert_passkey(vaults, payload, context, &rt, signed),
         VaultAction::ExportVaults { vault_keys } => {
-            let Some(VaultPayload::Export(export)) = payload else {
-                return Err("Missing export payload".to_string());
-            };
-            return export_vaults(vaults, vault_keys, export, context);
+            export_vaults(vaults, &vault_keys, payload, context)
         },
-        VaultAction::ImportVaults { .. } => {
-            let Some(VaultPayload::Import(import)) = payload else {
-                return Err("Missing import payload".to_string());
-            };
-            return import_vaults(vaults, import, context);
-        },
-        VaultAction::AddVault { path } => return add_external_vault(vaults, path, context),
-        _ => {},
-    }
-
-    let write = match payload {
-        Some(VaultPayload::Write(write)) => Some(write),
-        None => None,
-        Some(_) => return Err("Wrong payload for this vault action".to_string()),
-    };
-
-    let vh = open_vault(vaults, &prompt.vault_key, context)?;
-
-    match prompt.action {
-        VaultAction::ListItems => Ok(Served::new(
-            WireResponse::VaultItems {
-                items: collect_items(&vh)?,
-            },
-            AccessIds::One(SubjectIds::vault(vh.vault_id()?)),
-        )),
-        VaultAction::ReadSecret {
-            item_key,
-            credential_key,
-        } => {
-            let value = vh
-                .get_secret(&item_key, &credential_key)
-                .map_err(|e| format!("Failed to get secret: {e}"))?
-                .map(|secret| secret.expose_secret().to_string());
-            Ok(Served::new(
-                WireResponse::VaultSecret { value },
-                AccessIds::One(vh.credential_ids(&item_key, &credential_key)?),
-            ))
-        },
-        VaultAction::WriteSecret {
-            item_key,
-            credential_key,
-        } => {
-            let payload = write.ok_or("Missing write payload")?;
-            let (created, ids) = vaults
-                .files()
-                .write_unlocked(&vh, |fresh| {
-                    let created = write_secret(fresh, &item_key, &credential_key, payload)?;
-                    Ok::<_, String>((created, fresh.credential_ids(&item_key, &credential_key)?))
-                })?
-                .value;
-            Ok(Served::new(
-                WireResponse::VaultWritten { created },
-                AccessIds::One(ids),
-            ))
-        },
-        VaultAction::ResolveSecrets { .. }
-        | VaultAction::ListLogins { .. }
-        | VaultAction::FillLogin { .. }
-        | VaultAction::GenerateTotp { .. }
-        | VaultAction::SaveLogin { .. }
-        | VaultAction::UpdateLoginPassword { .. }
-        | VaultAction::ExportVaults { .. }
-        | VaultAction::ImportVaults { .. }
-        | VaultAction::AddVault { .. }
-        | VaultAction::CreatePasskey { .. }
-        | VaultAction::AssertPasskey { .. } => unreachable!("handled above"),
+        VaultAction::ImportVaults { .. } => import_vaults(vaults, payload, context),
+        VaultAction::AddVault { path } => add_external_vault(vaults, &path, context),
     }
 }
 

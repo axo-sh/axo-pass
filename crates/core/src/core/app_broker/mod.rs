@@ -63,11 +63,12 @@ pub use ssh::{
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, PasskeyAccountChoice,
-    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireExportMode,
-    WireImportIdentity, WireLogin, request_add_external_vault, request_assert_passkey,
-    request_create_passkey, request_export_vaults, request_import_vaults, request_resolve_secrets,
-    request_vault_items, request_vault_secret, request_write_vault_secret,
+    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireLogin,
+    request_add_external_vault, request_assert_passkey, request_create_passkey,
+    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
+    request_vault_secret, request_write_vault_secret,
 };
+pub use wire::{WireExportMode, WireImportIdentity};
 
 /// The AutoFill credential provider extension, staged under `Contents/PlugIns`.
 /// Matches the `target_name` of the `[[extensions]]` entry in strudel.toml.

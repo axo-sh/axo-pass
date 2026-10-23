@@ -16,7 +16,6 @@
 //! the core records internally, sourced to the app.
 
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use async_trait::async_trait;
 use secrecy::SecretString;
@@ -24,12 +23,13 @@ use serde::{Deserialize, Serialize};
 
 use super::PromptOutcome;
 use super::placement::{PasskeyChoices, PasskeyPlacement};
+use super::wire::WireImportIdentity;
 #[cfg(doc)]
 use super::wire::WireRequest;
 use crate::audit::Actor;
 use crate::core::auth::ForeignContext;
 use crate::core::provenance::ProcessNode;
-use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity, WorkFactor};
+use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::{Site, passkey};
 
 mod audit;
@@ -358,59 +358,6 @@ pub(super) enum VaultPayload {
     Import(ImportPayload),
     CreatePasskey(CreatePasskeyPayload),
     AssertPasskey(AssertPasskeyPayload),
-}
-
-/// How the export bundle key is protected, as it crosses the socket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum WireExportMode {
-    /// A passphrase and the resolved scrypt `log_n`.
-    Passphrase { passphrase: String, work_factor: u8 },
-    /// An age recipient (`age1...`).
-    Recipient { recipient: String },
-}
-
-impl From<WireExportMode> for ExportMode {
-    fn from(mode: WireExportMode) -> Self {
-        match mode {
-            WireExportMode::Passphrase {
-                passphrase,
-                work_factor,
-            } => ExportMode::Passphrase {
-                passphrase: passphrase.into(),
-                work_factor: WorkFactor::Custom(work_factor),
-            },
-            WireExportMode::Recipient { recipient } => ExportMode::Recipient(recipient),
-        }
-    }
-}
-
-/// How the import bundle is decrypted, as it crosses the socket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum WireImportIdentity {
-    Passphrase {
-        passphrase: String,
-    },
-    /// An age secret key (`AGE-SECRET-KEY-1...`).
-    Identity {
-        identity: String,
-    },
-}
-
-impl TryFrom<WireImportIdentity> for ImportIdentity {
-    type Error = String;
-
-    fn try_from(identity: WireImportIdentity) -> Result<Self, Self::Error> {
-        match identity {
-            WireImportIdentity::Passphrase { passphrase } => {
-                Ok(ImportIdentity::Passphrase(passphrase.into()))
-            },
-            WireImportIdentity::Identity { identity } => age::x25519::Identity::from_str(&identity)
-                .map(ImportIdentity::Identity)
-                .map_err(|e| format!("Invalid age identity: {e}")),
-        }
-    }
 }
 
 /// What the app needs to describe the prompt for a vault access.

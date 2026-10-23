@@ -2,13 +2,89 @@ use secrecy::ExposeSecret;
 
 use super::super::wire::WireResponse;
 use super::serve::{AccessIds, Served, open_vault};
-use super::{BrokerCredential, BrokerVaultItem, VaultRef, WriteSecretPayload};
+use super::{BrokerCredential, BrokerVaultItem, VaultPayload, VaultRef, WriteSecretPayload};
+use crate::audit::SubjectIds;
 use crate::core::auth::ForeignContext;
 use crate::secrets::vaults::{MatchKind, VaultCatalog, VaultHandle, autofill};
 
+/// Write payload of an item request, if it carries one. Any other payload is
+/// refused.
+fn write_payload(payload: Option<VaultPayload>) -> Result<Option<WriteSecretPayload>, String> {
+    match payload {
+        Some(VaultPayload::Write(write)) => Ok(Some(write)),
+        None => Ok(None),
+        Some(_) => Err("Wrong payload for this vault action".to_string()),
+    }
+}
+
+/// Serve a [`VaultAction::ListItems`]: the item overview of `vault_key`, never
+/// a secret.
+pub(super) fn list_items(
+    vaults: &VaultCatalog,
+    vault_key: &str,
+    payload: Option<VaultPayload>,
+    context: ForeignContext,
+) -> Result<Served, String> {
+    write_payload(payload)?;
+    let vh = open_vault(vaults, vault_key, context)?;
+    Ok(Served::new(
+        WireResponse::VaultItems {
+            items: collect_items(&vh)?,
+        },
+        AccessIds::One(SubjectIds::vault(vh.vault_id()?)),
+    ))
+}
+
+/// Serve a [`VaultAction::ReadSecret`]: one credential's secret value.
+pub(super) fn read_secret(
+    vaults: &VaultCatalog,
+    vault_key: &str,
+    item_key: &str,
+    credential_key: &str,
+    payload: Option<VaultPayload>,
+    context: ForeignContext,
+) -> Result<Served, String> {
+    write_payload(payload)?;
+    let vh = open_vault(vaults, vault_key, context)?;
+    let value = vh
+        .get_secret(item_key, credential_key)
+        .map_err(|e| format!("Failed to get secret: {e}"))?
+        .map(|secret| secret.expose_secret().to_string());
+    Ok(Served::new(
+        WireResponse::VaultSecret { value },
+        AccessIds::One(vh.credential_ids(item_key, credential_key)?),
+    ))
+}
+
+/// Serve a [`VaultAction::WriteSecret`]: write one credential's secret value in
+/// a transaction that reloads the vault under the vault locks.
+pub(super) fn write_vault_secret(
+    vaults: &VaultCatalog,
+    vault_key: &str,
+    item_key: &str,
+    credential_key: &str,
+    payload: Option<VaultPayload>,
+    context: ForeignContext,
+) -> Result<Served, String> {
+    let write = write_payload(payload)?;
+    let vh = open_vault(vaults, vault_key, context)?;
+    let payload = write.ok_or("Missing write payload")?;
+    let (created, ids) = vaults
+        .files()
+        .write_unlocked(&vh, |fresh| {
+            let created = write_secret(fresh, item_key, credential_key, payload)?;
+            Ok::<_, String>((created, fresh.credential_ids(item_key, credential_key)?))
+        })?
+        .value;
+    Ok(Served::new(
+        WireResponse::VaultWritten { created },
+        AccessIds::One(ids),
+    ))
+}
+
 /// Write the secret of a [`VaultAction::WriteSecret`] into a vault handle.
 /// Returns whether the item was created.
-pub(super) fn write_secret(
+fn write_secret(
     vh: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,

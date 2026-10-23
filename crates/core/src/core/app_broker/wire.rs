@@ -1,13 +1,16 @@
 //! The wire format between the broker's clients and the app.
 
+use std::str::FromStr;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
 use serde::{Deserialize, Serialize};
 
 use super::ssh::{ManagedIdentity, SignPurpose};
-use super::{age, keychain, vault};
+use super::{BrokerError, age, keychain, vault};
 use crate::core::provenance::ProcessNode;
 use crate::secrets::password::PasswordPolicy;
+use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::model::totp::TotpCode;
 use crate::secrets::vaults::passkey::{
     PrfAssertionInput, PrfRegistrationInput, PrfRegistrationOutput, PrfValues,
@@ -354,7 +357,7 @@ pub(super) enum WireRequest {
     ExportVaults {
         vault_keys: Vec<String>,
         dest_path: String,
-        mode: vault::WireExportMode,
+        mode: WireExportMode,
         /// Leave passkeys out of the bundle. They are included by default.
         #[serde(default)]
         exclude_passkeys: bool,
@@ -366,7 +369,7 @@ pub(super) enum WireRequest {
     /// each file key with the local encryption key.
     ImportVaults {
         import_path: String,
-        identity: vault::WireImportIdentity,
+        identity: WireImportIdentity,
         /// `(bundle vault id, target key)` pairs.
         selection: Vec<(String, String)>,
         #[serde(default)]
@@ -731,6 +734,22 @@ pub(super) fn decode_b64(value: &str) -> std::io::Result<Vec<u8>> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+pub(super) fn b64_encode(bytes: &[u8]) -> String {
+    b64.encode(bytes)
+}
+
+pub(super) fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
+    b64.decode(value)
+        .map_err(|e| BrokerError::Failed(format!("Malformed base64 in passkey response: {e}")))
+}
+
+pub(super) fn decode_prf_values(values: &WirePrfValues) -> Result<PrfValues, BrokerError> {
+    Ok(PrfValues {
+        first: b64_decode(&values.first)?,
+        second: values.second.as_deref().map(b64_decode).transpose()?,
+    })
+}
+
 /// One passkey offered for a sign-in. `credential_id` is standard base64.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WirePasskeyAccount {
@@ -828,6 +847,61 @@ impl WirePrfRegistrationOutput {
         Self {
             enabled: output.enabled,
             results: output.results.as_ref().map(WirePrfValues::encode),
+        }
+    }
+}
+
+/// How the export bundle key is protected, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireExportMode {
+    /// A passphrase and the resolved scrypt `log_n`.
+    Passphrase { passphrase: String, work_factor: u8 },
+    /// An age recipient (`age1...`).
+    Recipient { recipient: String },
+}
+
+impl From<WireExportMode> for ExportMode {
+    fn from(mode: WireExportMode) -> Self {
+        match mode {
+            WireExportMode::Passphrase {
+                passphrase,
+                work_factor,
+            } => ExportMode::Passphrase {
+                passphrase: passphrase.into(),
+                work_factor: WorkFactor::Custom(work_factor),
+            },
+            WireExportMode::Recipient { recipient } => ExportMode::Recipient(recipient),
+        }
+    }
+}
+
+/// How the import bundle is decrypted, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireImportIdentity {
+    Passphrase {
+        passphrase: String,
+    },
+    /// An age secret key (`AGE-SECRET-KEY-1...`).
+    Identity {
+        identity: String,
+    },
+}
+
+impl TryFrom<WireImportIdentity> for ImportIdentity {
+    type Error = String;
+
+    fn try_from(identity: WireImportIdentity) -> Result<Self, Self::Error> {
+        match identity {
+            WireImportIdentity::Passphrase { passphrase } => {
+                Ok(ImportIdentity::Passphrase(passphrase.into()))
+            },
+            WireImportIdentity::Identity { identity } => {
+                ::age::x25519::Identity::from_str(&identity)
+                    .map(ImportIdentity::Identity)
+                    .map_err(|e| format!("Invalid age identity: {e}"))
+            },
         }
     }
 }

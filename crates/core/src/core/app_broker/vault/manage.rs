@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::super::wire::WireResponse;
+use super::VaultPayload;
 use super::serve::{AccessIds, Served};
-use super::{ExportPayload, ImportPayload};
 use crate::audit::SubjectIds;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
@@ -14,9 +14,12 @@ use crate::secrets::vaults::{VaultCatalog, VaultHandle};
 pub(super) fn export_vaults(
     vaults: &VaultCatalog,
     vault_keys: &[String],
-    export: ExportPayload,
+    payload: Option<VaultPayload>,
     context: ForeignContext,
 ) -> Result<Served, String> {
+    let Some(VaultPayload::Export(export)) = payload else {
+        return Err("Missing export payload".to_string());
+    };
     vaults
         .export(
             vault_keys,
@@ -45,9 +48,12 @@ pub(super) fn export_vaults(
 /// with the local encryption key on the app's context.
 pub(super) fn import_vaults(
     vaults: &VaultCatalog,
-    import: ImportPayload,
+    payload: Option<VaultPayload>,
     context: ForeignContext,
 ) -> Result<Served, String> {
+    let Some(VaultPayload::Import(import)) = payload else {
+        return Err("Missing import payload".to_string());
+    };
     let identity =
         ImportIdentity::try_from(import.identity).map_err(|e| format!("Invalid identity: {e}"))?;
 

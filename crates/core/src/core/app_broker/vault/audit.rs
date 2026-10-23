@@ -16,6 +16,23 @@ pub(super) fn record_access(
     audit::record(access_event(prompt, actor, outcome, response, ids, message));
 }
 
+/// Record a vault access that ended without a response or any entity ids.
+pub(super) fn record_failure(
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
+    outcome: Outcome,
+    message: &str,
+) {
+    record_access(
+        prompt,
+        actor,
+        outcome,
+        None,
+        &AccessIds::None,
+        Some(message),
+    );
+}
+
 /// Audit event of one vault access, for [`record_access`]. `ids` come from
 /// the serve step.
 pub(super) fn access_event(
