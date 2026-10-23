@@ -19,11 +19,24 @@ use crate::secrets::vaults::{VaultCatalog, VaultHandle};
 pub(super) struct Served {
     pub(super) response: WireResponse,
     pub(super) ids: AccessIds,
+    /// WebAuthn credential id of the passkey a registration stored or a
+    /// sign-in signed with.
+    pub(super) passkey_credential_id: Option<Vec<u8>>,
 }
 
 impl Served {
     pub(super) fn new(response: WireResponse, ids: AccessIds) -> Self {
-        Self { response, ids }
+        Self {
+            response,
+            ids,
+            passkey_credential_id: None,
+        }
+    }
+
+    /// Set the WebAuthn credential id of the passkey the request acted on.
+    pub(super) fn passkey(mut self, credential_id: Vec<u8>) -> Self {
+        self.passkey_credential_id = Some(credential_id);
+        self
     }
 }
 
@@ -215,7 +228,11 @@ pub(in super::super) async fn authorize_and_serve(
     }
 
     let (response, outcome) = match result {
-        Ok(Served { response, ids }) => {
+        Ok(Served {
+            response,
+            ids,
+            passkey_credential_id,
+        }) => {
             let mut event = access_event(
                 &prompt,
                 &actor,
@@ -226,6 +243,9 @@ pub(in super::super) async fn authorize_and_serve(
             );
             if let Some(credential) = signed.and_then(|s| s.credential) {
                 event = event.detail("credential", credential);
+            }
+            if let Some(id) = &passkey_credential_id {
+                event = event.passkey_credential_id(id);
             }
             audit::record(event);
             (response, PromptOutcome::Succeeded)

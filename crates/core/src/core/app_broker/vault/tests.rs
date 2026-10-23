@@ -13,6 +13,7 @@ use super::super::placement::PasskeyChoices;
 use super::super::wire::WireResponse;
 use super::audit::access_event;
 use super::logins::{save_login, serve_logins, update_login_password};
+use super::passkeys::record_passkey_report;
 use super::serve::{AccessIds, Served, authorize_and_serve, serve_on_context};
 use super::{
     AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, LoginPage,
@@ -20,9 +21,10 @@ use super::{
     VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
 };
 use crate::audit::test_support::test_dir;
-use crate::audit::{self, Action, Actor, AuditEvent, Outcome, SubjectIds};
+use crate::audit::{self, Action, Actor, AuditEvent, Outcome, PASSKEY_CREDENTIAL_ID, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::vaults::bundle::ExportMode;
+use crate::secrets::vaults::passkey::signals::Report;
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill, passkey};
@@ -653,4 +655,116 @@ fn a_passkey_assertion_records_the_passkey_that_signed_from_the_vault_that_held_
     assert_eq!(asserted.outcome, Outcome::Succeeded);
     assert_eq!(recorded_ids(&asserted), ids);
     assert_eq!(asserted.detail["vault"], "shared");
+}
+
+#[test]
+fn a_registration_and_an_assertion_record_the_same_passkey_credential_id() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    let (action, payload) = assertion();
+    let failed = fx.serve_recorded(true, "", action, Some(payload));
+    assert_eq!(failed.outcome, Outcome::Failed);
+    assert!(!failed.detail.contains_key(PASSKEY_CREDENTIAL_ID));
+
+    let registered = fx.serve_recorded(
+        true,
+        "shared",
+        VaultAction::CreatePasskey {
+            rp_id: "example.com".to_string(),
+            user_name: "ada".to_string(),
+            choices: PasskeyChoices {
+                default_vault: "shared".to_string(),
+                ..Default::default()
+            },
+        },
+        Some(VaultPayload::CreatePasskey(CreatePasskeyPayload {
+            request: passkey::CreatePasskeyRequest {
+                rp_id: "example.com".to_string(),
+                rp_name: Some("Example".to_string()),
+                user_handle: vec![1, 2, 3, 4],
+                user_name: "ada".to_string(),
+                user_display_name: "Ada".to_string(),
+                client_data_hash: vec![0; 32],
+                algorithms: Vec::new(),
+                excluded_credentials: Vec::new(),
+                prf: None,
+                target: passkey::PasskeyTarget::NewLogin,
+            },
+        })),
+    );
+    assert_eq!(registered.action, Action::PasskeyRegistered);
+    assert_eq!(registered.outcome, Outcome::Succeeded);
+    let vw = fx.read("shared");
+    let stored = passkey::list(&vw).unwrap().remove(0);
+    let value = vw
+        .get_secret(&stored.item_key, &stored.credential_key)
+        .unwrap()
+        .unwrap();
+    let summary = passkey::summary(value.expose_secret()).unwrap();
+    assert_eq!(
+        registered.detail[PASSKEY_CREDENTIAL_ID],
+        summary.credential_id
+    );
+
+    let (action, payload) = assertion();
+    let asserted = fx.serve_recorded(true, "", action, Some(payload));
+    assert_eq!(asserted.action, Action::PasskeyAsserted);
+    assert_eq!(asserted.outcome, Outcome::Succeeded);
+    assert_eq!(
+        asserted.detail[PASSKEY_CREDENTIAL_ID],
+        summary.credential_id
+    );
+}
+
+#[test]
+fn a_passkey_report_records_the_passkey_credential_ids_it_names() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    // A relying party no other test uses, since pending reports are shared by
+    // the process.
+    let rp_id = "reports.example".to_string();
+    let report = |report: Report| {
+        fx.rt.block_on(record_passkey_report(
+            &Approver { approve: true },
+            report,
+            Actor::default(),
+        ));
+        audit::read(&audit::AuditFilter {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .events
+        .remove(0)
+    };
+
+    let unknown = report(Report::Unknown {
+        rp_id: rp_id.clone(),
+        credential_id: vec![0xfb, 0xff, 0x01],
+    });
+    assert_eq!(unknown.action, Action::PasskeyReported);
+    assert_eq!(unknown.detail[PASSKEY_CREDENTIAL_ID], "-_8B");
+
+    let accepted = report(Report::AllAccepted {
+        rp_id: rp_id.clone(),
+        user_handle: vec![1, 2, 3, 4],
+        credential_ids: vec![vec![0xfb, 0xff, 0x01], vec![1, 2, 3]],
+    });
+    assert_eq!(
+        accepted.detail[&format!("{PASSKEY_CREDENTIAL_ID}s")],
+        "-_8B,AQID"
+    );
+    assert!(!accepted.detail.contains_key(PASSKEY_CREDENTIAL_ID));
+
+    // A rename names an account, not a passkey.
+    let renamed = report(Report::Renamed {
+        rp_id,
+        user_handle: vec![1, 2, 3, 4],
+        name: "ada".to_string(),
+    });
+    assert!(!renamed.detail.contains_key(PASSKEY_CREDENTIAL_ID));
+    assert!(
+        !renamed
+            .detail
+            .contains_key(&format!("{PASSKEY_CREDENTIAL_ID}s"))
+    );
 }

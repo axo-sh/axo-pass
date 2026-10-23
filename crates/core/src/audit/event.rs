@@ -18,9 +18,14 @@ use crate::core::app_broker::{
     AGENT_EXECUTABLE_NAME, AUTOFILL_EXTENSION_NAME, BROWSER_HOST_EXECUTABLE_NAME,
 };
 use crate::core::provenance::ProcessNode;
+use crate::secrets::vaults::passkey;
 
 /// The current schema version. Bump when a field changes meaning.
 pub const SCHEMA_VERSION: u8 = 1;
+
+/// Detail key of the WebAuthn credential id of a passkey, in base64url without
+/// padding. The id is unchanged by renames and by moves between vaults.
+pub const PASSKEY_CREDENTIAL_ID: &str = "passkey_credential_id";
 
 /// One audit record. Serialized as a single JSON line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +166,23 @@ impl AuditEvent {
         self.maybe_detail("vault_id", ids.vault_id.map(|id| id.to_string()))
             .maybe_detail("item_id", ids.item_id.map(|id| id.to_string()))
             .maybe_detail("credential_id", ids.credential_id.map(|id| id.to_string()))
+    }
+
+    /// Record the WebAuthn credential id of a passkey under
+    /// [`PASSKEY_CREDENTIAL_ID`].
+    pub fn passkey_credential_id(self, id: &[u8]) -> Self {
+        self.detail(PASSKEY_CREDENTIAL_ID, passkey::encode_credential_id(id))
+    }
+
+    /// Record the WebAuthn credential ids of several passkeys as a
+    /// comma-separated list under the plural of [`PASSKEY_CREDENTIAL_ID`].
+    /// Records nothing if `ids` is empty.
+    pub fn passkey_credential_ids<'a>(self, ids: impl IntoIterator<Item = &'a [u8]>) -> Self {
+        let list: Vec<String> = ids.into_iter().map(passkey::encode_credential_id).collect();
+        self.maybe_detail(
+            format!("{PASSKEY_CREDENTIAL_ID}s"),
+            (!list.is_empty()).then(|| list.join(",")),
+        )
     }
 
     /// The timestamp as an RFC 3339 string.

@@ -39,8 +39,9 @@ mod reader;
 mod writer;
 
 pub use event::{
-    Action, ActionKind, Actor, AuditEvent, Category, Outcome, Requester, SCHEMA_VERSION, Source,
-    Subject, SubjectIds, SubjectKind, parse_rfc3339, process_source, set_process_source,
+    Action, ActionKind, Actor, AuditEvent, Category, Outcome, PASSKEY_CREDENTIAL_ID, Requester,
+    SCHEMA_VERSION, Source, Subject, SubjectIds, SubjectKind, parse_rfc3339, process_source,
+    set_process_source,
 };
 pub use reader::{AuditFilter, AuditPage, DetailId, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};

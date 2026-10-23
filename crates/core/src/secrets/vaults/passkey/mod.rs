@@ -592,6 +592,12 @@ fn now_unix() -> Option<i64> {
     i64::try_from(elapsed.as_secs()).ok()
 }
 
+/// WebAuthn credential id in base64url without padding, as the stored record
+/// holds it.
+pub fn encode_credential_id(id: &[u8]) -> String {
+    B64URL.encode(id)
+}
+
 fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
     let key = passkey
         .key
@@ -600,7 +606,7 @@ fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
         .map_err(|e| Error::Passkey(format!("Failed to encode the COSE key: {e}")))?;
     let record = StoredRecord {
         rp_id: passkey.rp_id.clone(),
-        credential_id: B64URL.encode(passkey.credential_id.as_slice()),
+        credential_id: encode_credential_id(passkey.credential_id.as_slice()),
         user_handle: passkey
             .user_handle
             .as_ref()
@@ -806,6 +812,20 @@ pub fn read_record(
         title,
         last_used_at,
     })
+}
+
+/// WebAuthn credential id of the passkey at `item_key`/`credential_key`. Fails
+/// when the credential is not a passkey or its record does not decode.
+pub fn webauthn_credential_id(
+    vw: &VaultHandle,
+    item_key: &str,
+    credential_key: &str,
+) -> Result<Vec<u8>, Error> {
+    let record = read_record(vw, item_key, credential_key)?;
+    Ok(decode(record.value.expose_secret())?
+        .credential_id
+        .as_slice()
+        .to_vec())
 }
 
 /// Store a record read by [`read_record`] in `target`, with its last-used
@@ -1045,6 +1065,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::audit::{self, AuditEvent};
     use crate::secrets::vaults::storage::handle::normalized_key;
     use crate::secrets::vaults::{CredentialUpdate, MatchKind, VaultItemOverview};
 
@@ -1390,7 +1411,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(ids.credential_id, source_id);
-        let moved = vw.get_item_overview_by_id(ids.item_id.unwrap()).unwrap().unwrap();
+        let moved = vw
+            .get_item_overview_by_id(ids.item_id.unwrap())
+            .unwrap()
+            .unwrap();
         let expected = copy
             .get_item_overview_by_id(copied.item_id.unwrap())
             .unwrap()
@@ -1475,6 +1499,72 @@ mod tests {
         assert_eq!(ids.credential_id, before.credential_id);
         assert_eq!(list(&vw).unwrap().len(), 1);
         assert!(vw.list_all_deleted().unwrap().is_empty());
+    }
+
+    /// `passkey_credential_id` that a move of `stored` records.
+    fn recorded_id(vw: &VaultHandle, stored: &StoredPasskey) -> String {
+        let id = webauthn_credential_id(vw, &stored.item_key, &stored.credential_key).unwrap();
+        AuditEvent::new(
+            audit::process_source(),
+            audit::Action::PasskeyMoved,
+            audit::Outcome::Succeeded,
+        )
+        .passkey_credential_id(&id)
+        .detail
+        .remove(audit::PASSKEY_CREDENTIAL_ID)
+        .unwrap()
+    }
+
+    /// WebAuthn credential id in the stored record of the passkey `ids` name.
+    fn stored_id(vw: &VaultHandle, ids: SubjectIds) -> String {
+        let stored = list(vw)
+            .unwrap()
+            .into_iter()
+            .find(|s| Some(s.credential_id) == ids.credential_id)
+            .unwrap();
+        let value = vw
+            .get_secret(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        summary(value.expose_secret()).unwrap().credential_id
+    }
+
+    #[tokio::test]
+    async fn a_passkey_moved_within_a_vault_keeps_its_passkey_credential_id() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        vw.add_item("other", "Other").unwrap();
+        let recorded = recorded_id(&vw, &stored);
+
+        let moved = move_within_vault(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            &PasskeyTarget::Item("other".into()),
+        )
+        .unwrap();
+
+        assert_eq!(stored_id(&vw, moved), recorded);
+        assert_eq!(
+            recorded,
+            encode_credential_id(stored.passkey.credential_id.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_passkey_moved_to_another_vault_keeps_its_passkey_credential_id() {
+        let mut source = VaultHandle::new_for_test("personal");
+        register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&source).unwrap().remove(0);
+        let recorded = recorded_id(&source, &stored);
+        let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
+        let mut dest = VaultHandle::new_for_test("work");
+
+        let moved = write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
+
+        assert_eq!(stored_id(&dest, moved), recorded);
+        assert_ne!(moved.credential_id, Some(stored.credential_id));
     }
 
     #[test]

@@ -1837,9 +1837,9 @@ impl AxoPass {
         let dest_item = dest_item_key
             .clone()
             .unwrap_or_else(|| "new_login".to_string());
-        // `None` if there was nothing to move. Otherwise the ids of the source
-        // and the stored passkey, and the result of removing the source, after
-        // the destination was written.
+        // `None` if there was nothing to move. Otherwise the ids of the source,
+        // the WebAuthn credential id, the ids of the stored passkey, and the
+        // result of removing the source, after the destination was written.
         let moved = tokio::task::spawn_blocking(move || {
             let target = match dest_item_key {
                 Some(key) => PasskeyTarget::Item(key),
@@ -1851,31 +1851,36 @@ impl AxoPass {
                 }
                 return VaultsManager::write_vault(&manager, &vault_key, |vw| {
                     let source = vw.credential_ids(&item_key, &cred_key)?;
+                    let webauthn_id = passkey::webauthn_credential_id(vw, &item_key, &cred_key)?;
                     let dest = passkey::move_within_vault(vw, &item_key, &cred_key, &target)?;
-                    Ok::<_, FfiError>(Some((source, dest, Ok(()))))
+                    Ok::<_, FfiError>(Some((source, webauthn_id, dest, Ok(()))))
                 });
             }
             // An add in a transaction on the destination, then a remove in a
             // transaction on the source, so no transaction holds two vaults'
             // locks. A failure between the two leaves the passkey in both.
-            let (record, source) = VaultsManager::write_vault(&manager, &vault_key, |vw| {
-                let record = passkey::read_record(vw, &item_key, &cred_key)?;
-                Ok::<_, FfiError>((record, vw.credential_ids(&item_key, &cred_key)?))
-            })?;
+            let (record, source, webauthn_id) =
+                VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                    let record = passkey::read_record(vw, &item_key, &cred_key)?;
+                    let source = vw.credential_ids(&item_key, &cred_key)?;
+                    let webauthn_id = passkey::webauthn_credential_id(vw, &item_key, &cred_key)?;
+                    Ok::<_, FfiError>((record, source, webauthn_id))
+                })?;
             let dest = VaultsManager::write_vault(&manager, &dest_vault_key, |vw| {
                 passkey::write_record(vw, &record, &target).map_err(FfiError::from)
             })?;
             let removed = VaultsManager::write_vault(&manager, &vault_key, |vw| {
                 passkey::remove_record(vw, &item_key, &cred_key).map_err(FfiError::from)
             });
-            Ok(Some((source, dest, removed)))
+            Ok(Some((source, webauthn_id, dest, removed)))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
-        let Some((source, dest, removed)) = moved else {
+        let Some((source, webauthn_id, dest, removed)) = moved else {
             return Ok(());
         };
         let mut event = change_event(audit::Action::PasskeyMoved, &key, subject, source)
+            .passkey_credential_id(&webauthn_id)
             .detail("dest_vault", dest_vault)
             .detail("dest_item", dest_item)
             .maybe_detail("dest_vault_id", dest.vault_id.map(|id| id.to_string()))
@@ -1908,19 +1913,24 @@ impl AxoPass {
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let key = vault_key.clone();
         let (item, cred) = (item_key.clone(), cred_key.clone());
-        let ids = self
+        let (ids, webauthn_id) = self
             .edit_vault(vault_key, move |vw| {
                 passkey::rename_account(vw, &item, &cred, &name)?;
                 let value = vw.get_secret(&item, &cred)?;
                 if let Some(summary) = value.and_then(|v| passkey::summary(v.expose_secret())) {
                     dismiss_report(vw, &summary, signals::DismissKind::Rename)?;
                 }
-                Ok(vw.credential_ids(&item, &cred)?)
+                // An id that does not decode leaves the event without one and
+                // does not fail the rename.
+                let webauthn_id = passkey::webauthn_credential_id(vw, &item, &cred).ok();
+                Ok((vw.credential_ids(&item, &cred)?, webauthn_id))
             })
             .await?;
-        change_event(audit::Action::PasskeyRenamed, &key, subject, ids)
-            .record_async()
-            .await;
+        let mut event = change_event(audit::Action::PasskeyRenamed, &key, subject, ids);
+        if let Some(id) = &webauthn_id {
+            event = event.passkey_credential_id(id);
+        }
+        event.record_async().await;
         Ok(())
     }
 

@@ -46,9 +46,7 @@ pub(in super::super) async fn record_passkey_report(
             message: "The system clock is before 1970".to_string(),
         };
     };
-    signals::record_pending(report, at);
-
-    let event = AuditEvent::new(
+    let mut event = AuditEvent::new(
         audit::process_source(),
         Action::PasskeyReported,
         Outcome::Succeeded,
@@ -57,6 +55,17 @@ pub(in super::super) async fn record_passkey_report(
     .actor(actor)
     .detail("report", kind)
     .detail("via", "broker");
+    // A rename names an account by user handle, not a passkey.
+    match &report {
+        Report::Unknown { credential_id, .. } => {
+            event = event.passkey_credential_id(credential_id);
+        },
+        Report::AllAccepted { credential_ids, .. } => {
+            event = event.passkey_credential_ids(credential_ids.iter().map(Vec::as_slice));
+        },
+        Report::Renamed { .. } => {},
+    }
+    signals::record_pending(report, at);
     audit::record_async(event).await;
 
     authorizer.passkey_reports_changed().await;
@@ -156,7 +165,8 @@ pub(super) fn create_passkey(
             prf: response.prf.as_ref().map(WirePrfRegistrationOutput::encode),
         },
         AccessIds::One(response.ids),
-    ))
+    )
+    .passkey(response.credential_id))
 }
 
 /// Sign an assertion challenge with a stored passkey. The credential may be in
@@ -217,7 +227,7 @@ pub(super) fn assert_passkey(
                             s.credential_id,
                         ))
                     });
-                    return Ok(Served::new(
+                    let served = Served::new(
                         WireResponse::PasskeyAsserted {
                             credential_id: b64_encode(&response.credential_id),
                             user_handle: b64_encode(&response.user_handle),
@@ -226,7 +236,11 @@ pub(super) fn assert_passkey(
                             prf: response.prf.as_ref().map(WirePrfValues::encode),
                         },
                         ids,
-                    ));
+                    );
+                    return Ok(match stored {
+                        Some(s) => served.passkey(s.passkey.credential_id.as_slice().to_vec()),
+                        None => served,
+                    });
                 },
                 Err(e) => last_error = Some(e.to_string()),
             }
