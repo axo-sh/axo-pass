@@ -111,6 +111,22 @@ impl ManagedKey {
         policy: KeyPolicy,
         la_context: Option<Retained<LAContext>>,
     ) -> Result<ManagedKey, KeychainError> {
+        Self::create_secure_enclave(label, policy.access_control(), policy.tag(), la_context)
+    }
+
+    /// Create a key the app uses itself, such as `device-signing-key`. The
+    /// Secure Enclave restricts it to this device and never prompts. It has no
+    /// application tag, so it is not a [`KeyPolicy::Default`] SSH key.
+    pub fn create_device_key(label: &str) -> Result<ManagedKey, KeychainError> {
+        Self::create_secure_enclave(label, AccessControl::ManagedKeyAppEnforced, None, None)
+    }
+
+    fn create_secure_enclave(
+        label: &str,
+        access_control: AccessControl,
+        tag: Option<&str>,
+        la_context: Option<Retained<LAContext>>,
+    ) -> Result<ManagedKey, KeychainError> {
         log::debug!("Creating new user key with label: {label}");
         unsafe {
             let public_attrs = CFMutableDictionary::<CFString, CFType>::empty();
@@ -119,9 +135,9 @@ impl ManagedKey {
             let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
             private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(true));
 
-            let access_control = policy.access_control().to_sec_access_control()?;
+            let access_control = access_control.to_sec_access_control()?;
             private_attrs.add(kSecAttrAccessControl, &*access_control);
-            if let Some(tag) = policy.tag() {
+            if let Some(tag) = tag {
                 private_attrs.add(kSecAttrApplicationTag, &CFData::from_bytes(tag.as_bytes()));
             }
 
@@ -158,7 +174,7 @@ impl ManagedKey {
             // leak the key, and with it the LAContext the key was created on.
             let managed_key = ManagedKey::new(
                 Some(label.to_string()),
-                policy.tag().map(String::from),
+                tag.map(String::from),
                 sec_key.into(),
             );
             log::debug!("Created new managed key: {managed_key:?}");
@@ -196,6 +212,16 @@ impl ManagedKey {
     }
 
     pub fn public_key(&self) -> Result<KeyData, KeychainError> {
+        let pub_key_bytes = self.public_key_sec1()?;
+        sec1_to_ssh_ecdsa(&pub_key_bytes).map_err(|err| {
+            KeychainError::PublicKeyUnavailable(format!(
+                "Failed to convert public key to SSH format: {err}"
+            ))
+        })
+    }
+
+    /// Public key as an uncompressed SEC1 point.
+    pub fn public_key_sec1(&self) -> Result<Vec<u8>, KeychainError> {
         // note SecKeyCopyExternalRepresentation returns public key in
         // ANSI X9.63 format (04 || X || Y [ || K])
         unsafe {
@@ -216,12 +242,7 @@ impl ManagedKey {
                     "No public key representation".to_string(),
                 ));
             };
-            let pub_key_bytes = pub_key_ext.as_bytes_unchecked();
-            sec1_to_ssh_ecdsa(pub_key_bytes).map_err(|err| {
-                KeychainError::PublicKeyUnavailable(format!(
-                    "Failed to convert public key to SSH format: {err}"
-                ))
-            })
+            Ok(pub_key_ext.as_bytes_unchecked().to_vec())
         }
     }
 

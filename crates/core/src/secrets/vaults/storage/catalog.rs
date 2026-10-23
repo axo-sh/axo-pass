@@ -11,6 +11,7 @@ use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::bundle::{ExportMode, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key, normalized_key,
 };
@@ -85,6 +86,11 @@ impl VaultCatalog {
 
     pub fn files(&self) -> &VaultWriter {
         &self.files
+    }
+
+    /// Signer for vault files, held by [`Self::files`].
+    pub fn signer(&self) -> &Arc<dyn VaultSigner> {
+        self.files.signer()
     }
 
     /// External vault paths by key.

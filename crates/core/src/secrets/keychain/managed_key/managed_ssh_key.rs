@@ -213,10 +213,7 @@ impl ManagedSshKey {
 
         let mut out = Vec::new();
         for managed_key in managed_keys {
-            if let Some(label) = &managed_key.label
-                && let Some(key_id) = label.strip_prefix(SSH_KEY_LABEL_PREFIX)
-                && let Ok(uuid) = Uuid::try_parse(key_id)
-            {
+            if let Some(uuid) = managed_key.label.as_deref().and_then(ssh_key_id) {
                 out.push(ManagedSshKey {
                     id: uuid,
                     public_key: managed_key.public_key()?,
@@ -228,11 +225,36 @@ impl ManagedSshKey {
     }
 }
 
+/// Key id of an SSH key label. Other managed keys, such as
+/// `vault-encryption-key` and `device-signing-key`, have none.
+fn ssh_key_id(label: &str) -> Option<Uuid> {
+    let key_id = label.strip_prefix(SSH_KEY_LABEL_PREFIX)?;
+    Uuid::try_parse(key_id).ok()
+}
+
 impl From<ManagedSshKey> for proto::Identity {
     fn from(val: ManagedSshKey) -> Self {
         proto::Identity {
             credential: proto::PublicCredential::Key(val.public_key.clone()),
             comment: format!("axo-secure-enclave:{}", &val.name()[0..6]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_key_list_skips_device_signing_key() {
+        assert_eq!(ssh_key_id("device-signing-key"), None);
+        assert_eq!(ssh_key_id("vault-encryption-key"), None);
+    }
+
+    #[test]
+    fn ssh_key_label_has_key_id() {
+        let id = Uuid::new_v4();
+        let label = format!("{SSH_KEY_LABEL_PREFIX}{}", id.simple());
+        assert_eq!(ssh_key_id(&label), Some(id));
     }
 }

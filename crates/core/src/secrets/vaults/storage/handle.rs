@@ -20,6 +20,7 @@ use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+use crate::secrets::vaults::format::signing::KeychainSigner;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
@@ -815,6 +816,7 @@ pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
 /// Read the vault encryption key on a specific [`AuthContext`], creating it if
 /// it does not exist yet. Key creation runs on the same context, so the Secure
 /// Enclave biometric prompt is drawn wherever the caller's context draws it.
+/// A missing `device-signing-key` is created as well, without a prompt.
 ///
 /// A foreign context arrives already authenticated by the process that owns it,
 /// so nothing is evaluated here: a second evaluation of the same context would
@@ -839,8 +841,8 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
     })
     .map_err(Error::KeyRetrievalFailed)?;
 
-    match key_result {
-        Ok(Some(user_encryption_key)) => Ok(user_encryption_key),
+    let key = match key_result {
+        Ok(Some(user_encryption_key)) => user_encryption_key,
         Ok(None) => {
             log::debug!("Vault encryption key not found, initializing new key...");
             run_on_auth_thread(auth_context, AuthMethod::None, move |la_context| {
@@ -851,10 +853,14 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
                 )
             })
             .map_err(Error::KeyCreationFailed)?
-            .map_err(Error::KeyCreationFailed)
+            .map_err(Error::KeyCreationFailed)?
         },
-        Err(e) => Err(Error::KeyRetrievalFailed(e)),
-    }
+        Err(e) => return Err(Error::KeyRetrievalFailed(e)),
+    };
+    // Temporary: create a missing device-signing-key if vault-encryption-key
+    // exists. Key creation does not yet follow a policy.
+    KeychainSigner::ensure_key()?;
+    Ok(key)
 }
 
 #[cfg(test)]

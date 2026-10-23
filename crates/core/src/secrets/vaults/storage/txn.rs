@@ -4,7 +4,9 @@
 //! [`VaultWriter::create`], or [`VaultWriter::delete`]. A write unwraps the
 //! file key first, which can prompt. It then takes the per-vault mutex and
 //! the cross-process lock, reloads the file, applies the change, retains the
-//! replaced file, and saves. No keychain call runs while the locks are held.
+//! replaced file, and saves. No keychain call that can prompt runs while the
+//! locks are held. Signing with `device-signing-key` never prompts, so it may
+//! run under the locks.
 //!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file.
@@ -12,6 +14,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
@@ -19,6 +22,9 @@ use crate::core::auth::AuthContext;
 use crate::core::dirs::app_data_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+#[cfg(test)]
+use crate::secrets::vaults::format::signing::TestSigner;
+use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::model::{UnlockedKey, Vault};
 use crate::secrets::vaults::storage::handle::{
     VaultHandle, check_vault_auth_still_valid, get_vault_encryption_key_on,
@@ -44,6 +50,7 @@ const MAX_ATTEMPTS: usize = 3;
 pub struct VaultWriter {
     root: PathBuf,
     locks: VaultLocks,
+    signer: Arc<dyn VaultSigner>,
 }
 
 impl Default for VaultWriter {
@@ -53,25 +60,33 @@ impl Default for VaultWriter {
 }
 
 impl VaultWriter {
-    /// The app data directory and the global locks.
+    /// The app data directory, the global locks, and the keychain signer.
     pub fn app() -> Self {
         Self {
             root: app_data_dir(),
             locks: VaultLocks::global(),
+            signer: Arc::new(KeychainSigner),
         }
     }
 
     /// Writer under `root` with its own locks, separate from the global locks.
+    /// It signs with the test device key.
     #[cfg(test)]
     pub fn isolated(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
             locks: VaultLocks::default(),
+            signer: Arc::new(TestSigner::device()),
         }
     }
 
     pub fn locks(&self) -> &VaultLocks {
         &self.locks
+    }
+
+    /// Signer for vault files.
+    pub fn signer(&self) -> &Arc<dyn VaultSigner> {
+        &self.signer
     }
 
     /// Retained versions of vault `id`.

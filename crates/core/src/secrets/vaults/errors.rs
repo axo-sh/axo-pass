@@ -71,6 +71,15 @@ pub enum Error {
     #[error("Could not retrieve key from keychain: {0}")]
     KeyRetrievalFailed(KeychainError),
 
+    #[error("The device signing key is not in the keychain")]
+    SigningKeyNotFound,
+
+    #[error("Failed to sign vault: {0}")]
+    VaultSigningFailed(String),
+
+    #[error("Vault signature is invalid")]
+    VaultSignatureInvalid,
+
     #[error("Invalid vault key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidVaultKey(String),
 
