@@ -72,9 +72,9 @@ pub enum PasskeyTarget {
     Item(String),
 }
 
-/// Create a passkey in an unlocked vault and return the CTAP2 response. The
-/// caller turns `as_webauthn_bytes()` into the attestation object the browser
-/// wants.
+/// Create a passkey in an unlocked vault and return the CTAP2 response and the
+/// audit ids of the stored passkey. The caller turns `as_webauthn_bytes()` into
+/// the attestation object the browser wants.
 ///
 /// The authenticator works on `vw`. The new passkey is then written into a
 /// fresh copy of the vault in its own transaction, so an edit saved since
@@ -85,7 +85,7 @@ pub async fn create(
     vw: &mut VaultHandle,
     request: make_credential::Request,
     target: PasskeyTarget,
-) -> Result<make_credential::Response, Error> {
+) -> Result<(make_credential::Response, SubjectIds), Error> {
     let staged = Arc::new(Mutex::new(None));
     let response = {
         let store = PasskeyCredentialStore {
@@ -103,8 +103,14 @@ pub async fn create(
         .unwrap_or_else(|e| e.into_inner())
         .take()
         .ok_or_else(|| Error::Passkey("The authenticator saved no passkey".to_string()))?;
-    files.write_unlocked::<_, Error>(vw, |fresh| staged.write(fresh, &target).map(|_| ()))?;
-    Ok(response)
+    let credential_key = PasskeyCredentialStore::credential_key(&staged.cred.credential_id);
+    let ids = files
+        .write_unlocked::<_, Error>(vw, |fresh| {
+            let item_key = staged.write(fresh, &target)?;
+            fresh.credential_ids(&item_key, &credential_key)
+        })?
+        .value;
+    Ok((response, ids))
 }
 
 /// Assert an existing passkey in an unlocked vault. Passkeys are synced, so
@@ -215,6 +221,8 @@ pub struct CreatePasskeyResponse {
     pub attestation_object: Vec<u8>,
     /// PRF extension output. `None` when the request carried no PRF input.
     pub prf: Option<PrfRegistrationOutput>,
+    /// Audit ids of the stored passkey.
+    pub ids: SubjectIds,
 }
 
 /// A WebAuthn assertion request, as it crosses the broker socket.
@@ -415,7 +423,7 @@ pub async fn create_from_wire(
         pin_protocol: None,
     };
 
-    let response = create(files, vw, request, req.target).await?;
+    let (response, ids) = create(files, vw, request, req.target).await?;
     let credential_id = response
         .auth_data
         .attested_credential_data
@@ -438,6 +446,7 @@ pub async fn create_from_wire(
         credential_id,
         attestation_object: response.as_webauthn_bytes().to_vec(),
         prf,
+        ids,
     })
 }
 

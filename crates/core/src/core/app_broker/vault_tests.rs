@@ -5,6 +5,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
 use super::*;
+use crate::audit::test_support::test_dir;
 use crate::secrets::vaults::FieldKind;
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
@@ -60,7 +61,7 @@ impl Fixture {
         vault_key: &str,
         action: VaultAction,
         payload: Option<VaultPayload>,
-    ) -> Result<WireResponse, String> {
+    ) -> Result<Served, String> {
         serve_on_context(
             &self.vaults,
             prompt(vault_key, action),
@@ -69,6 +70,51 @@ impl Fixture {
             self.rt.handle().clone(),
             &mut None,
         )
+    }
+
+    /// Serve `action` on `vault_key` and return the event the broker records
+    /// for it.
+    fn serve_event(
+        &self,
+        vault_key: &str,
+        action: VaultAction,
+        payload: Option<VaultPayload>,
+    ) -> AuditEvent {
+        let served = self.serve(vault_key, action.clone(), payload).unwrap();
+        access_event(
+            &prompt(vault_key, action),
+            &Actor::default(),
+            Outcome::Succeeded,
+            Some(&served.response),
+            &served.ids,
+            None,
+        )
+    }
+
+    /// Run `action` through the prompt and the serve step, as the broker does
+    /// for a request, and return the event it recorded. The prompt is
+    /// approved if `approve` is set. The caller holds an audit test dir.
+    fn serve_recorded(
+        &self,
+        approve: bool,
+        vault_key: &str,
+        action: VaultAction,
+        payload: Option<VaultPayload>,
+    ) -> AuditEvent {
+        self.rt.block_on(authorize_and_serve(
+            &Approver { approve },
+            &self.vaults,
+            prompt(vault_key, action),
+            Actor::default(),
+            payload,
+            &InFlightRequest::default(),
+        ));
+        audit::read(&audit::AuditFilter {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .events
+        .remove(0)
     }
 
     /// Write `item/cred` through the broker.
@@ -86,7 +132,8 @@ impl Fixture {
                     login: None,
                 })),
             )
-            .unwrap();
+            .unwrap()
+            .response;
         assert!(matches!(response, WireResponse::VaultWritten { .. }));
     }
 
@@ -142,6 +189,88 @@ fn prompt(vault_key: &str, action: VaultAction) -> VaultAccessPrompt {
     }
 }
 
+/// Approves every prompt if `approve` is set, and declines it otherwise.
+struct Approver {
+    approve: bool,
+}
+
+#[async_trait]
+impl VaultAuthorizer for Approver {
+    async fn begin(
+        &self,
+        _prompt: VaultAccessPrompt,
+        _peer: Actor,
+    ) -> Result<ForeignContext, String> {
+        if self.approve {
+            Ok(ForeignContext::for_test())
+        } else {
+            Err("Declined".to_string())
+        }
+    }
+
+    async fn abandon(&self) {}
+
+    async fn end(&self, _prompt: VaultAccessPrompt, _outcome: PromptOutcome) {}
+}
+
+/// Ids an event records under `vault_id`, `item_id`, and `credential_id`.
+fn recorded_ids(event: &AuditEvent) -> SubjectIds {
+    let id = |key: &str| {
+        event
+            .detail
+            .get(key)
+            .map(|value| uuid::Uuid::parse_str(value).unwrap())
+    };
+    SubjectIds {
+        vault_id: id("vault_id"),
+        item_id: id("item_id"),
+        credential_id: id("credential_id"),
+    }
+}
+
+fn read_token() -> VaultAction {
+    VaultAction::ReadSecret {
+        item_key: "item".to_string(),
+        credential_key: "token".to_string(),
+    }
+}
+
+fn token_ref(vault_key: &str, cred: &str) -> VaultRef {
+    VaultRef {
+        vault_key: vault_key.to_string(),
+        item_key: "item".to_string(),
+        credential_key: cred.to_string(),
+    }
+}
+
+fn example_page() -> LoginPage {
+    LoginPage::parse(
+        "https://example.com/login",
+        "https://example.com/login",
+        None,
+    )
+    .unwrap()
+}
+
+/// Request data of a passkey sign-in on `example.com`.
+fn assertion() -> (VaultAction, VaultPayload) {
+    let action = VaultAction::AssertPasskey {
+        rp_id: "example.com".to_string(),
+        user_name: None,
+    };
+    let payload = VaultPayload::AssertPasskey(AssertPasskeyPayload {
+        request: passkey::AssertPasskeyRequest {
+            rp_id: "example.com".to_string(),
+            client_data_hash: vec![0; 32],
+            allowed_credentials: Vec::new(),
+            prf: None,
+        },
+        choose_account: false,
+        vault_key: None,
+    });
+    (action, payload)
+}
+
 #[test]
 fn a_broker_write_and_an_app_write_to_one_vault_both_land() {
     let fx = Fixture::new();
@@ -169,16 +298,7 @@ fn a_broker_read_and_write_reach_an_external_vault() {
     let fx = Fixture::new();
     fx.broker_write("shared", "token", "secret");
 
-    let read = fx
-        .serve(
-            "shared",
-            VaultAction::ReadSecret {
-                item_key: "item".to_string(),
-                credential_key: "token".to_string(),
-            },
-            None,
-        )
-        .unwrap();
+    let read = fx.serve("shared", read_token(), None).unwrap().response;
     assert!(matches!(
         read,
         WireResponse::VaultSecret { value: Some(ref v) } if v == "secret"
@@ -189,15 +309,12 @@ fn a_broker_read_and_write_reach_an_external_vault() {
             "shared",
             VaultAction::ResolveSecrets {
                 purpose: ResolvePurpose::Read,
-                refs: vec![VaultRef {
-                    vault_key: "shared".to_string(),
-                    item_key: "item".to_string(),
-                    credential_key: "token".to_string(),
-                }],
+                refs: vec![token_ref("shared", "token")],
             },
             None,
         )
-        .unwrap();
+        .unwrap()
+        .response;
     assert!(matches!(
         resolved,
         WireResponse::ResolvedSecrets { ref values } if values == &[Some("secret".to_string())]
@@ -250,4 +367,273 @@ fn an_app_edit_made_during_an_update_confirmation_is_kept() {
         .unwrap();
     let secrets = autofill::read_login(&vw, &found).unwrap().unwrap();
     assert_eq!(secrets.password.expose_secret(), "new");
+}
+
+#[test]
+fn a_denied_prompt_records_no_ids_and_an_approved_read_records_its_credential() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    fx.broker_write("personal", "token", "secret");
+
+    let denied = fx.serve_recorded(false, "personal", read_token(), None);
+    assert_eq!(denied.action, Action::CredentialRead);
+    assert_eq!(denied.outcome, Outcome::Denied);
+    assert_eq!(recorded_ids(&denied), SubjectIds::default());
+
+    let read = fx.serve_recorded(true, "personal", read_token(), None);
+    assert_eq!(read.outcome, Outcome::Succeeded);
+    let token = fx.read("personal").credential_ids("item", "token").unwrap();
+    assert!(token.credential_id.is_some());
+    assert_eq!(recorded_ids(&read), token);
+}
+
+#[test]
+fn a_listing_and_a_write_record_the_ids_of_their_subject() {
+    let fx = Fixture::new();
+    let created = fx.serve_event(
+        "personal",
+        VaultAction::WriteSecret {
+            item_key: "item".to_string(),
+            credential_key: "token".to_string(),
+        },
+        Some(VaultPayload::Write(WriteSecretPayload {
+            title: "Token".to_string(),
+            value: SecretString::from("secret"),
+            login: None,
+        })),
+    );
+    assert_eq!(created.action, Action::ItemCreated);
+    let vw = fx.read("personal");
+    assert_eq!(
+        recorded_ids(&created),
+        vw.credential_ids("item", "token").unwrap()
+    );
+
+    let listed = fx.serve_event("personal", VaultAction::ListItems, None);
+    assert_eq!(
+        recorded_ids(&listed),
+        SubjectIds::vault(vw.vault_id().unwrap())
+    );
+}
+
+#[test]
+fn a_resolve_across_vaults_lists_the_credentials_it_resolved() {
+    let fx = Fixture::new();
+    fx.broker_write("personal", "token", "a");
+    fx.broker_write("shared", "token", "b");
+
+    let event = fx.serve_event(
+        "personal, shared",
+        VaultAction::ResolveSecrets {
+            purpose: ResolvePurpose::Exec,
+            refs: vec![
+                token_ref("personal", "token"),
+                token_ref("shared", "token"),
+                token_ref("personal", "missing"),
+                token_ref("personal", "token"),
+            ],
+        },
+        None,
+    );
+    let personal = fx.read("personal").credential_ids("item", "token").unwrap();
+    let shared = fx.read("shared").credential_ids("item", "token").unwrap();
+    let list = |ids: [Option<uuid::Uuid>; 2]| ids.map(|id| id.unwrap().to_string()).join(",");
+    assert_eq!(
+        event.detail["vault_ids"],
+        list([personal.vault_id, shared.vault_id])
+    );
+    assert_eq!(
+        event.detail["item_ids"],
+        list([personal.item_id, shared.item_id])
+    );
+    assert_eq!(
+        event.detail["credential_ids"],
+        list([personal.credential_id, shared.credential_id])
+    );
+    assert_eq!(recorded_ids(&event), SubjectIds::default());
+}
+
+#[test]
+fn an_export_lists_the_vaults_it_exported() {
+    let fx = Fixture::new();
+    let dest = fx._dir.path().join("export.axovault");
+    let recipient = age::x25519::Identity::generate().to_public().to_string();
+    let event = fx.serve_event(
+        "personal, shared",
+        VaultAction::ExportVaults {
+            vault_keys: vec!["personal".to_string(), "shared".to_string()],
+        },
+        Some(VaultPayload::Export(ExportPayload {
+            dest_path: dest,
+            mode: ExportMode::Recipient(recipient),
+            include_passkeys: false,
+        })),
+    );
+    let id = |key: &str| fx.originals[key].vault_id().unwrap().to_string();
+    assert_eq!(
+        event.detail["vault_ids"],
+        format!("{},{}", id("personal"), id("shared"))
+    );
+}
+
+#[test]
+fn a_login_listing_records_no_ids_and_a_fill_and_a_code_record_the_login() {
+    let fx = Fixture::new();
+    // The login is in the second vault, so the request unlocks both.
+    fx.app_write("shared", |vw| {
+        autofill::write_login(
+            vw,
+            autofill::LoginWrite {
+                item_key: "example",
+                title: "Example",
+                password_key: "password",
+                password: SecretString::from("pw"),
+                username: Some("ada"),
+                websites: &["example.com".to_string()],
+                match_kind: MatchKind::Domain,
+            },
+        )?;
+        vw.add_secret(
+            "example",
+            "code",
+            "Code",
+            FieldKind::Totp,
+            SecretString::from("JBSWY3DPEHPK3PXP"),
+        )?;
+        autofill::set_role(vw, "example", autofill::Role::Totp, Some("code"))
+    });
+    let vw = fx.read("shared");
+    let password = vw.credential_ids("example", "password").unwrap();
+    let code = vw.credential_ids("example", "code").unwrap();
+    let record_id = autofill::collect_items(&vw, None).unwrap()[0]
+        .record_id
+        .clone();
+
+    let ids = |action: VaultAction| {
+        serve_logins(
+            &fx.vaults,
+            &prompt("", action),
+            ForeignContext::for_test(),
+            None,
+            &LoginIndex::default(),
+        )
+        .unwrap()
+        .ids
+    };
+    assert_eq!(
+        ids(VaultAction::ListLogins {
+            page: example_page(),
+            all: true,
+        }),
+        AccessIds::None
+    );
+    assert_eq!(
+        ids(VaultAction::FillLogin {
+            page: example_page(),
+            record_id: record_id.clone(),
+            account: None,
+            unmatched: false,
+        }),
+        AccessIds::One(password)
+    );
+    assert_eq!(
+        ids(VaultAction::GenerateTotp {
+            page: example_page(),
+            record_id,
+        }),
+        AccessIds::One(code)
+    );
+}
+
+#[test]
+fn a_saved_login_and_a_password_update_record_the_ids_of_the_login() {
+    let fx = Fixture::new();
+    let page = example_page();
+    let saved = save_login(
+        &fx.vaults,
+        &prompt(
+            "personal",
+            VaultAction::SaveLogin {
+                page: page.clone(),
+                username: Some("ada".to_string()),
+            },
+        ),
+        &page,
+        Some("ada"),
+        SaveLoginPayload {
+            password: SecretString::from("old"),
+        },
+        ForeignContext::for_test(),
+        &LoginIndex::default(),
+    )
+    .unwrap();
+    let vw = fx.read("personal");
+    let item = autofill::collect_items(&vw, None).unwrap().remove(0);
+    assert_eq!(
+        saved.ids,
+        AccessIds::One(vw.item_ids(&item.item_key).unwrap())
+    );
+
+    let updated = update_login_password(
+        &fx.vaults,
+        &page,
+        &item.record_id,
+        UpdateLoginPayload {
+            password: SecretString::from("new"),
+        },
+        ForeignContext::for_test(),
+    )
+    .unwrap();
+    assert_eq!(
+        updated.ids,
+        AccessIds::One(
+            vw.credential_ids(&item.item_key, &item.password_key)
+                .unwrap()
+        )
+    );
+}
+
+#[test]
+fn a_passkey_assertion_records_the_passkey_that_signed_from_the_vault_that_held_it() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    let (action, payload) = assertion();
+    let failed = fx.serve_recorded(true, "", action, Some(payload));
+    assert_eq!(failed.outcome, Outcome::Failed);
+    assert_eq!(recorded_ids(&failed), SubjectIds::default());
+
+    let created = fx.serve_event(
+        "shared",
+        VaultAction::CreatePasskey {
+            rp_id: "example.com".to_string(),
+            user_name: "ada".to_string(),
+            choices: PasskeyChoices::default(),
+        },
+        Some(VaultPayload::CreatePasskey(CreatePasskeyPayload {
+            request: passkey::CreatePasskeyRequest {
+                rp_id: "example.com".to_string(),
+                rp_name: Some("Example".to_string()),
+                user_handle: vec![1, 2, 3, 4],
+                user_name: "ada".to_string(),
+                user_display_name: "Ada".to_string(),
+                client_data_hash: vec![0; 32],
+                algorithms: Vec::new(),
+                excluded_credentials: Vec::new(),
+                prf: None,
+                target: passkey::PasskeyTarget::NewLogin,
+            },
+        })),
+    );
+    let stored = passkey::list(&fx.read("shared")).unwrap().remove(0);
+    let ids = SubjectIds::credential(stored.vault_id, stored.item_id, stored.credential_id);
+    assert_eq!(recorded_ids(&created), ids);
+
+    // The prompt names no vault. Personal is unlocked first and holds no
+    // passkey.
+    let (action, payload) = assertion();
+    let asserted = fx.serve_recorded(true, "", action, Some(payload));
+    assert_eq!(asserted.action, Action::PasskeyAsserted);
+    assert_eq!(asserted.outcome, Outcome::Succeeded);
+    assert_eq!(recorded_ids(&asserted), ids);
+    assert_eq!(asserted.detail["vault"], "shared");
 }

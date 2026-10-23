@@ -33,7 +33,7 @@ use super::wire::{
     WirePrfRegistration, WirePrfRegistrationOutput, WirePrfValues, WireRequest, WireResponse,
 };
 use super::{Authorizers, BrokerError, ConfirmPrompt, PromptOutcome};
-use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
+use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::provenance::ProcessNode;
@@ -316,6 +316,32 @@ pub struct AssertPasskeyPayload {
     /// Vault of the passkey chosen in the prompt. If set, only this vault is
     /// unlocked to sign.
     pub vault_key: Option<String>,
+}
+
+/// Response of a served request and the audit ids of the entities it acted on.
+struct Served {
+    response: WireResponse,
+    ids: AccessIds,
+}
+
+impl Served {
+    fn new(response: WireResponse, ids: AccessIds) -> Self {
+        Self { response, ids }
+    }
+}
+
+/// Audit ids an access event records. Known only once a vault is unlocked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum AccessIds {
+    /// No entity, such as for a login listing or a vault that was never
+    /// unlocked.
+    #[default]
+    None,
+    /// One entity, recorded as `vault_id`, `item_id`, and `credential_id`.
+    One(SubjectIds),
+    /// Entities of a request that names several, recorded as comma-separated
+    /// lists under `vault_ids`, `item_ids`, and `credential_ids`.
+    Many(Vec<SubjectIds>),
 }
 
 /// Location of the passkey a sign-in signed with.
@@ -710,6 +736,8 @@ pub fn request_create_passkey(
                     })
                 })
                 .transpose()?,
+            // The wire does not carry where the passkey is stored.
+            ids: SubjectIds::default(),
         }),
         WireResponse::Cancelled => Err(BrokerError::Cancelled),
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
@@ -861,7 +889,14 @@ async fn authorize(
         Ok(context) => context,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");
-            record_access(prompt, actor, Outcome::Denied, None, Some(&message));
+            record_access(
+                prompt,
+                actor,
+                Outcome::Denied,
+                None,
+                &AccessIds::None,
+                Some(&message),
+            );
             authorizer
                 .end(prompt.clone(), PromptOutcome::Failed(message.clone()))
                 .await;
@@ -904,7 +939,9 @@ pub(super) async fn authorize_and_serve_logins(
             .await
             .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
-    let served = match result {
+    // A login that was found records its ids even if the user does not
+    // confirm it or the write fails.
+    let (served, ids) = match result {
         Ok(served) => {
             let confirmed = match served.confirm {
                 Some(question) => {
@@ -915,7 +952,7 @@ pub(super) async fn authorize_and_serve_logins(
                 },
                 None => true,
             };
-            if !confirmed {
+            let outcome = if !confirmed {
                 log::debug!("App broker login request was not confirmed");
                 Err(None)
             } else {
@@ -926,14 +963,22 @@ pub(super) async fn authorize_and_serve_logins(
                         .map_err(Some),
                     None => Ok(served.response),
                 }
-            }
+            };
+            (outcome, served.ids)
         },
-        Err(message) => Err(Some(message)),
+        Err(message) => (Err(Some(message)), AccessIds::None),
     };
 
     let (response, outcome) = match served {
         Ok(response) => {
-            record_access(&prompt, &actor, Outcome::Succeeded, Some(&response), None);
+            record_access(
+                &prompt,
+                &actor,
+                Outcome::Succeeded,
+                Some(&response),
+                &ids,
+                None,
+            );
             (response, PromptOutcome::Succeeded)
         },
         Err(None) => {
@@ -942,12 +987,13 @@ pub(super) async fn authorize_and_serve_logins(
                 &actor,
                 Outcome::Denied,
                 None,
+                &ids,
                 Some("Not confirmed"),
             );
             (WireResponse::Cancelled, PromptOutcome::Cancelled)
         },
         Err(Some(message)) => {
-            record_access(&prompt, &actor, Outcome::Failed, None, Some(&message));
+            record_access(&prompt, &actor, Outcome::Failed, None, &ids, Some(&message));
             (
                 WireResponse::Failed {
                     message: message.clone(),
@@ -988,7 +1034,14 @@ pub(super) async fn authorize_and_serve(
                 }
             },
             Err(message) => {
-                record_access(&prompt, &actor, Outcome::Failed, None, Some(&message));
+                record_access(
+                    &prompt,
+                    &actor,
+                    Outcome::Failed,
+                    None,
+                    &AccessIds::None,
+                    Some(&message),
+                );
                 authorizer
                     .end(prompt, PromptOutcome::Failed(message.clone()))
                     .await;
@@ -1031,7 +1084,14 @@ pub(super) async fn authorize_and_serve(
             Ok(None) => {},
             Err(message) => {
                 log::debug!("App broker passkey account was not chosen: {message}");
-                record_access(&prompt, &actor, Outcome::Cancelled, None, Some(message));
+                record_access(
+                    &prompt,
+                    &actor,
+                    Outcome::Cancelled,
+                    None,
+                    &AccessIds::None,
+                    Some(message),
+                );
                 authorizer.end(prompt, PromptOutcome::Cancelled).await;
                 return WireResponse::Cancelled;
             },
@@ -1055,9 +1115,15 @@ pub(super) async fn authorize_and_serve(
     }
 
     let (response, outcome) = match result {
-        Ok(response) => {
-            let mut event =
-                access_event(&prompt, &actor, Outcome::Succeeded, Some(&response), None);
+        Ok(Served { response, ids }) => {
+            let mut event = access_event(
+                &prompt,
+                &actor,
+                Outcome::Succeeded,
+                Some(&response),
+                &ids,
+                None,
+            );
             if let Some(credential) = signed.and_then(|s| s.credential) {
                 event = event.detail("credential", credential);
             }
@@ -1065,7 +1131,14 @@ pub(super) async fn authorize_and_serve(
             (response, PromptOutcome::Succeeded)
         },
         Err(message) => {
-            record_access(&prompt, &actor, Outcome::Failed, None, Some(&message));
+            record_access(
+                &prompt,
+                &actor,
+                Outcome::Failed,
+                None,
+                &AccessIds::None,
+                Some(&message),
+            );
             (
                 WireResponse::Failed {
                     message: message.clone(),
@@ -1085,17 +1158,20 @@ fn record_access(
     actor: &Actor,
     outcome: Outcome,
     response: Option<&WireResponse>,
+    ids: &AccessIds,
     message: Option<&str>,
 ) {
-    audit::record(access_event(prompt, actor, outcome, response, message));
+    audit::record(access_event(prompt, actor, outcome, response, ids, message));
 }
 
-/// Audit event of one vault access, for [`record_access`].
+/// Audit event of one vault access, for [`record_access`]. `ids` come from
+/// the serve step.
 fn access_event(
     prompt: &VaultAccessPrompt,
     actor: &Actor,
     outcome: Outcome,
     response: Option<&WireResponse>,
+    ids: &AccessIds,
     message: Option<&str>,
 ) -> AuditEvent {
     let vault_key = &prompt.vault_key;
@@ -1184,6 +1260,7 @@ fn access_event(
         .actor(actor.clone())
         .detail("vault", vault_key.clone())
         .detail("via", "broker");
+    event = access_ids(event, ids);
     if let VaultAction::ResolveSecrets { refs, .. } = &prompt.action {
         event = event.detail("secret_count", refs.len().to_string());
     }
@@ -1250,6 +1327,33 @@ fn access_event(
     event
 }
 
+/// Record `ids` in `event`. Each list holds distinct ids in request order.
+fn access_ids(event: AuditEvent, ids: &AccessIds) -> AuditEvent {
+    let all = match ids {
+        AccessIds::None => return event,
+        AccessIds::One(ids) => return event.subject_ids(*ids),
+        AccessIds::Many(all) => all,
+    };
+    let list = |id: fn(&SubjectIds) -> Option<uuid::Uuid>| {
+        let mut seen = Vec::new();
+        for id in all.iter().filter_map(id) {
+            if !seen.contains(&id) {
+                seen.push(id);
+            }
+        }
+        (!seen.is_empty()).then(|| {
+            seen.iter()
+                .map(uuid::Uuid::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    };
+    event
+        .maybe_detail("vault_ids", list(|ids| ids.vault_id))
+        .maybe_detail("item_ids", list(|ids| ids.item_id))
+        .maybe_detail("credential_ids", list(|ids| ids.credential_id))
+}
+
 /// The browser's name and signing team, and the extension the browser reported,
 /// for a request that came through the browser host.
 fn client_details(event: AuditEvent, client: &ClientIdentity) -> AuditEvent {
@@ -1294,7 +1398,7 @@ fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
 /// under the vault locks, as every app edit does, so neither replaces the
 /// other's save.
 /// `signed` is set to the passkey a sign-in signed with, since its prompt does
-/// not name a vault.
+/// not name a vault. The audit ids are those of the unlocked vault data.
 fn serve_on_context(
     vaults: &VaultCatalog,
     prompt: VaultAccessPrompt,
@@ -1302,7 +1406,7 @@ fn serve_on_context(
     payload: Option<VaultPayload>,
     rt: tokio::runtime::Handle,
     signed: &mut Option<SignedPasskey>,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     match &prompt.action {
         VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(vaults, refs, context),
         VaultAction::ListLogins { .. }
@@ -1356,9 +1460,12 @@ fn serve_on_context(
     let vw = open_vault(vaults, &prompt.vault_key, context)?;
 
     match prompt.action {
-        VaultAction::ListItems => Ok(WireResponse::VaultItems {
-            items: collect_items(&vw)?,
-        }),
+        VaultAction::ListItems => Ok(Served::new(
+            WireResponse::VaultItems {
+                items: collect_items(&vw)?,
+            },
+            AccessIds::One(SubjectIds::vault(vw.vault_id()?)),
+        )),
         VaultAction::ReadSecret {
             item_key,
             credential_key,
@@ -1367,20 +1474,27 @@ fn serve_on_context(
                 .get_secret(&item_key, &credential_key)
                 .map_err(|e| format!("Failed to get secret: {e}"))?
                 .map(|secret| secret.expose_secret().to_string());
-            Ok(WireResponse::VaultSecret { value })
+            Ok(Served::new(
+                WireResponse::VaultSecret { value },
+                AccessIds::One(vw.credential_ids(&item_key, &credential_key)?),
+            ))
         },
         VaultAction::WriteSecret {
             item_key,
             credential_key,
         } => {
             let payload = write.ok_or("Missing write payload")?;
-            let created = vaults
+            let (created, ids) = vaults
                 .files()
                 .write_unlocked(&vw, |fresh| {
-                    write_secret(fresh, &item_key, &credential_key, payload)
+                    let created = write_secret(fresh, &item_key, &credential_key, payload)?;
+                    Ok::<_, String>((created, fresh.credential_ids(&item_key, &credential_key)?))
                 })?
                 .value;
-            Ok(WireResponse::VaultWritten { created })
+            Ok(Served::new(
+                WireResponse::VaultWritten { created },
+                AccessIds::One(ids),
+            ))
         },
         VaultAction::ResolveSecrets { .. }
         | VaultAction::ListLogins { .. }
@@ -1465,18 +1579,31 @@ struct LoginServed {
     /// Runs once the user has confirmed, for a request that changes a vault. It
     /// writes nothing before then. Its result replaces `response`.
     commit: Option<Commit>,
+    /// Audit ids of the login the request used.
+    ids: AccessIds,
 }
 
 type Commit = Box<dyn FnOnce() -> Result<WireResponse, String> + Send>;
 
 impl LoginServed {
-    fn new(response: WireResponse) -> Self {
+    fn new(response: WireResponse, ids: AccessIds) -> Self {
         Self {
             response,
             confirm: None,
             commit: None,
+            ids,
         }
     }
+}
+
+/// Audit ids of login `item`, read from its record id. The credential is the
+/// login password.
+fn login_ids(item: &autofill::AutofillItem) -> SubjectIds {
+    autofill::parse_record_id(&item.record_id)
+        .map(|(vault_id, item_id, credential_id)| {
+            SubjectIds::credential(vault_id, item_id, credential_id)
+        })
+        .unwrap_or_default()
 }
 
 /// Serve a login request on the app's context. A vault that fails to load or
@@ -1552,16 +1679,20 @@ fn serve_logins(
                 !item.websites.is_empty() && !logins.iter().any(|m| m.record_id == item.record_id)
             });
             everything.sort_by_key(|item| item.title.to_lowercase());
-            Ok(LoginServed::new(WireResponse::Logins {
-                logins: logins
-                    .iter()
-                    .filter_map(autofill::AutofillItem::summary)
-                    .collect(),
-                others: everything
-                    .iter()
-                    .map(autofill::AutofillItem::other)
-                    .collect(),
-            }))
+            // A listing names many logins and uses none, so it records no ids.
+            Ok(LoginServed::new(
+                WireResponse::Logins {
+                    logins: logins
+                        .iter()
+                        .filter_map(autofill::AutofillItem::summary)
+                        .collect(),
+                    others: everything
+                        .iter()
+                        .map(autofill::AutofillItem::other)
+                        .collect(),
+                },
+                AccessIds::None,
+            ))
         },
         _ => Err("No login matches that record on this page".to_string()),
     }
@@ -1612,8 +1743,14 @@ fn serve_record(vw: &VaultHandle, action: &VaultAction) -> Result<Option<LoginSe
         cancel_label: Some("Cancel".to_string()),
     });
 
+    // A one-time code is read from the TOTP credential, not the password.
+    let mut ids = login_ids(&item);
     let response = if totp {
         let code = autofill::login_totp(vw, &item).map_err(|e| e.to_string())?;
+        ids.credential_id = vw
+            .get_item_overview(&item.item_key)?
+            .and_then(|overview| overview.autofill.totp_credential(overview))
+            .map(|cred| cred.id);
         WireResponse::TotpCode { code }
     } else {
         let secrets = autofill::read_login(vw, &item)
@@ -1628,6 +1765,7 @@ fn serve_record(vw: &VaultHandle, action: &VaultAction) -> Result<Option<LoginSe
         response,
         confirm,
         commit: None,
+        ids: AccessIds::One(ids),
     }))
 }
 
@@ -1692,8 +1830,15 @@ fn save_login(
         .value;
 
     let record_id = item.record_id.clone();
+    let ids = SubjectIds {
+        credential_id: None,
+        ..login_ids(&item)
+    };
     index.upsert(item);
-    Ok(LoginServed::new(WireResponse::LoginSaved { record_id }))
+    Ok(LoginServed::new(
+        WireResponse::LoginSaved { record_id },
+        AccessIds::One(ids),
+    ))
 }
 
 /// Find the login `record_id` names in whichever vault holds it and prepare to
@@ -1743,6 +1888,7 @@ fn update_login_password(
     // The copy read here only builds the prompt. The commit reloads the vault
     // in its own transaction after the user confirms, so an edit saved while
     // the prompt is shown is kept.
+    let ids = AccessIds::One(login_ids(&item));
     let files = vaults.files().clone();
     let commit: Commit = Box::new(move || {
         files.write_unlocked(&vw, |fresh| {
@@ -1755,6 +1901,7 @@ fn update_login_password(
         response: WireResponse::Acknowledged,
         confirm,
         commit: Some(commit),
+        ids,
     })
 }
 
@@ -1855,16 +2002,19 @@ fn create_passkey(
     request: passkey::CreatePasskeyRequest,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     let mut vw = open_vault(vaults, vault_key, context)?;
     let response = rt
         .block_on(passkey::create_from_wire(vaults.files(), &mut vw, request))
         .map_err(|e| format!("Failed to register the passkey: {e}"))?;
-    Ok(WireResponse::PasskeyRegistered {
-        credential_id: b64_encode(&response.credential_id),
-        attestation_object: b64_encode(&response.attestation_object),
-        prf: response.prf.as_ref().map(WirePrfRegistrationOutput::encode),
-    })
+    Ok(Served::new(
+        WireResponse::PasskeyRegistered {
+            credential_id: b64_encode(&response.credential_id),
+            attestation_object: b64_encode(&response.attestation_object),
+            prf: response.prf.as_ref().map(WirePrfRegistrationOutput::encode),
+        },
+        AccessIds::One(response.ids),
+    ))
 }
 
 /// Sign an assertion challenge with a stored passkey. The credential may be in
@@ -1872,7 +2022,8 @@ fn create_passkey(
 ///
 /// Passkeys a site reported it no longer accepts are used only if no other
 /// passkey matches. If `only_vault` is set, no other vault is unlocked.
-/// `signed` is set to the passkey that signed. Its vault records the use.
+/// `signed` is set to the passkey that signed. Its vault records the use. The
+/// audit ids are those of the passkey that signed.
 fn assert_passkey(
     vaults: &VaultCatalog,
     request: passkey::AssertPasskeyRequest,
@@ -1880,7 +2031,7 @@ fn assert_passkey(
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
     signed: &mut Option<SignedPasskey>,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     let mut unlocked = unlock_for_passkeys(vaults, &context, only_vault);
 
     let mut last_error = None;
@@ -1905,22 +2056,31 @@ fn assert_passkey(
             }
             match rt.block_on(passkey::assert_from_wire(vaults.files(), vw, request)) {
                 Ok(response) => {
+                    let stored = usable.iter().find(|s| {
+                        s.passkey.credential_id.as_slice() == &response.credential_id[..]
+                    });
                     *signed = Some(SignedPasskey {
                         vault_key: vault_key.clone(),
-                        credential: usable
-                            .iter()
-                            .find(|s| {
-                                s.passkey.credential_id.as_slice() == &response.credential_id[..]
-                            })
+                        credential: stored
                             .map(|s| format!("{vault_key}/{}/{}", s.item_key, s.credential_key)),
                     });
-                    return Ok(WireResponse::PasskeyAsserted {
-                        credential_id: b64_encode(&response.credential_id),
-                        user_handle: b64_encode(&response.user_handle),
-                        authenticator_data: b64_encode(&response.authenticator_data),
-                        signature: b64_encode(&response.signature),
-                        prf: response.prf.as_ref().map(WirePrfValues::encode),
+                    let ids = stored.map_or(AccessIds::None, |s| {
+                        AccessIds::One(SubjectIds::credential(
+                            s.vault_id,
+                            s.item_id,
+                            s.credential_id,
+                        ))
                     });
+                    return Ok(Served::new(
+                        WireResponse::PasskeyAsserted {
+                            credential_id: b64_encode(&response.credential_id),
+                            user_handle: b64_encode(&response.user_handle),
+                            authenticator_data: b64_encode(&response.authenticator_data),
+                            signature: b64_encode(&response.signature),
+                            prf: response.prf.as_ref().map(WirePrfValues::encode),
+                        },
+                        ids,
+                    ));
                 },
                 Err(e) => last_error = Some(e.to_string()),
             }
@@ -2014,7 +2174,7 @@ fn export_vaults(
     vault_keys: &[String],
     export: ExportPayload,
     context: ForeignContext,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     vaults
         .export(
             vault_keys,
@@ -2025,9 +2185,18 @@ fn export_vaults(
             |_| {},
         )
         .map_err(|e| format!("Failed to export vaults: {e}"))?;
-    Ok(WireResponse::VaultsExported {
-        count: vault_keys.len() as u32,
-    })
+    // A vault whose id cannot be read after the export is left out.
+    let ids = vault_keys
+        .iter()
+        .filter_map(|key| vaults.load(key).and_then(|vw| vw.peek_vault_id()).ok())
+        .map(SubjectIds::vault)
+        .collect();
+    Ok(Served::new(
+        WireResponse::VaultsExported {
+            count: vault_keys.len() as u32,
+        },
+        AccessIds::Many(ids),
+    ))
 }
 
 /// Re-open the bundle and import the selected vaults, re-wrapping each file key
@@ -2036,7 +2205,7 @@ fn import_vaults(
     vaults: &VaultCatalog,
     import: ImportPayload,
     context: ForeignContext,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     let identity =
         ImportIdentity::try_from(import.identity).map_err(|e| format!("Invalid identity: {e}"))?;
 
@@ -2048,13 +2217,19 @@ fn import_vaults(
 
     let bundle = ImportableBundle::open(&import.import_path, identity)
         .map_err(|e| format!("Failed to open bundle: {e}"))?;
-    let keys = vaults
+    let imported = vaults
         .import(bundle, &selection, AuthContext::Foreign(context))
-        .map_err(|e| format!("Failed to import bundle: {e}"))?
-        .into_iter()
-        .map(|vw| vw.key)
+        .map_err(|e| format!("Failed to import bundle: {e}"))?;
+    let ids = imported
+        .iter()
+        .filter_map(|vw| vw.peek_vault_id().ok())
+        .map(SubjectIds::vault)
         .collect();
-    Ok(WireResponse::VaultsImported { keys })
+    let keys = imported.into_iter().map(|vw| vw.key).collect();
+    Ok(Served::new(
+        WireResponse::VaultsImported { keys },
+        AccessIds::Many(ids),
+    ))
 }
 
 /// Unlock the vault at `path` to validate it, then register it as an external
@@ -2063,7 +2238,7 @@ fn add_external_vault(
     vaults: &VaultCatalog,
     path: &str,
     context: ForeignContext,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     let path = Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Could not resolve path {path}: {e}"))?;
@@ -2075,31 +2250,36 @@ fn add_external_vault(
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
 
     let name = vw.vault_name().map(str::to_string);
+    let ids = SubjectIds::vault(vw.vault_id()?);
     APP_CONFIG
         .lock()
         .map_err(|e| format!("Failed to lock config: {e}"))?
         .add_external_vault(&vw.key, path)
         .map_err(|e| format!("Failed to add vault: {e}"))?;
 
-    Ok(WireResponse::VaultLinked {
-        vault_key: vw.key.clone(),
-        name,
-    })
+    Ok(Served::new(
+        WireResponse::VaultLinked {
+            vault_key: vw.key.clone(),
+            name,
+        },
+        AccessIds::One(ids),
+    ))
 }
 
 /// Resolve every reference, unlocking each distinct vault once on the app's
 /// context. The result is positionally matched to `refs`. A reference whose
 /// vault fails to load or unlock resolves to `None` rather than failing the
-/// whole batch.
+/// whole batch. The audit ids are those of the credentials that resolved.
 fn resolve_secrets(
     vaults: &VaultCatalog,
     refs: &[VaultRef],
     context: ForeignContext,
-) -> Result<WireResponse, String> {
+) -> Result<Served, String> {
     use std::collections::HashMap;
 
     let mut opened: HashMap<String, Option<VaultHandle>> = HashMap::new();
     let mut values = Vec::with_capacity(refs.len());
+    let mut ids = Vec::new();
 
     for r in refs {
         let vw = opened.entry(r.vault_key.clone()).or_insert_with(|| {
@@ -2123,10 +2303,21 @@ fn resolve_secrets(
             },
             None => None,
         };
+        if value.is_some()
+            && let Some(vw) = vw
+        {
+            match vw.credential_ids(&r.item_key, &r.credential_key) {
+                Ok(found) => ids.push(found),
+                Err(e) => log::error!("Failed to read the audit ids of a resolved secret: {e}"),
+            }
+        }
         values.push(value);
     }
 
-    Ok(WireResponse::ResolvedSecrets { values })
+    Ok(Served::new(
+        WireResponse::ResolvedSecrets { values },
+        AccessIds::Many(ids),
+    ))
 }
 
 fn collect_items(vw: &VaultHandle) -> Result<Vec<BrokerVaultItem>, String> {
