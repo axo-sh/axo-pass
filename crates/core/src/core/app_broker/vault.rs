@@ -40,7 +40,7 @@ use crate::core::provenance::ProcessNode;
 use crate::secrets::vaults::passkey_signals::{self, Report};
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::{
-    DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultWrapper, VaultsManager, autofill, passkey,
+    DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultHandle, VaultsManager, autofill, passkey,
 };
 
 /// One `axo://` reference to resolve, as it crosses the socket.
@@ -1339,7 +1339,7 @@ fn serve_on_context(
         Some(_) => return Err("Wrong payload for this vault action".to_string()),
     };
 
-    let mut vw = VaultWrapper::load(&vaults_dir(), Some(prompt.vault_key.clone()))
+    let mut vw = VaultHandle::load(&vaults_dir(), Some(prompt.vault_key.clone()))
         .map_err(|e| format!("Failed to load vault: {e}"))?;
     vw.unlock_on(AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
@@ -1527,7 +1527,7 @@ fn serve_logins(
 /// Serve a fill or a one-time code from `vw`, when the record is a login in it
 /// that matches the page. The match is decided here, from the vault, whatever
 /// the client believes.
-fn serve_record(vw: &VaultWrapper, action: &VaultAction) -> Result<Option<LoginServed>, String> {
+fn serve_record(vw: &VaultHandle, action: &VaultAction) -> Result<Option<LoginServed>, String> {
     use secrecy::ExposeSecret;
 
     let (page, record_id, totp, unmatched) = match action {
@@ -1627,7 +1627,7 @@ fn save_login(
     context: ForeignContext,
     index: &LoginIndex,
 ) -> Result<LoginServed, String> {
-    let mut vw = VaultWrapper::load(&vaults_dir(), Some(prompt.vault_key.clone()))
+    let mut vw = VaultHandle::load(&vaults_dir(), Some(prompt.vault_key.clone()))
         .map_err(|e| format!("Failed to load vault: {e}"))?;
     vw.unlock_on(AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
@@ -1812,7 +1812,7 @@ fn create_passkey(
     let vw = match vm.get_vault_mut(vault_key) {
         Some(vw) => vw,
         None => {
-            created = VaultWrapper::load(&vaults_dir(), Some(vault_key.to_string()))
+            created = VaultHandle::load(&vaults_dir(), Some(vault_key.to_string()))
                 .map_err(|e| format!("Failed to load vault {vault_key}: {e}"))?;
             &mut created
         },
@@ -1960,7 +1960,7 @@ fn unlock_for_passkeys(
 /// Stored passkeys of `vw` for the request relying party that its allow list
 /// permits. An empty allow list permits every passkey of the relying party.
 fn matching_passkeys(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     request: &passkey::AssertPasskeyRequest,
 ) -> Vec<passkey::StoredPasskey> {
     passkey::list(vw)
@@ -2028,7 +2028,7 @@ fn add_external_vault(path: &str, context: ForeignContext) -> Result<WireRespons
         .canonicalize()
         .map_err(|e| format!("Could not resolve path {path}: {e}"))?;
 
-    let mut vw = VaultWrapper::load_from_path(None, &path)
+    let mut vw = VaultHandle::load_from_path(None, &path)
         .map_err(|e| format!("Not a valid vault file: {e}"))?;
     vw.unlock_on(AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
@@ -2054,12 +2054,12 @@ fn resolve_secrets(refs: &[VaultRef], context: ForeignContext) -> Result<WireRes
     use std::collections::HashMap;
 
     let vaults_dir = vaults_dir();
-    let mut vaults: HashMap<String, Option<VaultWrapper>> = HashMap::new();
+    let mut vaults: HashMap<String, Option<VaultHandle>> = HashMap::new();
     let mut values = Vec::with_capacity(refs.len());
 
     for r in refs {
         let vw = vaults.entry(r.vault_key.clone()).or_insert_with(|| {
-            match VaultWrapper::load(&vaults_dir, Some(r.vault_key.clone())) {
+            match VaultHandle::load(&vaults_dir, Some(r.vault_key.clone())) {
                 Ok(mut vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
                     Ok(()) => Some(vw),
                     Err(e) => {
@@ -2095,7 +2095,7 @@ fn resolve_secrets(refs: &[VaultRef], context: ForeignContext) -> Result<WireRes
     Ok(WireResponse::ResolvedSecrets { values })
 }
 
-fn collect_items(vw: &VaultWrapper) -> Result<Vec<BrokerVaultItem>, String> {
+fn collect_items(vw: &VaultHandle) -> Result<Vec<BrokerVaultItem>, String> {
     let mut items: Vec<BrokerVaultItem> = vw
         .list_items()
         .map_err(|e| format!("Failed to list items: {e}"))?
@@ -2121,8 +2121,8 @@ fn collect_items(vw: &VaultWrapper) -> Result<Vec<BrokerVaultItem>, String> {
 mod tests {
     use super::*;
 
-    fn vault_with_github() -> (VaultWrapper, String) {
-        let mut vw = VaultWrapper::new_for_test("personal");
+    fn vault_with_github() -> (VaultHandle, String) {
+        let mut vw = VaultHandle::new_for_test("personal");
         autofill::write_login(
             &mut vw,
             autofill::LoginWrite {

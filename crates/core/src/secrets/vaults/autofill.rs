@@ -23,10 +23,10 @@ use uuid::Uuid;
 
 pub use super::item_autofill::Role;
 use super::totp::{self, TotpCode};
-use super::vault_wrapper::validate_key;
+use super::vault_handle::validate_key;
 use super::{
-    CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultItemCredentialOverview,
-    VaultItemOverview, VaultItemSection, VaultWrapper, Website,
+    CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultHandle,
+    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, Website,
 };
 
 /// Credential keys treated as the account name when a conversion finds no
@@ -135,7 +135,7 @@ pub struct LoginSummary {
 
 /// Collect every AutoFill candidate in an unlocked vault. `service`, when
 /// given, keeps only the items matching it, best match first.
-pub fn collect_items(vw: &VaultWrapper, service: Option<&str>) -> Result<Vec<AutofillItem>, Error> {
+pub fn collect_items(vw: &VaultHandle, service: Option<&str>) -> Result<Vec<AutofillItem>, Error> {
     let target = match service {
         Some(service) => match ParsedUrl::parse(service) {
             Some(target) => Some(target),
@@ -159,7 +159,7 @@ pub fn collect_items(vw: &VaultWrapper, service: Option<&str>) -> Result<Vec<Aut
 /// One item as an AutoFill candidate. `None` when the item is not a login, or
 /// when `target` is given and no website of the item matches it.
 fn candidate(
-    vw: &VaultWrapper,
+    vw: &VaultHandle,
     vault_id: Uuid,
     overview: &VaultItemOverview,
     target: Option<&ParsedUrl>,
@@ -236,7 +236,7 @@ pub struct LoginPlace {
 /// A login is an item with a password role, a passkey, or the `login` category.
 /// Unlike [`collect_items`] this includes logins with no password, such as the
 /// ones created for a passkey.
-pub fn collect_places(vw: &VaultWrapper) -> Result<Vec<LoginPlace>, Error> {
+pub fn collect_places(vw: &VaultHandle) -> Result<Vec<LoginPlace>, Error> {
     let mut places = Vec::new();
     for overview in vw.list_items()? {
         let has_passkey = overview
@@ -291,7 +291,7 @@ pub fn parse_record_id(record_id: &str) -> Option<(Uuid, Uuid, Uuid)> {
 /// one the identifier names, and one of its websites must match `frame_url`
 /// under that website's match kind.
 pub fn find_login(
-    vw: &VaultWrapper,
+    vw: &VaultHandle,
     record_id: &str,
     frame_url: &str,
 ) -> Result<Option<AutofillItem>, Error> {
@@ -321,7 +321,7 @@ pub struct LoginSecrets {
 }
 
 /// Read the role credentials of a login found by [`find_login`].
-pub fn read_login(vw: &VaultWrapper, item: &AutofillItem) -> Result<Option<LoginSecrets>, Error> {
+pub fn read_login(vw: &VaultHandle, item: &AutofillItem) -> Result<Option<LoginSecrets>, Error> {
     use secrecy::ExposeSecret;
 
     let Some(password) = vw.get_secret(&item.item_key, &item.password_key)? else {
@@ -336,7 +336,7 @@ pub fn read_login(vw: &VaultWrapper, item: &AutofillItem) -> Result<Option<Login
 /// The current one-time code of a login found by [`find_login`], from the
 /// item's `Totp` credential with the lowest position. `None` when the item has
 /// no such credential or it is empty.
-pub fn login_totp(vw: &VaultWrapper, item: &AutofillItem) -> Result<Option<TotpCode>, Error> {
+pub fn login_totp(vw: &VaultHandle, item: &AutofillItem) -> Result<Option<TotpCode>, Error> {
     use secrecy::ExposeSecret;
 
     let Some(overview) = vw.get_item_overview(&item.item_key)? else {
@@ -438,7 +438,7 @@ pub struct LoginWrite<'a> {
 /// Write a login into an unlocked vault: the item when it is missing, the
 /// password credential, the username credential keyed `username`, the role
 /// slots, the websites, and `category: login`. The caller saves the vault.
-pub fn write_login(vw: &mut VaultWrapper, login: LoginWrite) -> Result<(), Error> {
+pub fn write_login(vw: &mut VaultHandle, login: LoginWrite) -> Result<(), Error> {
     if vw.get_item_overview(login.item_key)?.is_none() {
         vw.add_item(login.item_key, login.title)?;
     }
@@ -512,7 +512,7 @@ pub fn names_for_site(site: &Site) -> (String, String) {
 
 /// `base`, or `base-2`, `base-3`, and so on, whichever is the first key no item
 /// in `vw` uses.
-pub(super) fn unused_item_key(vw: &VaultWrapper, base: &str) -> Result<String, Error> {
+pub(super) fn unused_item_key(vw: &VaultHandle, base: &str) -> Result<String, Error> {
     let mut key = base.to_string();
     let mut n = 2;
     while vw.get_item_overview(&key)?.is_some() {
@@ -527,7 +527,7 @@ pub(super) fn unused_item_key(vw: &VaultWrapper, base: &str) -> Result<String, E
 /// `host` matching, so a capture on one page of a shared host does not offer
 /// the login across its whole registrable domain. The caller saves the vault.
 pub fn save_login(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     site_origin: &str,
     username: Option<&str>,
     password: SecretString,
@@ -563,7 +563,7 @@ pub fn save_login(
 /// suffix. The website matches by `domain`. The caller saves the vault. Returns
 /// the item's key.
 pub fn create_login(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     website: &str,
     username: Option<&str>,
     password: SecretString,
@@ -605,7 +605,7 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 /// password role to an item with no category makes it a login. The caller saves
 /// the vault.
 pub fn set_role(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     item_key: &str,
     role: Role,
     cred_key: Option<&str>,
@@ -654,7 +654,7 @@ pub fn set_role(
 /// Replace the websites an item applies to. Every URL must be an `http` or
 /// `https` site or a bare domain. The caller saves the vault.
 pub fn set_websites(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     item_key: &str,
     websites: Vec<Website>,
 ) -> Result<(), Error> {
@@ -682,7 +682,7 @@ pub fn set_websites(
 /// username credential assigned the username role. It has no password role. The
 /// caller saves the vault. Returns the new item's key.
 pub fn add_passkey_login(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     rp_id: &str,
     title: Option<&str>,
     username: Option<&str>,
@@ -740,7 +740,7 @@ pub fn add_passkey_login(
 /// - the source goes to the deleted items with the credentials that stayed and
 ///   its own deleted credentials. With neither, it is purged.
 /// - caller is responsible for saving the vault.
-pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> Result<(), Error> {
+pub fn merge_items(vw: &mut VaultHandle, source_key: &str, dest_key: &str) -> Result<(), Error> {
     use secrecy::ExposeSecret;
 
     if source_key == dest_key {
@@ -827,7 +827,7 @@ pub fn merge_items(vw: &mut VaultWrapper, source_key: &str, dest_key: &str) -> R
 /// destination section with the same title, created if there is none.
 /// `sections` caches the choice per source section.
 fn dest_section(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     dest_key: &str,
     section: &VaultItemSection,
     sections: &mut HashMap<Uuid, Uuid>,
@@ -849,7 +849,7 @@ fn dest_section(
 
 /// `base`, or `base-2`, `base-3`, and so on, whichever is the first credential
 /// key the item does not use.
-fn unused_credential_key(vw: &VaultWrapper, item_key: &str, base: &str) -> Result<String, Error> {
+fn unused_credential_key(vw: &VaultHandle, item_key: &str, base: &str) -> Result<String, Error> {
     let mut key = base.to_string();
     let mut n = 2;
     while vw.get_secret_overview(item_key, &key)?.is_some() {
@@ -862,10 +862,7 @@ fn unused_credential_key(vw: &VaultWrapper, item_key: &str, base: &str) -> Resul
 /// The login a record identifier names, wherever it applies. Unlike
 /// [`find_login`] this does not check a page, so the caller decides what an
 /// unmatched page means.
-pub fn find_login_record(
-    vw: &VaultWrapper,
-    record_id: &str,
-) -> Result<Option<AutofillItem>, Error> {
+pub fn find_login_record(vw: &VaultHandle, record_id: &str) -> Result<Option<AutofillItem>, Error> {
     let Some((vault_id, item_id, _)) = parse_record_id(record_id) else {
         return Ok(None);
     };
@@ -886,7 +883,7 @@ pub fn is_stored_for(item: &AutofillItem, frame_url: &str) -> bool {
 /// Replace the password of a login found by [`find_login_record`], keeping the
 /// credential's title and kind. The caller saves the vault.
 pub fn update_login_password(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     item: &AutofillItem,
     password: SecretString,
 ) -> Result<(), Error> {
@@ -899,7 +896,7 @@ pub fn update_login_password(
     vw.add_secret(&item.item_key, &item.password_key, &title, kind, password)
 }
 
-fn credential_id(vw: &VaultWrapper, item_key: &str, cred_key: &str) -> Result<uuid::Uuid, Error> {
+fn credential_id(vw: &VaultHandle, item_key: &str, cred_key: &str) -> Result<uuid::Uuid, Error> {
     vw.get_secret_overview(item_key, cred_key)?
         .map(|cred| cred.id)
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))
@@ -1074,7 +1071,7 @@ impl ParsedUrl {
     }
 }
 
-fn read(vw: &VaultWrapper, item_key: &str, cred_key: &str) -> Result<Option<String>, Error> {
+fn read(vw: &VaultHandle, item_key: &str, cred_key: &str) -> Result<Option<String>, Error> {
     use secrecy::ExposeSecret;
     let value = vw
         .get_secret(item_key, cred_key)?
@@ -1114,7 +1111,7 @@ pub struct LoginConversion {
 /// `https` scheme, matched by `domain`; other schemes would turn database and
 /// API items into logins. The one-time code is the first `Totp` credential.
 pub fn suggest_conversion(
-    vw: &VaultWrapper,
+    vw: &VaultHandle,
     overview: &VaultItemOverview,
 ) -> Result<Option<LoginConversion>, Error> {
     let autofill = &overview.autofill;
@@ -1157,7 +1154,7 @@ pub fn suggest_conversion(
 /// Apply [`suggest_conversion`] to an item and mark it as a login. Credential
 /// keys are not renamed. Returns false when there was nothing to convert. The
 /// caller saves the vault.
-pub fn convert_to_login(vw: &mut VaultWrapper, item_key: &str) -> Result<bool, Error> {
+pub fn convert_to_login(vw: &mut VaultHandle, item_key: &str) -> Result<bool, Error> {
     let Some(overview) = vw.get_item_overview(item_key)? else {
         return Err(Error::InvalidItemKey(item_key.to_string()));
     };
@@ -1540,7 +1537,7 @@ mod tests {
     fn write_login_creates_the_item_credentials_roles_and_websites() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
 
@@ -1573,7 +1570,7 @@ mod tests {
 
     #[test]
     fn write_login_stores_an_email_username_as_email() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         write_login(&mut vw, login(&[], Some("tp@example.com"))).unwrap();
         let cred = vw
             .get_secret_overview("github", "username")
@@ -1584,7 +1581,7 @@ mod tests {
 
     #[test]
     fn write_login_does_not_duplicate_websites_on_update() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, None)).unwrap();
         write_login(&mut vw, login(&websites, None)).unwrap();
@@ -1623,7 +1620,7 @@ mod tests {
     fn save_login_stores_a_host_website_and_the_conventional_keys() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let item = save_login(
             &mut vw,
             "https://login.example.com",
@@ -1665,8 +1662,8 @@ mod tests {
     fn save_login_leaves_an_existing_item_alone() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
-        let save = |vw: &mut VaultWrapper, password: &str| {
+        let mut vw = VaultHandle::new_for_test("personal");
+        let save = |vw: &mut VaultHandle, password: &str| {
             save_login(
                 vw,
                 "https://example.com",
@@ -1687,7 +1684,7 @@ mod tests {
 
     #[test]
     fn save_login_without_a_username_has_no_username_role() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let item = save_login(
             &mut vw,
             "https://example.com",
@@ -1702,7 +1699,7 @@ mod tests {
 
     #[test]
     fn save_login_refuses_a_page_that_is_not_http() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         assert!(save_login(&mut vw, "ftp://example.com", None, SecretString::from("pw")).is_err());
     }
 
@@ -1710,7 +1707,7 @@ mod tests {
     fn update_login_password_changes_only_the_value() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
         let before = vw
@@ -1735,7 +1732,7 @@ mod tests {
 
     #[test]
     fn find_login_record_ignores_the_page_but_not_the_id() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
         let item = collect_items(&vw, None).unwrap().remove(0);
@@ -1751,7 +1748,7 @@ mod tests {
 
     #[test]
     fn a_login_is_stored_for_a_page_only_through_a_listed_website() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
         let item = find_login_record(&vw, &collect_items(&vw, None).unwrap()[0].record_id)
@@ -1764,7 +1761,7 @@ mod tests {
 
     /// An item the way an older build stored it: credentials only, with no
     /// roles or websites.
-    fn legacy_item(vw: &mut VaultWrapper, key: &str, creds: &[(&str, FieldKind, &str)]) {
+    fn legacy_item(vw: &mut VaultHandle, key: &str, creds: &[(&str, FieldKind, &str)]) {
         vw.add_item(key, key).unwrap();
         for (cred_key, kind, value) in creds {
             vw.add_secret(
@@ -1780,7 +1777,7 @@ mod tests {
 
     #[test]
     fn an_item_without_autofill_data_is_not_offered() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
             "blog",
@@ -1796,7 +1793,7 @@ mod tests {
 
     #[test]
     fn conversion_assigns_roles_and_websites_from_the_credentials() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
             "blog",
@@ -1837,7 +1834,7 @@ mod tests {
 
     #[test]
     fn conversion_is_limited_to_http_sites() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
             "database",
@@ -1853,7 +1850,7 @@ mod tests {
 
     #[test]
     fn conversion_needs_a_confidential_credential() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
             "notes",
@@ -1864,7 +1861,7 @@ mod tests {
 
     #[test]
     fn conversion_leaves_an_item_with_roles_alone() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         vw.add_secret(
             "github",
@@ -1916,7 +1913,7 @@ mod tests {
     }
 
     /// Point the github test item's totp slot at the credential `cred_key`.
-    fn set_totp_slot(vw: &mut VaultWrapper, cred_key: &str) {
+    fn set_totp_slot(vw: &mut VaultHandle, cred_key: &str) {
         let overview = vw.get_item_overview("github").unwrap().unwrap();
         let mut autofill = overview.autofill.clone();
         autofill.totp = Some(key_of(overview, cred_key));
@@ -1957,9 +1954,9 @@ mod tests {
 
     #[test]
     fn has_totp_follows_the_totp_slot() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
-        let has_totp = |vw: &VaultWrapper| collect_items(vw, None).unwrap()[0].has_totp;
+        let has_totp = |vw: &VaultHandle| collect_items(vw, None).unwrap()[0].has_totp;
         assert!(!has_totp(&vw));
 
         vw.add_secret(
@@ -1991,7 +1988,7 @@ mod tests {
         );
     }
 
-    fn github_login(vw: &mut VaultWrapper) -> String {
+    fn github_login(vw: &mut VaultHandle) -> String {
         let websites = vec!["github.com".to_string()];
         write_login(vw, login(&websites, Some("tp"))).unwrap();
         collect_items(vw, Some("github.com")).unwrap()[0]
@@ -2001,7 +1998,7 @@ mod tests {
 
     #[test]
     fn find_login_requires_a_website_that_matches_the_frame() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
 
         let found = find_login(&vw, &record_id, "https://gist.github.com/new")
@@ -2030,7 +2027,7 @@ mod tests {
 
     #[test]
     fn find_login_refuses_ids_that_do_not_name_this_login() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
         let (vault, item, credential) = parse_record_id(&record_id).unwrap();
         let new = Uuid::new_v4;
@@ -2057,7 +2054,7 @@ mod tests {
     fn read_login_returns_only_the_role_credentials() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
         vw.add_secret(
             "github",
@@ -2076,7 +2073,7 @@ mod tests {
 
     #[test]
     fn a_login_listing_summary_carries_no_secret_or_key() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         let found = collect_items(&vw, Some("github.com")).unwrap();
         let summary = found[0].summary().unwrap();
@@ -2091,7 +2088,7 @@ mod tests {
 
     #[test]
     fn login_totp_uses_the_credential_in_the_totp_slot() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
         let item = find_login(&vw, &record_id, "github.com").unwrap().unwrap();
         assert!(login_totp(&vw, &item).unwrap().is_none());
@@ -2182,7 +2179,7 @@ mod tests {
 
     #[test]
     fn create_login_derives_the_key_and_title_from_the_website() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let key = create_login(
             &mut vw,
             " github.com ",
@@ -2219,8 +2216,8 @@ mod tests {
 
     #[test]
     fn create_login_rejects_a_bad_website_or_key() {
-        let mut vw = VaultWrapper::new_for_test("personal");
-        let create = |vw: &mut VaultWrapper, website: &str, key: Option<&str>| {
+        let mut vw = VaultHandle::new_for_test("personal");
+        let create = |vw: &mut VaultHandle, website: &str, key: Option<&str>| {
             create_login(vw, website, None, SecretString::from("pw"), key, None)
         };
         assert!(create(&mut vw, "ftp://example.com", None).is_err());
@@ -2231,7 +2228,7 @@ mod tests {
 
     #[test]
     fn set_role_moves_a_credential_between_roles() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         set_role(&mut vw, "github", Role::Password, Some("username")).unwrap();
         let item = vw.get_item_overview("github").unwrap().unwrap();
@@ -2249,7 +2246,7 @@ mod tests {
 
     #[test]
     fn set_role_rejects_a_credential_of_the_wrong_kind() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         vw.add_secret(
             "github",
@@ -2268,7 +2265,7 @@ mod tests {
 
     #[test]
     fn set_role_makes_an_uncategorized_item_a_login() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(&mut vw, "blog", &[("secret", FieldKind::default(), "pw")]);
         set_role(&mut vw, "blog", Role::Password, Some("secret")).unwrap();
         let item = vw.get_item_overview("blog").unwrap().unwrap();
@@ -2277,7 +2274,7 @@ mod tests {
 
     #[test]
     fn set_websites_replaces_the_list_and_checks_each_url() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         set_websites(
             &mut vw,
@@ -2336,7 +2333,7 @@ mod tests {
     fn merge_moves_credentials_and_deletes_the_source() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         add_passkey_login(&mut vw, "github.com", Some("GitHub"), Some("tp")).unwrap();
         let source = vw
@@ -2402,7 +2399,7 @@ mod tests {
 
     #[test]
     fn merge_renames_a_differing_credential_and_fills_missing_roles() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
             "alpha",
@@ -2440,7 +2437,7 @@ mod tests {
     fn merge_keeps_history_and_sections_and_purges_an_emptied_source() {
         use secrecy::ExposeSecret;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(&mut vw, "alpha", &[]);
         legacy_item(
             &mut vw,
@@ -2486,7 +2483,7 @@ mod tests {
 
     #[test]
     fn merge_into_itself_is_an_error() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         assert!(merge_items(&mut vw, "github", "github").is_err());
         assert!(vw.get_item_overview("github").unwrap().is_some());

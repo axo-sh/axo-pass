@@ -48,7 +48,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Error, FieldKind, VaultWrapper, autofill};
+use super::{Error, FieldKind, VaultHandle, autofill};
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
 /// random constant, per the WebAuthn spec: it names the model, never the
@@ -74,7 +74,7 @@ pub enum PasskeyTarget {
 /// The vault is saved before returning, so the credential is durable by the
 /// time the relying party sees the attestation.
 pub async fn create(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     request: make_credential::Request,
     target: PasskeyTarget,
 ) -> Result<make_credential::Response, Error> {
@@ -92,7 +92,7 @@ pub async fn create(
 /// Assert an existing passkey in an unlocked vault. Passkeys are synced, so
 /// their signature counter stays 0 and the stored record is never changed.
 pub async fn assert(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     request: get_assertion::Request,
 ) -> Result<get_assertion::Response, Error> {
     let mut authenticator = authenticator(PasskeyCredentialStore::new(vw, PasskeyTarget::NewLogin));
@@ -133,7 +133,7 @@ impl StoredPasskey {
 /// List the passkeys in an unlocked vault, for the UI and for registering
 /// AutoFill identities. A record this build cannot read is logged and skipped
 /// rather than failing the listing.
-pub fn list(vw: &VaultWrapper) -> Result<Vec<StoredPasskey>, Error> {
+pub fn list(vw: &VaultHandle) -> Result<Vec<StoredPasskey>, Error> {
     let mut out = Vec::new();
     let vault_id = vw.vault_id()?;
     for item in vw.list_items()? {
@@ -346,7 +346,7 @@ fn descriptors(ids: Vec<Vec<u8>>) -> Option<Vec<PublicKeyCredentialDescriptor>> 
 
 /// Register a passkey in an unlocked vault from a broker request.
 pub async fn create_from_wire(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     req: CreatePasskeyRequest,
 ) -> Result<CreatePasskeyResponse, Error> {
     let mut params: Vec<PublicKeyCredentialParameters> = req
@@ -430,7 +430,7 @@ pub async fn create_from_wire(
 /// vault is saved. A failure to save is logged and does not fail the
 /// sign-in.
 pub async fn assert_from_wire(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     req: AssertPasskeyRequest,
 ) -> Result<AssertPasskeyResponse, Error> {
     let request = get_assertion::Request {
@@ -638,13 +638,13 @@ fn decode(value: &str) -> Result<Passkey, Error> {
 /// into the in-memory vault and flushed by [`create`] / [`assert`], so a failed
 /// request leaves nothing behind on disk.
 struct PasskeyCredentialStore<'a> {
-    vw: &'a mut VaultWrapper,
+    vw: &'a mut VaultHandle,
     /// Where a new passkey goes. Read by `save_credential` only.
     target: PasskeyTarget,
 }
 
 impl<'a> PasskeyCredentialStore<'a> {
-    fn new(vw: &'a mut VaultWrapper, target: PasskeyTarget) -> Self {
+    fn new(vw: &'a mut VaultHandle, target: PasskeyTarget) -> Self {
         Self { vw, target }
     }
 
@@ -687,7 +687,7 @@ impl<'a> PasskeyCredentialStore<'a> {
 /// item for the relying party when the target is a new login. Returns the item
 /// key. The caller saves the vault.
 fn store_passkey(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     cred: &Passkey,
     value: String,
     item_title: Option<&str>,
@@ -727,7 +727,7 @@ pub struct PasskeyRecord {
 /// Read the passkey at `item_key`/`credential_key`. Fails when the credential
 /// is not a passkey.
 pub fn read_record(
-    vw: &VaultWrapper,
+    vw: &VaultHandle,
     item_key: &str,
     credential_key: &str,
 ) -> Result<PasskeyRecord, Error> {
@@ -751,7 +751,7 @@ pub fn read_record(
 /// time. The record must decode, so a damaged value is refused rather than
 /// copied. The caller saves the vault.
 pub fn write_record(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     record: &PasskeyRecord,
     target: &PasskeyTarget,
 ) -> Result<(), Error> {
@@ -772,7 +772,7 @@ pub fn write_record(
 /// credential id. Fails when the credential is not a passkey. The caller saves
 /// the vault.
 pub fn remove_record(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
 ) -> Result<(), Error> {
@@ -790,7 +790,7 @@ pub fn remove_record(
 /// all take the new name. The replaced record is not kept as a previous value,
 /// since it differs only in the name. The caller saves the vault.
 pub fn rename_account(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
     name: &str,
@@ -945,7 +945,7 @@ mod tests {
 
     use super::*;
     use crate::secrets::vaults::MatchKind;
-    use crate::secrets::vaults::vault_wrapper::normalized_key;
+    use crate::secrets::vaults::vault_handle::normalized_key;
 
     /// Keeps whatever the authenticator saves, so a test can inspect a real
     /// credential without needing a vault on disk.
@@ -1124,7 +1124,7 @@ mod tests {
     }
 
     /// Register without saving, since a test vault has no path to write to.
-    async fn register(vw: &mut VaultWrapper, target: PasskeyTarget, user: &str) {
+    async fn register(vw: &mut VaultHandle, target: PasskeyTarget, user: &str) {
         let mut authenticator = Authenticator::new(
             AAGUID,
             PasskeyCredentialStore::new(vw, target),
@@ -1138,7 +1138,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_login_target_creates_a_login_item() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
 
         let passkeys = list(&vw).unwrap();
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_item_target_stores_the_passkey_beside_the_login() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         autofill::write_login(
             &mut vw,
             autofill::LoginWrite {
@@ -1183,7 +1183,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_passkey_moves_to_another_vault_with_its_record_intact() {
-        let mut source = VaultWrapper::new_for_test("personal");
+        let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
         source
@@ -1191,11 +1191,11 @@ mod tests {
             .unwrap();
         let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
 
-        let mut dest = VaultWrapper::new_for_test("work");
+        let mut dest = VaultHandle::new_for_test("work");
         write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
 
         let moved = list(&dest).unwrap().remove(0);
-        let last_used = |vw: &VaultWrapper| {
+        let last_used = |vw: &VaultHandle| {
             vw.get_secret_overview(&moved.item_key, &moved.credential_key)
                 .unwrap()
                 .unwrap()
@@ -1213,11 +1213,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_moved_passkey_is_not_kept_in_the_source_deleted_credentials() {
-        let mut source = VaultWrapper::new_for_test("personal");
+        let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
         let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
-        let mut dest = VaultWrapper::new_for_test("work");
+        let mut dest = VaultHandle::new_for_test("work");
         write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
 
         remove_record(&mut source, &stored.item_key, &stored.credential_key).unwrap();
@@ -1228,7 +1228,7 @@ mod tests {
 
     #[test]
     fn only_passkeys_can_be_removed_after_a_move() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         vw.add_item("site", "Site").unwrap();
         vw.add_secret(
             "site",
@@ -1244,7 +1244,7 @@ mod tests {
 
     #[test]
     fn only_passkeys_can_be_read_for_a_move() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         vw.add_item("site", "Site").unwrap();
         vw.add_secret(
             "site",
@@ -1259,7 +1259,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_item_target_is_an_error() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let mut authenticator = Authenticator::new(
             AAGUID,
             PasskeyCredentialStore::new(&mut vw, PasskeyTarget::Item("gone".into())),
@@ -1275,12 +1275,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_assertion_leaves_the_stored_record_unchanged() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let before = list(&vw).unwrap();
         let item_key = before[0].item_key.clone();
         let credential_key = before[0].credential_key.clone();
-        let stored = |vw: &VaultWrapper| {
+        let stored = |vw: &VaultHandle| {
             vw.get_secret(&item_key, &credential_key)
                 .unwrap()
                 .unwrap()
@@ -1321,7 +1321,7 @@ mod tests {
     async fn registrations_and_assertions_report_synced_verified_flags() {
         use passkey_types::ctap2::Flags;
 
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let mut authenticator = Authenticator::new(
             AAGUID,
             PasskeyCredentialStore::new(&mut vw, PasskeyTarget::NewLogin),
@@ -1393,7 +1393,7 @@ mod tests {
 
     #[tokio::test]
     async fn prf_results_are_stable_and_match_registration() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let eval = PrfValues {
             first: b"first input".to_vec(),
             second: Some(b"second input".to_vec()),
@@ -1462,7 +1462,7 @@ mod tests {
 
     #[tokio::test]
     async fn per_credential_prf_input_takes_precedence() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         let mut request = registration("example.com", "ada");
         request.extensions = Some(make_credential::ExtensionInputs {
             hmac_secret: Some(true),
@@ -1512,7 +1512,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_passkey_without_a_prf_secret_returns_no_prf_results() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         // Registered without PRF, as passkeys were before PRF support.
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn renaming_an_account_keeps_the_key_and_adds_no_history() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
 
@@ -1577,7 +1577,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_registration_records_when_it_was_created() {
-        let mut vw = VaultWrapper::new_for_test("personal");
+        let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
         let value = vw

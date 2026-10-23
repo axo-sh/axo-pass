@@ -29,8 +29,8 @@ pub use crate::secrets::vaults::vault_export::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
 pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
-use crate::secrets::vaults::vault_wrapper::{
-    VaultWrapper, get_vault_encryption_key_on, normalized_key,
+use crate::secrets::vaults::vault_handle::{
+    VaultHandle, get_vault_encryption_key_on, normalized_key,
 };
 
 const FILE_KEY_LEN: usize = 32;
@@ -156,7 +156,7 @@ impl ImportableBundle {
         selection: &BTreeMap<Uuid, String>,
         vault_dir: &Path,
         auth_context: AuthContext,
-    ) -> Result<Vec<VaultWrapper>, Error> {
+    ) -> Result<Vec<VaultHandle>, Error> {
         if selection.is_empty() {
             return Err(Error::VaultImportError(
                 "No vaults selected for import".to_string(),
@@ -268,7 +268,7 @@ impl ImportableBundle {
 
         staged
             .into_iter()
-            .map(|(key, path, _)| VaultWrapper::load_from_path(Some(key), &path))
+            .map(|(key, path, _)| VaultHandle::load_from_path(Some(key), &path))
             .collect()
     }
 }

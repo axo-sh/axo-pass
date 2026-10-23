@@ -52,7 +52,7 @@ enum VaultState {
 }
 
 // in-memory representation of a vault
-pub struct VaultWrapper {
+pub struct VaultHandle {
     pub key: String,
     pub path: PathBuf,
     state: VaultState,
@@ -93,7 +93,7 @@ fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-impl VaultWrapper {
+impl VaultHandle {
     pub fn new_vault(
         name: Option<String>,
         vault_dir: &Path,
@@ -106,15 +106,15 @@ impl VaultWrapper {
 
         let vault_path = vault_file_path(vault_dir, &vault_key)?;
         let vault_overview = Vault::new(name, user_encryption_key)?;
-        let vault_wrapper = Self {
+        let handle = Self {
             key: vault_key.to_string(),
             path: vault_path,
             state: VaultState::Unlocked {
                 vault: Box::new(vault_overview),
             },
         };
-        vault_wrapper.save()?;
-        Ok(vault_wrapper)
+        handle.save()?;
+        Ok(handle)
     }
 
     /// An unlocked, empty vault that is never written to disk.
@@ -660,7 +660,7 @@ impl VaultWrapper {
 /// unlocked. Passkeys are left out of the bundle unless `include_passkeys` is
 /// set.
 pub fn export_bundle(
-    vaults: &[&VaultWrapper],
+    vaults: &[&VaultHandle],
     path: &Path,
     export_mode: ExportMode,
     include_passkeys: bool,

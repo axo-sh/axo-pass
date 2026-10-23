@@ -7,7 +7,7 @@ pub mod passkey_signals;
 pub mod totp;
 mod vault;
 pub mod vault_export;
-mod vault_wrapper;
+mod vault_handle;
 mod vaults_manager;
 
 pub use autofill::{
@@ -21,5 +21,5 @@ pub use vault::{
     CredentialPlacement, CredentialUpdate, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection, display_order,
 };
-pub use vault_wrapper::{DEFAULT_VAULT, ExportProgress, VaultWrapper};
+pub use vault_handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use vaults_manager::VaultsManager;

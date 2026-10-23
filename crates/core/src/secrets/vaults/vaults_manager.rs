@@ -10,15 +10,15 @@ use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, ImportableBundle};
-use crate::secrets::vaults::vault_wrapper::{
-    ExportProgress, VaultWrapper, check_vault_auth_still_valid, export_bundle,
+use crate::secrets::vaults::vault_handle::{
+    ExportProgress, VaultHandle, check_vault_auth_still_valid, export_bundle,
     get_vault_encryption_key, normalized_key,
 };
 
 #[derive(Default)]
 pub struct VaultsManager {
     vaults_dir: PathBuf,
-    vaults: HashMap<String, VaultWrapper>,
+    vaults: HashMap<String, VaultHandle>,
 }
 
 impl VaultsManager {
@@ -34,10 +34,10 @@ impl VaultsManager {
         &mut self,
         name: Option<String>,
         vault_key: &str,
-    ) -> Result<&VaultWrapper, Error> {
+    ) -> Result<&VaultHandle, Error> {
         let user_encryption_key = get_vault_encryption_key()?;
 
-        let vw = VaultWrapper::new_vault(name, &self.vaults_dir, vault_key, user_encryption_key)?;
+        let vw = VaultHandle::new_vault(name, &self.vaults_dir, vault_key, user_encryption_key)?;
         let vault_key = vw.key.clone(); // normalized key
 
         log::debug!("Vault created, saving new vault to disk...");
@@ -47,7 +47,7 @@ impl VaultsManager {
         Ok(self.vaults.get(&vault_key).unwrap())
     }
 
-    fn discover_vaults(vaults_dir: &Path) -> HashMap<String, VaultWrapper> {
+    fn discover_vaults(vaults_dir: &Path) -> HashMap<String, VaultHandle> {
         let mut vaults = HashMap::new();
 
         // read vaults from default vault dir
@@ -67,7 +67,7 @@ impl VaultsManager {
 
             // load vault using key (this is a bit redundant with VaultWrapper::load, which
             // recreates the path)
-            match VaultWrapper::load_from_path(Some(key.to_owned()), &path) {
+            match VaultHandle::load_from_path(Some(key.to_owned()), &path) {
                 Ok(vw) => {
                     vaults.insert(key.to_string(), vw);
                 },
@@ -81,7 +81,7 @@ impl VaultsManager {
         }) {
             for (vault_key, vault_config) in config.external_vaults.clone() {
                 if let Ok(vault) =
-                    VaultWrapper::load_from_path(Some(vault_key.clone()), &vault_config.path)
+                    VaultHandle::load_from_path(Some(vault_key.clone()), &vault_config.path)
                 {
                     if vaults.contains_key(&vault_key) {
                         log::error!(
@@ -150,7 +150,7 @@ impl VaultsManager {
                 .ok_or_else(|| Error::VaultNotFound(key.clone()))?;
             vw.unlock_on(auth_context.clone())?;
         }
-        let selected: Vec<&VaultWrapper> = vault_keys
+        let selected: Vec<&VaultHandle> = vault_keys
             .iter()
             .map(|k| self.vaults.get(k.as_str()).expect("unlocked above"))
             .collect();
@@ -240,7 +240,7 @@ impl VaultsManager {
         Ok(())
     }
 
-    pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultWrapper)> {
+    pub fn iter_vaults(&self) -> impl Iterator<Item = (&String, &VaultHandle)> {
         self.vaults.iter()
     }
 
@@ -270,7 +270,7 @@ impl VaultsManager {
     /// the get/unlock/save steps themselves.
     pub fn with_unlocked_vault<F, R, E>(&mut self, vault_key: &str, f: F) -> Result<R, E>
     where
-        F: FnOnce(&mut VaultWrapper) -> Result<R, E>,
+        F: FnOnce(&mut VaultHandle) -> Result<R, E>,
         E: From<Error>,
     {
         check_vault_auth_still_valid()?;
@@ -283,14 +283,14 @@ impl VaultsManager {
         Ok(result)
     }
 
-    pub fn get_or_create_vault_mut(&mut self, key: &str) -> Result<&mut VaultWrapper, Error> {
+    pub fn get_or_create_vault_mut(&mut self, key: &str) -> Result<&mut VaultHandle, Error> {
         if !self.vaults.contains_key(key) {
             log::debug!(
                 "Vault not loaded, reading vault from vaults dir: {}",
                 self.vaults_dir.display()
             );
             let vw =
-                VaultWrapper::load(&self.vaults_dir, Some(key.to_owned())).inspect_err(|e| {
+                VaultHandle::load(&self.vaults_dir, Some(key.to_owned())).inspect_err(|e| {
                     log::error!("Error reading vault: {:?}", e);
                 })?;
             self.vaults.insert(key.to_string(), vw);
@@ -299,11 +299,11 @@ impl VaultsManager {
         Ok(self.vaults.get_mut(key).unwrap())
     }
 
-    pub fn get_vault_mut(&mut self, key: &str) -> Option<&mut VaultWrapper> {
+    pub fn get_vault_mut(&mut self, key: &str) -> Option<&mut VaultHandle> {
         self.vaults.get_mut(key)
     }
 
-    pub fn get_vault(&self, key: &str) -> Option<&VaultWrapper> {
+    pub fn get_vault(&self, key: &str) -> Option<&VaultHandle> {
         self.vaults.get(key)
     }
 

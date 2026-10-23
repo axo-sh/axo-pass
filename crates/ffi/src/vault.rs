@@ -8,8 +8,8 @@ use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey_signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
-    TextField, VaultFolder, VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
-    VaultWrapper, Website, autofill, display_order, passkey, totp,
+    TextField, VaultFolder, VaultHandle, VaultItemCredentialOverview, VaultItemOverview,
+    VaultItemSection, Website, autofill, display_order, passkey, totp,
 };
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
@@ -424,7 +424,7 @@ impl AxoPass {
     async fn edit_vault<R: Send + 'static>(
         &self,
         vault_key: String,
-        f: impl FnOnce(&mut VaultWrapper) -> Result<R, FfiError> + Send + 'static,
+        f: impl FnOnce(&mut VaultHandle) -> Result<R, FfiError> + Send + 'static,
     ) -> Result<R, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
@@ -438,7 +438,7 @@ impl AxoPass {
 
 /// Decrypt a vault from disk if it is not already in memory. Uses the shared
 /// LAContext, so there is no re-prompt after a successful `unlock`.
-fn ensure_unlocked(vault: &mut VaultWrapper) -> Result<(), FfiError> {
+fn ensure_unlocked(vault: &mut VaultHandle) -> Result<(), FfiError> {
     if matches!(vault.list_items(), Err(VaultError::VaultLocked)) {
         vault.unlock()?;
     }
@@ -552,7 +552,7 @@ fn website_origin(url: &str) -> String {
 /// Record in the vault of the passkey that the user dismissed what reports so
 /// far say about it. The caller saves the vault.
 fn dismiss_report(
-    vw: &mut VaultWrapper,
+    vw: &mut VaultHandle,
     summary: &passkey::PasskeySummary,
     kind: passkey_signals::DismissKind,
 ) -> Result<(), FfiError> {

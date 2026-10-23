@@ -24,7 +24,7 @@ use crate::secrets::vaults::vault::encrypted_vault::{
 };
 use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
-use crate::secrets::vaults::vault_wrapper::normalized_key;
+use crate::secrets::vaults::vault_handle::normalized_key;
 
 type FolderId = Uuid;
 type ItemId = Uuid;
