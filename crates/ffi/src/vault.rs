@@ -6,7 +6,7 @@ use axo_pass_core::core::app_broker::IndexedPasskey;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::model::totp;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
-use axo_pass_core::secrets::vaults::passkey_signals::{self, SignalStore};
+use axo_pass_core::secrets::vaults::passkey::signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
     TextField, VaultFolder, VaultHandle, VaultItemCredentialOverview, VaultItemOverview,
@@ -78,11 +78,11 @@ pub enum PasskeyReportKind {
     Rename,
 }
 
-impl From<PasskeyReportKind> for passkey_signals::DismissKind {
+impl From<PasskeyReportKind> for signals::DismissKind {
     fn from(kind: PasskeyReportKind) -> Self {
         match kind {
-            PasskeyReportKind::Rejection => passkey_signals::DismissKind::Rejection,
-            PasskeyReportKind::Rename => passkey_signals::DismissKind::Rename,
+            PasskeyReportKind::Rejection => signals::DismissKind::Rejection,
+            PasskeyReportKind::Rename => signals::DismissKind::Rename,
         }
     }
 }
@@ -102,8 +102,8 @@ fn passkey_info(summary: passkey::PasskeySummary, signals: &SignalStore) -> Pass
     }
 }
 
-fn passkey_ref(summary: &passkey::PasskeySummary) -> passkey_signals::PasskeyRef<'_> {
-    passkey_signals::PasskeyRef {
+fn passkey_ref(summary: &passkey::PasskeySummary) -> signals::PasskeyRef<'_> {
+    signals::PasskeyRef {
         rp_id: &summary.rp_id,
         credential_id: &summary.credential_id,
         user_handle: summary.user_handle.as_deref(),
@@ -553,7 +553,7 @@ fn website_origin(url: &str) -> String {
 fn dismiss_report(
     vw: &mut VaultHandle,
     summary: &passkey::PasskeySummary,
-    kind: passkey_signals::DismissKind,
+    kind: signals::DismissKind,
 ) -> Result<(), FfiError> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1777,7 +1777,7 @@ impl AxoPass {
             passkey::rename_account(vw, &item, &cred, &name)?;
             let value = vw.get_secret(&item, &cred)?;
             if let Some(summary) = value.and_then(|v| passkey::summary(v.expose_secret())) {
-                dismiss_report(vw, &summary, passkey_signals::DismissKind::Rename)?;
+                dismiss_report(vw, &summary, signals::DismissKind::Rename)?;
             }
             Ok(())
         })
@@ -1813,7 +1813,7 @@ impl AxoPass {
     pub async fn apply_passkey_reports(&self) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let reports = passkey_signals::pending();
+            let reports = signals::pending();
             if reports.is_empty() {
                 return Ok(());
             }
@@ -1845,7 +1845,7 @@ impl AxoPass {
                 }
             }
             if complete {
-                passkey_signals::clear_pending(&reports);
+                signals::clear_pending(&reports);
             }
             Ok(())
         })

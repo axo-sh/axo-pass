@@ -14,16 +14,16 @@ use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
+use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
-use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
     HistoryOverview, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection,
 };
-use crate::secrets::vaults::passkey_signals::{self, SignalStore};
+use crate::secrets::vaults::passkey::signals::{self, SignalStore};
 use crate::secrets::vaults::storage::txn::VaultLocks;
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -569,7 +569,7 @@ impl VaultHandle {
     /// not yet written into the vaults.
     pub fn passkey_signals(&self) -> Result<SignalStore, Error> {
         let vault = self.get_unlocked_vault()?;
-        Ok(passkey_signals::effective(vault.passkey_signals()))
+        Ok(signals::effective(vault.passkey_signals()))
     }
 
     /// Change the site reports stored in this vault. The caller saves.

@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use super::FieldKind;
-use super::model::{VaultItemCredentialOverview, VaultItemOverview};
+use crate::secrets::vaults::FieldKind;
+use crate::secrets::vaults::model::{VaultItemCredentialOverview, VaultItemOverview};
 
 /// The `category` value for items created as logins.
 pub const CATEGORY_LOGIN: &str = "login";

@@ -253,7 +253,7 @@ fn cred_id(vault: &Vault, item_key: &str, cred_key: &str) -> Uuid {
 
 #[test]
 fn autofill_survives_a_save_and_decrypts_with_its_own_aad() {
-    use crate::secrets::vaults::item_autofill::{MatchKind, Website};
+    use crate::secrets::vaults::autofill::item::{MatchKind, Website};
 
     let mut vault = vault_with_credentials("item", &["username", "password", "totp"]);
     let autofill = ItemAutofill {
@@ -652,7 +652,7 @@ fn deleting_a_folder_unfiles_its_items() {
 
 #[test]
 fn passkey_reports_persist_in_the_vault_metadata() {
-    use crate::secrets::vaults::passkey_signals::Report;
+    use crate::secrets::vaults::passkey::signals::Report;
 
     let mut vault = test_vault();
     let folder_id = vault.create_folder("Work").id;

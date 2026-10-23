@@ -12,8 +12,8 @@ use super::{
 };
 use crate::core::provenance::PeerIdentity;
 use crate::secrets::vaults::autofill::check_rp_id;
+use crate::secrets::vaults::passkey::signals::Report;
 use crate::secrets::vaults::passkey::{AssertPasskeyRequest, CreatePasskeyRequest, PasskeyTarget};
-use crate::secrets::vaults::passkey_signals::Report;
 
 /// Serve one request from a verified peer, whichever transport carried it.
 ///

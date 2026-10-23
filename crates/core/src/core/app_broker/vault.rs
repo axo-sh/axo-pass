@@ -37,7 +37,7 @@ use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKin
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::provenance::ProcessNode;
-use crate::secrets::vaults::passkey_signals::{self, Report};
+use crate::secrets::vaults::passkey::signals::{self, Report};
 use crate::secrets::vaults::vault_export::{
     ExportMode, ImportIdentity, ImportableBundle, WorkFactor,
 };
@@ -814,7 +814,7 @@ pub(super) async fn record_passkey_report(
             message: "The system clock is before 1970".to_string(),
         };
     };
-    passkey_signals::record_pending(report, at);
+    signals::record_pending(report, at);
 
     let event = AuditEvent::new(
         audit::process_source(),

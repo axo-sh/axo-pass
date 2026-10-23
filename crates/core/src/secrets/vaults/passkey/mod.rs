@@ -23,6 +23,8 @@
 //! secret is stored in the record at registration, and PRF results are
 //! HMAC-SHA-256 of that secret over the hashed page input.
 
+pub mod signals;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

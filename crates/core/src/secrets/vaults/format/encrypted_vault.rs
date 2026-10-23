@@ -8,10 +8,10 @@ use serde_with::serde_as;
 use uuid::Uuid;
 
 use crate::secrets::keychain::managed_key::ManagedKey;
+use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
-use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
     VaultItemMetadata, VaultItemOverview, VaultMetadata,

@@ -8,10 +8,10 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 use super::ItemId;
+use crate::secrets::vaults::autofill::item::{ItemAutofill, Role};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
 use crate::secrets::vaults::model::fields::FieldKind;
-use crate::secrets::vaults::passkey_signals::SignalStore;
+use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::normalized_key;
 
 /// Sort key for folders, sections, and credentials. Entries with a position

@@ -14,14 +14,16 @@
 //! Websites match through the Public Suffix List, including its private
 //! section, so `a.github.io` and `b.github.io` are different sites.
 
+pub(super) mod item;
+
 use std::collections::HashMap;
 
+pub use item::Role;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 use uuid::Uuid;
 
-pub use super::item_autofill::Role;
 use super::model::totp::{self, TotpCode};
 use super::storage::handle::validate_key;
 use super::{
