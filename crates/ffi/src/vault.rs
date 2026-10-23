@@ -51,8 +51,9 @@ pub struct CredentialInfo {
     /// "totp", or none. The password role decides the credential is concealed,
     /// whatever its kind.
     pub role: Option<String>,
-    /// Unix seconds of the last recorded use. Only passkey sign-ins set it.
-    pub last_used_at: Option<i64>,
+    /// Unix seconds of the first use on the most recent day of use. Only
+    /// passkey sign-ins set it. It names the day of last use, not the time.
+    pub last_used_day_at: Option<i64>,
     /// Only present for passkeys; contains passkey credential details for
     /// display.
     pub passkey: Option<PasskeyInfo>,
@@ -674,7 +675,7 @@ impl AxoPass {
                                 position: c.position,
                                 section_id: c.section.map(|id| id.to_string()),
                                 role: role.map(str::to_string),
-                                last_used_at: c.last_used_at,
+                                last_used_day_at: c.last_used_day_at,
                                 passkey,
                             }
                         })

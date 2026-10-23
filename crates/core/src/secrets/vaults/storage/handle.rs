@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
+use jiff::tz::TimeZone;
 use secrecy::{SecretBox, SecretString};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -397,15 +398,29 @@ impl VaultHandle {
         Ok(())
     }
 
-    /// Record when a credential was last used. The value is unchanged.
+    /// Record a use of a credential at `at`, in the system time zone. See
+    /// [`Self::mark_credential_used_in`].
     pub fn mark_credential_used(
         &mut self,
         item_key: &str,
         cred_key: &str,
         at: i64,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
+        self.mark_credential_used_in(item_key, cred_key, at, &TimeZone::system())
+    }
+
+    /// Record a use of a credential at `at`. Writes only if no use is stored,
+    /// or if the stored use falls on an earlier date in `zone`. The value is
+    /// unchanged. Returns whether the time was written.
+    pub fn mark_credential_used_in(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        at: i64,
+        zone: &TimeZone,
+    ) -> Result<bool, Error> {
         let vault = self.get_unlocked_vault_mut()?;
-        vault.mark_credential_used(item_key, cred_key, at)
+        vault.mark_credential_used(item_key, cred_key, at, zone)
     }
 
     pub fn delete_item_credential(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {

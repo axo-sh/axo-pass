@@ -22,6 +22,7 @@ dirs = "7.0.0"
 glob = "0.3"
 indoc = "2.0.8"
 itertools = "0.15.0"
+jiff = "0.2.38"
 libc = "0.2"
 libproc = "0.14.11"
 log.workspace = true

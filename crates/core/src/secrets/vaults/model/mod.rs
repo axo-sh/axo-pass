@@ -1,4 +1,5 @@
 pub mod fields;
+pub mod last_used;
 mod overview;
 pub mod totp;
 
@@ -6,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
+use jiff::tz::TimeZone;
 pub use overview::{
     DeletedCredentialEntry, DeletedCredentialOverview, DeletedInfo, DeletedItemOverview,
     HistoryInfo, HistoryOverview, VaultCredentialMetadata, VaultFolder, VaultFolderMetadata,
@@ -1202,23 +1204,29 @@ impl Vault {
         Ok(cred)
     }
 
-    /// Record when a credential was last used. Only its metadata blob is
-    /// re-encrypted. The value and its history are unchanged.
+    /// Record a use of a credential at `at`. Writes only if no use is stored,
+    /// or if the stored use falls on an earlier date in `zone`. Only the
+    /// credential metadata blob is re-encrypted. The value and its history are
+    /// unchanged. Returns whether the time was written.
     pub fn mark_credential_used(
         &mut self,
         item_key: &str,
         cred_key: &str,
         at: i64,
-    ) -> Result<(), Error> {
+        zone: &TimeZone,
+    ) -> Result<bool, Error> {
         let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
         let cred = self
             .items
             .get_mut(&item_id)
             .and_then(|item| item.credentials.get_mut(&cred_id))
             .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
-        cred.last_used_at = Some(at);
+        if !last_used::is_later_day(cred.last_used_day_at, at, zone) {
+            return Ok(false);
+        }
+        cred.last_used_day_at = Some(at);
         self.cred_blobs.remove(&cred_id);
-        Ok(())
+        Ok(true)
     }
 
     /// Mark a credential as deleted. Its key is free for reuse. The

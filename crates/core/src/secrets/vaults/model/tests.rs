@@ -103,7 +103,7 @@ fn cred_metadata(title: &str, key: &str, kind: FieldKind) -> VaultCredentialMeta
         kind,
         position: None,
         section: None,
-        last_used_at: None,
+        last_used_day_at: None,
     }
 }
 
@@ -806,19 +806,53 @@ fn updating_a_credential_keeps_its_value_and_persists() {
 fn marking_a_credential_used_persists_without_history() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);
-    vault
-        .mark_credential_used("item", "alpha", 1_750_000_000)
+    let marked = vault
+        .mark_credential_used("item", "alpha", 1_750_000_000, &TimeZone::UTC)
         .unwrap();
+    assert!(marked);
 
     let vault = reload(&vault);
     let cred = vault.get_item_credential("item", "alpha").unwrap();
-    assert_eq!(cred.last_used_at, Some(1_750_000_000));
+    assert_eq!(cred.last_used_day_at, Some(1_750_000_000));
     assert!(vault.list_history("item", "alpha").unwrap().is_empty());
     let secret = vault
         .get_item_credential_secret("item", "alpha")
         .unwrap()
         .unwrap();
     assert_eq!(secret.expose_secret(), "secret");
+}
+
+#[test]
+fn a_use_on_the_same_local_day_is_not_written() {
+    let mut vault = vault_with_credentials("item", &["alpha"]);
+    let zone = TimeZone::fixed(jiff::tz::Offset::from_seconds(-7 * 3600).unwrap());
+    // 2026-10-22 08:00 at UTC-7.
+    let first = 1_792_713_600 - 9 * 3600;
+    assert!(
+        vault
+            .mark_credential_used("item", "alpha", first, &zone)
+            .unwrap()
+    );
+    populate_caches(&mut vault);
+    let (_, cred_id) = vault.get_credential_ids("item", "alpha").unwrap();
+    let cached = |vault: &Vault| {
+        vault
+            .cred_blobs
+            .get(&cred_id)
+            .map(|blob| serde_json::to_string(blob).unwrap())
+    };
+    let before = cached(&vault);
+    assert!(before.is_some());
+
+    // 23:59 the same day at UTC-7, and on the next day in UTC.
+    let marked = vault
+        .mark_credential_used("item", "alpha", first + 15 * 3600 + 59 * 60, &zone)
+        .unwrap();
+
+    assert!(!marked);
+    assert_eq!(cached(&vault), before);
+    let cred = vault.get_item_credential("item", "alpha").unwrap();
+    assert_eq!(cred.last_used_day_at, Some(first));
 }
 
 #[test]

@@ -32,6 +32,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as B64URL};
 use coset::{CborSerializable, CoseKey};
+use jiff::tz::TimeZone;
 use passkey_authenticator::extensions::HmacSecretConfig;
 use passkey_authenticator::{
     Authenticator, CredentialStore, DiscoverabilitySupport, StoreInfo, UiHint, UserCheck,
@@ -51,6 +52,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::model::last_used;
 use super::storage::txn::VaultWriter;
 use super::{Error, FieldKind, VaultHandle, autofill};
 use crate::audit::SubjectIds;
@@ -454,9 +456,9 @@ pub async fn create_from_wire(
 /// user handle is read back from the stored record rather than the CTAP2
 /// response, which omits it for a non-discoverable assertion.
 ///
-/// The passkey's last use is recorded in its credential metadata, and the
-/// vault is saved. A failure to save is logged and does not fail the
-/// sign-in.
+/// The passkey's last use is recorded in its credential metadata by
+/// [`record_use`], at most once a day. A failure to save is logged and does
+/// not fail the sign-in.
 pub async fn assert_from_wire(
     files: &VaultWriter,
     vw: &mut VaultHandle,
@@ -493,12 +495,8 @@ pub async fn assert_from_wire(
         .map(|h| h.as_slice().to_vec())
         .unwrap_or_default();
 
-    // The use is recorded in a fresh copy of the vault in its own transaction,
-    // so an edit saved since `vw` was loaded is kept.
     if let Some(now) = now_unix() {
-        let marked = files.write_unlocked::<_, Error>(vw, |fresh| {
-            fresh.mark_credential_used(&stored.item_key, &stored.credential_key, now)
-        });
+        let marked = record_use(files, vw, &stored, now, &TimeZone::system());
         if let Err(e) = marked {
             log::error!(
                 "Failed to record the use of passkey {}/{}: {e}",
@@ -522,6 +520,30 @@ pub async fn assert_from_wire(
         item_key: stored.item_key,
         credential_key: stored.credential_key,
     })
+}
+
+/// Record a use of `stored` at `now`. Runs a transaction only if the use
+/// stored in `vw` falls on an earlier date in `zone` than `now`, so a later
+/// sign-in that day writes nothing. The transaction reloads the vault, so an
+/// edit saved since `vw` was loaded is kept. It saves only if the reloaded
+/// vault also holds an earlier use. Returns whether the vault was saved.
+fn record_use(
+    files: &VaultWriter,
+    vw: &VaultHandle,
+    stored: &StoredPasskey,
+    now: i64,
+    zone: &TimeZone,
+) -> Result<bool, Error> {
+    let last_used = vw
+        .get_secret_overview(&stored.item_key, &stored.credential_key)?
+        .and_then(|cred| cred.last_used_day_at);
+    if !last_used::is_later_day(last_used, now, zone) {
+        return Ok(false);
+    }
+    let committed = files.write_unlocked::<_, Error>(vw, |fresh| {
+        fresh.mark_credential_used_in(&stored.item_key, &stored.credential_key, now, zone)
+    })?;
+    Ok(committed.changed)
 }
 
 // MARK: - On-disk record
@@ -783,12 +805,12 @@ fn store_passkey(
     Ok(item_key)
 }
 
-/// Raw record, credential title, and last-used time of a stored passkey, read
+/// Raw record, credential title, and last used day of a stored passkey, read
 /// so it can move to another item or vault.
 pub struct PasskeyRecord {
     pub value: SecretString,
     pub title: String,
-    pub last_used_at: Option<i64>,
+    pub last_used_day_at: Option<i64>,
 }
 
 /// Read the passkey at `item_key`/`credential_key`. Fails when the credential
@@ -803,14 +825,14 @@ pub fn read_record(
         .filter(|cred| matches!(cred.kind, FieldKind::Passkey))
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
     let title = overview.title.clone();
-    let last_used_at = overview.last_used_at;
+    let last_used_day_at = overview.last_used_day_at;
     let value = vw
         .get_secret(item_key, credential_key)?
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{credential_key}")))?;
     Ok(PasskeyRecord {
         value: SecretString::from(value.expose_secret().clone()),
         title,
-        last_used_at,
+        last_used_day_at,
     })
 }
 
@@ -828,10 +850,11 @@ pub fn webauthn_credential_id(
         .to_vec())
 }
 
-/// Store a record read by [`read_record`] in `target`, with its last-used
-/// time. The record must decode, so a damaged value is refused rather than
-/// copied. The caller saves the vault. Returns the audit ids of the stored
-/// passkey.
+/// Store a record read by [`read_record`] in `target`, with its last used
+/// day. If the target credential already holds the passkey with a use on the
+/// same date or later, its own time is kept. The record must decode, so a
+/// damaged value is refused rather than copied. The caller saves the vault.
+/// Returns the audit ids of the stored passkey.
 pub fn write_record(
     vw: &mut VaultHandle,
     record: &PasskeyRecord,
@@ -841,14 +864,14 @@ pub fn write_record(
     let cred = decode(&value)?;
     let item_key = store_passkey(vw, &cred, value, None, &record.title, target)?;
     let credential_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
-    if let Some(at) = record.last_used_at {
+    if let Some(at) = record.last_used_day_at {
         vw.mark_credential_used(&item_key, &credential_key, at)?;
     }
     vw.credential_ids(&item_key, &credential_key)
 }
 
 /// Move the passkey at `item_key`/`credential_key` to `target` in the same
-/// vault. The credential keeps its id, title, metadata, last used time, and
+/// vault. The credential keeps its id, title, metadata, last used day, and
 /// previous values. A new login is created as [`store_passkey`] creates it. If
 /// the target item already holds the passkey key, that credential is the same
 /// passkey. It then takes the record through [`write_record`], and the source
@@ -1062,7 +1085,11 @@ fn status_error(status: StatusCode) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::{Arc, Mutex};
+
+    use jiff::tz::Offset;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::audit::{self, AuditEvent};
@@ -1321,7 +1348,7 @@ mod tests {
             vw.get_secret_overview(&moved.item_key, &moved.credential_key)
                 .unwrap()
                 .unwrap()
-                .last_used_at
+                .last_used_day_at
         };
         assert_eq!(last_used(&dest), Some(1_750_000_000));
         assert_eq!(moved.credential_key, stored.credential_key);
@@ -1377,7 +1404,7 @@ mod tests {
         assert_eq!(ids.credential_id, Some(before.id));
         assert_eq!(after.id, before.id);
         assert_eq!(after.title, before.title);
-        assert_eq!(after.last_used_at, Some(1_750_000_000));
+        assert_eq!(after.last_used_day_at, Some(1_750_000_000));
         let passkeys = list(&vw).unwrap();
         assert_eq!(passkeys.len(), 1);
         assert_eq!(passkeys[0].item_key, "other");
@@ -1472,7 +1499,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(after.title, record.title);
-        assert_eq!(after.last_used_at, Some(1_750_000_000));
+        assert_eq!(after.last_used_day_at, Some(1_750_000_000));
         let passkeys = list(&vw).unwrap();
         assert_eq!(passkeys.len(), 1);
         assert_eq!(passkeys[0].item_key, "other");
@@ -1499,6 +1526,261 @@ mod tests {
         assert_eq!(ids.credential_id, before.credential_id);
         assert_eq!(list(&vw).unwrap().len(), 1);
         assert!(vw.list_all_deleted().unwrap().is_empty());
+    }
+
+    /// Last used times ten days apart, so they fall on different dates in
+    /// every zone.
+    const EARLIER_USE: i64 = 1_750_000_000;
+    const LATER_USE: i64 = EARLIER_USE + 10 * 86_400;
+
+    fn last_used_at(vw: &VaultHandle, item_key: &str, credential_key: &str) -> Option<i64> {
+        vw.get_secret_overview(item_key, credential_key)
+            .unwrap()
+            .unwrap()
+            .last_used_day_at
+    }
+
+    #[tokio::test]
+    async fn a_move_onto_the_same_passkey_keeps_the_later_last_used_time() {
+        for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
+            let mut vw = VaultHandle::new_for_test("personal");
+            register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+            let stored = list(&vw).unwrap().remove(0);
+            let key = &stored.credential_key;
+            vw.add_item("other", "Other").unwrap();
+            let record = read_record(&vw, &stored.item_key, key).unwrap();
+            write_record(&mut vw, &record, &PasskeyTarget::Item("other".into())).unwrap();
+            vw.mark_credential_used(&stored.item_key, key, source_at)
+                .unwrap();
+            vw.mark_credential_used("other", key, dest_at).unwrap();
+
+            move_within_vault(
+                &mut vw,
+                &stored.item_key,
+                key,
+                &PasskeyTarget::Item("other".into()),
+            )
+            .unwrap();
+
+            assert_eq!(last_used_at(&vw, "other", key), Some(LATER_USE));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_copy_onto_the_same_passkey_in_another_vault_keeps_the_later_last_used_time() {
+        for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
+            let mut source = VaultHandle::new_for_test("personal");
+            register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+            let stored = list(&source).unwrap().remove(0);
+            let key = &stored.credential_key;
+            let mut dest = VaultHandle::new_for_test("work");
+            let record = read_record(&source, &stored.item_key, key).unwrap();
+            let ids = write_record(&mut dest, &record, &PasskeyTarget::NewLogin).unwrap();
+            let dest_item = dest
+                .get_item_overview_by_id(ids.item_id.unwrap())
+                .unwrap()
+                .unwrap()
+                .key
+                .clone();
+            dest.mark_credential_used(&dest_item, key, dest_at).unwrap();
+            let record = PasskeyRecord {
+                last_used_day_at: Some(source_at),
+                ..record
+            };
+
+            write_record(&mut dest, &record, &PasskeyTarget::Item(dest_item.clone())).unwrap();
+
+            assert_eq!(last_used_at(&dest, &dest_item, key), Some(LATER_USE));
+        }
+    }
+
+    /// Unix time of 2026-10-23 00:00:00 UTC.
+    const OCT_23_UTC: i64 = 1_792_713_600;
+    const HOUR: i64 = 3600;
+
+    fn fixed_zone(hours: i32) -> TimeZone {
+        TimeZone::fixed(Offset::from_seconds(hours * 3600).unwrap())
+    }
+
+    /// Vault file in a temp directory that holds one passkey with no last
+    /// used time.
+    struct OnDisk {
+        _dir: TempDir,
+        files: VaultWriter,
+        /// Vault as created.
+        vault: VaultHandle,
+        stored: StoredPasskey,
+    }
+
+    impl OnDisk {
+        async fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let files = VaultWriter::isolated(dir.path().join("data"));
+            let mut vault =
+                VaultHandle::new_for_test_at(dir.path().join("vaults").join("personal.json"));
+            register(&mut vault, PasskeyTarget::NewLogin, "ada").await;
+            files.create(&vault).unwrap();
+            let stored = list(&vault).unwrap().remove(0);
+            Self {
+                _dir: dir,
+                files,
+                vault,
+                stored,
+            }
+        }
+
+        /// Vault as it is on disk now. The read runs a transaction that
+        /// saves nothing.
+        fn load(&self) -> VaultHandle {
+            self.files
+                .write_unlocked::<_, Error>(&self.vault, |_| Ok(()))
+                .unwrap()
+                .vault
+        }
+
+        fn last_used_on_disk(&self) -> Option<i64> {
+            last_used_at(
+                &self.load(),
+                &self.stored.item_key,
+                &self.stored.credential_key,
+            )
+        }
+
+        /// Record a use at `at` in `zone` from `vw`.
+        fn sign_in(&self, vw: &VaultHandle, at: i64, zone: &TimeZone) -> bool {
+            record_use(&self.files, vw, &self.stored, at, zone).unwrap()
+        }
+
+        /// File contents and retained version count.
+        fn snapshot(&self) -> (Vec<u8>, usize) {
+            let id = self.vault.vault_id().unwrap();
+            (
+                fs::read(&self.vault.path).unwrap(),
+                self.files.list_versions(id).unwrap().len(),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_sign_in_on_the_same_day_runs_no_transaction() {
+        let disk = OnDisk::new().await;
+        let zone = fixed_zone(-7);
+        // 2026-10-22 08:00 at UTC-7.
+        let first = OCT_23_UTC - 9 * HOUR;
+        assert!(disk.sign_in(&disk.vault, first, &zone));
+        let loaded = disk.load();
+        let before = disk.snapshot();
+
+        // 2026-10-22 23:00 at UTC-7.
+        assert!(!disk.sign_in(&loaded, first + 15 * HOUR, &zone));
+
+        assert_eq!(disk.snapshot(), before);
+        assert_eq!(disk.last_used_on_disk(), Some(first));
+        // A transaction reloads the file, so with the file removed, one that
+        // ran would fail.
+        fs::remove_file(&disk.vault.path).unwrap();
+        assert!(!disk.sign_in(&loaded, first + 15 * HOUR, &zone));
+    }
+
+    /// The vault the passkey signed from was loaded before another sign-in
+    /// recorded today. The transaction reloads the vault and saves nothing.
+    #[tokio::test]
+    async fn a_sign_in_from_a_stale_vault_on_the_same_day_saves_nothing() {
+        let disk = OnDisk::new().await;
+        let zone = fixed_zone(-7);
+        let first = OCT_23_UTC - 9 * HOUR;
+        assert!(disk.sign_in(&disk.vault, first, &zone));
+        let before = disk.snapshot();
+
+        assert!(!disk.sign_in(&disk.vault, first + HOUR, &zone));
+
+        assert_eq!(disk.snapshot(), before);
+        assert_eq!(disk.last_used_on_disk(), Some(first));
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_on_a_later_day_writes_the_new_time() {
+        let disk = OnDisk::new().await;
+        let zone = fixed_zone(-7);
+        let first = OCT_23_UTC - 9 * HOUR;
+        assert!(disk.sign_in(&disk.vault, first, &zone));
+        let (_, versions) = disk.snapshot();
+
+        let next = first + 24 * HOUR;
+        assert!(disk.sign_in(&disk.load(), next, &zone));
+
+        assert_eq!(disk.last_used_on_disk(), Some(next));
+        assert_eq!(disk.snapshot().1, versions + 1);
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_after_local_midnight_writes() {
+        let disk = OnDisk::new().await;
+        let zone = fixed_zone(-7);
+        // 2026-10-22 23:30 and 2026-10-23 00:30 at UTC-7. Both are on
+        // 2026-10-23 in UTC.
+        let first = OCT_23_UTC + 7 * HOUR - HOUR / 2;
+        let second = first + HOUR;
+        assert!(disk.sign_in(&disk.vault, first, &zone));
+
+        assert!(disk.sign_in(&disk.load(), second, &zone));
+
+        assert_eq!(disk.last_used_on_disk(), Some(second));
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_after_utc_midnight_on_the_same_local_day_does_not_write() {
+        let disk = OnDisk::new().await;
+        let zone = fixed_zone(-7);
+        // 2026-10-22 16:30 and 17:30 at UTC-7, either side of UTC midnight.
+        let first = OCT_23_UTC - HOUR / 2;
+        assert!(disk.sign_in(&disk.vault, first, &zone));
+        let loaded = disk.load();
+        let before = disk.snapshot();
+
+        assert!(!disk.sign_in(&loaded, first + HOUR, &zone));
+
+        assert_eq!(disk.snapshot(), before);
+        assert_eq!(disk.last_used_on_disk(), Some(first));
+    }
+
+    /// Another Mac at UTC+9 recorded a use at 08:00 on 2026-10-23 there, which
+    /// is 23:00 on 2026-10-22 in UTC. This Mac is at UTC+2, where that use is
+    /// at 01:00 on 2026-10-23.
+    #[tokio::test]
+    async fn a_use_from_another_zone_that_is_today_here_is_not_overwritten() {
+        let disk = OnDisk::new().await;
+        let other_mac = OCT_23_UTC - HOUR;
+        assert!(disk.sign_in(&disk.vault, other_mac, &fixed_zone(9)));
+        let loaded = disk.load();
+        let before = disk.snapshot();
+
+        // 2026-10-23 10:00 at UTC+2.
+        assert!(!disk.sign_in(&loaded, OCT_23_UTC + 8 * HOUR, &fixed_zone(2)));
+
+        assert_eq!(disk.snapshot(), before);
+        assert_eq!(disk.last_used_on_disk(), Some(other_mac));
+    }
+
+    /// An app edit saved after the vault the passkey signed from was loaded
+    /// is kept, since the last used write reloads the vault in its own
+    /// transaction.
+    #[tokio::test]
+    async fn the_last_used_write_keeps_an_edit_saved_after_the_vault_was_loaded() {
+        let disk = OnDisk::new().await;
+        let signed_from = disk.load();
+        disk.files
+            .write_unlocked::<_, Error>(&disk.vault, |vw| {
+                vw.add_item("other", "Other")?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(disk.sign_in(&signed_from, OCT_23_UTC, &TimeZone::UTC));
+
+        let after = disk.load();
+        assert!(after.get_item_overview("other").unwrap().is_some());
+        assert_eq!(disk.last_used_on_disk(), Some(OCT_23_UTC));
     }
 
     /// `passkey_credential_id` that a move of `stored` records.

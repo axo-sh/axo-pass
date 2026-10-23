@@ -593,9 +593,11 @@ struct CredentialRow: View {
   /// When the passkey was last used, or when it was created, or its site for a
   /// record that predates creation times.
   private var passkeySubtitle: String? {
-    if let lastUsed = cred.lastUsedAt {
-      let date = Date(timeIntervalSince1970: TimeInterval(lastUsed))
-      return "Used \(date.formatted(.relative(presentation: .named)))"
+    if let lastUsed = lastUsedDay {
+      let calendar = Calendar.current
+      if calendar.isDateInToday(lastUsed) { return "Used today" }
+      if calendar.isDateInYesterday(lastUsed) { return "Used yesterday" }
+      return "Used \(lastUsed.formatted(date: .abbreviated, time: .omitted))"
     }
     if let created = passkeyCreated { return "Created \(created)" }
     return cred.passkey?.rpId
@@ -608,9 +610,12 @@ struct CredentialRow: View {
   }
 
   private var passkeyLastUsed: String? {
-    guard let lastUsed = cred.lastUsedAt else { return nil }
-    return Date(timeIntervalSince1970: TimeInterval(lastUsed))
-      .formatted(date: .abbreviated, time: .shortened)
+    lastUsedDay?.formatted(date: .abbreviated, time: .omitted)
+  }
+
+  /// Time on the day of the last use. Only the day is meaningful.
+  private var lastUsedDay: Date? {
+    cred.lastUsedDayAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
   }
 
   // MARK: - Login field

@@ -158,9 +158,10 @@ pub struct VaultItemCredentialOverview {
     /// Section of the item the credential is shown in. `None` for a
     /// credential outside any section.
     pub section: Option<Uuid>,
-    /// Unix seconds of the last use, for credentials whose use is recorded.
-    /// Only passkey sign-ins set it.
-    pub last_used_at: Option<i64>,
+    /// Unix seconds of the first use on the most recent day of use, for
+    /// credentials whose use is recorded. Only passkey sign-ins set it. It
+    /// names the day of last use, not the time.
+    pub last_used_day_at: Option<i64>,
 }
 
 impl VaultItemCredentialOverview {
@@ -174,7 +175,7 @@ impl VaultItemCredentialOverview {
             kind,
             position: None,
             section: None,
-            last_used_at: None,
+            last_used_day_at: None,
         })
     }
 
@@ -186,7 +187,7 @@ impl VaultItemCredentialOverview {
             kind: metadata.kind.clone(),
             position: metadata.position,
             section: metadata.section,
-            last_used_at: metadata.last_used_at,
+            last_used_day_at: metadata.last_used_day_at,
         }
     }
 
@@ -197,7 +198,7 @@ impl VaultItemCredentialOverview {
             kind: self.kind.clone(),
             position: self.position,
             section: self.section,
-            last_used_at: self.last_used_at,
+            last_used_day_at: self.last_used_day_at,
         }
     }
 }
@@ -316,7 +317,8 @@ pub struct VaultCredentialMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     pub section: Option<Uuid>,
-    /// Unix seconds of the last use. Absent until the first recorded use.
+    /// Unix seconds of the first use on the most recent day of use. Absent
+    /// until the first recorded use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_used_at: Option<i64>,
+    pub last_used_day_at: Option<i64>,
 }
