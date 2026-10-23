@@ -827,6 +827,45 @@ pub fn write_record(
     vw.credential_ids(&item_key, &credential_key)
 }
 
+/// Move the passkey at `item_key`/`credential_key` to `target` in the same
+/// vault. The credential keeps its id, title, metadata, last used time, and
+/// previous values. A new login is created as [`store_passkey`] creates it. If
+/// the target item already holds the passkey key, that credential is the same
+/// passkey. It then takes the record through [`write_record`], and the source
+/// is removed. A move to the source item changes nothing. The caller saves the
+/// vault. Returns the audit ids of the moved passkey.
+pub fn move_within_vault(
+    vw: &mut VaultHandle,
+    item_key: &str,
+    credential_key: &str,
+    target: &PasskeyTarget,
+) -> Result<SubjectIds, Error> {
+    let record = read_record(vw, item_key, credential_key)?;
+    let cred = decode(record.value.expose_secret())?;
+    let new_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
+    let dest_item_key = match target {
+        PasskeyTarget::Item(key) if key == item_key => {
+            return vw.credential_ids(item_key, credential_key);
+        },
+        PasskeyTarget::Item(key) => {
+            if vw.get_item_overview(key)?.is_none() {
+                return Err(Error::InvalidItemKey(key.clone()));
+            }
+            if vw.get_secret_overview(key, &new_key)?.is_some() {
+                let ids = write_record(vw, &record, target)?;
+                remove_record(vw, item_key, credential_key)?;
+                return Ok(ids);
+            }
+            key.clone()
+        },
+        PasskeyTarget::NewLogin => {
+            autofill::add_passkey_login(vw, &cred.rp_id, None, cred.username.as_deref())?
+        },
+    };
+    vw.transfer_credential(item_key, credential_key, &dest_item_key, &new_key, None)?;
+    vw.credential_ids(&dest_item_key, &new_key)
+}
+
 /// Remove the passkey at `item_key`/`credential_key` after it was copied by
 /// [`write_record`]. The passkey is deleted and purged immediately rather than
 /// kept in the deleted credentials. A copy left there would keep the private
@@ -1006,8 +1045,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::secrets::vaults::MatchKind;
     use crate::secrets::vaults::storage::handle::normalized_key;
+    use crate::secrets::vaults::{CredentialUpdate, MatchKind, VaultItemOverview};
 
     /// Keeps whatever the authenticator saves, so a test can inspect a real
     /// credential without needing a vault on disk.
@@ -1286,6 +1325,156 @@ mod tests {
 
         assert!(list(&source).unwrap().is_empty());
         assert!(source.list_all_deleted().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_move_within_a_vault_keeps_the_credential() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        vw.mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
+            .unwrap();
+        let before = vw
+            .get_secret_overview(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .unwrap()
+            .clone();
+        vw.add_item("other", "Other").unwrap();
+
+        let ids = move_within_vault(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            &PasskeyTarget::Item("other".into()),
+        )
+        .unwrap();
+
+        let after = vw
+            .get_secret_overview("other", &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ids.credential_id, Some(before.id));
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.last_used_at, Some(1_750_000_000));
+        let passkeys = list(&vw).unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert_eq!(passkeys[0].item_key, "other");
+        assert!(
+            vw.get_secret_overview(&stored.item_key, &stored.credential_key)
+                .unwrap()
+                .is_none()
+        );
+        assert!(vw.list_all_deleted().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_move_within_a_vault_to_a_new_login_gives_the_same_item_as_a_copy() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
+        let stored = list(&vw).unwrap().remove(0);
+        let record = read_record(&vw, &stored.item_key, &stored.credential_key).unwrap();
+        let mut copy = VaultHandle::new_for_test("work");
+        let copied = write_record(&mut copy, &record, &PasskeyTarget::NewLogin).unwrap();
+        let source_id = vw
+            .credential_ids(&stored.item_key, &stored.credential_key)
+            .unwrap()
+            .credential_id;
+
+        let ids = move_within_vault(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            &PasskeyTarget::NewLogin,
+        )
+        .unwrap();
+
+        assert_eq!(ids.credential_id, source_id);
+        let moved = vw.get_item_overview_by_id(ids.item_id.unwrap()).unwrap().unwrap();
+        let expected = copy
+            .get_item_overview_by_id(copied.item_id.unwrap())
+            .unwrap()
+            .unwrap();
+        assert_ne!(moved.key, stored.item_key);
+        assert_eq!(moved.title, expected.title);
+        assert_eq!(moved.category, expected.category);
+        assert_eq!(moved.autofill.websites, expected.autofill.websites);
+        assert!(moved.autofill.password.is_none());
+        let username = |vw: &VaultHandle, item: &VaultItemOverview| {
+            let cred = item.autofill.username_credential(item).unwrap();
+            let value = vw.get_secret(&item.key, &cred.key).unwrap().unwrap();
+            (cred.key.clone(), value.expose_secret().clone())
+        };
+        assert_eq!(username(&vw, moved), username(&copy, expected));
+        assert_eq!(list(&vw).unwrap()[0].item_key, moved.key);
+    }
+
+    /// A passkey key comes from the WebAuthn credential id, so a destination
+    /// credential with the same key is the same passkey. It takes the source
+    /// record and keeps its own id.
+    #[tokio::test]
+    async fn a_move_within_a_vault_onto_the_same_passkey_replaces_it() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        vw.mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
+            .unwrap();
+        let record = read_record(&vw, &stored.item_key, &stored.credential_key).unwrap();
+        vw.add_item("other", "Other").unwrap();
+        let existing = write_record(&mut vw, &record, &PasskeyTarget::Item("other".into()))
+            .unwrap()
+            .credential_id;
+        vw.update_credential(
+            "other",
+            &stored.credential_key,
+            CredentialUpdate {
+                title: Some("Old title".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let ids = move_within_vault(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            &PasskeyTarget::Item("other".into()),
+        )
+        .unwrap();
+
+        assert_eq!(ids.credential_id, existing);
+        let after = vw
+            .get_secret_overview("other", &stored.credential_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.title, record.title);
+        assert_eq!(after.last_used_at, Some(1_750_000_000));
+        let passkeys = list(&vw).unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert_eq!(passkeys[0].item_key, "other");
+        assert!(vw.list_all_deleted().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_move_within_a_vault_to_the_source_item_changes_nothing() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let stored = list(&vw).unwrap().remove(0);
+        let before = vw
+            .credential_ids(&stored.item_key, &stored.credential_key)
+            .unwrap();
+
+        let ids = move_within_vault(
+            &mut vw,
+            &stored.item_key,
+            &stored.credential_key,
+            &PasskeyTarget::Item(stored.item_key.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(ids.credential_id, before.credential_id);
+        assert_eq!(list(&vw).unwrap().len(), 1);
+        assert!(vw.list_all_deleted().unwrap().is_empty());
     }
 
     #[test]
