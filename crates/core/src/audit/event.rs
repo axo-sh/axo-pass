@@ -151,6 +151,11 @@ impl AuditEvent {
         self
     }
 
+    /// Record this event from an async context. See `audit::record_async`.
+    pub async fn record_async(self) {
+        super::record_async(self).await
+    }
+
     /// Record the vault, item, and credential ids of the subject in `detail`.
     pub fn subject_ids(self, ids: SubjectIds) -> Self {
         self.maybe_detail("vault_id", ids.vault_id.map(|id| id.to_string()))

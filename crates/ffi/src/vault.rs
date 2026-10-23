@@ -946,15 +946,14 @@ impl AxoPass {
                 Ok(vw.credential_ids(&item_key, &cred_key)?)
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::CredentialHistoryRestored,
-                &vault_key,
-                subject,
-                ids,
-            )
-            .detail("history_id", id),
+        change_event(
+            audit::Action::CredentialHistoryRestored,
+            &vault_key,
+            subject,
+            ids,
         )
+        .detail("history_id", id)
+        .record_async()
         .await;
         Ok(())
     }
@@ -975,15 +974,14 @@ impl AxoPass {
                 Ok(vw.credential_ids(&item_key, &cred_key)?)
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::CredentialHistoryPurged,
-                &vault_key,
-                subject,
-                ids,
-            )
-            .detail("history_id", id),
+        change_event(
+            audit::Action::CredentialHistoryPurged,
+            &vault_key,
+            subject,
+            ids,
         )
+        .detail("history_id", id)
+        .record_async()
         .await;
         Ok(())
     }
@@ -1033,12 +1031,13 @@ impl AxoPass {
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
         let (info, ids) = info;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::VaultCreated,
             &info.key,
             vault_subject(&info.key).maybe_label(info.name.clone()),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(info)
     }
@@ -1074,16 +1073,15 @@ impl AxoPass {
             .await?;
 
         if renamed.is_some() || rekeyed.is_some() {
-            audit::record_async(
-                change_event(
-                    audit::Action::VaultUpdated,
-                    &vault_key,
-                    vault_subject(&vault_key),
-                    ids,
-                )
-                .maybe_detail("new_name", renamed)
-                .maybe_detail("new_key", rekeyed),
+            change_event(
+                audit::Action::VaultUpdated,
+                &vault_key,
+                vault_subject(&vault_key),
+                ids,
             )
+            .maybe_detail("new_name", renamed)
+            .maybe_detail("new_key", rekeyed)
+            .record_async()
             .await;
         }
         Ok(())
@@ -1122,15 +1120,14 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
-        audit::record_async(
-            change_event(
-                audit::Action::VaultVersionRestored,
-                &key,
-                vault_subject(&key).maybe_label(vault_name),
-                audit::SubjectIds::vault(vault_id),
-            )
-            .detail("version", name),
+        change_event(
+            audit::Action::VaultVersionRestored,
+            &key,
+            vault_subject(&key).maybe_label(vault_name),
+            audit::SubjectIds::vault(vault_id),
         )
+        .detail("version", name)
+        .record_async()
         .await;
         Ok(())
     }
@@ -1144,15 +1141,14 @@ impl AxoPass {
         let (vault_id, count) = tokio::task::spawn_blocking(move || store.erase_versions(&key))
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))??;
-        audit::record_async(
-            change_event(
-                audit::Action::VaultVersionsErased,
-                &vault_key,
-                vault_subject(&vault_key),
-                audit::SubjectIds::vault(vault_id),
-            )
-            .detail("version_count", count.to_string()),
+        change_event(
+            audit::Action::VaultVersionsErased,
+            &vault_key,
+            vault_subject(&vault_key),
+            audit::SubjectIds::vault(vault_id),
         )
+        .detail("version_count", count.to_string())
+        .record_async()
         .await;
         Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
@@ -1172,12 +1168,13 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::VaultDeleted,
             &key,
             vault_subject(&key).maybe_label(name),
             audit::SubjectIds::vault(vault_id),
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1206,7 +1203,7 @@ impl AxoPass {
             },
             Some(_) => return Ok(()),
         };
-        audit::record_async(event).await;
+        event.record_async().await;
         Ok(())
     }
 
@@ -1281,12 +1278,13 @@ impl AxoPass {
                 Ok((restored, audit::SubjectIds::item(vw.vault_id()?, id)))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::ItemRestored,
             &vault_key,
             item_subject_by_id(&vault_key, &id, restored),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1306,12 +1304,13 @@ impl AxoPass {
                 Ok((purged, audit::SubjectIds::item(vw.vault_id()?, id)))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::ItemPurged,
             &vault_key,
             item_subject_by_id(&vault_key, &id, purged),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1328,12 +1327,13 @@ impl AxoPass {
                 Ok((title, ids))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::ItemDeleted,
             &vault_key,
             subject.maybe_label(title),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1366,13 +1366,9 @@ impl AxoPass {
                 Ok(vw.credential_ids(&item_key, &cred_key)?)
             })
             .await?;
-        audit::record_async(change_event(
-            audit::Action::CredentialCreated,
-            &key,
-            subject,
-            ids,
-        ))
-        .await;
+        change_event(audit::Action::CredentialCreated, &key, subject, ids)
+            .record_async()
+            .await;
         Ok(())
     }
 
@@ -1430,7 +1426,7 @@ impl AxoPass {
             Some(changed) => change_event(audit::Action::CredentialUpdated, &key, subject, ids)
                 .detail("changed", changed),
         };
-        audit::record_async(event).await;
+        event.record_async().await;
         Ok(())
     }
 
@@ -1469,12 +1465,11 @@ impl AxoPass {
             })
             .await?;
         if !changed.is_empty() {
-            audit::record_async(
-                change_event(audit::Action::CredentialUpdated, &vault_key, subject, ids)
-                    .detail("changed", changed)
-                    .maybe_detail("new_key", renamed_to),
-            )
-            .await;
+            change_event(audit::Action::CredentialUpdated, &vault_key, subject, ids)
+                .detail("changed", changed)
+                .maybe_detail("new_key", renamed_to)
+                .record_async()
+                .await;
         }
         Ok(())
     }
@@ -1565,12 +1560,13 @@ impl AxoPass {
                 Ok((restored, ids))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::CredentialRestored,
             &vault_key,
             credential_subject_by_id(&vault_key, &item, &id, restored),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1604,12 +1600,13 @@ impl AxoPass {
                 Ok((purged, ids))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::CredentialPurged,
             &vault_key,
             credential_subject_by_id(&vault_key, &item, &id, purged),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1634,12 +1631,13 @@ impl AxoPass {
                 Ok((title, ids))
             })
             .await?;
-        audit::record_async(change_event(
+        change_event(
             audit::Action::CredentialDeleted,
             &key,
             subject.maybe_label(title),
             ids,
-        ))
+        )
+        .record_async()
         .await;
         Ok(())
     }
@@ -1671,15 +1669,14 @@ impl AxoPass {
                 Ok((created_key, ids))
             })
             .await?;
-        audit::record_async(
-            change_event(
-                audit::Action::ItemCreated,
-                &key,
-                item_subject(&key, &created_key),
-                ids,
-            )
-            .detail("login", "true"),
+        change_event(
+            audit::Action::ItemCreated,
+            &key,
+            item_subject(&key, &created_key),
+            ids,
         )
+        .detail("login", "true")
+        .record_async()
         .await;
         Ok(created_key)
     }
@@ -1757,7 +1754,7 @@ impl AxoPass {
         if cleared {
             event = event.detail("cleared", "true");
         }
-        audit::record_async(event).await;
+        event.record_async().await;
         Ok(())
     }
 
@@ -1786,12 +1783,11 @@ impl AxoPass {
                 Ok(vw.item_ids(&item_key)?)
             })
             .await?;
-        audit::record_async(
-            change_event(audit::Action::ItemWebsitesChanged, &key, subject, ids)
-                .detail("origins", origins)
-                .detail("website_count", website_count),
-        )
-        .await;
+        change_event(audit::Action::ItemWebsitesChanged, &key, subject, ids)
+            .detail("origins", origins)
+            .detail("website_count", website_count)
+            .record_async()
+            .await;
         Ok(())
     }
 
@@ -1811,13 +1807,9 @@ impl AxoPass {
             })
             .await?;
         if converted {
-            audit::record_async(change_event(
-                audit::Action::ItemConverted,
-                &key,
-                subject,
-                ids,
-            ))
-            .await;
+            change_event(audit::Action::ItemConverted, &key, subject, ids)
+                .record_async()
+                .await;
         }
         Ok(converted)
     }
@@ -1900,7 +1892,7 @@ impl AxoPass {
                 .detail("source_removed", "false")
                 .message(e.to_string());
         }
-        audit::record_async(event).await;
+        event.record_async().await;
         removed
     }
 
@@ -1926,13 +1918,9 @@ impl AxoPass {
                 Ok(vw.credential_ids(&item, &cred)?)
             })
             .await?;
-        audit::record_async(change_event(
-            audit::Action::PasskeyRenamed,
-            &key,
-            subject,
-            ids,
-        ))
-        .await;
+        change_event(audit::Action::PasskeyRenamed, &key, subject, ids)
+            .record_async()
+            .await;
         Ok(())
     }
 
@@ -2021,12 +2009,11 @@ impl AxoPass {
                 Ok((vw.item_ids(&dest_item_key)?, source))
             })
             .await?;
-        audit::record_async(
-            change_event(audit::Action::ItemMerged, &key, subject, ids)
-                .detail("source_item", source_item)
-                .maybe_detail("source_item_id", source.item_id.map(|id| id.to_string())),
-        )
-        .await;
+        change_event(audit::Action::ItemMerged, &key, subject, ids)
+            .detail("source_item", source_item)
+            .maybe_detail("source_item_id", source.item_id.map(|id| id.to_string()))
+            .record_async()
+            .await;
         Ok(())
     }
 
