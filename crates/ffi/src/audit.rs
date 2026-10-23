@@ -299,6 +299,7 @@ impl From<AuditFilterInput> for audit::AuditFilter {
             requesters: input.requesters.into_iter().map(Into::into).collect(),
             outcomes: input.outcomes.into_iter().map(Into::into).collect(),
             query: input.query.filter(|q| !q.is_empty()),
+            detail_id: None,
             limit: input.limit.map(|l| l as usize),
             offset: input.offset as usize,
         }

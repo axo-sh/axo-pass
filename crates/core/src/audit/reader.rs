@@ -24,6 +24,8 @@ pub struct AuditFilter {
     /// Case-insensitive substring match on caller, subject id/label and
     /// message.
     pub query: Option<String>,
+    /// Entity id to match in the event detail.
+    pub detail_id: Option<DetailId>,
     /// Maximum events to return. `None` means no limit.
     pub limit: Option<usize>,
     /// Events to skip, after filtering, before collecting.
@@ -36,6 +38,37 @@ pub struct AuditFilter {
 pub struct AuditPage {
     pub events: Vec<AuditEvent>,
     pub skipped_lines: usize,
+}
+
+/// Entity id to find in event detail, such as an `item_id`.
+///
+/// An event names the id if its detail holds `key` equal to `id`, or holds the
+/// plural key, such as `item_ids`, as a comma-separated list that contains
+/// `id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailId {
+    /// Detail key of a single id, such as `item_id`.
+    pub key: String,
+    pub id: String,
+}
+
+impl DetailId {
+    pub fn new(key: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            id: id.into(),
+        }
+    }
+
+    fn matches(&self, event: &AuditEvent) -> bool {
+        if event.detail.get(&self.key) == Some(&self.id) {
+            return true;
+        }
+        event
+            .detail
+            .get(&format!("{}s", self.key))
+            .is_some_and(|ids| ids.split(',').any(|id| id.trim() == self.id))
+    }
 }
 
 impl AuditFilter {
@@ -65,6 +98,11 @@ impl AuditFilter {
             return false;
         }
         if !self.outcomes.is_empty() && !self.outcomes.contains(&event.outcome) {
+            return false;
+        }
+        if let Some(detail_id) = &self.detail_id
+            && !detail_id.matches(event)
+        {
             return false;
         }
         if let Some(query) = &self.query {

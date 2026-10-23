@@ -42,7 +42,7 @@ pub use event::{
     Action, ActionKind, Actor, AuditEvent, Category, Outcome, Requester, SCHEMA_VERSION, Source,
     Subject, SubjectKind, parse_rfc3339, process_source, set_process_source,
 };
-pub use reader::{AuditFilter, AuditPage, read};
+pub use reader::{AuditFilter, AuditPage, DetailId, read};
 pub use writer::{audit_dir, audit_log_path, record, record_async};
 
 /// Record an `ssh.managed_key_delete` event from a delete result of `(label,
@@ -227,6 +227,33 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(offset.events.len(), 2);
+    }
+
+    #[test]
+    fn a_detail_id_filter_matches_a_single_id_or_an_id_in_a_list() {
+        let _t = test_dir();
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", "a"));
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", "ab"));
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_ids", "c,a,b"));
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("credential_id", "a"));
+        record(event(Action::ItemUpdated, Outcome::Succeeded));
+
+        let ids = |id: &str| {
+            read(&AuditFilter {
+                detail_id: Some(DetailId::new("item_id", id)),
+                ..Default::default()
+            })
+            .events
+            .into_iter()
+            .map(|e| e.detail)
+            .collect::<Vec<_>>()
+        };
+        let a = ids("a");
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0].get("item_ids").map(String::as_str), Some("c,a,b"));
+        assert_eq!(a[1].get("item_id").map(String::as_str), Some("a"));
+        assert_eq!(ids("b").len(), 1);
+        assert!(ids("missing").is_empty());
     }
 
     #[test]
