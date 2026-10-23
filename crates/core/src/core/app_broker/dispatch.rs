@@ -160,8 +160,15 @@ pub(super) async fn serve_request(
                     action: vault::VaultAction::ListItems,
                 };
                 log::debug!("App broker request: {prompt:?}");
-                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
-                    .await
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    None,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::ListLogins {
                 url,
@@ -298,7 +305,7 @@ pub(super) async fn serve_request(
                     Ok(page) => {
                         let username = username.filter(|name| !name.trim().is_empty());
                         let prompt = vault::VaultAccessPrompt {
-                            vault_key: vault::write_vault_key(),
+                            vault_key: vault::write_vault_key(&authorizers.vaults),
                             caller: vouched_caller(scope, &client_id, caller),
                             caller_chain: caller_chain.clone(),
                             client: client_id.clone(),
@@ -382,8 +389,15 @@ pub(super) async fn serve_request(
                     },
                 };
                 log::debug!("App broker request: {prompt:?}");
-                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
-                    .await
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    None,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::ResolveSecrets {
                 refs,
@@ -402,8 +416,15 @@ pub(super) async fn serve_request(
                     action: vault::VaultAction::ResolveSecrets { purpose, refs },
                 };
                 log::debug!("App broker request: {prompt:?}");
-                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
-                    .await
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    None,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::WriteVaultSecret {
                 vault_key,
@@ -432,6 +453,7 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
                     &*authorizers.vault,
+                    &authorizers.vaults,
                     prompt,
                     actor,
                     Some(vault::VaultPayload::Write(payload)),
@@ -463,6 +485,7 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
                     &*authorizers.vault,
+                    &authorizers.vaults,
                     prompt,
                     actor,
                     Some(vault::VaultPayload::Export(payload)),
@@ -495,6 +518,7 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
                     &*authorizers.vault,
+                    &authorizers.vaults,
                     prompt,
                     actor,
                     Some(vault::VaultPayload::Import(payload)),
@@ -511,8 +535,15 @@ pub(super) async fn serve_request(
                     action: vault::VaultAction::AddVault { path },
                 };
                 log::debug!("App broker request: {prompt:?}");
-                vault::authorize_and_serve(&*authorizers.vault, prompt, actor, None, &in_flight)
-                    .await
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    None,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::CreatePasskey {
                 rp_id,
@@ -537,7 +568,12 @@ pub(super) async fn serve_request(
                 for c in &excluded_credentials {
                     excluded.push(decode_b64(c)?);
                 }
-                let choices = vault::passkey_choices(&rp_id, &user_name, &authorizers.logins);
+                let choices = vault::passkey_choices(
+                    &authorizers.vaults,
+                    &rp_id,
+                    &user_name,
+                    &authorizers.logins,
+                );
                 let request = CreatePasskeyRequest {
                     rp_id: rp_id.clone(),
                     rp_name,
@@ -566,6 +602,7 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
                     &*authorizers.vault,
+                    &authorizers.vaults,
                     prompt,
                     actor,
                     Some(vault::VaultPayload::CreatePasskey(
@@ -614,6 +651,7 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: {prompt:?}");
                 vault::authorize_and_serve(
                     &*authorizers.vault,
+                    &authorizers.vaults,
                     prompt,
                     actor,
                     Some(vault::VaultPayload::AssertPasskey(

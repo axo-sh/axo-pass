@@ -35,17 +35,39 @@ pub struct EncryptedVault {
     pub deleted: BTreeMap<Uuid, DeletedItem>,
 }
 
+/// Id of a vault file, read without decrypting anything, for the transaction
+/// registry.
+#[derive(Deserialize)]
+pub struct VaultHeader {
+    pub id: Uuid,
+}
+
+impl VaultHeader {
+    pub fn peek(vault_path: &Path) -> Result<Self, Error> {
+        let vault_data = EncryptedVault::read_file(vault_path)?;
+        serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)
+    }
+}
+
 impl EncryptedVault {
-    pub fn load(vault_path: &Path) -> Result<Self, Error> {
-        log::debug!("Reading vault from file: {}", vault_path.display());
-        let vault_data = fs::read_to_string(vault_path).map_err(|e| {
+    /// Read a vault file as text. A missing file is `VaultNotFound`.
+    pub(crate) fn read_file(vault_path: &Path) -> Result<String, Error> {
+        fs::read_to_string(vault_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 Error::VaultNotFound(format!("Vault file not found: {}", vault_path.display()))
             } else {
                 Error::VaultReadError(e)
             }
-        })?;
-        serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)
+        })
+    }
+
+    pub fn load(vault_path: &Path) -> Result<Self, Error> {
+        log::debug!("Reading vault from file: {}", vault_path.display());
+        Self::parse(&Self::read_file(vault_path)?)
+    }
+
+    pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
+        serde_json::from_str(vault_data).map_err(Error::VaultDeserializationError)
     }
 
     pub fn decrypt_file_key(&self, user_encryption_key: &ManagedKey) -> Result<VaultCipher, Error> {
@@ -167,7 +189,7 @@ impl EncryptedVault {
 }
 
 #[serde_as]
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum VaultFileKey {
     Personal(#[serde_as(as = "Base64")] Vec<u8>),
@@ -175,7 +197,7 @@ pub enum VaultFileKey {
     MembersFile { path: PathBuf },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct VaultMember {
     pub public_key: String,
     pub wrapped_key: Vec<u8>, // file_key encrypted with this member's public key

@@ -47,6 +47,15 @@ pub enum Error {
     #[error("Failed to delete vault: {0}")]
     VaultDeleteError(#[source] std::io::Error),
 
+    #[error("The vault file key changed while the vault was being opened")]
+    VaultFileKeyChanged,
+
+    #[error("Two vault files have the same vault id: {0}")]
+    DuplicateVaultId(String),
+
+    #[error("Failed to lock vault: {0}")]
+    VaultLockError(#[source] std::io::Error),
+
     #[error("Passkey operation failed: {0}")]
     Passkey(String),
 

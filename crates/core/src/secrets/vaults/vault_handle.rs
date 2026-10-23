@@ -1,7 +1,6 @@
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::{fs, io};
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
@@ -22,11 +21,12 @@ use crate::secrets::vaults::passkey_signals::{self, SignalStore};
 use crate::secrets::vaults::vault::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::vault::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
-    HistoryOverview, Vault, VaultFolder, VaultItemCredentialOverview, VaultItemOverview,
-    VaultItemSection,
+    HistoryOverview, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
+    VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
+use crate::secrets::vaults::vault_txn::VaultLocks;
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -64,36 +64,9 @@ fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> 
     Ok(vault_dir.join(format!("{vault_key}.json")))
 }
 
-/// Write a file by way of a temp file in the same directory. The data is
-/// synced before the temp file is renamed over `path`, so `path` holds either
-/// the old or the new contents after a crash.
-pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path has no parent directory"))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Path has no file name"))?
-        .to_string_lossy();
-    let tmp_path = dir.join(format!(".{file_name}.tmp"));
-
-    let result = write_synced(&tmp_path, data).and_then(|()| fs::rename(&tmp_path, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp_path);
-        return result;
-    }
-
-    // Sync the directory so the rename itself is durable.
-    fs::File::open(dir)?.sync_all()
-}
-
-fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
-    file.write_all(data)?;
-    file.sync_all()
-}
-
 impl VaultHandle {
+    /// A new, unlocked vault that is not written yet. Write it with
+    /// [`super::vault_txn::VaultWriter::create`].
     pub fn new_vault(
         name: Option<String>,
         vault_dir: &Path,
@@ -106,36 +79,51 @@ impl VaultHandle {
 
         let vault_path = vault_file_path(vault_dir, &vault_key)?;
         let vault_overview = Vault::new(name, user_encryption_key)?;
-        let handle = Self {
-            key: vault_key.to_string(),
-            path: vault_path,
+        Ok(Self::unlocked(vault_key, vault_path, vault_overview))
+    }
+
+    pub(crate) fn unlocked(key: String, path: PathBuf, vault: Vault) -> Self {
+        Self {
+            key,
+            path,
             state: VaultState::Unlocked {
-                vault: Box::new(vault_overview),
+                vault: Box::new(vault),
             },
-        };
-        handle.save()?;
-        Ok(handle)
+        }
     }
 
     /// An unlocked, empty vault that is never written to disk.
     #[cfg(test)]
     pub(crate) fn new_for_test(vault_key: &str) -> Self {
-        Self {
-            key: vault_key.to_string(),
-            path: PathBuf::from(format!("/nonexistent/{vault_key}.json")),
-            state: VaultState::Unlocked {
-                vault: Box::new(Vault::new_for_test()),
-            },
-        }
+        Self::new_for_test_at(PathBuf::from(format!("/nonexistent/{vault_key}.json")))
     }
 
-    pub fn load(vault_dir: &Path, vault_key: Option<String>) -> Result<Self, Error> {
+    /// An unlocked, empty vault at `path`, not yet written.
+    #[cfg(test)]
+    pub(crate) fn new_for_test_at(path: PathBuf) -> Self {
+        let key = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        Self::unlocked(key, path, Vault::new_for_test())
+    }
+
+    pub fn load(
+        vault_dir: &Path,
+        vault_key: Option<String>,
+        locks: &VaultLocks,
+    ) -> Result<Self, Error> {
         let vault_key = vault_key.unwrap_or(DEFAULT_VAULT.to_string());
         let vault_path = vault_file_path(vault_dir, &vault_key)?;
-        Self::load_from_path(Some(vault_key), &vault_path)
+        Self::load_from_path(Some(vault_key), &vault_path, locks)
     }
 
-    pub fn load_from_path(vault_key: Option<String>, vault_path: &Path) -> Result<Self, Error> {
+    /// Load a locked vault and record its path in `locks`.
+    pub fn load_from_path(
+        vault_key: Option<String>,
+        vault_path: &Path,
+        locks: &VaultLocks,
+    ) -> Result<Self, Error> {
         let vault = EncryptedVault::load(vault_path)?;
 
         // todo: decide what to do for key for external vaults, some options:
@@ -147,6 +135,7 @@ impl VaultHandle {
         if !validate_key(&vault_key) {
             return Err(Error::InvalidVaultKey(vault_key.to_string()));
         }
+        locks.track(vault.id, vault_path);
 
         Ok(Self {
             key: vault_key,
@@ -202,24 +191,28 @@ impl VaultHandle {
         }
     }
 
-    pub fn save(&self) -> Result<(), Error> {
-        let Some(vault_dir) = self.path.parent() else {
-            return Err(Error::VaultDirCreateError(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Vault directory not found",
-            )));
-        };
-
+    /// Contents of the vault file for the unlocked vault.
+    pub(crate) fn file_contents(&self) -> Result<String, Error> {
         let vault = self.get_unlocked_vault()?;
         let encrypted_vault = vault.to_encrypted(true)?;
-        let vault_data = serde_json::to_string_pretty(&encrypted_vault)
-            .map_err(Error::VaultSerializationError)?;
-
-        fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
-        write_atomic(&self.path, vault_data.as_bytes()).map_err(Error::VaultWriteError)?;
-        Ok(())
+        serde_json::to_string_pretty(&encrypted_vault).map_err(Error::VaultSerializationError)
     }
 
+    /// File key of the unlocked vault, for a transaction that reloads it.
+    pub(crate) fn unlocked_key(&self) -> Result<UnlockedKey, Error> {
+        Ok(self.get_unlocked_vault()?.unlocked_key())
+    }
+
+    /// Replace the unlocked vault.
+    #[cfg(test)]
+    pub(crate) fn replace_vault(&mut self, vault: Vault) {
+        self.state = VaultState::Unlocked {
+            vault: Box::new(vault),
+        };
+    }
+
+    /// Change the vault key, and so the file name. The transaction that runs
+    /// this moves the file when it saves.
     pub fn set_vault_key(&mut self, new_vault_key: String) -> Result<(), Error> {
         if !validate_key(&new_vault_key) {
             return Err(Error::InvalidVaultKey(new_vault_key));
@@ -228,16 +221,9 @@ impl VaultHandle {
         let vault_dir = self
             .path
             .parent()
-            .expect("Vault path has no parent directory");
-        let new_path = vault_file_path(vault_dir, &new_vault_key)?;
-
-        if let Err(err) = std::fs::rename(&self.path, &new_path) {
-            return Err(Error::VaultKeyUpdateFailed(err));
-        }
-
+            .ok_or_else(|| Error::VaultNotFound(self.path.display().to_string()))?;
+        self.path = vault_file_path(vault_dir, &new_vault_key)?;
         self.key = new_vault_key;
-        self.path = new_path;
-        self.save()?;
         Ok(())
     }
 
@@ -821,40 +807,5 @@ pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedK
             .map_err(Error::KeyCreationFailed)
         },
         Err(e) => Err(Error::KeyRetrievalFailed(e)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-
-    use super::*;
-
-    #[test]
-    fn write_atomic_replaces_contents_and_leaves_no_temp_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vault.json");
-        fs::write(&path, "old contents that are longer").unwrap();
-
-        write_atomic(&path, b"new").unwrap();
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
-        let names: Vec<_> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(names, vec![OsString::from("vault.json")]);
-    }
-
-    #[test]
-    fn write_atomic_keeps_the_old_file_if_the_write_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vault.json");
-        fs::write(&path, "old").unwrap();
-        // A directory at the temp path makes creating the temp file fail.
-        fs::create_dir(dir.path().join(".vault.json.tmp")).unwrap();
-
-        assert!(write_atomic(&path, b"new").is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 }

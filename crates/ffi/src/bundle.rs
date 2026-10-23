@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use axo_pass_core::core::auth::AuthContext;
 use axo_pass_core::secrets::vaults::ExportProgress as CoreExportProgress;
 use axo_pass_core::secrets::vaults::vault_export::{
-    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity,
+    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity, ImportableBundle,
     WorkFactor as CoreWorkFactor,
 };
 
@@ -105,36 +106,42 @@ impl AxoPass {
         include_passkeys: bool,
         progress: Option<Arc<dyn VaultExportProgressDelegate>>,
     ) -> Result<(), FfiError> {
-        let manager = Arc::clone(&self.manager);
+        let store = self
+            .manager
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .store()
+            .clone();
         tokio::task::spawn_blocking(move || {
-            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let export_mode = ExportMode::Passphrase {
                 passphrase: passphrase.into(),
                 work_factor: work_factor.into(),
             };
-            m.export_bundle(
-                &vault_keys,
-                std::path::Path::new(&dest_path),
-                export_mode,
-                include_passkeys,
-                |p| {
-                    if let Some(delegate) = &progress {
-                        let (stage, index, total) = match p {
-                            CoreExportProgress::Vault { index, total } => (
-                                VaultExportStage::CollectingVault,
-                                index as u32,
-                                total as u32,
-                            ),
-                            CoreExportProgress::DerivingKey => {
-                                (VaultExportStage::DerivingKey, 0, 0)
-                            },
-                            CoreExportProgress::Writing => (VaultExportStage::Writing, 0, 0),
-                        };
-                        delegate.on_stage(stage, index, total);
-                    }
-                },
-            )
-            .map_err(FfiError::from)
+            store
+                .export(
+                    &vault_keys,
+                    std::path::Path::new(&dest_path),
+                    export_mode,
+                    include_passkeys,
+                    AuthContext::SharedThreadLocal,
+                    |p| {
+                        if let Some(delegate) = &progress {
+                            let (stage, index, total) = match p {
+                                CoreExportProgress::Vault { index, total } => (
+                                    VaultExportStage::CollectingVault,
+                                    index as u32,
+                                    total as u32,
+                                ),
+                                CoreExportProgress::DerivingKey => {
+                                    (VaultExportStage::DerivingKey, 0, 0)
+                                },
+                                CoreExportProgress::Writing => (VaultExportStage::Writing, 0, 0),
+                            };
+                            delegate.on_stage(stage, index, total);
+                        }
+                    },
+                )
+                .map_err(FfiError::from)
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
@@ -146,15 +153,12 @@ impl AxoPass {
         src_path: String,
         passphrase: String,
     ) -> Result<Vec<BundleVaultInfo>, FfiError> {
-        let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let bundle = m
-                .open_bundle(
-                    std::path::Path::new(&src_path),
-                    ImportIdentity::Passphrase(passphrase.into()),
-                )
-                .map_err(FfiError::from)?;
+            let bundle = ImportableBundle::open(
+                std::path::Path::new(&src_path),
+                ImportIdentity::Passphrase(passphrase.into()),
+            )
+            .map_err(FfiError::from)?;
             Ok(bundle
                 .vaults()
                 .into_iter()
@@ -175,13 +179,11 @@ impl AxoPass {
     ) -> Result<Vec<String>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let bundle = m
-                .open_bundle(
-                    std::path::Path::new(&src_path),
-                    ImportIdentity::Passphrase(passphrase.into()),
-                )
-                .map_err(FfiError::from)?;
+            let bundle = ImportableBundle::open(
+                std::path::Path::new(&src_path),
+                ImportIdentity::Passphrase(passphrase.into()),
+            )
+            .map_err(FfiError::from)?;
 
             let mut targets = std::collections::BTreeMap::new();
             for entry in selection {
@@ -191,6 +193,7 @@ impl AxoPass {
                 targets.insert(id, entry.target_key);
             }
 
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             m.import_bundle(bundle, &targets).map_err(FfiError::from)
         })
         .await

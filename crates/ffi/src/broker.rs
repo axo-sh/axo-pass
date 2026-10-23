@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axo_pass_core::audit;
 use axo_pass_core::core::auth::ForeignContext;
 use axo_pass_core::core::{app_broker, provenance};
+use axo_pass_core::secrets::vaults::VaultCatalog;
 use axo_pass_core::ssh::app_grants;
 use secrecy::SecretString;
 
@@ -437,6 +438,7 @@ impl AxoPass {
                 manager: Arc::clone(&self.manager),
             }),
             logins: Arc::clone(&self.login_index),
+            vaults: VaultCatalog::app(),
         };
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {

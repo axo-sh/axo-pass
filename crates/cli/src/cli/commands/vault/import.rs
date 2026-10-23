@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::VaultsManager;
-use axo_pass_core::secrets::vaults::vault_export::{BundleVaultInfo, ImportIdentity};
+use axo_pass_core::secrets::vaults::vault_export::{
+    BundleVaultInfo, ImportIdentity, ImportableBundle,
+};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;
@@ -44,9 +45,7 @@ impl VaultImportCommand {
         let wire_identity = self.import_encryption.wire_identity()?;
         let import_identity = ImportIdentity::try_from(wire_identity.clone())?;
 
-        let vm = VaultsManager::new();
-        let bundle = vm
-            .open_bundle(&self.import_path, import_identity)
+        let bundle = ImportableBundle::open(&self.import_path, import_identity)
             .map_err(|e| format!("Failed to open bundle: {e}"))?;
 
         let infos = bundle.vaults();

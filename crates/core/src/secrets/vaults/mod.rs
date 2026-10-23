@@ -4,10 +4,14 @@ mod fields;
 mod item_autofill;
 pub mod passkey;
 pub mod passkey_signals;
+#[cfg(test)]
+pub(crate) mod test_unlocker;
 pub mod totp;
 mod vault;
+mod vault_catalog;
 pub mod vault_export;
 mod vault_handle;
+pub mod vault_txn;
 mod vaults_manager;
 
 pub use autofill::{
@@ -21,5 +25,6 @@ pub use vault::{
     CredentialPlacement, CredentialUpdate, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection, display_order,
 };
+pub use vault_catalog::{Unlocker, VaultCatalog};
 pub use vault_handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use vaults_manager::VaultsManager;

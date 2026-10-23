@@ -396,7 +396,7 @@ pub trait VaultPromptDelegate: Send + Sync {
 pub(crate) struct DelegatingVaultAuthorizer {
     pub(crate) delegate: Arc<dyn VaultPromptDelegate>,
     /// The app's long-lived manager. A broker write goes to disk through its
-    /// own `VaultWrapper`, so this copy is relocked afterwards to force a
+    /// own `VaultHandle`, so this copy is relocked afterwards to force a
     /// reload on the next read.
     pub(crate) manager: Arc<Mutex<VaultsManager>>,
 }

@@ -34,6 +34,15 @@ impl VaultCipher {
         }
     }
 
+    /// A second cipher with the same key, for a reloaded copy of the vault.
+    pub(crate) fn duplicate(&self) -> Self {
+        Self::new_with_bytes(self.cipher_bytes.expose_secret(), self.vault_id)
+    }
+
+    pub(crate) fn vault_id(&self) -> Uuid {
+        self.vault_id
+    }
+
     // AAD binding each blob to its location in the vault. Changing any of
     // these makes existing vaults undecryptable.
 

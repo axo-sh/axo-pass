@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker::{self, WireExportMode};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::secrets::vaults::VaultCatalog;
 use axo_pass_core::secrets::vaults::vault_export::{ExportMode, WorkFactor};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
@@ -41,10 +41,10 @@ pub struct VaultExportCommand {
 
 impl VaultExportCommand {
     pub fn execute(&self) -> Result<(), String> {
-        let vm = VaultsManager::new();
+        let vaults = VaultCatalog::app();
 
         let mut vault_keys = if self.vault.is_empty() {
-            select_vaults(vm.vault_labels())?
+            select_vaults(vaults.labels())?
         } else {
             self.vault.clone()
         };

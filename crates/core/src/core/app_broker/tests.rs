@@ -230,6 +230,7 @@ impl TestBroker {
                 vault: authorizer.clone(),
                 keychain: authorizer.clone(),
                 logins: logins.clone(),
+                vaults: empty_vaults(),
             },
             shutdown_rx,
         ));
@@ -1341,7 +1342,18 @@ fn stub_authorizers(authorizer: &Arc<StubAuthorizer>) -> Authorizers {
         vault: authorizer.clone(),
         keychain: authorizer.clone(),
         logins: Arc::new(LoginIndex::default()),
+        vaults: empty_vaults(),
     }
+}
+
+/// A vault store with no vaults, so no test reads the developer's own vaults.
+fn empty_vaults() -> crate::secrets::vaults::VaultCatalog {
+    crate::secrets::vaults::VaultCatalog::with_unlocker(
+        PathBuf::from("/nonexistent/vaults"),
+        crate::secrets::vaults::vault_txn::VaultWriter::isolated("/nonexistent/data"),
+        Default::default(),
+        Arc::new(crate::secrets::vaults::test_unlocker::KeyUnlocker::default()),
+    )
 }
 
 /// A request over the Mach service is verified from its audit token,
@@ -1616,6 +1628,7 @@ async fn replaces_a_stale_socket() {
             vault: authorizer.clone(),
             keychain: authorizer,
             logins: Arc::new(LoginIndex::default()),
+            vaults: empty_vaults(),
         },
         shutdown_rx,
     ));

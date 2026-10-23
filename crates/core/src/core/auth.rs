@@ -79,6 +79,16 @@ impl ForeignContext {
     fn is_invalidated(&self) -> bool {
         self.invalidated.load(Ordering::SeqCst)
     }
+
+    /// A new context that nothing has evaluated, for tests that pass a context
+    /// through without unlocking anything on it.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            context: unsafe { LAContext::new() },
+            invalidated: Arc::new(AtomicBool::new(false)),
+        }
+    }
 }
 
 impl std::fmt::Debug for ForeignContext {

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::core::dirs::{app_data_dir, app_group_identifier};
+use crate::secrets::vaults::VaultCatalog;
 
 mod access;
 pub mod age;
@@ -145,4 +146,8 @@ pub struct Authorizers {
     /// The logins the app indexed at its last unlock. The app fills it, and the
     /// broker lists from it for the clients allowed to list without a prompt.
     pub logins: Arc<LoginIndex>,
+    /// Where vault requests find vaults. Real builds pass
+    /// [`VaultCatalog::app`]. This is a field so tests can serve requests
+    /// against a temp directory.
+    pub vaults: VaultCatalog,
 }

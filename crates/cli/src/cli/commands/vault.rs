@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker;
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::secrets::vaults::VaultCatalog;
 use clap::{Parser, Subcommand};
 use clml::cprintln;
 
@@ -62,12 +62,12 @@ impl VaultCommand {
     }
 
     fn cmd_list_vaults(&self) -> ! {
-        let vm = VaultsManager::new();
+        let vaults = VaultCatalog::app().list();
         cprintln!("<green>Vaults:</green>");
-        if vm.iter_vault_keys().next().is_none() {
+        if vaults.is_empty() {
             println!("<no vaults>");
         }
-        for (vault_key, vw) in vm.iter_vaults() {
+        for (vault_key, vw) in &vaults {
             let vault_name = vw.vault_name().unwrap_or("<unnamed>");
             cprintln!("  <blue>{vault_name}</blue> {vault_key}");
         }

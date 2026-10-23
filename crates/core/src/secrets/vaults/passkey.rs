@@ -24,6 +24,7 @@
 //! HMAC-SHA-256 of that secret over the hashed page input.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -48,6 +49,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::vault_txn::VaultWriter;
 use super::{Error, FieldKind, VaultHandle, autofill};
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
@@ -71,21 +73,34 @@ pub enum PasskeyTarget {
 /// caller turns `as_webauthn_bytes()` into the attestation object the browser
 /// wants.
 ///
-/// The vault is saved before returning, so the credential is durable by the
-/// time the relying party sees the attestation.
+/// The authenticator works on `vw`. The new passkey is then written into a
+/// fresh copy of the vault in its own transaction, so an edit saved since
+/// `vw` was loaded is kept. It is saved before this returns, so the
+/// credential is durable by the time the relying party sees the attestation.
 pub async fn create(
+    files: &VaultWriter,
     vw: &mut VaultHandle,
     request: make_credential::Request,
     target: PasskeyTarget,
 ) -> Result<make_credential::Response, Error> {
-    let mut authenticator = authenticator(PasskeyCredentialStore::new(vw, target));
-    let response = authenticator
-        .make_credential(request)
-        .await
-        .map_err(status_error)?;
-    // `save_credential` staged the credential in the in-memory vault; persist
-    // it now that the authenticator has finished.
-    vw.save()?;
+    let staged = Arc::new(Mutex::new(None));
+    let response = {
+        let store = PasskeyCredentialStore {
+            vw: &mut *vw,
+            target: target.clone(),
+            staged: Arc::clone(&staged),
+        };
+        authenticator(store)
+            .make_credential(request)
+            .await
+            .map_err(status_error)?
+    };
+    let staged = staged
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or_else(|| Error::Passkey("The authenticator saved no passkey".to_string()))?;
+    files.write_unlocked::<_, Error>(vw, |fresh| staged.write(fresh, &target).map(|_| ()))?;
     Ok(response)
 }
 
@@ -346,6 +361,7 @@ fn descriptors(ids: Vec<Vec<u8>>) -> Option<Vec<PublicKeyCredentialDescriptor>> 
 
 /// Register a passkey in an unlocked vault from a broker request.
 pub async fn create_from_wire(
+    files: &VaultWriter,
     vw: &mut VaultHandle,
     req: CreatePasskeyRequest,
 ) -> Result<CreatePasskeyResponse, Error> {
@@ -396,7 +412,7 @@ pub async fn create_from_wire(
         pin_protocol: None,
     };
 
-    let response = create(vw, request, req.target).await?;
+    let response = create(files, vw, request, req.target).await?;
     let credential_id = response
         .auth_data
         .attested_credential_data
@@ -430,6 +446,7 @@ pub async fn create_from_wire(
 /// vault is saved. A failure to save is logged and does not fail the
 /// sign-in.
 pub async fn assert_from_wire(
+    files: &VaultWriter,
     vw: &mut VaultHandle,
     req: AssertPasskeyRequest,
 ) -> Result<AssertPasskeyResponse, Error> {
@@ -464,10 +481,12 @@ pub async fn assert_from_wire(
         .map(|h| h.as_slice().to_vec())
         .unwrap_or_default();
 
+    // The use is recorded in a fresh copy of the vault in its own transaction,
+    // so an edit saved since `vw` was loaded is kept.
     if let Some(now) = now_unix() {
-        let marked = vw
-            .mark_credential_used(&stored.item_key, &stored.credential_key, now)
-            .and_then(|()| vw.save());
+        let marked = files.write_unlocked::<_, Error>(vw, |fresh| {
+            fresh.mark_credential_used(&stored.item_key, &stored.credential_key, now)
+        });
         if let Err(e) = marked {
             log::error!(
                 "Failed to record the use of passkey {}/{}: {e}",
@@ -634,18 +653,49 @@ fn decode(value: &str) -> Result<Passkey, Error> {
 
 /// The `CredentialStore` the authenticator reads and writes through.
 ///
-/// Holds the unlocked vault for the length of one request. Writes are staged
-/// into the in-memory vault and flushed by [`create`] / [`assert`], so a failed
-/// request leaves nothing behind on disk.
+/// Holds the unlocked vault for the length of one request. A new passkey is
+/// written into the in-memory vault and kept in `staged`, and [`create`]
+/// writes it to disk in a transaction. A failed request leaves nothing behind
+/// on disk.
 struct PasskeyCredentialStore<'a> {
     vw: &'a mut VaultHandle,
     /// Where a new passkey goes. Read by `save_credential` only.
     target: PasskeyTarget,
+    /// The passkey `save_credential` wrote, if any.
+    staged: Arc<Mutex<Option<StagedPasskey>>>,
+}
+
+/// A passkey the authenticator saved, kept so it can be written again into a
+/// fresh copy of the vault.
+struct StagedPasskey {
+    cred: Passkey,
+    /// Encoded record, with the creation time of the registration.
+    value: String,
+    item_title: Option<String>,
+    credential_title: String,
+}
+
+impl StagedPasskey {
+    /// Write the passkey into `vw` at `target`. Returns the item key.
+    fn write(&self, vw: &mut VaultHandle, target: &PasskeyTarget) -> Result<String, Error> {
+        store_passkey(
+            vw,
+            &self.cred,
+            self.value.clone(),
+            self.item_title.as_deref(),
+            &self.credential_title,
+            target,
+        )
+    }
 }
 
 impl<'a> PasskeyCredentialStore<'a> {
     fn new(vw: &'a mut VaultHandle, target: PasskeyTarget) -> Self {
-        Self { vw, target }
+        Self {
+            vw,
+            target,
+            staged: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// The vault credential key for a passkey: `passkey-` and the lowercase hex
@@ -670,15 +720,14 @@ impl<'a> PasskeyCredentialStore<'a> {
         item_title: Option<&str>,
         credential_title: &str,
     ) -> Result<(), Error> {
-        let value = encode(cred, now_unix())?;
-        store_passkey(
-            self.vw,
-            cred,
-            value,
-            item_title,
-            credential_title,
-            &self.target,
-        )?;
+        let staged = StagedPasskey {
+            cred: cred.clone(),
+            value: encode(cred, now_unix())?,
+            item_title: item_title.map(str::to_string),
+            credential_title: credential_title.to_string(),
+        };
+        staged.write(self.vw, &self.target)?;
+        *self.staged.lock().unwrap_or_else(|e| e.into_inner()) = Some(staged);
         Ok(())
     }
 }

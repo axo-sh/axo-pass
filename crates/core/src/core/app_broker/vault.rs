@@ -15,6 +15,7 @@
 //! records `ssh.sign`. Export and import also emit the per-vault events that
 //! the core records internally, sourced to the app.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,12 +36,13 @@ use super::{Authorizers, BrokerError, ConfirmPrompt, PromptOutcome};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
-use crate::core::dirs::vaults_dir;
 use crate::core::provenance::ProcessNode;
 use crate::secrets::vaults::passkey_signals::{self, Report};
-use crate::secrets::vaults::vault_export::{ExportMode, ImportIdentity, WorkFactor};
+use crate::secrets::vaults::vault_export::{
+    ExportMode, ImportIdentity, ImportableBundle, WorkFactor,
+};
 use crate::secrets::vaults::{
-    DEFAULT_VAULT, FieldKind, MatchKind, Site, VaultHandle, VaultsManager, autofill, passkey,
+    DEFAULT_VAULT, MatchKind, Site, VaultCatalog, VaultHandle, autofill, passkey,
 };
 
 /// One `axo://` reference to resolve, as it crosses the socket.
@@ -898,9 +900,11 @@ pub(super) async fn authorize_and_serve_logins(
 
     let job = prompt.clone();
     let index = Arc::clone(&authorizers.logins);
-    let result = tokio::task::spawn_blocking(move || serve_logins(&job, context, payload, &index))
-        .await
-        .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
+    let vaults = authorizers.vaults.clone();
+    let result =
+        tokio::task::spawn_blocking(move || serve_logins(&vaults, &job, context, payload, &index))
+            .await
+            .unwrap_or_else(|e| Err(format!("Vault task failed: {e}")));
 
     let served = match result {
         Ok(served) => {
@@ -960,6 +964,7 @@ pub(super) async fn authorize_and_serve_logins(
 
 pub(super) async fn authorize_and_serve(
     authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
     mut prompt: VaultAccessPrompt,
     actor: Actor,
     mut payload: Option<VaultPayload>,
@@ -1002,10 +1007,12 @@ pub(super) async fn authorize_and_serve(
     {
         let request = assert.request.clone();
         let candidates_context = context.clone();
-        let candidates =
-            tokio::task::spawn_blocking(move || passkey_candidates(&request, candidates_context))
-                .await
-                .unwrap_or_default();
+        let candidates_vaults = vaults.clone();
+        let candidates = tokio::task::spawn_blocking(move || {
+            passkey_candidates(&candidates_vaults, &request, candidates_context)
+        })
+        .await
+        .unwrap_or_default();
         let chosen = if candidates.len() > 1 {
             let choose = authorizer.choose_passkey(&prompt, candidates.clone());
             match in_flight.unless_abandoned(choose).await {
@@ -1035,9 +1042,10 @@ pub(super) async fn authorize_and_serve(
 
     let job = prompt.clone();
     let rt = tokio::runtime::Handle::current();
+    let vaults = vaults.clone();
     let (result, signed) = tokio::task::spawn_blocking(move || {
         let mut signed = None;
-        let result = serve_on_context(job, context, payload, rt, &mut signed);
+        let result = serve_on_context(&vaults, job, context, payload, rt, &mut signed);
         (result, signed)
     })
     .await
@@ -1283,13 +1291,14 @@ fn login_page_details(event: AuditEvent, page: &LoginPage) -> AuditEvent {
 
 /// Load the vault from disk and serve the request on the app's context.
 ///
-/// The vault is loaded fresh from disk and, for a write, saved straight back,
-/// so this does not touch the app's in-memory vault state. The app's own CRUD
-/// re-reads the file before every mutation (`with_unlocked_vault` calls
-/// `unlock` each time), so a later UI edit does not clobber a write made here.
+/// The vault is loaded fresh from disk, so this does not touch the app's
+/// in-memory vault state. A write runs in a transaction that reloads the vault
+/// under the vault locks, as every app edit does, so neither replaces the
+/// other's save.
 /// `signed` is set to the passkey a sign-in signed with, since its prompt does
 /// not name a vault.
 fn serve_on_context(
+    vaults: &VaultCatalog,
     prompt: VaultAccessPrompt,
     context: ForeignContext,
     payload: Option<VaultPayload>,
@@ -1297,7 +1306,7 @@ fn serve_on_context(
     signed: &mut Option<SignedPasskey>,
 ) -> Result<WireResponse, String> {
     match &prompt.action {
-        VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(refs, context),
+        VaultAction::ResolveSecrets { refs, .. } => return resolve_secrets(vaults, refs, context),
         VaultAction::ListLogins { .. }
         | VaultAction::FillLogin { .. }
         | VaultAction::GenerateTotp { .. }
@@ -1309,27 +1318,34 @@ fn serve_on_context(
             let Some(VaultPayload::CreatePasskey(p)) = payload else {
                 return Err("Missing passkey registration payload".to_string());
             };
-            return create_passkey(&prompt.vault_key, p.request, context, &rt);
+            return create_passkey(vaults, &prompt.vault_key, p.request, context, &rt);
         },
         VaultAction::AssertPasskey { .. } => {
             let Some(VaultPayload::AssertPasskey(p)) = payload else {
                 return Err("Missing passkey assertion payload".to_string());
             };
-            return assert_passkey(p.request, p.vault_key.as_deref(), context, &rt, signed);
+            return assert_passkey(
+                vaults,
+                p.request,
+                p.vault_key.as_deref(),
+                context,
+                &rt,
+                signed,
+            );
         },
         VaultAction::ExportVaults { vault_keys } => {
             let Some(VaultPayload::Export(export)) = payload else {
                 return Err("Missing export payload".to_string());
             };
-            return export_vaults(vault_keys, export, context);
+            return export_vaults(vaults, vault_keys, export, context);
         },
         VaultAction::ImportVaults { .. } => {
             let Some(VaultPayload::Import(import)) = payload else {
                 return Err("Missing import payload".to_string());
             };
-            return import_vaults(import, context);
+            return import_vaults(vaults, import, context);
         },
-        VaultAction::AddVault { path } => return add_external_vault(path, context),
+        VaultAction::AddVault { path } => return add_external_vault(vaults, path, context),
         _ => {},
     }
 
@@ -1339,10 +1355,7 @@ fn serve_on_context(
         Some(_) => return Err("Wrong payload for this vault action".to_string()),
     };
 
-    let mut vw = VaultHandle::load(&vaults_dir(), Some(prompt.vault_key.clone()))
-        .map_err(|e| format!("Failed to load vault: {e}"))?;
-    vw.unlock_on(AuthContext::Foreign(context))
-        .map_err(|e| format!("Failed to unlock vault: {e}"))?;
+    let vw = open_vault(vaults, &prompt.vault_key, context)?;
 
     match prompt.action {
         VaultAction::ListItems => Ok(WireResponse::VaultItems {
@@ -1363,46 +1376,12 @@ fn serve_on_context(
             credential_key,
         } => {
             let payload = write.ok_or("Missing write payload")?;
-            if let Some(login) = payload.login {
-                let created = vw.get_item_overview(&item_key).ok().flatten().is_none();
-                autofill::write_login(
-                    &mut vw,
-                    autofill::LoginWrite {
-                        item_key: &item_key,
-                        title: &payload.title,
-                        password_key: &credential_key,
-                        password: payload.value,
-                        username: login.username.as_deref(),
-                        websites: &login.websites,
-                        match_kind: MatchKind::Domain,
-                    },
-                )
-                .map_err(|e| format!("Failed to write login: {e}"))?;
-                vw.save()
-                    .map_err(|e| format!("Failed to save vault: {e}"))?;
-                return Ok(WireResponse::VaultWritten { created });
-            }
-            // Keep an existing credential's kind so a value-only update does
-            // not reset it; a new credential falls back to the default.
-            let existing = vw
-                .get_secret_overview(&item_key, &credential_key)
-                .ok()
-                .flatten();
-            let created =
-                existing.is_none() && vw.get_item_overview(&item_key).ok().flatten().is_none();
-            let kind = existing
-                .map(|o| o.kind.clone())
-                .unwrap_or_else(FieldKind::default);
-            vw.add_secret(
-                &item_key,
-                &credential_key,
-                &payload.title,
-                kind,
-                payload.value,
-            )
-            .map_err(|e| format!("Failed to add secret: {e}"))?;
-            vw.save()
-                .map_err(|e| format!("Failed to save vault: {e}"))?;
+            let created = vaults
+                .files()
+                .write_unlocked(&vw, |fresh| {
+                    write_secret(fresh, &item_key, &credential_key, payload)
+                })?
+                .value;
             Ok(WireResponse::VaultWritten { created })
         },
         VaultAction::ResolveSecrets { .. }
@@ -1417,6 +1396,67 @@ fn serve_on_context(
         | VaultAction::CreatePasskey { .. }
         | VaultAction::AssertPasskey { .. } => unreachable!("handled above"),
     }
+}
+
+/// Load a vault by key and unlock it on the app's context. This can prompt, so
+/// a write calls it before the transaction takes the vault locks.
+fn open_vault(
+    vaults: &VaultCatalog,
+    vault_key: &str,
+    context: ForeignContext,
+) -> Result<VaultHandle, String> {
+    vaults
+        .open(vault_key, AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to open vault {vault_key}: {e}"))
+}
+
+/// Write the secret of a [`VaultAction::WriteSecret`] into `vw`. Returns
+/// whether the item was created.
+fn write_secret(
+    vw: &mut VaultHandle,
+    item_key: &str,
+    credential_key: &str,
+    payload: WriteSecretPayload,
+) -> Result<bool, String> {
+    if let Some(login) = payload.login {
+        let created = vw.get_item_overview(item_key).ok().flatten().is_none();
+        autofill::write_login(
+            vw,
+            autofill::LoginWrite {
+                item_key,
+                title: &payload.title,
+                password_key: credential_key,
+                password: payload.value,
+                username: login.username.as_deref(),
+                websites: &login.websites,
+                match_kind: MatchKind::Domain,
+            },
+        )
+        .map_err(|e| format!("Failed to write login: {e}"))?;
+        return Ok(created);
+    }
+    // Keep an existing credential's kind so a value-only update does
+    // not reset it; a new credential falls back to the default.
+    let existing = vw
+        .get_secret_overview(item_key, credential_key)
+        .ok()
+        .flatten();
+    let created = existing.is_none() && vw.get_item_overview(item_key).ok().flatten().is_none();
+    let kind = existing.map(|o| o.kind.clone()).unwrap_or_default();
+    // Create a missing item titled by its key.
+    if created {
+        vw.add_item(item_key, item_key)
+            .map_err(|e| format!("Failed to add item: {e}"))?;
+    }
+    vw.add_secret(
+        item_key,
+        credential_key,
+        &payload.title,
+        kind,
+        payload.value,
+    )
+    .map_err(|e| format!("Failed to add secret: {e}"))?;
+    Ok(created)
 }
 
 /// The result of a login request, and the question the user must answer before
@@ -1445,6 +1485,7 @@ impl LoginServed {
 /// unlock is skipped rather than failing the request, so one broken vault does
 /// not take AutoFill down.
 fn serve_logins(
+    vaults: &VaultCatalog,
     prompt: &VaultAccessPrompt,
     context: ForeignContext,
     payload: Option<VaultPayload>,
@@ -1452,33 +1493,37 @@ fn serve_logins(
 ) -> Result<LoginServed, String> {
     match (&prompt.action, payload) {
         (VaultAction::SaveLogin { page, username }, Some(VaultPayload::SaveLogin(save))) => {
-            return save_login(prompt, page, username.as_deref(), save, context, index);
+            return save_login(
+                vaults,
+                prompt,
+                page,
+                username.as_deref(),
+                save,
+                context,
+                index,
+            );
         },
         (
             VaultAction::UpdateLoginPassword {
                 page, record_id, ..
             },
             Some(VaultPayload::UpdateLogin(update)),
-        ) => return update_login_password(page, record_id, update, context),
+        ) => return update_login_password(vaults, page, record_id, update, context),
         (VaultAction::SaveLogin { .. } | VaultAction::UpdateLoginPassword { .. }, _) => {
             return Err("Missing login payload".to_string());
         },
         _ => {},
     }
 
-    let mut vm = VaultsManager::new();
-    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
     let mut logins = Vec::new();
     let mut everything = Vec::new();
 
-    for vault_key in vault_keys {
-        let Some(vw) = vm.get_vault_mut(&vault_key) else {
-            continue;
-        };
-        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
+    for (vault_key, mut vw) in vaults.list() {
+        if let Err(e) = vaults.unlock(&mut vw, AuthContext::Foreign(context.clone())) {
             log::error!("Failed to unlock vault {vault_key}: {e}");
             continue;
         }
+        let vw = &mut vw;
         match &prompt.action {
             VaultAction::ListLogins { page, all } => {
                 match autofill::collect_items(vw, Some(&page.frame_url)) {
@@ -1606,20 +1651,32 @@ fn stored_hosts(item: &autofill::AutofillItem) -> String {
 /// The vaults and logins a passkey for `rp_id` may be stored in, for the
 /// registration prompt. The logins come from the index, so a cold start offers
 /// only "New login".
-pub(super) fn passkey_choices(rp_id: &str, user_name: &str, index: &LoginIndex) -> PasskeyChoices {
-    let vm = VaultsManager::new();
-    let vaults = vm
-        .iter_vaults()
+pub(super) fn passkey_choices(
+    vaults: &VaultCatalog,
+    rp_id: &str,
+    user_name: &str,
+    index: &LoginIndex,
+) -> PasskeyChoices {
+    let places = vaults
+        .list()
+        .into_iter()
         .map(|(key, vw)| PlacementVault {
-            key: key.clone(),
             name: vw.vault_name().map(String::from),
+            key,
         })
         .collect();
-    PasskeyChoices::build(rp_id, user_name, &index.places(), vaults, write_vault_key())
+    PasskeyChoices::build(
+        rp_id,
+        user_name,
+        &index.places(),
+        places,
+        write_vault_key(vaults),
+    )
 }
 
 /// Save a captured login as a new item in the vault the prompt named.
 fn save_login(
+    vaults: &VaultCatalog,
     prompt: &VaultAccessPrompt,
     page: &LoginPage,
     username: Option<&str>,
@@ -1627,15 +1684,14 @@ fn save_login(
     context: ForeignContext,
     index: &LoginIndex,
 ) -> Result<LoginServed, String> {
-    let mut vw = VaultHandle::load(&vaults_dir(), Some(prompt.vault_key.clone()))
-        .map_err(|e| format!("Failed to load vault: {e}"))?;
-    vw.unlock_on(AuthContext::Foreign(context))
-        .map_err(|e| format!("Failed to unlock vault: {e}"))?;
-
-    let item = autofill::save_login(&mut vw, &page.frame_origin, username, save.password)
-        .map_err(|e| format!("Failed to write login: {e}"))?;
-    vw.save()
-        .map_err(|e| format!("Failed to save vault: {e}"))?;
+    let vw = open_vault(vaults, &prompt.vault_key, context)?;
+    let item = vaults
+        .files()
+        .write_unlocked(&vw, |vw| {
+            autofill::save_login(vw, &page.frame_origin, username, save.password)
+                .map_err(|e| format!("Failed to write login: {e}"))
+        })?
+        .value;
 
     let record_id = item.record_id.clone();
     index.upsert(item);
@@ -1647,33 +1703,28 @@ fn save_login(
 /// captured on another site is a reason to ask the user, not to refuse. The
 /// write is returned as a commit, so nothing changes before the user confirms.
 fn update_login_password(
+    vaults: &VaultCatalog,
     page: &LoginPage,
     record_id: &str,
     update: UpdateLoginPayload,
     context: ForeignContext,
 ) -> Result<LoginServed, String> {
-    let mut vm = VaultsManager::new();
-    let vault_keys: Vec<String> = vm.iter_vault_keys().collect();
-
     let mut found = None;
-    for vault_key in vault_keys {
-        let Some(vw) = vm.get_vault_mut(&vault_key) else {
-            continue;
-        };
-        if let Err(e) = vw.unlock_on(AuthContext::Foreign(context.clone())) {
+    for (vault_key, mut vw) in vaults.list() {
+        if let Err(e) = vaults.unlock(&mut vw, AuthContext::Foreign(context.clone())) {
             log::error!("Failed to unlock vault {vault_key}: {e}");
             continue;
         }
-        match autofill::find_login_record(vw, record_id) {
+        match autofill::find_login_record(&vw, record_id) {
             Ok(Some(item)) => {
-                found = Some((vault_key, item));
+                found = Some((vw, item));
                 break;
             },
             Ok(None) => {},
             Err(e) => log::error!("Failed to look up a login in {vault_key}: {e}"),
         }
     }
-    let Some((vault_key, item)) = found else {
+    let Some((vw, item)) = found else {
         return Err("No login matches that record".to_string());
     };
 
@@ -1691,14 +1742,15 @@ fn update_login_password(
         }
     });
 
+    // The copy read here only builds the prompt. The commit reloads the vault
+    // in its own transaction after the user confirms, so an edit saved while
+    // the prompt is shown is kept.
+    let files = vaults.files().clone();
     let commit: Commit = Box::new(move || {
-        let vw = vm
-            .get_vault_mut(&vault_key)
-            .ok_or_else(|| format!("Vault {vault_key} is no longer available"))?;
-        autofill::update_login_password(vw, &item, update.password)
-            .map_err(|e| format!("Failed to update the password: {e}"))?;
-        vw.save()
-            .map_err(|e| format!("Failed to save vault: {e}"))?;
+        files.write_unlocked(&vw, |fresh| {
+            autofill::update_login_password(fresh, &item, update.password)
+                .map_err(|e| format!("Failed to update the password: {e}"))
+        })?;
         Ok(WireResponse::Acknowledged)
     });
     Ok(LoginServed {
@@ -1789,8 +1841,8 @@ pub(super) fn list_passkeys_locked(rp_id: &str, actor: &Actor, index: &LoginInde
 /// exists or there are no vaults, otherwise the first one. The broker names
 /// this vault in the prompt, so it is chosen before the prompt rather than
 /// after.
-pub(super) fn write_vault_key() -> String {
-    let keys: Vec<String> = VaultsManager::new().iter_vault_keys().collect();
+pub(super) fn write_vault_key(vaults: &VaultCatalog) -> String {
+    let keys: Vec<String> = vaults.list().into_keys().collect();
     if keys.is_empty() || keys.iter().any(|k| k == DEFAULT_VAULT) {
         DEFAULT_VAULT.to_string()
     } else {
@@ -1800,28 +1852,15 @@ pub(super) fn write_vault_key() -> String {
 
 /// Register a passkey in `vault_key` on the app's context.
 fn create_passkey(
+    vaults: &VaultCatalog,
     vault_key: &str,
     request: passkey::CreatePasskeyRequest,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
 ) -> Result<WireResponse, String> {
-    let mut vm = VaultsManager::new();
-    let mut created;
-    // With no vaults yet, `write_vault_key` names the default vault, which
-    // loading creates.
-    let vw = match vm.get_vault_mut(vault_key) {
-        Some(vw) => vw,
-        None => {
-            created = VaultHandle::load(&vaults_dir(), Some(vault_key.to_string()))
-                .map_err(|e| format!("Failed to load vault {vault_key}: {e}"))?;
-            &mut created
-        },
-    };
-    vw.unlock_on(AuthContext::Foreign(context))
-        .map_err(|e| format!("Failed to unlock vault {vault_key}: {e}"))?;
-
+    let mut vw = open_vault(vaults, vault_key, context)?;
     let response = rt
-        .block_on(passkey::create_from_wire(vw, request))
+        .block_on(passkey::create_from_wire(vaults.files(), &mut vw, request))
         .map_err(|e| format!("Failed to register the passkey: {e}"))?;
     Ok(WireResponse::PasskeyRegistered {
         credential_id: b64_encode(&response.credential_id),
@@ -1837,21 +1876,19 @@ fn create_passkey(
 /// passkey matches. If `only_vault` is set, no other vault is unlocked.
 /// `signed` is set to the passkey that signed. Its vault records the use.
 fn assert_passkey(
+    vaults: &VaultCatalog,
     request: passkey::AssertPasskeyRequest,
     only_vault: Option<&str>,
     context: ForeignContext,
     rt: &tokio::runtime::Handle,
     signed: &mut Option<SignedPasskey>,
 ) -> Result<WireResponse, String> {
-    let (mut vm, vault_keys) = unlock_for_passkeys(&context, only_vault);
+    let mut unlocked = unlock_for_passkeys(vaults, &context, only_vault);
 
     let mut last_error = None;
     // The first pass skips rejected passkeys. The second allows them.
     for skip_rejected in [true, false] {
-        for vault_key in &vault_keys {
-            let Some(vw) = vm.get_vault_mut(vault_key) else {
-                continue;
-            };
+        for (vault_key, vw) in unlocked.iter_mut() {
             let signals = vw.passkey_signals().unwrap_or_default();
             let candidates = matching_passkeys(vw, &request);
             let usable: Vec<&passkey::StoredPasskey> = candidates
@@ -1868,7 +1905,7 @@ fn assert_passkey(
                     .map(|s| s.passkey.credential_id.as_slice().to_vec())
                     .collect();
             }
-            match rt.block_on(passkey::assert_from_wire(vw, request)) {
+            match rt.block_on(passkey::assert_from_wire(vaults.files(), vw, request)) {
                 Ok(response) => {
                     *signed = Some(SignedPasskey {
                         vault_key: vault_key.clone(),
@@ -1899,15 +1936,13 @@ fn assert_passkey(
 /// pick one. Rejected passkeys are left out unless every match is rejected,
 /// which mirrors the order `assert_passkey` tries them in.
 fn passkey_candidates(
+    vaults: &VaultCatalog,
     request: &passkey::AssertPasskeyRequest,
     context: ForeignContext,
 ) -> Vec<PasskeyAccountChoice> {
-    let (mut vm, vault_keys) = unlock_for_passkeys(&context, None);
     let mut found = Vec::new();
-    for vault_key in &vault_keys {
-        let Some(vw) = vm.get_vault_mut(vault_key) else {
-            continue;
-        };
+    for (vault_key, mut vw) in unlock_for_passkeys(vaults, &context, None) {
+        let vw = &mut vw;
         let signals = vw.passkey_signals().unwrap_or_default();
         for stored in matching_passkeys(vw, request) {
             found.push((vault_key.clone(), signals.rejects(&stored), stored));
@@ -1933,28 +1968,26 @@ fn passkey_candidates(
 }
 
 /// Load the vaults and unlock them on the app's context. If `only` is set,
-/// only that vault is unlocked. Returns the manager and the keys of the vaults
-/// that unlocked.
+/// only that vault is unlocked. Returns the vaults that unlocked, by key.
 fn unlock_for_passkeys(
+    vaults: &VaultCatalog,
     context: &ForeignContext,
     only: Option<&str>,
-) -> (VaultsManager, Vec<String>) {
-    let mut vm = VaultsManager::new();
-    let mut vault_keys: Vec<String> = vm
-        .iter_vault_keys()
-        .filter(|vault_key| only.is_none_or(|only| only == vault_key))
-        .collect();
-    vault_keys.retain(|vault_key| match vm.get_vault_mut(vault_key) {
-        Some(vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
+) -> BTreeMap<String, VaultHandle> {
+    let mut unlocked = vaults.list();
+    unlocked.retain(|vault_key, vw| {
+        if only.is_some_and(|only| only != vault_key) {
+            return false;
+        }
+        match vaults.unlock(vw, AuthContext::Foreign(context.clone())) {
             Ok(()) => true,
             Err(e) => {
                 log::error!("Failed to unlock vault {vault_key} for a passkey assertion: {e}");
                 false
             },
-        },
-        None => false,
+        }
     });
-    (vm, vault_keys)
+    unlocked
 }
 
 /// Stored passkeys of `vw` for the request relying party that its allow list
@@ -1979,20 +2012,21 @@ fn matching_passkeys(
 
 /// Unlock every named vault on the app's context and write the export bundle.
 fn export_vaults(
+    vaults: &VaultCatalog,
     vault_keys: &[String],
     export: ExportPayload,
     context: ForeignContext,
 ) -> Result<WireResponse, String> {
-    let mut vm = VaultsManager::new();
-    vm.export_bundle_on(
-        vault_keys,
-        &export.dest_path,
-        export.mode,
-        export.include_passkeys,
-        AuthContext::Foreign(context),
-        |_| {},
-    )
-    .map_err(|e| format!("Failed to export vaults: {e}"))?;
+    vaults
+        .export(
+            vault_keys,
+            &export.dest_path,
+            export.mode,
+            export.include_passkeys,
+            AuthContext::Foreign(context),
+            |_| {},
+        )
+        .map_err(|e| format!("Failed to export vaults: {e}"))?;
     Ok(WireResponse::VaultsExported {
         count: vault_keys.len() as u32,
     })
@@ -2000,37 +2034,46 @@ fn export_vaults(
 
 /// Re-open the bundle and import the selected vaults, re-wrapping each file key
 /// with the local encryption key on the app's context.
-fn import_vaults(import: ImportPayload, context: ForeignContext) -> Result<WireResponse, String> {
+fn import_vaults(
+    vaults: &VaultCatalog,
+    import: ImportPayload,
+    context: ForeignContext,
+) -> Result<WireResponse, String> {
     let identity =
         ImportIdentity::try_from(import.identity).map_err(|e| format!("Invalid identity: {e}"))?;
 
-    let mut selection: std::collections::BTreeMap<uuid::Uuid, String> =
-        std::collections::BTreeMap::new();
+    let mut selection: BTreeMap<uuid::Uuid, String> = BTreeMap::new();
     for (id, key) in import.selection {
         let id = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid vault id {id}: {e}"))?;
         selection.insert(id, key);
     }
 
-    let mut vm = VaultsManager::new();
-    let bundle = vm
-        .open_bundle(&import.import_path, identity)
+    let bundle = ImportableBundle::open(&import.import_path, identity)
         .map_err(|e| format!("Failed to open bundle: {e}"))?;
-    let keys = vm
-        .import_bundle_on(bundle, &selection, AuthContext::Foreign(context))
-        .map_err(|e| format!("Failed to import bundle: {e}"))?;
+    let keys = vaults
+        .import(bundle, &selection, AuthContext::Foreign(context))
+        .map_err(|e| format!("Failed to import bundle: {e}"))?
+        .into_iter()
+        .map(|vw| vw.key)
+        .collect();
     Ok(WireResponse::VaultsImported { keys })
 }
 
 /// Unlock the vault at `path` to validate it, then register it as an external
 /// vault in the app config.
-fn add_external_vault(path: &str, context: ForeignContext) -> Result<WireResponse, String> {
+fn add_external_vault(
+    vaults: &VaultCatalog,
+    path: &str,
+    context: ForeignContext,
+) -> Result<WireResponse, String> {
     let path = Path::new(path)
         .canonicalize()
         .map_err(|e| format!("Could not resolve path {path}: {e}"))?;
 
-    let mut vw = VaultHandle::load_from_path(None, &path)
+    let mut vw = VaultHandle::load_from_path(None, &path, vaults.files().locks())
         .map_err(|e| format!("Not a valid vault file: {e}"))?;
-    vw.unlock_on(AuthContext::Foreign(context))
+    vaults
+        .unlock(&mut vw, AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
 
     let name = vw.vault_name().map(str::to_string);
@@ -2050,28 +2093,21 @@ fn add_external_vault(path: &str, context: ForeignContext) -> Result<WireRespons
 /// context. The result is positionally matched to `refs`. A reference whose
 /// vault fails to load or unlock resolves to `None` rather than failing the
 /// whole batch.
-fn resolve_secrets(refs: &[VaultRef], context: ForeignContext) -> Result<WireResponse, String> {
+fn resolve_secrets(
+    vaults: &VaultCatalog,
+    refs: &[VaultRef],
+    context: ForeignContext,
+) -> Result<WireResponse, String> {
     use std::collections::HashMap;
 
-    let vaults_dir = vaults_dir();
-    let mut vaults: HashMap<String, Option<VaultHandle>> = HashMap::new();
+    let mut opened: HashMap<String, Option<VaultHandle>> = HashMap::new();
     let mut values = Vec::with_capacity(refs.len());
 
     for r in refs {
-        let vw = vaults.entry(r.vault_key.clone()).or_insert_with(|| {
-            match VaultHandle::load(&vaults_dir, Some(r.vault_key.clone())) {
-                Ok(mut vw) => match vw.unlock_on(AuthContext::Foreign(context.clone())) {
-                    Ok(()) => Some(vw),
-                    Err(e) => {
-                        log::error!("Failed to unlock vault {}: {e}", r.vault_key);
-                        None
-                    },
-                },
-                Err(e) => {
-                    log::error!("Failed to load vault {}: {e}", r.vault_key);
-                    None
-                },
-            }
+        let vw = opened.entry(r.vault_key.clone()).or_insert_with(|| {
+            open_vault(vaults, &r.vault_key, context.clone())
+                .inspect_err(|e| log::error!("{e}"))
+                .ok()
         });
 
         let value = match vw {
@@ -2116,6 +2152,10 @@ fn collect_items(vw: &VaultHandle) -> Result<Vec<BrokerVaultItem>, String> {
     items.sort_by_key(|a| a.title.to_lowercase());
     Ok(items)
 }
+
+#[cfg(test)]
+#[path = "vault_tests.rs"]
+mod txn_tests;
 
 #[cfg(test)]
 mod tests {

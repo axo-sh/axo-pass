@@ -31,6 +31,38 @@ type ItemId = Uuid;
 type SectionId = Uuid;
 type CredentialId = Uuid;
 
+/// Unwrapped file key of a vault and the wrapped form it came from. A
+/// transaction unwraps the key before it takes the vault locks, and decrypts
+/// the reloaded file with it under the locks.
+pub struct UnlockedKey {
+    file_key: VaultFileKey,
+    cipher: VaultCipher,
+}
+
+impl UnlockedKey {
+    /// Unwrap the file key of `enc_vault` with the vault encryption key.
+    pub(crate) fn unwrap(
+        user_encryption_key: &ManagedKey,
+        enc_vault: &EncryptedVault,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            file_key: enc_vault.file_key.clone(),
+            cipher: enc_vault.decrypt_file_key(user_encryption_key)?,
+        })
+    }
+
+    /// Key of a vault file whose wrapped key is ignored, for tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(file_key: VaultFileKey, cipher: VaultCipher) -> Self {
+        Self { file_key, cipher }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cipher_for_test(&self) -> VaultCipher {
+        self.cipher.duplicate()
+    }
+}
+
 /// Vault contains decrypted metadata for all folders, items, and credentials
 /// in a vault, as well as the encrypted secrets for each credential. It is
 /// used to display the vault contents without decrypting secrets, and to look
@@ -134,7 +166,28 @@ impl Vault {
         Self::from_encrypted_with_cipher(vault_cipher, enc_vault)
     }
 
-    fn from_encrypted_with_cipher(
+    /// Decrypt `enc_vault` with a file key unwrapped earlier, without the
+    /// keychain. Fails with `VaultFileKeyChanged` if the wrapped file key in
+    /// `enc_vault` differs from the one `key` was unwrapped from.
+    pub(crate) fn from_unlocked_key(
+        key: &UnlockedKey,
+        enc_vault: EncryptedVault,
+    ) -> Result<Self, Error> {
+        if enc_vault.file_key != key.file_key || enc_vault.id != key.cipher.vault_id() {
+            return Err(Error::VaultFileKeyChanged);
+        }
+        Self::from_encrypted_with_cipher(key.cipher.duplicate(), enc_vault)
+    }
+
+    /// File key of this vault, for decrypting a reloaded copy.
+    pub(crate) fn unlocked_key(&self) -> UnlockedKey {
+        UnlockedKey {
+            file_key: self.file_key.clone(),
+            cipher: self.cipher.duplicate(),
+        }
+    }
+
+    pub(crate) fn from_encrypted_with_cipher(
         cipher: VaultCipher,
         enc_vault: EncryptedVault,
     ) -> Result<Self, Error> {

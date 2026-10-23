@@ -17,11 +17,12 @@ use uuid::Uuid;
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::VaultMetadata;
 use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
 };
+use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
+use crate::secrets::vaults::vault::{Vault, VaultMetadata};
 pub use crate::secrets::vaults::vault_export::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -32,6 +33,7 @@ pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
 use crate::secrets::vaults::vault_handle::{
     VaultHandle, get_vault_encryption_key_on, normalized_key,
 };
+use crate::secrets::vaults::vault_txn::VaultWriter;
 
 const FILE_KEY_LEN: usize = 32;
 
@@ -147,14 +149,16 @@ impl ImportableBundle {
 
     /// Import the selected vaults. `selection` maps a bundle vault id to the
     /// key it should be imported as. Every target key must be valid, unique
-    /// among the selection, and absent on disk. Vaults are staged and written
-    /// to temporary files, then renamed into place. A mid-run failure rolls
-    /// back on a best-effort basis: cleanup errors are ignored, so files may
-    /// be left behind.
+    /// among the selection, and absent on disk. Each vault is written in its
+    /// own transaction, which never leaves a partial file. A vault id that
+    /// another vault file on this Mac already holds is refused. If a write
+    /// fails, the vaults this import already wrote are removed on a
+    /// best-effort basis.
     pub fn import(
         self,
         selection: &BTreeMap<Uuid, String>,
         vault_dir: &Path,
+        files: &VaultWriter,
         auth_context: AuthContext,
     ) -> Result<Vec<VaultHandle>, Error> {
         if selection.is_empty() {
@@ -201,15 +205,17 @@ impl ImportableBundle {
             });
         }
 
-        // re-wrap each file key with the local Secure Enclave key and serialize
+        // re-wrap each file key with the local Secure Enclave key, and decrypt
+        // each vault so a damaged one is refused before anything is written
         let managed_key = get_vault_encryption_key_on(auth_context)?;
-        let mut staged: Vec<(String, PathBuf, String)> = Vec::with_capacity(planned.len());
+        let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
         let mut audit_rows: Vec<(String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
             audit_rows.push((p.key.clone(), p.prepared.name.clone()));
+            let raw_file_key = p.prepared.raw_file_key.expose_secret();
             let enc_file_key = VaultFileKey::Personal(
                 managed_key
-                    .encrypt(p.prepared.raw_file_key.expose_secret())
+                    .encrypt(raw_file_key)
                     .ok_or(Error::VaultFileKeyEncryptionError)?
                     .into_bytes(),
             );
@@ -221,36 +227,28 @@ impl ImportableBundle {
                 items: p.prepared.items,
                 deleted: BTreeMap::new(),
             };
-            let json = serde_json::to_string_pretty(&encrypted_vault)
-                .map_err(Error::VaultSerializationError)?;
-            staged.push((p.key, p.path, json));
+            let cipher = VaultCipher::new_with_bytes(raw_file_key, p.prepared.id);
+            let vault = Vault::from_encrypted_with_cipher(cipher, encrypted_vault)?;
+            staged.push(VaultHandle::unlocked(p.key, p.path, vault));
         }
 
-        fs::create_dir_all(vault_dir).map_err(Error::VaultDirCreateError)?;
-
-        // write to temp files, then rename them all into place
-        let mut temps: Vec<PathBuf> = Vec::with_capacity(staged.len());
-        for (key, _, json) in &staged {
-            let tmp = vault_dir.join(format!(".{key}.json.tmp"));
-            if let Err(e) = fs::write(&tmp, json) {
-                for t in &temps {
-                    let _ = fs::remove_file(t);
+        let mut written: Vec<&Path> = Vec::with_capacity(staged.len());
+        for vw in &staged {
+            if let Err(e) = files.create(vw) {
+                for path in written {
+                    let removed = files.delete(path, |path| {
+                        fs::remove_file(path).map_err(Error::VaultDeleteError)
+                    });
+                    if let Err(e) = removed {
+                        log::error!(
+                            "Failed to remove {} after a failed import: {e}",
+                            path.display()
+                        );
+                    }
                 }
-                let _ = fs::remove_file(&tmp);
-                return Err(Error::VaultWriteError(e));
+                return Err(e);
             }
-            temps.push(tmp);
-        }
-        for (i, (_, path, _)) in staged.iter().enumerate() {
-            if let Err(e) = fs::rename(&temps[i], path) {
-                for done in staged.iter().take(i) {
-                    let _ = fs::remove_file(&done.1);
-                }
-                for t in temps.iter().skip(i) {
-                    let _ = fs::remove_file(t);
-                }
-                return Err(Error::VaultWriteError(e));
-            }
+            written.push(&vw.path);
         }
 
         let count = audit_rows.len();
@@ -266,9 +264,12 @@ impl ImportableBundle {
             );
         }
 
-        staged
+        Ok(staged
             .into_iter()
-            .map(|(key, path, _)| VaultHandle::load_from_path(Some(key), &path))
-            .collect()
+            .map(|mut vw| {
+                vw.lock();
+                vw
+            })
+            .collect())
     }
 }
