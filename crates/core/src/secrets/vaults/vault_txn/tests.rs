@@ -292,7 +292,7 @@ fn a_changed_file_key_is_not_used_and_the_key_is_unwrapped_again() {
         let current = fx.vault.unlocked_key().unwrap();
         if call == 0 {
             UnlockedKey::for_test(
-                crate::secrets::vaults::vault::encrypted_vault::VaultFileKey::Personal(vec![
+                crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![
                     1u8;
                     32
                 ]),
@@ -317,7 +317,7 @@ fn a_file_key_that_keeps_changing_fails() {
     let fx = Fixture::new();
     let key = || {
         UnlockedKey::for_test(
-            crate::secrets::vaults::vault::encrypted_vault::VaultFileKey::Personal(vec![1u8; 32]),
+            crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![1u8; 32]),
             fx.vault.unlocked_key().unwrap().cipher_for_test(),
         )
     };

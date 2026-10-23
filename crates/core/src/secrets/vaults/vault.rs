@@ -1,7 +1,3 @@
-pub mod encrypted_blob;
-pub mod encrypted_vault;
-pub mod vault_cipher;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use aes_gcm::aead::OsRng;
@@ -15,14 +11,14 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::fields::FieldKind;
-use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
-use crate::secrets::vaults::passkey_signals::SignalStore;
-use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault::encrypted_vault::{
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
     EncryptedVaultItemCredential, HistoryEntry, VaultFileKey,
 };
-use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
+use crate::secrets::vaults::format::vault_cipher::VaultCipher;
+use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
+use crate::secrets::vaults::passkey_signals::SignalStore;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
 use crate::secrets::vaults::vault_handle::normalized_key;
 

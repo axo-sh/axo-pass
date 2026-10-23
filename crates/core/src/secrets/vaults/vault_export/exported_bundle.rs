@@ -7,9 +7,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::encrypted_vault::EncryptedVaultItem;
 use crate::secrets::vaults::vault::VaultMetadata;
-use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault::encrypted_vault::EncryptedVaultItem;
 
 /// Current bundle format version. Import rejects anything newer.
 pub const BUNDLE_VERSION: u32 = 1;

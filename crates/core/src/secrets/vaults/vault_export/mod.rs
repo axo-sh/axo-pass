@@ -17,11 +17,11 @@ use uuid::Uuid;
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault::encrypted_vault::{
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
 };
-use crate::secrets::vaults::vault::vault_cipher::VaultCipher;
+use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::vault::{Vault, VaultMetadata};
 pub use crate::secrets::vaults::vault_export::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,

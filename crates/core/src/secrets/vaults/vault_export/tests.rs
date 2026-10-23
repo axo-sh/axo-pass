@@ -4,7 +4,7 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault_export::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };

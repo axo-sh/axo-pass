@@ -3,8 +3,8 @@ use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
-use crate::secrets::vaults::vault::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::vault::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
 };

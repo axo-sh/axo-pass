@@ -1,6 +1,7 @@
 pub mod autofill;
 mod errors;
 mod fields;
+pub mod format;
 mod item_autofill;
 pub mod passkey;
 pub mod passkey_signals;
