@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
-use crate::secrets::vaults::vault::{
+use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
 };
 use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;

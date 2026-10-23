@@ -12,7 +12,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
-use crate::secrets::vaults::vault::{
+use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
     VaultItemMetadata, VaultItemOverview, VaultMetadata,
 };
@@ -257,8 +257,8 @@ mod tests {
     use secrecy::ExposeSecret;
 
     use super::*;
-    use crate::secrets::vaults::fields::FieldKind;
-    use crate::secrets::vaults::vault::VaultFolder;
+    use crate::secrets::vaults::model::VaultFolder;
+    use crate::secrets::vaults::model::fields::FieldKind;
 
     fn make_vault() -> EncryptedVault {
         EncryptedVault {

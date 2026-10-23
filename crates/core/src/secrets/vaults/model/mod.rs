@@ -1,3 +1,6 @@
+pub mod fields;
+pub mod totp;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use aes_gcm::aead::OsRng;
@@ -10,7 +13,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
@@ -18,6 +20,7 @@ use crate::secrets::vaults::format::encrypted_vault::{
 };
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
+use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey_signals::SignalStore;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
 use crate::secrets::vaults::vault_handle::normalized_key;
@@ -2169,7 +2172,7 @@ pub struct VaultCredentialMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::vaults::fields::TextField;
+    use crate::secrets::vaults::model::fields::TextField;
 
     const TEST_FILE_KEY: [u8; 32] = [7u8; 32];
 

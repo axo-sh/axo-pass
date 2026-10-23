@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
-use crate::secrets::vaults::vault::{UnlockedKey, Vault};
+use crate::secrets::vaults::model::{UnlockedKey, Vault};
 use crate::secrets::vaults::{Unlocker, VaultHandle};
 
 /// Unlock with file keys by vault id instead of the keychain. A vault without

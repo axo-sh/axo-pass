@@ -3,7 +3,7 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 use super::FieldKind;
-use super::vault::{VaultItemCredentialOverview, VaultItemOverview};
+use super::model::{VaultItemCredentialOverview, VaultItemOverview};
 
 /// The `category` value for items created as logins.
 pub const CATEGORY_LOGIN: &str = "login";

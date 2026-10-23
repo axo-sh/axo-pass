@@ -22,7 +22,7 @@ use crate::secrets::vaults::format::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
 };
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
-use crate::secrets::vaults::vault::{Vault, VaultMetadata};
+use crate::secrets::vaults::model::{Vault, VaultMetadata};
 pub use crate::secrets::vaults::vault_export::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };

@@ -4,12 +4,13 @@ use std::sync::Arc;
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker::IndexedPasskey;
 use axo_pass_core::secrets::password::PasswordPolicy;
+use axo_pass_core::secrets::vaults::model::totp;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey_signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
     TextField, VaultFolder, VaultHandle, VaultItemCredentialOverview, VaultItemOverview,
-    VaultItemSection, VaultsManager, Website, autofill, display_order, passkey, totp,
+    VaultItemSection, VaultsManager, Website, autofill, display_order, passkey,
 };
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;

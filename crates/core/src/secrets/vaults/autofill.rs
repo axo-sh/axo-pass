@@ -22,7 +22,7 @@ use url::{Host, Url};
 use uuid::Uuid;
 
 pub use super::item_autofill::Role;
-use super::totp::{self, TotpCode};
+use super::model::totp::{self, TotpCode};
 use super::vault_handle::validate_key;
 use super::{
     CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultHandle,

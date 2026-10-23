@@ -15,15 +15,15 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::fields::FieldKind;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
-use crate::secrets::vaults::passkey_signals::{self, SignalStore};
-use crate::secrets::vaults::vault::{
+use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
     HistoryOverview, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection,
 };
+use crate::secrets::vaults::passkey_signals::{self, SignalStore};
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::vault_txn::VaultLocks;

@@ -8,10 +8,10 @@ use super::ssh::{ManagedIdentity, SignPurpose};
 use super::{age, keychain, vault};
 use crate::core::provenance::ProcessNode;
 use crate::secrets::password::PasswordPolicy;
+use crate::secrets::vaults::model::totp::TotpCode;
 use crate::secrets::vaults::passkey::{
     PrfAssertionInput, PrfRegistrationInput, PrfRegistrationOutput, PrfValues,
 };
-use crate::secrets::vaults::totp::TotpCode;
 use crate::secrets::vaults::{LoginSummary, OtherLogin};
 
 /// What our browser host reports about the browser that started it. The broker

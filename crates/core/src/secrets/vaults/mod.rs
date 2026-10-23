@@ -1,14 +1,12 @@
 pub mod autofill;
 mod errors;
-mod fields;
 pub mod format;
 mod item_autofill;
+pub mod model;
 pub mod passkey;
 pub mod passkey_signals;
 #[cfg(test)]
 pub(crate) mod test_unlocker;
-pub mod totp;
-mod vault;
 mod vault_catalog;
 pub mod vault_export;
 mod vault_handle;
@@ -20,9 +18,9 @@ pub use autofill::{
     OtherLogin, Site, write_login,
 };
 pub use errors::Error;
-pub use fields::{FieldKind, TextField};
 pub use item_autofill::{CATEGORY_LOGIN, ItemAutofill, MatchKind, Website};
-pub use vault::{
+pub use model::fields::{FieldKind, TextField};
+pub use model::{
     CredentialPlacement, CredentialUpdate, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection, display_order,
 };

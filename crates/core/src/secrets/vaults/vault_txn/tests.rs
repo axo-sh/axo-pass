@@ -7,7 +7,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
 use super::*;
-use crate::secrets::vaults::fields::FieldKind;
+use crate::secrets::vaults::model::fields::FieldKind;
 
 /// A vault written to a temp directory, with its lock files in the same
 /// directory.
