@@ -56,6 +56,12 @@ pub enum Error {
     #[error("Failed to lock vault: {0}")]
     VaultLockError(#[source] std::io::Error),
 
+    #[error("Retained version {0} not found")]
+    VaultVersionNotFound(String),
+
+    #[error("Retained version {0} has a different vault file key and cannot be restored")]
+    VaultVersionKeyChanged(String),
+
     #[error("Passkey operation failed: {0}")]
     Passkey(String),
 

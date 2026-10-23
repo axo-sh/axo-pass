@@ -765,6 +765,27 @@ final class VaultsModel {
     }
   }
 
+  // MARK: - Previous versions
+
+  /// Copies of a vault from before each save, newest first.
+  func vaultVersions(_ vaultKey: String) async throws -> [RetainedVersionInfo] {
+    try await core.listVaultVersions(vaultKey: vaultKey)
+  }
+
+  /// Replace a vault with a previous version. The replaced vault becomes a
+  /// previous version in turn.
+  func restoreVaultVersion(vaultKey: String, name: String) async throws {
+    try await core.restoreVaultVersion(vaultKey: vaultKey, name: name)
+    folderCache.removeValue(forKey: vaultKey)
+    reload()
+    await brokerVaultsChanged([vaultKey])
+  }
+
+  /// Delete every previous version of a vault. Returns the number deleted.
+  func eraseVaultVersions(_ vaultKey: String) async throws -> UInt32 {
+    try await core.eraseVaultVersions(vaultKey: vaultKey)
+  }
+
   // MARK: - Bundle export / import
 
   /// Export the given vaults to a passphrase-encrypted bundle file. Returns an

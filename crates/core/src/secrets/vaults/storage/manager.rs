@@ -146,6 +146,23 @@ impl VaultsManager {
         Ok(VaultsManager::lock(manager).install(committed))
     }
 
+    /// Replace a vault of a shared manager with its retained version `name`,
+    /// and keep the restored copy. Returns the key and name of the restored
+    /// vault. The key differs from `vault_key` if the vault was renamed since
+    /// the manager loaded it.
+    pub fn restore_version(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        name: &str,
+    ) -> Result<(String, Option<String>), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().restore_version(&target, Unlock::App, name)?;
+        let key = committed.vault.key.clone();
+        let vault_name = committed.vault.vault_name().map(str::to_string);
+        VaultsManager::lock(manager).install(committed);
+        Ok((key, vault_name))
+    }
+
     /// Store and target of a vault of a shared manager, loading the vault if
     /// the manager has not yet. The manager mutex is released on return.
     fn locate(manager: &Mutex<Self>, vault_key: &str) -> Result<(VaultCatalog, Target), Error> {

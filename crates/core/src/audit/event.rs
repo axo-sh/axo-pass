@@ -303,6 +303,10 @@ pub enum Action {
     VaultExported,
     #[serde(rename = "vault.imported")]
     VaultImported,
+    #[serde(rename = "vault.version_restored")]
+    VaultVersionRestored,
+    #[serde(rename = "vault.versions_erased")]
+    VaultVersionsErased,
 
     #[serde(rename = "item.listed")]
     ItemListed,
@@ -403,6 +407,8 @@ impl Action {
             Action::VaultLinked => "vault.linked",
             Action::VaultExported => "vault.exported",
             Action::VaultImported => "vault.imported",
+            Action::VaultVersionRestored => "vault.version_restored",
+            Action::VaultVersionsErased => "vault.versions_erased",
             Action::ItemListed => "item.listed",
             Action::ItemCreated => "item.created",
             Action::ItemUpdated => "item.updated",
@@ -437,7 +443,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 60] = [
+    pub const ALL: [Action; 62] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -469,6 +475,8 @@ impl Action {
         Action::VaultLinked,
         Action::VaultExported,
         Action::VaultImported,
+        Action::VaultVersionRestored,
+        Action::VaultVersionsErased,
         Action::ItemListed,
         Action::ItemCreated,
         Action::ItemUpdated,
@@ -547,6 +555,10 @@ impl Action {
             Action::VaultLinked => "Added an external vault file.",
             Action::VaultExported => "Exported vaults to an encrypted bundle.",
             Action::VaultImported => "Imported vaults from an encrypted bundle.",
+            Action::VaultVersionRestored => {
+                "Replaced a vault with a version retained from before an earlier save."
+            },
+            Action::VaultVersionsErased => "Deleted every retained version of a vault.",
             Action::ItemListed => {
                 "Listed the items in a vault, or the logins for a site. No values are read."
             },
@@ -626,7 +638,9 @@ impl Action {
             | Action::VaultDeleted
             | Action::VaultLinked
             | Action::VaultExported
-            | Action::VaultImported => Category::Vault,
+            | Action::VaultImported
+            | Action::VaultVersionRestored
+            | Action::VaultVersionsErased => Category::Vault,
             Action::ItemListed
             | Action::ItemCreated
             | Action::ItemUpdated
@@ -692,6 +706,8 @@ impl Action {
             | Action::VaultDeleted
             | Action::VaultLinked
             | Action::VaultImported
+            | Action::VaultVersionRestored
+            | Action::VaultVersionsErased
             | Action::ItemCreated
             | Action::ItemUpdated
             | Action::ItemDeleted

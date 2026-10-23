@@ -6,11 +6,12 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
+use super::versions::{DAY_MS, HOUR_MS, kept_versions};
 use super::*;
 use crate::secrets::vaults::model::fields::FieldKind;
 
-/// A vault written to a temp directory, with its lock files in the same
-/// directory.
+/// A vault written to a temp directory, with its retained versions and lock
+/// files in the same directory.
 struct Fixture {
     dir: TempDir,
     files: VaultWriter,
@@ -61,6 +62,10 @@ impl Fixture {
             .unwrap()
             .map(|s| s.expose_secret().clone())
     }
+
+    fn versions(&self) -> Vec<RetainedVersion> {
+        self.files.list_versions(self.id()).unwrap()
+    }
 }
 
 /// Add a credential `item/cred` with `value`, creating `item` if needed.
@@ -75,10 +80,19 @@ fn add_credential(vw: &mut VaultHandle, cred: &str, value: &str) -> Result<(), E
     )
 }
 
+fn version(ms: u64, seq: u64) -> RetainedVersion {
+    RetainedVersion {
+        name: format!("{ms}-{seq}.json"),
+        saved_at_ms: ms,
+        seq,
+    }
+}
+
 #[test]
-fn creating_a_vault_writes_once() {
+fn creating_a_vault_writes_once_and_retains_nothing() {
     let fx = Fixture::new();
     assert!(fx.vault.path.exists());
+    assert!(fx.versions().is_empty());
     let entry = fx.files.locks().entry(fx.id(), &fx.vault.path);
     assert_eq!(entry.save_count(), 1);
 }
@@ -95,13 +109,18 @@ fn creating_a_vault_over_an_existing_file_fails() {
 }
 
 #[test]
-fn a_write_saves_the_change() {
+fn a_write_saves_and_retains_the_replaced_file() {
     let fx = Fixture::new();
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
 
     let committed = fx.add(&fx.target(), "alpha", "one");
 
     assert!(committed.changed);
     assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("one"));
+    let versions = fx.versions();
+    assert_eq!(versions.len(), 1);
+    let retained = fs::read_to_string(fx.files.versions(fx.id()).file(&versions[0].name)).unwrap();
+    assert_eq!(retained, before);
 }
 
 #[test]
@@ -112,6 +131,7 @@ fn a_write_that_changes_nothing_saves_nothing() {
         .write::<_, Error>(&fx.target(), fx.unlock(), |vw| vw.list_items().map(|_| ()))
         .unwrap();
     assert!(!committed.changed);
+    assert!(fx.versions().is_empty());
 }
 
 #[test]
@@ -145,6 +165,7 @@ fn concurrent_writers_both_land() {
             Some(format!("value-{i}"))
         );
     }
+    assert_eq!(fx.versions().len(), 8);
 }
 
 #[test]
@@ -204,7 +225,7 @@ fn writers_through_different_path_spellings_share_one_entry() {
 }
 
 #[test]
-fn a_rename_moves_the_file() {
+fn a_rename_moves_the_file_and_retains_one_version() {
     let fx = Fixture::new();
     let committed = fx
         .files
@@ -219,6 +240,7 @@ fn a_rename_moves_the_file() {
     assert_eq!(committed.previous_key, "personal");
     assert!(!fx.vault.path.exists());
     assert_eq!(fx.read(&new_path).vault_name(), Some("Renamed"));
+    assert_eq!(fx.versions().len(), 1);
 }
 
 #[test]
@@ -419,4 +441,186 @@ fn a_read_during_saves_sees_a_whole_vault() {
             EncryptedVault::parse(&contents).unwrap();
         }
     });
+}
+
+#[test]
+fn restoring_a_version_replaces_the_vault_and_retains_the_replaced_file() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    fx.add(&fx.target(), "alpha", "two");
+    let before_restore = fs::read_to_string(&fx.vault.path).unwrap();
+    // Newest first: the version before "two" holds "one".
+    let versions = fx.versions();
+    assert_eq!(versions.len(), 2);
+
+    let committed = fx
+        .files
+        .restore_version(&fx.target(), fx.unlock(), &versions[0].name)
+        .unwrap();
+
+    assert!(committed.changed);
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("one"));
+    let after = fx.versions();
+    assert_eq!(after.len(), 3);
+    let retained = fs::read_to_string(fx.files.versions(fx.id()).file(&after[0].name)).unwrap();
+    assert_eq!(retained, before_restore);
+}
+
+#[test]
+fn restoring_a_missing_version_fails() {
+    let fx = Fixture::new();
+    for name in ["1-0.json", "../personal.json", "nonsense"] {
+        assert!(matches!(
+            fx.files.restore_version(&fx.target(), fx.unlock(), name),
+            Err(Error::VaultVersionNotFound(_))
+        ));
+    }
+}
+
+#[test]
+fn restoring_a_version_with_another_file_key_fails() {
+    let fx = Fixture::new();
+    let mut enc_vault = EncryptedVault::load(&fx.vault.path).unwrap();
+    enc_vault.file_key =
+        crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![1u8; 32]);
+    let dir = fx.files.versions(fx.id());
+    fs::create_dir_all(&dir.path).unwrap();
+    fs::write(
+        dir.file("1-0.json"),
+        serde_json::to_string_pretty(&enc_vault).unwrap(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        fx.files
+            .restore_version(&fx.target(), fx.unlock(), "1-0.json"),
+        Err(Error::VaultVersionKeyChanged(_))
+    ));
+}
+
+#[test]
+fn listing_versions_deletes_versions_past_retention() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    let dir = fx.files.versions(fx.id());
+    dir.add(now_ms() - 40 * DAY_MS, "old").unwrap();
+    assert_eq!(dir.list().unwrap().len(), 2);
+
+    assert_eq!(fx.versions().len(), 1);
+    assert_eq!(dir.list().unwrap().len(), 1);
+}
+
+#[test]
+fn pruning_all_vaults_removes_expired_versions_and_empty_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path());
+    let now = now_ms();
+    let expired = files.versions(Uuid::new_v4());
+    expired.add(now - 40 * DAY_MS, "old").unwrap();
+    let current = files.versions(Uuid::new_v4());
+    current.add(now - 40 * DAY_MS, "old").unwrap();
+    current.add(now, "new").unwrap();
+
+    files.prune_all();
+
+    assert!(!expired.path.exists());
+    assert_eq!(current.list().unwrap().len(), 1);
+}
+
+#[test]
+fn deleting_a_vault_keeps_its_versions_until_they_expire() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    let dir = fx.files.versions(fx.id());
+    dir.add(now_ms() - 40 * DAY_MS, "old").unwrap();
+
+    fx.files
+        .delete(&fx.vault.path, |path| {
+            fs::remove_file(path).map_err(Error::VaultDeleteError)
+        })
+        .unwrap();
+
+    assert_eq!(dir.list().unwrap().len(), 2);
+    fx.files.prune_all();
+    assert_eq!(dir.list().unwrap().len(), 1);
+}
+
+#[test]
+fn erasing_versions_deletes_them_and_leaves_the_vault() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    fx.add(&fx.target(), "alpha", "two");
+    assert_eq!(fx.versions().len(), 2);
+
+    let erased = fx.files.erase_versions(fx.id(), &fx.vault.path).unwrap();
+
+    assert_eq!(erased, 2);
+    assert!(fx.versions().is_empty());
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("two"));
+}
+
+#[test]
+fn versions_in_one_millisecond_get_distinct_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = VersionsDir::at(tmp.path());
+    let first = dir.add(1_000, "a").unwrap();
+    let second = dir.add(1_000, "b").unwrap();
+    assert_ne!(first, second);
+    let versions = dir.list().unwrap();
+    assert_eq!(versions, vec![version(1_000, 1), version(1_000, 0)]);
+}
+
+#[test]
+fn retention_keeps_the_last_hour_and_the_last_version_of_each_day() {
+    let now = 100 * DAY_MS + 12 * HOUR_MS;
+    let mut versions = Vec::new();
+    // A burst of 150 saves in the last ten minutes.
+    for i in 0..150 {
+        versions.push(version(now - 10 * 60 * 1000 + i * 1000, 0));
+    }
+    // Three saves on each of the 40 days before today.
+    for day in 1..=40 {
+        for hour in [3, 9, 15] {
+            versions.push(version(
+                now - day * DAY_MS - 12 * HOUR_MS + hour * HOUR_MS,
+                0,
+            ));
+        }
+    }
+    versions.sort_by_key(|v| std::cmp::Reverse((v.saved_at_ms, v.seq)));
+
+    let keep = kept_versions(&versions, now);
+
+    // The newest 100 of the burst.
+    for i in 50..150 {
+        assert!(keep.contains(&version(now - 10 * 60 * 1000 + i * 1000, 0).name));
+    }
+    for i in 0..50 {
+        assert!(!keep.contains(&version(now - 10 * 60 * 1000 + i * 1000, 0).name));
+    }
+    // The last version of each earlier day within 30 days, and nothing older.
+    for day in 1..=40 {
+        let last = version(now - day * DAY_MS - 12 * HOUR_MS + 15 * HOUR_MS, 0);
+        let earlier = version(now - day * DAY_MS - 12 * HOUR_MS + 9 * HOUR_MS, 0);
+        // The last version of day 30 is 30 days less 3 hours old.
+        assert_eq!(keep.contains(&last.name), day <= 30, "day {day}");
+        assert!(!keep.contains(&earlier.name), "day {day}");
+    }
+    assert_eq!(keep.len(), 100 + 30);
+}
+
+#[test]
+fn pruning_deletes_versions_retention_does_not_keep() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = VersionsDir::at(tmp.path());
+    let now = 100 * DAY_MS;
+    let old = now - 40 * DAY_MS;
+    dir.add(old, "old").unwrap();
+    dir.add(now, "new").unwrap();
+    fs::write(dir.file("notes.txt"), "kept").unwrap();
+
+    dir.prune(now).unwrap();
+
+    assert_eq!(dir.list().unwrap(), vec![version(now, 0)]);
+    assert!(dir.file("notes.txt").exists());
 }

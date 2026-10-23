@@ -83,7 +83,9 @@ struct PreviousValuesSheet: View {
     ) { entry in
       Button("Delete Permanently", role: .destructive) { purge(entry) }
     } message: { _ in
-      Text("The value is erased from the vault. This cannot be undone.")
+      Text(
+        "The value is erased from the vault. Previous versions of the vault keep it for up to 30 days, unless you erase them."
+      )
     }
   }
 

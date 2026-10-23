@@ -6,6 +6,7 @@ struct VaultsSidebar: View {
   @State private var showingNewVaultSheet = false
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
+  @State private var versionsVaultKey: String? = nil
   @State private var secretsExpanded = true
   @State private var toolsExpanded = true
 
@@ -77,6 +78,10 @@ struct VaultsSidebar: View {
     .sheet(item: $exportingVaultKey) { vaultKey in
       VaultExportSheet(model: model, only: vaultKey)
     }
+    .sheet(item: $versionsVaultKey) { vaultKey in
+      let existing = model.vaults.first { $0.key == vaultKey }
+      VaultVersionsSheet(vaultKey: vaultKey, vaultName: existing?.name ?? vaultKey)
+    }
   }
 
   @ViewBuilder
@@ -114,6 +119,7 @@ struct VaultsSidebar: View {
         .contextMenu {
           Button("Rename…") { renamingVaultKey = vault.key }
           Button("Export Backup…") { exportingVaultKey = vault.key }
+          Button("Previous Versions…") { versionsVaultKey = vault.key }
           Button("Delete", role: .destructive) {
             Task { await model.deleteVault(vault.key) }
           }

@@ -203,8 +203,7 @@ impl VaultHandle {
         Ok(self.get_unlocked_vault()?.unlocked_key())
     }
 
-    /// Replace the unlocked vault.
-    #[cfg(test)]
+    /// Replace the unlocked vault, as when a retained version is restored.
     pub(crate) fn replace_vault(&mut self, vault: Vault) {
         self.state = VaultState::Unlocked {
             vault: Box::new(vault),

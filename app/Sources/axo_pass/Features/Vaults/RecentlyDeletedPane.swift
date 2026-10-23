@@ -202,11 +202,14 @@ private struct RecentlyDeletedDetail: View {
   private var purgeMessage: String {
     switch entry {
     case .item(_, let item):
-      "The item and its \(item.credentials.count) credential(s) are erased from the vault. This cannot be undone."
+      "The item and its \(item.credentials.count) credential(s) are erased from the vault. \(Self.retainedNote)"
     case .credential:
-      "Its value is erased from the vault. This cannot be undone."
+      "Its value is erased from the vault. \(Self.retainedNote)"
     }
   }
+
+  private static let retainedNote =
+    "Previous versions of the vault keep it for up to 30 days, unless you erase them."
 
   /// Run an action that removes the entry. The view is replaced when the list
   /// reloads without it.

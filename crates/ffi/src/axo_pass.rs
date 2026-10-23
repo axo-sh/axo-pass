@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker;
@@ -7,6 +7,7 @@ use axo_pass_core::core::auth::{
     run_on_auth_thread,
 };
 use axo_pass_core::secrets::vaults::VaultsManager;
+use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
 
 use crate::*;
 
@@ -29,6 +30,13 @@ impl AxoPass {
     pub fn new() -> Arc<Self> {
         axo_pass_core::logging::init("app.log");
         audit::set_process_source(audit::Source::App);
+        // Retention also runs on each save. This covers vaults that are not
+        // saved again. The app creates several instances, so it runs once per
+        // process.
+        static PRUNE: Once = Once::new();
+        PRUNE.call_once(|| {
+            std::thread::spawn(|| VaultWriter::app().prune_all());
+        });
         Arc::new(Self {
             manager: Arc::new(Mutex::new(VaultsManager::new())),
             embedded_auth_lock: Mutex::new(None),

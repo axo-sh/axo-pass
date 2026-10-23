@@ -9,8 +9,8 @@ use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey::signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
-    TextField, VaultFolder, VaultHandle, VaultItemCredentialOverview, VaultItemOverview,
-    VaultItemSection, VaultsManager, Website, autofill, display_order, passkey,
+    TextField, VaultCatalog, VaultFolder, VaultHandle, VaultItemCredentialOverview,
+    VaultItemOverview, VaultItemSection, VaultsManager, Website, autofill, display_order, passkey,
 };
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
@@ -21,6 +21,16 @@ use crate::*;
 pub struct VaultInfo {
     pub key: String,
     pub name: Option<String>,
+}
+
+/// A retained version of a vault: the vault file as it was before a save.
+#[derive(uniffi::Record)]
+pub struct RetainedVersionInfo {
+    /// Identifies the version for a restore.
+    pub name: String,
+    /// Time of the save that replaced this version, as a Unix timestamp in
+    /// seconds.
+    pub saved_at: i64,
 }
 
 #[derive(uniffi::Record)]
@@ -432,6 +442,17 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || VaultsManager::write_vault(&manager, &vault_key, f))
             .await
             .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// The vault files on disk, for an operation that keeps no copy in the
+    /// manager.
+    fn store(&self) -> Result<VaultCatalog, FfiError> {
+        Ok(self
+            .manager
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .store()
+            .clone())
     }
 }
 
@@ -1050,6 +1071,72 @@ impl AxoPass {
             .await;
         }
         Ok(())
+    }
+
+    /// Retained versions of a vault, newest first.
+    pub async fn list_vault_versions(
+        &self,
+        vault_key: String,
+    ) -> Result<Vec<RetainedVersionInfo>, FfiError> {
+        let store = self.store()?;
+        let versions = tokio::task::spawn_blocking(move || store.list_versions(&vault_key))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))??;
+        Ok(versions
+            .into_iter()
+            .map(|v| RetainedVersionInfo {
+                saved_at: i64::try_from(v.saved_at_ms / 1000).unwrap_or(i64::MAX),
+                name: v.name,
+            })
+            .collect())
+    }
+
+    /// Replace a vault with its retained version `name`. The replaced vault is
+    /// retained in turn, so the restore can be undone. Records
+    /// `vault.version_restored`.
+    pub async fn restore_vault_version(
+        &self,
+        vault_key: String,
+        name: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        let version = name.clone();
+        let (key, vault_name) = tokio::task::spawn_blocking(move || {
+            VaultsManager::restore_version(&manager, &vault_key, &version)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(
+            change_event(
+                audit::Action::VaultVersionRestored,
+                &key,
+                vault_subject(&key).maybe_label(vault_name),
+            )
+            .detail("version", name),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Delete every retained version of a vault. The vault itself is
+    /// unchanged. Records `vault.versions_erased`. Returns the number of
+    /// versions deleted.
+    pub async fn erase_vault_versions(&self, vault_key: String) -> Result<u32, FfiError> {
+        let store = self.store()?;
+        let key = vault_key.clone();
+        let count = tokio::task::spawn_blocking(move || store.erase_versions(&key))
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))??;
+        audit::record_async(
+            change_event(
+                audit::Action::VaultVersionsErased,
+                &vault_key,
+                vault_subject(&vault_key),
+            )
+            .detail("version_count", count.to_string()),
+        )
+        .await;
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
     /// Delete a vault (moved to Trash, not permanently deleted). Mirrors

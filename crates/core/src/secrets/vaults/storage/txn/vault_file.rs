@@ -67,8 +67,15 @@ pub(super) fn write_new(vh: &VaultHandle, contents: &str) -> Result<(), Error> {
 
 /// Save `vh` over `old_path`, whose contents were `old_contents`. A vault
 /// whose path changed is written at the new path and removed at the old one.
-/// Returns whether anything was written.
-pub(super) fn commit(old_path: &Path, old_contents: &str, vh: &VaultHandle) -> Result<bool, Error> {
+/// `retain` is called with `old_contents` before the file is replaced, or
+/// after a move succeeds. A failed move retains nothing. Returns whether
+/// anything was written.
+pub(super) fn commit(
+    old_path: &Path,
+    old_contents: &str,
+    vh: &VaultHandle,
+    retain: impl FnOnce(&str),
+) -> Result<bool, Error> {
     let contents = vh.file_contents()?;
     let moved = vh.path != old_path;
     if !moved && contents == old_contents {
@@ -76,7 +83,9 @@ pub(super) fn commit(old_path: &Path, old_contents: &str, vh: &VaultHandle) -> R
     }
     if moved {
         move_vault_file(old_path, vh, &contents)?;
+        retain(old_contents);
     } else {
+        retain(old_contents);
         write_atomic(&vh.path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
     }
     Ok(true)
