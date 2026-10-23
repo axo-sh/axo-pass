@@ -19,7 +19,7 @@ use crate::core::dirs::app_data_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::model::{UnlockedKey, Vault};
-use crate::secrets::vaults::vault_handle::{
+use crate::secrets::vaults::storage::handle::{
     VaultHandle, check_vault_auth_still_valid, get_vault_encryption_key_on,
 };
 

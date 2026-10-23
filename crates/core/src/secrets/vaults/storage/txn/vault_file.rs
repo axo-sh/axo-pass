@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::core::files::{write_atomic, write_atomic_new};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
-use crate::secrets::vaults::vault_handle::VaultHandle;
+use crate::secrets::vaults::storage::handle::VaultHandle;
 
 fn same_path(a: &Path, b: &Path) -> bool {
     if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) {

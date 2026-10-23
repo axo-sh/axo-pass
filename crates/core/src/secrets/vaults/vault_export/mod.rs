@@ -23,6 +23,10 @@ use crate::secrets::vaults::format::encrypted_vault::{
 };
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{Vault, VaultMetadata};
+use crate::secrets::vaults::storage::handle::{
+    VaultHandle, get_vault_encryption_key_on, normalized_key,
+};
+use crate::secrets::vaults::storage::txn::VaultWriter;
 pub use crate::secrets::vaults::vault_export::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -30,10 +34,6 @@ pub use crate::secrets::vaults::vault_export::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
 pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
-use crate::secrets::vaults::vault_handle::{
-    VaultHandle, get_vault_encryption_key_on, normalized_key,
-};
-use crate::secrets::vaults::vault_txn::VaultWriter;
 
 const FILE_KEY_LEN: usize = 32;
 

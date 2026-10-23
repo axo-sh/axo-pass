@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault_catalog::VaultCatalog;
+use crate::secrets::vaults::storage::catalog::VaultCatalog;
+use crate::secrets::vaults::storage::handle::VaultHandle;
+use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 use crate::secrets::vaults::vault_export::ImportableBundle;
-use crate::secrets::vaults::vault_handle::VaultHandle;
-use crate::secrets::vaults::vault_txn::{Committed, Target, Unlock};
 
 /// The app's copies of its vaults, by key. A copy stays unlocked between
 /// edits, so reading items does not decrypt the file again. Every change to a
@@ -184,8 +184,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::secrets::vaults::test_unlocker::KeyUnlocker;
-    use crate::secrets::vaults::vault_txn::VaultWriter;
+    use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
+    use crate::secrets::vaults::storage::txn::VaultWriter;
 
     /// A manager holding one vault written to a temp directory. Its store has
     /// no external vaults, so the app config is not read.

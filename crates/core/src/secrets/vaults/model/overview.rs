@@ -12,7 +12,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::item_autofill::{ItemAutofill, Role};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey_signals::SignalStore;
-use crate::secrets::vaults::vault_handle::normalized_key;
+use crate::secrets::vaults::storage::handle::normalized_key;
 
 /// Sort key for folders, sections, and credentials. Entries with a position
 /// come first, ordered by position, then the rest by title.

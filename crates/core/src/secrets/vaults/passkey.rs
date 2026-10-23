@@ -49,7 +49,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::vault_txn::VaultWriter;
+use super::storage::txn::VaultWriter;
 use super::{Error, FieldKind, VaultHandle, autofill};
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
@@ -994,7 +994,7 @@ mod tests {
 
     use super::*;
     use crate::secrets::vaults::MatchKind;
-    use crate::secrets::vaults::vault_handle::normalized_key;
+    use crate::secrets::vaults::storage::handle::normalized_key;
 
     /// Keeps whatever the authenticator saves, so a test can inspect a real
     /// credential without needing a vault on disk.

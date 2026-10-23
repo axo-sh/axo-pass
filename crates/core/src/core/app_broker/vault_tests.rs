@@ -6,8 +6,8 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::secrets::vaults::FieldKind;
-use crate::secrets::vaults::test_unlocker::KeyUnlocker;
-use crate::secrets::vaults::vault_txn::VaultWriter;
+use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
+use crate::secrets::vaults::storage::txn::VaultWriter;
 
 /// Vault `personal` in the vaults directory and external vault `shared` in
 /// another directory, served through a [`VaultCatalog`] that unlocks with the

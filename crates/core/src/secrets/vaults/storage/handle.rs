@@ -24,9 +24,9 @@ use crate::secrets::vaults::model::{
     VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::passkey_signals::{self, SignalStore};
+use crate::secrets::vaults::storage::txn::VaultLocks;
 use crate::secrets::vaults::vault_export::ExportMode;
 use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
-use crate::secrets::vaults::vault_txn::VaultLocks;
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -66,7 +66,7 @@ fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> 
 
 impl VaultHandle {
     /// A new, unlocked vault that is not written yet. Write it with
-    /// [`super::vault_txn::VaultWriter::create`].
+    /// [`super::txn::VaultWriter::create`].
     pub fn new_vault(
         name: Option<String>,
         vault_dir: &Path,

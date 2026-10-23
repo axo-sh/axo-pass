@@ -6,6 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
+pub use overview::{
+    DeletedCredentialEntry, DeletedCredentialOverview, DeletedInfo, DeletedItemOverview,
+    HistoryInfo, HistoryOverview, VaultCredentialMetadata, VaultFolder, VaultFolderMetadata,
+    VaultItemCredentialOverview, VaultItemMetadata, VaultItemOverview, VaultItemSection,
+    VaultMetadata, VaultSectionMetadata, display_order,
+};
 use secrecy::{ExposeSecret, SecretBox, SecretString};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -22,15 +28,8 @@ use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::item_autofill::ItemAutofill;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey_signals::SignalStore;
+use crate::secrets::vaults::storage::handle::normalized_key;
 use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
-use crate::secrets::vaults::vault_handle::normalized_key;
-
-pub use overview::{
-    DeletedCredentialEntry, DeletedCredentialOverview, DeletedInfo, DeletedItemOverview,
-    HistoryInfo, HistoryOverview, VaultCredentialMetadata, VaultFolder, VaultFolderMetadata,
-    VaultItemCredentialOverview, VaultItemMetadata, VaultItemOverview, VaultItemSection,
-    VaultMetadata, VaultSectionMetadata, display_order,
-};
 
 type FolderId = Uuid;
 type ItemId = Uuid;
@@ -1803,7 +1802,6 @@ fn is_permutation(ordered: &[Uuid], existing: impl Iterator<Item = Uuid>) -> boo
     ordered_set.len() == ordered.len() && ordered_set == existing
 }
 
-
 /// Set each entry's position, reached through `position`, to its index in
 /// `ordered`. Returns false without changing anything unless `ordered` lists
 /// every entry exactly once.
@@ -1823,12 +1821,10 @@ fn assign_positions<T>(
     true
 }
 
-
 struct DeletedEntry {
     blobs: DeletedCredential,
     overview: DeletedCredentialOverview,
 }
-
 
 struct DeletedItemEntry {
     item: DecryptedItem,
@@ -1856,7 +1852,6 @@ struct DecryptedCredential {
     value: EncryptedBlob<String>,
     history: Vec<HistoryEntry>,
 }
-
 
 /// Changes for [`Vault::update_item_credential`]. `None` fields are left
 /// unchanged.

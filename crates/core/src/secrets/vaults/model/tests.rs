@@ -525,8 +525,7 @@ fn records_resolve_by_id_after_a_credential_is_renamed() {
 
 #[test]
 fn legacy_item_metadata_without_category_loads() {
-    let meta: VaultItemMetadata =
-        serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
+    let meta: VaultItemMetadata = serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
     assert_eq!(meta.category, None);
     let json = serde_json::to_value(&meta).unwrap();
     assert!(json.get("category").is_none());
@@ -584,8 +583,7 @@ fn non_default_kind_roundtrips_through_metadata() {
 
 #[test]
 fn legacy_item_metadata_loads_unfiled_without_sections() {
-    let meta: VaultItemMetadata =
-        serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
+    let meta: VaultItemMetadata = serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
     assert_eq!(meta.folder, None);
     assert!(meta.sections.is_empty());
 

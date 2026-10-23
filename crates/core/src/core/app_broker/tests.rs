@@ -1350,9 +1350,9 @@ fn stub_authorizers(authorizer: &Arc<StubAuthorizer>) -> Authorizers {
 fn empty_vaults() -> crate::secrets::vaults::VaultCatalog {
     crate::secrets::vaults::VaultCatalog::with_unlocker(
         PathBuf::from("/nonexistent/vaults"),
-        crate::secrets::vaults::vault_txn::VaultWriter::isolated("/nonexistent/data"),
+        crate::secrets::vaults::storage::txn::VaultWriter::isolated("/nonexistent/data"),
         Default::default(),
-        Arc::new(crate::secrets::vaults::test_unlocker::KeyUnlocker::default()),
+        Arc::new(crate::secrets::vaults::storage::test_unlocker::KeyUnlocker::default()),
     )
 }
 
