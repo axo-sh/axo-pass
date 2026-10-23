@@ -1,8 +1,5 @@
 //! Routes one request from a verified peer to the authorizer that serves it.
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
-
 use super::access::{RequestScope, client_identity, request_actor, requester_for, vouched_caller};
 use super::in_flight::InFlightRequest;
 use super::wire::{WireRequest, WireResponse, decode_b64};
@@ -70,9 +67,7 @@ pub(super) async fn serve_request(
                 // hash.
                 flags: _,
             } => {
-                let data = b64
-                    .decode(&data)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let data = decode_b64(&data)?;
                 let prompt = SignPrompt {
                     key_label,
                     fingerprint,

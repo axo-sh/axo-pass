@@ -12,14 +12,12 @@
 //! [`super::gpg::get_passphrase`].
 
 use anyhow::anyhow;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use super::client::send_request;
 use super::in_flight::InFlightRequest;
-use super::wire::{WireRequest, WireResponse};
+use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome};
 use crate::age::errors::AgeError;
 use crate::age::key_overview::list_age_keys;
@@ -65,8 +63,7 @@ pub fn request_age_identity(
     };
     match send_request(&request)? {
         WireResponse::AgeIdentity { identity } => {
-            let bytes = b64
-                .decode(identity)
+            let bytes = b64_decode_raw(identity)
                 .map_err(|e| BrokerError::Failed(format!("Malformed identity: {e}")))?;
             String::from_utf8(bytes)
                 .map(SecretString::from)
@@ -216,7 +213,7 @@ pub(super) async fn get_identity(
     let (response, outcome) = match result {
         Ok(Some(identity)) => (
             WireResponse::AgeIdentity {
-                identity: b64.encode(identity.expose_secret().as_bytes()),
+                identity: b64_encode(identity.expose_secret().as_bytes()),
             },
             PromptOutcome::Succeeded,
         ),

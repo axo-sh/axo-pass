@@ -730,16 +730,20 @@ pub(super) enum WireResponse {
 /// Decode a standard-base64 wire field into bytes, mapping a bad encoding to an
 /// `InvalidData` error so the connection is dropped rather than mishandled.
 pub(super) fn decode_b64(value: &str) -> std::io::Result<Vec<u8>> {
-    b64.decode(value)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    b64_decode_raw(value).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 pub(super) fn b64_encode(bytes: &[u8]) -> String {
     b64.encode(bytes)
 }
 
-pub(super) fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
+/// Decode standard base64 and return the engine's own error.
+pub(super) fn b64_decode_raw(value: impl AsRef<[u8]>) -> Result<Vec<u8>, base64::DecodeError> {
     b64.decode(value)
+}
+
+pub(super) fn b64_decode(value: &str) -> Result<Vec<u8>, BrokerError> {
+    b64_decode_raw(value)
         .map_err(|e| BrokerError::Failed(format!("Malformed base64 in passkey response: {e}")))
 }
 
@@ -809,8 +813,8 @@ impl WirePrfValues {
 
     pub(super) fn encode(values: &PrfValues) -> Self {
         Self {
-            first: b64.encode(&values.first),
-            second: values.second.as_ref().map(|s| b64.encode(s)),
+            first: b64_encode(&values.first),
+            second: values.second.as_ref().map(|s| b64_encode(s)),
         }
     }
 }

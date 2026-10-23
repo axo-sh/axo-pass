@@ -7,15 +7,13 @@ use std::os::fd::BorrowedFd;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, Signature};
 
 use super::client::send_request_for;
 use super::in_flight::InFlightRequest;
-use super::wire::{WireRequest, WireResponse};
+use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome};
 use crate::audit;
 use crate::core::auth::{
@@ -171,7 +169,7 @@ pub fn request_signature(
         caller: caller.map(String::from),
         caller_chain: caller_chain.to_vec(),
         purpose: purpose.cloned(),
-        data: b64.encode(data),
+        data: b64_encode(data),
         flags,
     };
     match send_request_for(&request, requester)? {
@@ -181,8 +179,7 @@ pub fn request_signature(
         } => {
             let algorithm = Algorithm::new(&algorithm)
                 .map_err(|e| BrokerError::Failed(format!("Unknown algorithm: {e}")))?;
-            let body = b64
-                .decode(signature)
+            let body = b64_decode_raw(signature)
                 .map_err(|e| BrokerError::Failed(format!("Malformed signature: {e}")))?;
             Signature::new(algorithm, body)
                 .map_err(|e| BrokerError::Failed(format!("Invalid signature: {e}")))
@@ -332,7 +329,7 @@ async fn sign_preapproved(
     record_grant_use(authorizer, prompt, peer, grant).await;
     Some(WireResponse::Signed {
         algorithm: signature.algorithm().to_string(),
-        signature: b64.encode(signature.as_bytes()),
+        signature: b64_encode(signature.as_bytes()),
     })
 }
 
@@ -455,7 +452,7 @@ async fn authorize_and_sign(
         Ok(signature) => (
             WireResponse::Signed {
                 algorithm: signature.algorithm().to_string(),
-                signature: b64.encode(signature.as_bytes()),
+                signature: b64_encode(signature.as_bytes()),
             },
             PromptOutcome::Succeeded,
         ),
@@ -571,8 +568,7 @@ pub fn request_ssh_passphrase(
     };
     match send_request_for(&request, requester)? {
         WireResponse::Passphrase { passphrase } => {
-            let bytes = b64
-                .decode(passphrase)
+            let bytes = b64_decode_raw(passphrase)
                 .map_err(|e| BrokerError::Failed(format!("Malformed passphrase: {e}")))?;
             String::from_utf8(bytes)
                 .map(SecretString::from)
@@ -723,7 +719,7 @@ async fn save_passphrase(entry: PasswordEntry, passphrase: SecretString) {
 
 fn passphrase_response(passphrase: &SecretString) -> WireResponse {
     WireResponse::Passphrase {
-        passphrase: b64.encode(passphrase.expose_secret().as_bytes()),
+        passphrase: b64_encode(passphrase.expose_secret().as_bytes()),
     }
 }
 

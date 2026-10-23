@@ -41,8 +41,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
 
 use super::access::{
     AUTOFILL_CALLER, Client, RequestScope, UNKNOWN_CLIENT, agent_policy, requester_for,
@@ -51,7 +49,7 @@ use super::client::wait_for_response;
 use super::in_flight::InFlightRequest;
 use super::mach::{self, TestRequest};
 use super::server::serve_on;
-use super::wire::{WireRequest, WireResponse};
+use super::wire::{WireRequest, WireResponse, b64_decode_raw};
 use super::*;
 use crate::audit;
 use crate::audit::test_support::{TestDir, test_dir};
@@ -569,7 +567,10 @@ async fn collects_a_passphrase_for_a_key_with_nothing_saved() {
     let WireResponse::Passphrase { passphrase } = response else {
         panic!("unexpected response to a passphrase request");
     };
-    assert_eq!(b64.decode(passphrase).unwrap(), STUB_PASSPHRASE.as_bytes());
+    assert_eq!(
+        b64_decode_raw(passphrase).unwrap(),
+        STUB_PASSPHRASE.as_bytes()
+    );
 
     let prompts = broker.authorizer.passphrase_prompts.lock().unwrap();
     assert_eq!(prompts.len(), 1);

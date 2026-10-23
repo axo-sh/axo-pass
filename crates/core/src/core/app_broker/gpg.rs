@@ -4,13 +4,11 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as b64;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::client::send_request;
 use super::in_flight::InFlightRequest;
-use super::wire::{WireRequest, WireResponse};
+use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PromptOutcome};
 use crate::audit;
 use crate::core::auth::{AuthContext, ForeignContext};
@@ -122,8 +120,7 @@ pub fn request_passphrase(prompt: &PassphrasePrompt) -> Result<SecretString, Bro
     };
     match send_request(&request)? {
         WireResponse::Passphrase { passphrase } => {
-            let bytes = b64
-                .decode(passphrase)
+            let bytes = b64_decode_raw(passphrase)
                 .map_err(|e| BrokerError::Failed(format!("Malformed passphrase: {e}")))?;
             String::from_utf8(bytes)
                 .map(SecretString::from)
@@ -327,6 +324,6 @@ async fn save_passphrase(entry: PasswordEntry, passphrase: SecretString) {
 
 fn passphrase_response(passphrase: &SecretString) -> WireResponse {
     WireResponse::Passphrase {
-        passphrase: b64.encode(passphrase.expose_secret().as_bytes()),
+        passphrase: b64_encode(passphrase.expose_secret().as_bytes()),
     }
 }
