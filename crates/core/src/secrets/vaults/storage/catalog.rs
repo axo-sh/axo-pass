@@ -9,12 +9,12 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
+use crate::secrets::vaults::bundle::{ExportMode, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key, normalized_key,
 };
 use crate::secrets::vaults::storage::txn::VaultWriter;
-use crate::secrets::vaults::vault_export::{ExportMode, ImportableBundle};
 
 /// This struct tracks vault files on disk: the vaults directory, the external
 /// vaults, and the lock files. Operations read the necessary files and

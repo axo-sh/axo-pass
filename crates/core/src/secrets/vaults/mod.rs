@@ -1,10 +1,10 @@
 pub mod autofill;
+pub mod bundle;
 mod errors;
 pub mod format;
 pub mod model;
 pub mod passkey;
 pub mod storage;
-pub mod vault_export;
 
 pub use autofill::item::{CATEGORY_LOGIN, ItemAutofill, MatchKind, Website};
 pub use autofill::{

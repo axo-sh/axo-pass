@@ -3,12 +3,12 @@ use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use crate::secrets::vaults::autofill::item::ItemAutofill;
+use crate::secrets::vaults::bundle::exported_bundle::RawFileKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
 };
-use crate::secrets::vaults::vault_export::exported_bundle::RawFileKey;
 
 pub struct VaultCipher {
     cipher: Aes256Gcm,

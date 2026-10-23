@@ -16,6 +16,13 @@ use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectKind};
 use crate::core::auth::AuthContext;
+pub use crate::secrets::vaults::bundle::export_mode::{
+    ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
+};
+pub use crate::secrets::vaults::bundle::exported_bundle::{
+    BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
+};
+pub use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
@@ -27,13 +34,6 @@ use crate::secrets::vaults::storage::handle::{
     VaultHandle, get_vault_encryption_key_on, normalized_key,
 };
 use crate::secrets::vaults::storage::txn::VaultWriter;
-pub use crate::secrets::vaults::vault_export::export_mode::{
-    ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
-};
-pub use crate::secrets::vaults::vault_export::exported_bundle::{
-    BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
-};
-pub use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
 
 const FILE_KEY_LEN: usize = 32;
 

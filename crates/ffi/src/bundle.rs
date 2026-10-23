@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axo_pass_core::core::auth::AuthContext;
 use axo_pass_core::secrets::vaults::ExportProgress as CoreExportProgress;
-use axo_pass_core::secrets::vaults::vault_export::{
+use axo_pass_core::secrets::vaults::bundle::{
     BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity, ImportableBundle,
     WorkFactor as CoreWorkFactor,
 };

@@ -4,14 +4,14 @@ use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::vault_export::export_mode::{
+use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
-use crate::secrets::vaults::vault_export::exported_bundle::{
+use crate::secrets::vaults::bundle::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
-use crate::secrets::vaults::vault_export::import_identity::ImportIdentity;
+use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
+use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 
 #[test]
 fn test_passphrase_round_trip() {

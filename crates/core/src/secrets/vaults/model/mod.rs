@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::autofill::item::ItemAutofill;
+use crate::secrets::vaults::bundle::exported_bundle::{BundledVault, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
@@ -29,7 +30,6 @@ use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::normalized_key;
-use crate::secrets::vaults::vault_export::exported_bundle::{BundledVault, ExportedBundle};
 
 type FolderId = Uuid;
 type ItemId = Uuid;

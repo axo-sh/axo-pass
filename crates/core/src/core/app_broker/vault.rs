@@ -37,10 +37,8 @@ use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectKin
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::core::provenance::ProcessNode;
+use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity, ImportableBundle, WorkFactor};
 use crate::secrets::vaults::passkey::signals::{self, Report};
-use crate::secrets::vaults::vault_export::{
-    ExportMode, ImportIdentity, ImportableBundle, WorkFactor,
-};
 use crate::secrets::vaults::{
     DEFAULT_VAULT, MatchKind, Site, VaultCatalog, VaultHandle, autofill, passkey,
 };

@@ -3,9 +3,7 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::vault_export::{
-    BundleVaultInfo, ImportIdentity, ImportableBundle,
-};
+use axo_pass_core::secrets::vaults::bundle::{BundleVaultInfo, ImportIdentity, ImportableBundle};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;

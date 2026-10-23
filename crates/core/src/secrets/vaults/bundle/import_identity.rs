@@ -3,8 +3,8 @@ use std::iter::once;
 
 use secrecy::SecretString;
 
+use crate::secrets::vaults::bundle::export_mode::MAX_IMPORT_WORK_FACTOR;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::vault_export::export_mode::MAX_IMPORT_WORK_FACTOR;
 
 pub enum ImportIdentity {
     Passphrase(SecretString),

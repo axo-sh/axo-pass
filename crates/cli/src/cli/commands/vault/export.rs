@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use axo_pass_core::core::app_broker::{self, WireExportMode};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::VaultCatalog;
-use axo_pass_core::secrets::vaults::vault_export::{ExportMode, WorkFactor};
+use axo_pass_core::secrets::vaults::bundle::{ExportMode, WorkFactor};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;

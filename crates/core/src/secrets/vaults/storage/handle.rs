@@ -15,6 +15,8 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::autofill::item::ItemAutofill;
+use crate::secrets::vaults::bundle::ExportMode;
+use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::model::fields::FieldKind;
@@ -25,8 +27,6 @@ use crate::secrets::vaults::model::{
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
 use crate::secrets::vaults::storage::txn::VaultLocks;
-use crate::secrets::vaults::vault_export::ExportMode;
-use crate::secrets::vaults::vault_export::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 
 pub const DEFAULT_VAULT: &str = "default";
 

@@ -4,11 +4,11 @@ use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
+use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::VaultCatalog;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
-use crate::secrets::vaults::vault_export::ImportableBundle;
 
 /// The app's copies of its vaults, by key. A copy stays unlocked between
 /// edits, so reading items does not decrypt the file again. Every change to a
