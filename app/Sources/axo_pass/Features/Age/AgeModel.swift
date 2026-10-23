@@ -84,6 +84,7 @@ final class AgeModel {
       requesters: [],
       outcomes: [],
       query: name,
+      detailId: nil,
       limit: limit,
       offset: 0
     )

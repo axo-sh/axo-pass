@@ -52,6 +52,7 @@ struct CredentialRow: View {
 
   @State private var confirmingPasskeyDelete: Bool = false
   @State private var showingPasskeyDetails: Bool = false
+  @State private var recentSignIns: [AuditLogRow] = []
   @State private var hoveringValue: Bool = false
   @State private var justCopied: Bool = false
   @State private var hoveringReference: Bool = false
@@ -63,6 +64,9 @@ struct CredentialRow: View {
   // The value the quick editor opened with, used to disable Save until it
   // actually changes. Nil until the secret is revealed.
   @State private var quickOriginal: String? = nil
+
+  /// Sign-ins listed in the passkey details.
+  private static let recentSignInCount: UInt32 = 5
 
   /// Passkeys are shown read only: their value is a structured record the
   /// authenticator owns, not free text to edit.
@@ -368,6 +372,14 @@ struct CredentialRow: View {
           .padding(.leading, loginFieldLabelWidth + 12)
           .padding(.bottom, 4)
           .transition(.opacity)
+          .task(id: cred.passkey?.credentialId) {
+            guard let credentialId = cred.passkey?.credentialId else {
+              recentSignIns = []
+              return
+            }
+            recentSignIns = await model.recentSignIns(
+              passkeyCredentialId: credentialId, limit: Self.recentSignInCount)
+          }
       }
     }
     .contentShape(.rect)
@@ -438,6 +450,11 @@ struct CredentialRow: View {
           .foregroundStyle(.red)
       }
 
+      if !recentSignIns.isEmpty {
+        Divider()
+        signInTable
+      }
+
       Divider()
 
       Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
@@ -454,6 +471,37 @@ struct CredentialRow: View {
       }
       .controlSize(.small)
     }
+  }
+
+  /// Recent sign-ins of the passkey from the audit log, newest first, with the
+  /// client and the exact time.
+  private var signInTable: some View {
+    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+      GridRow {
+        columnHeader("Client")
+        columnHeader("Signed in").gridColumnAlignment(.trailing)
+      }
+      Divider().gridCellColumns(2)
+      ForEach(recentSignIns) { event in
+        GridRow {
+          Text(event.callerText)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          Text(event.timeText)
+            .foregroundStyle(.secondary)
+        }
+        .font(.callout)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func columnHeader(_ text: String) -> some View {
+    Text(text.uppercased())
+      .font(.caption2)
+      .fontWeight(.semibold)
+      .foregroundStyle(.secondary)
   }
 
   /// Site reports about the passkey, with the actions that settle them.

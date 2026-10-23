@@ -46,6 +46,7 @@ final class AuditLogModel {
       requesters: requester.map { [$0] } ?? [],
       outcomes: [],
       query: query.isEmpty ? nil : query,
+      detailId: nil,
       limit: Self.pageSize,
       offset: UInt32(events.count)
     )

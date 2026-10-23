@@ -190,6 +190,7 @@ final class SshModel {
       requesters: [],
       outcomes: [],
       query: fingerprintSha256,
+      detailId: nil,
       limit: limit,
       offset: 0
     )

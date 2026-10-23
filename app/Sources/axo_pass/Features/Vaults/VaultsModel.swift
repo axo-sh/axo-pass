@@ -1479,6 +1479,27 @@ final class VaultsModel {
     await loadItems(for: vaultKey)
   }
 
+  /// The most recent sign-ins of one passkey, newest first. Events name the
+  /// passkey by its WebAuthn credential id in base64url, which is unchanged
+  /// by a rename or a move. Events without the id are left out.
+  func recentSignIns(passkeyCredentialId: String, limit: UInt32) async -> [AuditLogRow] {
+    let filter = AuditFilterInput(
+      sinceRfc3339: nil,
+      untilRfc3339: nil,
+      actions: ["passkey.asserted"],
+      categories: [],
+      kind: nil,
+      requesters: [],
+      outcomes: [.succeeded],
+      query: nil,
+      detailId: AuditDetailIdInput(key: "passkey_credential_id", id: passkeyCredentialId),
+      limit: limit,
+      offset: 0
+    )
+    guard let events = try? await core.listAuditEvents(filter: filter) else { return [] }
+    return events.map(AuditLogRow.init)
+  }
+
   /// The items of a vault as last loaded, without loading. Empty when the
   /// vault is not cached.
   func cachedItems(in vaultKey: String) -> [ItemInfo] {

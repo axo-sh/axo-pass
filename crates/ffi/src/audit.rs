@@ -274,8 +274,19 @@ pub struct AuditFilterInput {
     pub requesters: Vec<AuditRequesterKind>,
     pub outcomes: Vec<AuditOutcomeKind>,
     pub query: Option<String>,
+    /// Entity id to match in the event detail. See `audit::DetailId`.
+    pub detail_id: Option<AuditDetailIdInput>,
     pub limit: Option<u32>,
     pub offset: u32,
+}
+
+/// Entity id to match in the event detail, such as a `passkey_credential_id`.
+/// See `audit::DetailId`.
+#[derive(uniffi::Record)]
+pub struct AuditDetailIdInput {
+    /// Detail key of a single id, such as `passkey_credential_id`.
+    pub key: String,
+    pub id: String,
 }
 
 impl From<AuditFilterInput> for audit::AuditFilter {
@@ -299,7 +310,7 @@ impl From<AuditFilterInput> for audit::AuditFilter {
             requesters: input.requesters.into_iter().map(Into::into).collect(),
             outcomes: input.outcomes.into_iter().map(Into::into).collect(),
             query: input.query.filter(|q| !q.is_empty()),
-            detail_id: None,
+            detail_id: input.detail_id.map(|d| audit::DetailId::new(d.key, d.id)),
             limit: input.limit.map(|l| l as usize),
             offset: input.offset as usize,
         }

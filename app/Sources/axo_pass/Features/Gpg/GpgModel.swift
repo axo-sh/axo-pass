@@ -189,6 +189,7 @@ final class GpgModel {
         requesters: [],
         outcomes: [],
         query: keygrip,
+        detailId: nil,
         limit: limit,
         offset: 0
       )
