@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
+use std::fs;
 
 use aes_gcm::{Aes256Gcm, KeyInit};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
+use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -12,6 +15,9 @@ use crate::secrets::vaults::bundle::exported_bundle::{
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::encrypted_vault::VaultFileKey;
+use crate::secrets::vaults::model::Vault;
+use crate::secrets::vaults::model::fields::FieldKind;
 
 #[test]
 fn test_passphrase_round_trip() {
@@ -156,6 +162,107 @@ fn test_bundle_single_vault_round_trip() {
 fn test_bundle_two_vault_round_trip() {
     let (json, _id, file_keys) = make_bundle_json(2);
     assert_eq!(unwrap_bundle_file_keys(&json), file_keys);
+}
+
+fn blob_json<T>(blob: &EncryptedBlob<T>) -> Value {
+    serde_json::to_value(blob).unwrap()
+}
+
+#[test]
+fn bundle_exported_before_vault_format_2_imports() {
+    let bundle_id = Uuid::new_v4();
+    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundle_cipher = Aes256Gcm::new(&bundle_key);
+
+    let mut vault = Vault::new_for_test();
+    vault.add_or_update_item("login", "Login").unwrap();
+    for value in ["old", "new"] {
+        vault
+            .add_or_update_item_credential(
+                "login",
+                "password",
+                "Password",
+                FieldKind::default(),
+                SecretString::from(value.to_string()),
+            )
+            .unwrap();
+    }
+    let bundled = vault
+        .to_bundled_vault(Some("old".to_string()), bundle_id, &bundle_cipher, true)
+        .unwrap();
+
+    // Bundle JSON with the field names of bundle version 1 as written before
+    // vault format 2. Only the blobs come from the current code.
+    let items: Map<String, Value> = bundled
+        .items
+        .iter()
+        .map(|(item_id, item)| {
+            let credentials: Map<String, Value> = item
+                .credentials
+                .iter()
+                .map(|(cred_id, cred)| {
+                    let history: Vec<Value> = cred
+                        .history
+                        .iter()
+                        .map(|entry| {
+                            json!({
+                                "id": entry.id,
+                                "value": blob_json(&entry.value),
+                                "info": blob_json(&entry.info),
+                            })
+                        })
+                        .collect();
+                    let cred = json!({
+                        "metadata": blob_json(&cred.metadata),
+                        "value": blob_json(&cred.value),
+                        "history": history,
+                    });
+                    (cred_id.to_string(), cred)
+                })
+                .collect();
+            let item = json!({
+                "metadata": blob_json(&item.metadata),
+                "credentials": credentials,
+            });
+            (item_id.to_string(), item)
+        })
+        .collect();
+    let bundle = json!({
+        "version": 1,
+        "id": bundle_id,
+        "exported_at": "2026-10-01T12:00:00Z",
+        "age_bundle_key": ExportMode::passphrase("pw").encrypt(bundle_key.as_slice()).unwrap(),
+        "vaults": [{
+            "id": bundled.id,
+            "name": "Old",
+            "default_key": "old",
+            "wrapped_file_key": blob_json(&bundled.wrapped_file_key),
+            "items": items,
+        }],
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.axovault");
+    fs::write(&path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
+
+    let opened = ImportableBundle::open(&path, ImportIdentity::Passphrase("pw".into())).unwrap();
+    let prepared = opened.vaults.into_iter().next().unwrap();
+    assert_eq!(prepared.id, bundled.id);
+    assert_eq!(prepared.default_key.as_deref(), Some("old"));
+    let imported = prepared
+        .into_vault(VaultFileKey::new(vec![0u8; 32]))
+        .unwrap();
+
+    let value = imported
+        .get_item_credential_secret("login", "password")
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.expose_secret(), "new");
+    let history = imported.list_history("login", "password").unwrap();
+    assert_eq!(history.len(), 1);
+    let previous = imported
+        .get_history_value("login", "password", history[0].id)
+        .unwrap();
+    assert_eq!(previous.expose_secret(), "old");
 }
 
 #[test]

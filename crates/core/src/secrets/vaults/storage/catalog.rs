@@ -428,14 +428,24 @@ mod tests {
             self.catalog.files().locks().contains(id)
         }
 
-        /// Write the `personal` vault file to `path` after `edit`.
+        /// Write the `personal` vault file to `path` after `edit`. `edit`
+        /// receives the `vault` object inside the file envelope.
         fn write_copy(&self, path: &Path, edit: impl FnOnce(&mut Value)) {
             let data = fs::read_to_string(self.vault_path("personal")).unwrap();
-            let mut vault: Value = serde_json::from_str(&data).unwrap();
-            edit(&mut vault);
-            let data = serde_json::to_string_pretty(&vault).unwrap();
+            let mut file: Value = serde_json::from_str(&data).unwrap();
+            edit(&mut file["vault"]);
+            let data = serde_json::to_string_pretty(&file).unwrap();
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, data).unwrap();
+        }
+
+        /// Write the `personal` vault object to `{key}.json` without its
+        /// envelope, as a format 1 file is.
+        fn write_without_envelope(&self, key: &str) {
+            let data = fs::read_to_string(self.vault_path("personal")).unwrap();
+            let file: Value = serde_json::from_str(&data).unwrap();
+            let data = serde_json::to_string_pretty(&file["vault"]).unwrap();
+            fs::write(self.vault_path(key), data).unwrap();
         }
 
         /// Write the `personal` vault file to `{key}.json` after `edit`.
@@ -516,6 +526,17 @@ mod tests {
                 paths: vec![fx.vault_path("copy"), fx.vault_path("personal")],
             }]
         );
+    }
+
+    #[test]
+    fn format1_file_is_not_listed() {
+        let fx = Fixture::new();
+        fx.write_without_envelope("legacy");
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+        assert!(scan.duplicates.is_empty(), "{:?}", scan.duplicates);
     }
 
     #[test]

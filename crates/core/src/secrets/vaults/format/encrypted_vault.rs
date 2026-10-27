@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{fs, io};
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_with::base64::Base64;
 use serde_with::serde_as;
 use uuid::Uuid;
@@ -17,14 +18,63 @@ use crate::secrets::vaults::model::{
     VaultItemMetadata, VaultItemOverview, VaultMetadata,
 };
 
+/// Vault file format written and read by this build.
+pub const VAULT_FORMAT: u32 = 2;
+
+/// Format of a vault file without a `format` field. Format 1 is not read.
+const FORMAT_WITHOUT_ENVELOPE: u32 = 1;
+
+/// Outer object of a vault file.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultEnvelope<'a> {
+    format: u32,
+    #[serde(borrow)]
+    vault: &'a RawValue,
+}
+
+impl<'a> VaultEnvelope<'a> {
+    /// `vault` field of the vault file `data`. Any format other than
+    /// [`VAULT_FORMAT`] fails with `UnsupportedVaultFormat` before the rest
+    /// of the envelope is checked. A file without a `format` field is format
+    /// 1.
+    fn vault_json(data: &'a str) -> Result<&'a RawValue, Error> {
+        let fields: BTreeMap<String, &RawValue> =
+            serde_json::from_str(data).map_err(Error::VaultDeserializationError)?;
+        let format = match fields.get("format") {
+            Some(format) => {
+                serde_json::from_str(format.get()).map_err(Error::VaultDeserializationError)?
+            },
+            None => FORMAT_WITHOUT_ENVELOPE,
+        };
+        if format != VAULT_FORMAT {
+            return Err(Error::UnsupportedVaultFormat(format));
+        }
+        let envelope: Self =
+            serde_json::from_str(data).map_err(Error::VaultDeserializationError)?;
+        Ok(envelope.vault)
+    }
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 // EncryptedVault is the on disk representation of a vault, with metadata and
 // secrets encrypted. We don't persist this in memory; see Vault
-#[serde_as]
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedVault {
     pub id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Save counter for sync. Absent if 0. Not read yet.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub generation: u64,
+    /// Sync replica id of this copy of the vault. Absent if the vault is not
+    /// synced. Not read yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replica_id: Option<Uuid>,
     pub file_key: VaultFileKey,
     /// Vault-level metadata such as folders. Absent for a vault with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,8 +96,12 @@ pub struct VaultHeader {
 
 impl VaultHeader {
     pub fn peek(vault_path: &Path) -> Result<Self, Error> {
-        let vault_data = EncryptedVault::read_file(vault_path)?;
-        serde_json::from_str(&vault_data).map_err(Error::VaultDeserializationError)
+        Self::parse(&EncryptedVault::read_file(vault_path)?)
+    }
+
+    pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
+        let vault = VaultEnvelope::vault_json(vault_data)?;
+        serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)
     }
 }
 
@@ -68,29 +122,32 @@ impl EncryptedVault {
         Self::parse(&Self::read_file(vault_path)?)
     }
 
+    /// Parse the contents of a vault file.
     pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
-        serde_json::from_str(vault_data).map_err(Error::VaultDeserializationError)
+        let vault = VaultEnvelope::vault_json(vault_data)?;
+        serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)
+    }
+
+    /// Contents of a vault file of format [`VAULT_FORMAT`] for this vault.
+    pub(crate) fn to_file_contents(&self) -> Result<String, Error> {
+        // Indent the vault JSON to its depth in the envelope. JSON strings
+        // hold no raw newlines, so only line breaks between tokens change.
+        let vault = serde_json::to_string_pretty(self)
+            .map_err(Error::VaultSerializationError)?
+            .replace('\n', "\n  ");
+        let vault = RawValue::from_string(vault).map_err(Error::VaultSerializationError)?;
+        let envelope = VaultEnvelope {
+            format: VAULT_FORMAT,
+            vault: &vault,
+        };
+        serde_json::to_string_pretty(&envelope).map_err(Error::VaultSerializationError)
     }
 
     pub fn decrypt_file_key(&self, user_encryption_key: &ManagedKey) -> Result<VaultCipher, Error> {
-        let candidate_keys = match &self.file_key {
-            VaultFileKey::Personal(file_key_bytes) => vec![file_key_bytes],
-            VaultFileKey::Members(members) => {
-                members.iter().map(|member| &member.wrapped_key).collect()
-            },
-            VaultFileKey::MembersFile { .. } => {
-                todo!()
-            },
-        };
-
-        // try all candidate keys
-        for file_key_bytes in candidate_keys {
-            if let Some(decrypted_key) = user_encryption_key.decrypt(file_key_bytes) {
-                let cipher = VaultCipher::new_with_bytes(&decrypted_key, self.id);
-                return Ok(cipher);
-            }
-        }
-        Err(Error::VaultFileKeyDecryptionError)
+        let decrypted_key = user_encryption_key
+            .decrypt(self.file_key.as_bytes())
+            .ok_or(Error::VaultFileKeyDecryptionError)?;
+        Ok(VaultCipher::new_with_bytes(&decrypted_key, self.id))
     }
 
     /// Set the vault metadata. If `value` is empty, the field is left as none.
@@ -190,22 +247,25 @@ impl EncryptedVault {
     }
 }
 
+/// Vault file key wrapped by `vault-encryption-key`. Written as a base64
+/// string. Any other JSON shape is refused.
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum VaultFileKey {
-    Personal(#[serde_as(as = "Base64")] Vec<u8>),
-    Members(Vec<VaultMember>),
-    MembersFile { path: PathBuf },
-}
+#[serde(transparent)]
+pub struct VaultFileKey(#[serde_as(as = "Base64")] Vec<u8>);
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct VaultMember {
-    pub public_key: String,
-    pub wrapped_key: Vec<u8>, // file_key encrypted with this member's public key
+impl VaultFileKey {
+    pub fn new(wrapped: Vec<u8>) -> Self {
+        Self(wrapped)
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedVaultItem {
     pub metadata: EncryptedBlob<VaultItemMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,13 +280,14 @@ pub struct EncryptedVaultItem {
 /// its credentials and its own deleted credentials, so moving it to or from
 /// deleted needs no re-encryption.
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeletedItem {
-    #[serde(flatten)]
     pub item: EncryptedVaultItem,
     pub info: EncryptedBlob<DeletedInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EncryptedVaultItemCredential {
     pub metadata: EncryptedBlob<VaultCredentialMetadata>,
     pub value: EncryptedBlob<String>,
@@ -239,6 +300,7 @@ pub struct EncryptedVaultItemCredential {
 /// as well as the credential, so it cannot be swapped into the live value's
 /// place.
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct HistoryEntry {
     pub id: Uuid,
     pub value: EncryptedBlob<String>,
@@ -248,8 +310,8 @@ pub struct HistoryEntry {
 /// A deleted credential. The credential blobs are the same as when it was
 /// live, so moving it to or from deleted needs no re-encryption.
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DeletedCredential {
-    #[serde(flatten)]
     pub credential: EncryptedVaultItemCredential,
     pub info: EncryptedBlob<DeletedInfo>,
 }
@@ -257,20 +319,209 @@ pub struct DeletedCredential {
 #[cfg(test)]
 mod tests {
     use secrecy::ExposeSecret;
+    use serde_json::{Value, json};
 
     use super::*;
-    use crate::secrets::vaults::model::VaultFolder;
     use crate::secrets::vaults::model::fields::FieldKind;
+    use crate::secrets::vaults::model::{Vault, VaultFolder};
 
     fn make_vault() -> EncryptedVault {
         EncryptedVault {
             id: Uuid::new_v4(),
             name: Some("test vault".to_string()),
-            file_key: VaultFileKey::Personal(vec![0u8; 32]),
+            generation: 0,
+            replica_id: None,
+            file_key: VaultFileKey::new(vec![0u8; 32]),
             metadata: None,
             items: BTreeMap::new(),
             deleted: BTreeMap::new(),
         }
+    }
+
+    /// Vault named "Filled" with entries of every kind the vault file holds.
+    fn filled_vault() -> EncryptedVault {
+        let mut vault = Vault::new_for_test();
+        vault.name = Some("Filled".to_string());
+        vault.fill_for_test();
+        vault.to_encrypted(true).unwrap()
+    }
+
+    /// Format 2 file of [`filled_vault`], as JSON.
+    fn filled_file() -> Value {
+        let contents = filled_vault().to_file_contents().unwrap();
+        serde_json::from_str(&contents).unwrap()
+    }
+
+    /// Pointer to the one entry of the map at `pointer` in `file`.
+    fn only_entry(file: &Value, pointer: &str) -> String {
+        let map = file.pointer(pointer).unwrap().as_object().unwrap();
+        assert_eq!(map.len(), 1, "{pointer}");
+        let key = map.keys().next().unwrap();
+        format!("{pointer}/{key}")
+    }
+
+    /// Parse `file` after adding an unknown field to the object at `pointer`.
+    fn parse_with_unknown_field(file: &Value, pointer: &str) -> Result<EncryptedVault, Error> {
+        let mut file = file.clone();
+        let object = file.pointer_mut(pointer).unwrap().as_object_mut().unwrap();
+        object.insert("unknown".to_string(), json!(1));
+        EncryptedVault::parse(&file.to_string())
+    }
+
+    fn assert_refused(result: Result<EncryptedVault, Error>, pointer: &str) {
+        assert!(
+            matches!(result, Err(Error::VaultDeserializationError(_))),
+            "unknown field at {pointer:?} was not refused"
+        );
+    }
+
+    #[test]
+    fn format2_file_round_trips() {
+        let vault = filled_vault();
+        let contents = vault.to_file_contents().unwrap();
+        let back = EncryptedVault::parse(&contents).unwrap();
+        assert_eq!(back.to_file_contents().unwrap(), contents);
+
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(file["format"], json!(VAULT_FORMAT));
+        assert!(file["vault"].get("generation").is_none());
+        assert!(file["vault"].get("replica_id").is_none());
+    }
+
+    #[test]
+    fn generation_and_replica_id_are_written_if_set() {
+        let mut vault = filled_vault();
+        let replica_id = Uuid::new_v4();
+        vault.generation = 7;
+        vault.replica_id = Some(replica_id);
+        let contents = vault.to_file_contents().unwrap();
+
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(file["vault"]["generation"], json!(7));
+        assert_eq!(file["vault"]["replica_id"], json!(replica_id));
+        let back = EncryptedVault::parse(&contents).unwrap();
+        assert_eq!(back.generation, 7);
+        assert_eq!(back.replica_id, Some(replica_id));
+    }
+
+    #[test]
+    fn unknown_format_fails_closed() {
+        for format in [0, 1, 3, 1000] {
+            let mut file = filled_file();
+            file["format"] = json!(format);
+            // A later format can add envelope fields. The format is checked
+            // first.
+            file["signature"] = json!("c2ln");
+            let contents = file.to_string();
+
+            let result = EncryptedVault::parse(&contents);
+            assert!(
+                matches!(result, Err(Error::UnsupportedVaultFormat(f)) if f == format),
+                "format {format}"
+            );
+            let result = VaultHeader::parse(&contents);
+            assert!(
+                matches!(result, Err(Error::UnsupportedVaultFormat(f)) if f == format),
+                "format {format}"
+            );
+        }
+    }
+
+    #[test]
+    fn format2_file_key_with_members_shape_is_refused() {
+        let shapes = [
+            json!([{ "public_key": "key", "wrapped_key": [1, 2, 3] }]),
+            json!({ "path": "/tmp/members.json" }),
+        ];
+        for shape in shapes {
+            let mut file = filled_file();
+            file["vault"]["file_key"] = shape.clone();
+            let result = EncryptedVault::parse(&file.to_string());
+            assert!(
+                matches!(result, Err(Error::VaultDeserializationError(_))),
+                "{shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_without_envelope_is_refused_as_format_1() {
+        // A format 1 file is the vault object without an envelope.
+        let contents = serde_json::to_string_pretty(&filled_vault()).unwrap();
+        assert!(matches!(
+            EncryptedVault::parse(&contents),
+            Err(Error::UnsupportedVaultFormat(1))
+        ));
+        assert!(matches!(
+            VaultHeader::parse(&contents),
+            Err(Error::UnsupportedVaultFormat(1))
+        ));
+    }
+
+    #[test]
+    fn unknown_field_in_deleted_item_is_refused() {
+        let file = filled_file();
+        let deleted_item = only_entry(&file, "/vault/deleted");
+        let deleted_credential = only_entry(&file, &format!("{deleted_item}/item/deleted"));
+        let pointers = [
+            deleted_item.clone(),
+            format!("{deleted_item}/item"),
+            deleted_credential.clone(),
+            format!("{deleted_credential}/credential"),
+        ];
+        for pointer in pointers {
+            assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);
+        }
+    }
+
+    #[test]
+    fn unknown_field_in_deleted_credential_is_refused() {
+        let file = filled_file();
+        let item = only_entry(&file, "/vault/items");
+        let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
+        for pointer in [
+            deleted_credential.clone(),
+            format!("{deleted_credential}/credential"),
+        ] {
+            assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);
+        }
+    }
+
+    #[test]
+    fn unknown_field_in_any_outer_struct_is_refused() {
+        let file = filled_file();
+        EncryptedVault::parse(&file.to_string()).unwrap();
+
+        let item = only_entry(&file, "/vault/items");
+        let credential = only_entry(&file, &format!("{item}/credentials"));
+        let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
+        let deleted_item = only_entry(&file, "/vault/deleted");
+        let pointers = [
+            String::new(),
+            "/vault".to_string(),
+            item,
+            credential.clone(),
+            format!("{credential}/history/0"),
+            deleted_credential.clone(),
+            format!("{deleted_credential}/credential"),
+            deleted_item.clone(),
+            format!("{deleted_item}/item"),
+        ];
+        for pointer in pointers {
+            assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);
+        }
+    }
+
+    #[test]
+    fn header_is_read_from_vault_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = filled_vault();
+        let path = dir.path().join("filled.json");
+        fs::write(&path, vault.to_file_contents().unwrap()).unwrap();
+
+        let header = VaultHeader::peek(&path).unwrap();
+        assert_eq!(header.id, vault.id);
+        assert_eq!(header.name.as_deref(), Some("Filled"));
     }
 
     #[test]

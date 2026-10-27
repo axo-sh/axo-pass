@@ -8,7 +8,7 @@ fn test_vault() -> Vault {
     Vault::empty(
         id,
         Some("test vault".to_string()),
-        VaultFileKey::Personal(vec![0u8; 32]),
+        VaultFileKey::new(vec![0u8; 32]),
         VaultCipher::new_with_bytes(&TEST_FILE_KEY, id),
     )
 }

@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 use super::versions::{DAY_MS, HOUR_MS, kept_versions};
 use super::*;
+use crate::secrets::vaults::format::encrypted_vault::{VAULT_FORMAT, VaultFileKey};
 use crate::secrets::vaults::model::fields::FieldKind;
 
 /// A vault written to a temp directory, with its retained versions and lock
@@ -132,6 +133,57 @@ fn a_write_that_changes_nothing_saves_nothing() {
         .unwrap();
     assert!(!committed.changed);
     assert!(fx.versions().is_empty());
+}
+
+/// Vault with entries of every kind, created at `vaults/personal.json` in
+/// `dir`.
+fn filled_vault(dir: &TempDir, files: &VaultWriter) -> VaultHandle {
+    let mut vault = Vault::new_for_test();
+    vault.fill_for_test();
+    let path = dir.path().join("vaults").join("personal.json");
+    let vh = VaultHandle::unlocked("personal".to_string(), path, vault);
+    files.create(&vh).unwrap();
+    vh
+}
+
+#[test]
+fn vault_with_every_entry_kind_is_saved_and_reloaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let vh = filled_vault(&dir, &files);
+
+    files
+        .write_unlocked::<_, Error>(&vh, |vw| vw.add_item("new", "New").map(|_| ()))
+        .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&vh.path).unwrap()).unwrap();
+    assert_eq!(json["format"], serde_json::json!(VAULT_FORMAT));
+    let enc_vault = EncryptedVault::load(&vh.path).unwrap();
+    let vault = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), enc_vault).unwrap();
+    vault.assert_filled_for_test();
+    assert!(vault.get_item("new").is_ok());
+}
+
+#[test]
+fn unchanged_vault_with_every_entry_kind_saves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let vh = filled_vault(&dir, &files);
+    let before = fs::read_to_string(&vh.path).unwrap();
+
+    let committed = files
+        .write_unlocked::<_, Error>(&vh, |vw| vw.list_items().map(|_| ()))
+        .unwrap();
+
+    assert!(!committed.changed);
+    assert_eq!(fs::read_to_string(&vh.path).unwrap(), before);
+    assert!(
+        files
+            .list_versions(vh.vault_id().unwrap())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -313,13 +365,7 @@ fn a_changed_file_key_is_not_used_and_the_key_is_unwrapped_again() {
         let call = calls.fetch_add(1, Ordering::SeqCst);
         let current = fx.vault.unlocked_key().unwrap();
         if call == 0 {
-            UnlockedKey::for_test(
-                crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![
-                    1u8;
-                    32
-                ]),
-                current.cipher_for_test(),
-            )
+            UnlockedKey::for_test(VaultFileKey::new(vec![1u8; 32]), current.cipher_for_test())
         } else {
             current
         }
@@ -339,7 +385,7 @@ fn a_file_key_that_keeps_changing_fails() {
     let fx = Fixture::new();
     let key = || {
         UnlockedKey::for_test(
-            crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![1u8; 32]),
+            VaultFileKey::new(vec![1u8; 32]),
             fx.vault.unlocked_key().unwrap().cipher_for_test(),
         )
     };
@@ -481,15 +527,10 @@ fn restoring_a_missing_version_fails() {
 fn restoring_a_version_with_another_file_key_fails() {
     let fx = Fixture::new();
     let mut enc_vault = EncryptedVault::load(&fx.vault.path).unwrap();
-    enc_vault.file_key =
-        crate::secrets::vaults::format::encrypted_vault::VaultFileKey::Personal(vec![1u8; 32]);
+    enc_vault.file_key = VaultFileKey::new(vec![1u8; 32]);
     let dir = fx.files.versions(fx.id());
     fs::create_dir_all(&dir.path).unwrap();
-    fs::write(
-        dir.file("1-0.json"),
-        serde_json::to_string_pretty(&enc_vault).unwrap(),
-    )
-    .unwrap();
+    fs::write(dir.file("1-0.json"), enc_vault.to_file_contents().unwrap()).unwrap();
 
     assert!(matches!(
         fx.files

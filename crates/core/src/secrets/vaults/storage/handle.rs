@@ -203,11 +203,11 @@ impl VaultHandle {
         }
     }
 
-    /// Contents of the vault file for the unlocked vault.
+    /// Contents of the vault file for the unlocked vault, always in the current
+    /// format.
     pub(crate) fn file_contents(&self) -> Result<String, Error> {
         let vault = self.get_unlocked_vault()?;
-        let encrypted_vault = vault.to_encrypted(true)?;
-        serde_json::to_string_pretty(&encrypted_vault).map_err(Error::VaultSerializationError)
+        vault.to_encrypted(true)?.to_file_contents()
     }
 
     /// File key of the unlocked vault, for a transaction that reloads it.

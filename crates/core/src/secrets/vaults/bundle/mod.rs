@@ -54,6 +54,25 @@ struct PreparedVault {
     items: BTreeMap<Uuid, EncryptedVaultItem>,
 }
 
+impl PreparedVault {
+    /// Decrypt the vault with its raw file key. `file_key` is the wrapped form
+    /// the vault file stores. The vault is not synced.
+    fn into_vault(self, file_key: VaultFileKey) -> Result<Vault, Error> {
+        let cipher = VaultCipher::new_with_bytes(self.raw_file_key.expose_secret(), self.id);
+        let encrypted_vault = EncryptedVault {
+            id: self.id,
+            name: self.name,
+            generation: 0,
+            replica_id: None,
+            file_key,
+            metadata: self.metadata,
+            items: self.items,
+            deleted: BTreeMap::new(),
+        };
+        Vault::from_encrypted_with_cipher(cipher, encrypted_vault)
+    }
+}
+
 /// A decrypted bundle ready to import. The bundle key has been unwrapped and
 /// every vault's file key decrypted. Nothing is written until [`import`] runs.
 ///
@@ -212,23 +231,13 @@ impl ImportableBundle {
         let mut audit_rows: Vec<(Uuid, String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
             audit_rows.push((p.prepared.id, p.key.clone(), p.prepared.name.clone()));
-            let raw_file_key = p.prepared.raw_file_key.expose_secret();
-            let enc_file_key = VaultFileKey::Personal(
+            let enc_file_key = VaultFileKey::new(
                 managed_key
-                    .encrypt(raw_file_key)
+                    .encrypt(p.prepared.raw_file_key.expose_secret())
                     .ok_or(Error::VaultFileKeyEncryptionError)?
                     .into_bytes(),
             );
-            let encrypted_vault = EncryptedVault {
-                id: p.prepared.id,
-                name: p.prepared.name,
-                file_key: enc_file_key,
-                metadata: p.prepared.metadata,
-                items: p.prepared.items,
-                deleted: BTreeMap::new(),
-            };
-            let cipher = VaultCipher::new_with_bytes(raw_file_key, p.prepared.id);
-            let vault = Vault::from_encrypted_with_cipher(cipher, encrypted_vault)?;
+            let vault = p.prepared.into_vault(enc_file_key)?;
             staged.push(VaultHandle::unlocked(p.key, p.path, vault));
         }
 

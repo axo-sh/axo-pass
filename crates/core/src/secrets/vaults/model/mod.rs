@@ -83,6 +83,10 @@ pub struct Vault {
     pub name: Option<String>,
     file_key: VaultFileKey,
     cipher: VaultCipher,
+    // Sync fields as read from the file, written back unchanged. A vault that
+    // is not synced has generation 0 and no replica id.
+    generation: u64,
+    replica_id: Option<Uuid>,
 
     folders: BTreeMap<FolderId, VaultFolder>,
     // Site reports about the passkeys in this vault. Stored in the vault blob.
@@ -116,7 +120,7 @@ impl Vault {
         let actual_file_key = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
 
         // use actual key to create personal vault file key
-        let enc_file_key = VaultFileKey::Personal(
+        let enc_file_key = VaultFileKey::new(
             user_encryption_key
                 .encrypt(&actual_file_key)
                 .ok_or(Error::VaultFileKeyEncryptionError)?
@@ -135,6 +139,8 @@ impl Vault {
             name,
             file_key,
             cipher,
+            generation: 0,
+            replica_id: None,
             folders: BTreeMap::new(),
             passkey_signals: SignalStore::new(),
             items: BTreeMap::new(),
@@ -158,9 +164,69 @@ impl Vault {
         Self::empty(
             id,
             None,
-            VaultFileKey::Personal(vec![0u8; 32]),
+            VaultFileKey::new(vec![0u8; 32]),
             VaultCipher::new(id),
         )
+    }
+
+    /// Add entries of every kind the vault file holds, for tests. Item `kept`
+    /// has credential `alpha` with value `two` and one previous value, and the
+    /// deleted credential `beta`. The deleted item `removed` has credential
+    /// `gamma` and the deleted credential `delta`.
+    #[cfg(test)]
+    pub(crate) fn fill_for_test(&mut self) {
+        self.add_or_update_item("kept", "Kept").unwrap();
+        self.add_or_update_item("removed", "Removed").unwrap();
+        let values = [
+            ("kept", "alpha", "one"),
+            ("kept", "alpha", "two"),
+            ("kept", "beta", "secret"),
+            ("removed", "gamma", "secret"),
+            ("removed", "delta", "secret"),
+        ];
+        for (item, cred, value) in values {
+            self.add_or_update_item_credential(
+                item,
+                cred,
+                cred,
+                FieldKind::default(),
+                SecretString::from(value.to_string()),
+            )
+            .unwrap();
+        }
+        self.delete_item_credential("kept", "beta").unwrap();
+        self.delete_item_credential("removed", "delta").unwrap();
+        self.delete_item("removed").unwrap();
+    }
+
+    /// Check that the vault holds the entries [`Self::fill_for_test`] adds.
+    #[cfg(test)]
+    pub(crate) fn assert_filled_for_test(&self) {
+        let value = self.get_item_credential_secret("kept", "alpha").unwrap();
+        assert_eq!(value.unwrap().expose_secret(), "two");
+        let history = self.list_history("kept", "alpha").unwrap();
+        assert_eq!(history.len(), 1);
+        let previous = self
+            .get_history_value("kept", "alpha", history[0].id)
+            .unwrap();
+        assert_eq!(previous.expose_secret(), "one");
+
+        let deleted = self.list_deleted("kept").unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].credential.key, "beta");
+
+        let deleted_items = self.list_deleted_items();
+        assert_eq!(deleted_items.len(), 1);
+        assert_eq!(deleted_items[0].item.key, "removed");
+        assert!(
+            deleted_items[0]
+                .item
+                .credentials
+                .values()
+                .any(|cred| cred.key == "gamma")
+        );
+        assert_eq!(deleted_items[0].deleted_credentials.len(), 1);
+        assert_eq!(deleted_items[0].deleted_credentials[0].key, "delta");
     }
 
     // This converts an EncryptedVault into a Vault by decrypting all
@@ -199,6 +265,8 @@ impl Vault {
         enc_vault: EncryptedVault,
     ) -> Result<Self, Error> {
         let mut vault = Self::empty(enc_vault.id, enc_vault.name, enc_vault.file_key, cipher);
+        vault.generation = enc_vault.generation;
+        vault.replica_id = enc_vault.replica_id;
 
         if let Some(blob) = enc_vault.metadata {
             let metadata = vault.cipher.decrypt_vault_metadata(&blob)?;
@@ -413,6 +481,8 @@ impl Vault {
         let mut vault = EncryptedVault {
             id: self.id,
             name: self.name.clone(),
+            generation: self.generation,
+            replica_id: self.replica_id,
             file_key: self.file_key.clone(),
             metadata: None,
             items: BTreeMap::new(),

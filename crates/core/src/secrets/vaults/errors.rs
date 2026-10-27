@@ -23,6 +23,9 @@ pub enum Error {
     #[error("Failed to deserialize vault: {0}")]
     VaultDeserializationError(#[source] serde_json::Error),
 
+    #[error("Vault file format {0} is not supported by this version of the app")]
+    UnsupportedVaultFormat(u32),
+
     #[error("Failed to encrypt vault file key")]
     VaultFileKeyEncryptionError,
 
