@@ -58,23 +58,32 @@ struct PreparedVault {
 }
 
 impl PreparedVault {
-    /// Decrypt the vault with its raw file key. `key` is the vault key the
-    /// vault is imported as, already validated. `file_key` is the wrapped form
-    /// the vault file stores. The vault is not synced.
-    fn into_vault(self, key: String, file_key: VaultFileKey) -> Result<Vault, Error> {
+    /// Decrypt the vault with its raw file key and encrypt it again under a
+    /// new file key, so the vault shares no key with the bundle. `key` is the
+    /// vault key the vault is imported as, already validated. `wrap` receives
+    /// the raw new file key and returns the form the vault file stores. The
+    /// vault keeps the bundle vault id and is not synced.
+    fn into_vault(
+        self,
+        key: String,
+        wrap: impl FnOnce(&[u8]) -> Result<VaultFileKey, Error>,
+    ) -> Result<Vault, Error> {
         let cipher = VaultCipher::new_with_bytes(self.raw_file_key.expose_secret(), self.id);
+        // The decrypted vault has no wrapped file key. It is dropped at
+        // return and is never saved.
         let encrypted_vault = EncryptedVault {
             id: self.id,
             key,
             name: self.name,
             generation: 0,
             replica_id: None,
-            file_key,
+            file_key: VaultFileKey::new(Vec::new()),
             metadata: self.metadata,
             items: self.items,
             deleted: BTreeMap::new(),
         };
-        Vault::from_encrypted_with_cipher(cipher, encrypted_vault)
+        let decrypted = Vault::from_encrypted_with_cipher(cipher, encrypted_vault)?;
+        decrypted.rekeyed(None, wrap)
     }
 }
 
@@ -191,7 +200,8 @@ impl ImportableBundle {
     /// Import the selected vaults. `selection` maps a bundle vault id to the
     /// key it should be imported as. Every target key must be valid and
     /// unique among the selection. The caller checks that no vault file on
-    /// this Mac claims it. Each vault holds its key and is written to
+    /// this Mac claims it. Each vault is encrypted again under a new file key
+    /// before anything is written. Each vault holds its key and is written to
     /// `{id}.json` in `vault_dir`, in its own transaction, which never leaves
     /// a partial file. A vault id that another vault file on this Mac already
     /// holds is refused. If a write fails, the vaults this import already
@@ -270,15 +280,15 @@ impl ImportableBundle {
             });
         }
 
-        // re-wrap each file key with the local Secure Enclave key, and decrypt
-        // each vault so a damaged one is refused before anything is written
+        // encrypt each vault again under a new file key wrapped with the local
+        // Secure Enclave key, so a damaged vault is refused before anything is
+        // written
         let wrap = wrapper()?;
         let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
         let mut audit_rows: Vec<(Uuid, String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
             audit_rows.push((p.prepared.id, p.key.clone(), p.prepared.name.clone()));
-            let enc_file_key = wrap(p.prepared.raw_file_key.expose_secret())?;
-            let vault = p.prepared.into_vault(p.key, enc_file_key)?;
+            let vault = p.prepared.into_vault(p.key, |raw| wrap(raw))?;
             staged.push(VaultHandle::unlocked(p.path, vault));
         }
 
