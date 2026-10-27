@@ -99,7 +99,8 @@ impl VaultSigner for KeychainSigner {
 }
 
 /// In-memory signer for tests. Its signatures have the form of
-/// [`KeychainSigner`] signatures.
+/// [`KeychainSigner`] signatures, and are randomized as Secure Enclave
+/// signatures are, so two signatures of one message differ.
 #[cfg(test)]
 pub struct TestSigner(p256::ecdsa::SigningKey);
 
@@ -121,8 +122,8 @@ impl TestSigner {
 #[cfg(test)]
 impl VaultSigner for TestSigner {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
-        use p256::ecdsa::signature::Signer;
-        let signature: Signature = self.0.sign(message);
+        use p256::ecdsa::signature::RandomizedSigner;
+        let signature: Signature = self.0.sign_with_rng(&mut aes_gcm::aead::OsRng, message);
         Ok(signature.to_der().as_bytes().to_vec())
     }
 
@@ -174,6 +175,12 @@ mod tests {
         assert_eq!(signature[0], 0x30);
         assert_eq!(usize::from(signature[1]), signature.len() - 2);
         verify(&signer.verifying_key().unwrap(), MESSAGE, &signature).unwrap();
+    }
+
+    #[test]
+    fn test_signatures_of_one_message_differ() {
+        let signer = TestSigner::device();
+        assert_ne!(signer.sign(MESSAGE).unwrap(), signer.sign(MESSAGE).unwrap());
     }
 
     #[test]

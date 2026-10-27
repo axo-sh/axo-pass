@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
+use serde_json::value::RawValue;
 use tempfile::TempDir;
 
 use super::versions::{DAY_MS, HOUR_MS, kept_versions};
@@ -52,7 +54,7 @@ impl Fixture {
     /// The vault as it is on disk now, at `path`.
     fn read(&self, path: &Path) -> VaultHandle {
         let contents = fs::read_to_string(path).unwrap();
-        let enc_vault = EncryptedVault::parse(&contents).unwrap();
+        let enc_vault = EncryptedVault::parse(&contents, self.files.signer().as_ref()).unwrap();
         let vault =
             Vault::from_unlocked_key(&self.vault.unlocked_key().unwrap(), enc_vault).unwrap();
         VaultHandle::unlocked(path.to_path_buf(), vault)
@@ -88,6 +90,130 @@ fn version(ms: u64, seq: u64) -> RetainedVersion {
         saved_at_ms: ms,
         seq,
     }
+}
+
+/// Raw vault bytes of the vault file `contents`.
+fn raw(contents: &str) -> String {
+    EncryptedVault::raw_vault_json(contents)
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn saved_vault_is_signed_and_reloads_unchanged() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+
+    let saved = fs::read_to_string(&fx.vault.path).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert!(file["signature"].is_string());
+    let reloaded = fx.read(&fx.vault.path);
+    assert_eq!(reloaded.vault_json().unwrap(), raw(&saved));
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("one"));
+}
+
+#[test]
+fn unchanged_save_writes_nothing_although_each_signature_differs() {
+    let fx = Fixture::new();
+    let signer = fx.files.signer().as_ref();
+    assert_ne!(
+        fx.vault.file_contents(signer).unwrap(),
+        fx.vault.file_contents(signer).unwrap()
+    );
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
+
+    let committed = fx
+        .files
+        .write::<_, Error>(&fx.target(), fx.unlock(), |vw| vw.list_items().map(|_| ()))
+        .unwrap();
+
+    assert!(!committed.changed);
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), before);
+    assert!(fx.versions().is_empty());
+}
+
+#[test]
+fn reload_verifies_before_file_key_is_compared() {
+    let fx = Fixture::new();
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
+    let file: serde_json::Value = serde_json::from_str(&before).unwrap();
+    let file_key = file["vault"]["file_key"].to_string();
+    let other_key = serde_json::to_string(&VaultFileKey::new(vec![1u8; 32])).unwrap();
+    assert_eq!(before.matches(&file_key).count(), 1);
+    // A planted file key under the old signature. Without the signature
+    // check, the file key comparison would retry and fail with
+    // `VaultFileKeyChanged`.
+    let planted = before.replacen(&file_key, &other_key, 1);
+    fs::write(&fx.vault.path, &planted).unwrap();
+
+    let ran = AtomicBool::new(false);
+    let result = fx.files.write::<_, Error>(&fx.target(), fx.unlock(), |_| {
+        ran.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+
+    assert!(matches!(result, Err(Error::VaultSignatureInvalid)));
+    assert!(!ran.load(Ordering::SeqCst));
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), planted);
+    assert!(fx.versions().is_empty());
+}
+
+#[test]
+fn unsigned_file_is_refused_and_not_modified() {
+    let fx = Fixture::new();
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
+    let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(&before).unwrap();
+    fields.remove("signature").unwrap();
+    let unsigned = serde_json::to_string_pretty(&fields).unwrap();
+    fs::write(&fx.vault.path, &unsigned).unwrap();
+
+    let result = fx.files.write::<_, Error>(&fx.target(), fx.unlock(), |vw| {
+        add_credential(vw, "alpha", "one")
+    });
+
+    assert!(matches!(result, Err(Error::VaultSignatureMissing)));
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), unsigned);
+    assert!(fx.versions().is_empty());
+}
+
+#[test]
+fn file_signed_by_another_key_is_refused_and_not_modified() {
+    let fx = Fixture::new();
+    let other_mac =
+        VaultWriter::isolated_with_signer(fx.dir.path().join("other"), TestSigner::random());
+    let vh = VaultHandle::new_for_test_at(fx.dir.path().join("vaults").join("other.json"));
+    other_mac.create(&vh).unwrap();
+    let before = fs::read_to_string(&vh.path).unwrap();
+
+    let result = fx
+        .files
+        .write_unlocked::<_, Error>(&vh, |vw| add_credential(vw, "alpha", "one"));
+
+    assert!(matches!(result, Err(Error::VaultSignatureInvalid)));
+    assert_eq!(fs::read_to_string(&vh.path).unwrap(), before);
+    let id = vh.vault_id().unwrap();
+    assert!(fx.files.list_versions(id).unwrap().is_empty());
+}
+
+#[test]
+fn retained_version_whose_signature_fails_is_not_restored() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    fx.add(&fx.target(), "alpha", "two");
+    let versions = fx.versions();
+    let name = &versions[0].name;
+    let path = fx.files.versions(fx.id()).file(name);
+    let version = fs::read_to_string(&path).unwrap();
+    let forged = EncryptedVault::sign_vault_json(raw(&version), &TestSigner::random()).unwrap();
+    fs::write(&path, forged).unwrap();
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
+
+    let result = fx.files.restore_version(&fx.target(), fx.unlock(), name);
+
+    assert!(matches!(result, Err(Error::VaultSignatureInvalid)));
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), before);
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("two"));
+    assert_eq!(fx.versions().len(), 2);
 }
 
 #[test]
@@ -160,7 +286,7 @@ fn vault_with_every_entry_kind_is_saved_and_reloaded() {
     let json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&vh.path).unwrap()).unwrap();
     assert_eq!(json["format"], serde_json::json!(VAULT_FORMAT));
-    let enc_vault = EncryptedVault::load(&vh.path).unwrap();
+    let enc_vault = EncryptedVault::load(&vh.path, files.signer().as_ref()).unwrap();
     let vault = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), enc_vault).unwrap();
     vault.assert_filled_for_test();
     assert!(vault.get_item("new").is_ok());
@@ -194,7 +320,7 @@ fn vault_with_hyphenated_ids_loads_and_next_save_writes_short_ids() {
     let vh = filled_vault(&dir, &files);
     let id = vh.vault_id().unwrap();
     let short = fs::read_to_string(&vh.path).unwrap();
-    let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short);
+    let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short, files.signer().as_ref());
     fs::write(&vh.path, &hyphenated).unwrap();
 
     assert_eq!(VaultHeader::peek(&vh.path).unwrap().id, id);
@@ -202,12 +328,13 @@ fn vault_with_hyphenated_ids_loads_and_next_save_writes_short_ids() {
         .write_unlocked::<_, Error>(&vh, |vw| vw.list_items().map(|_| ()))
         .unwrap();
 
-    // The file bytes differ from the saved form, so the save rewrites them.
+    // The raw vault bytes differ from the saved form, so the save rewrites
+    // them. The new signature differs from the first one.
     assert!(committed.changed);
     let saved = fs::read_to_string(&vh.path).unwrap();
-    assert_eq!(saved, short);
+    assert_eq!(raw(&saved), raw(&short));
     assert!(EncryptedVault::assert_short_ids_for_test(&saved) > 0);
-    let enc_vault = EncryptedVault::load(&vh.path).unwrap();
+    let enc_vault = EncryptedVault::load(&vh.path, files.signer().as_ref()).unwrap();
     let vault = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), enc_vault).unwrap();
     vault.assert_filled_for_test();
 
@@ -537,7 +664,7 @@ fn a_read_during_saves_sees_a_whole_vault() {
         });
         while !done.load(Ordering::SeqCst) {
             let contents = fs::read_to_string(&fx.vault.path).unwrap();
-            EncryptedVault::parse(&contents).unwrap();
+            EncryptedVault::parse(&contents, fx.files.signer().as_ref()).unwrap();
         }
     });
 }
@@ -579,11 +706,18 @@ fn restoring_a_missing_version_fails() {
 #[test]
 fn restoring_a_version_with_another_file_key_fails() {
     let fx = Fixture::new();
-    let mut enc_vault = EncryptedVault::load(&fx.vault.path).unwrap();
+    let signer = fx.files.signer().as_ref();
+    let mut enc_vault = EncryptedVault::load(&fx.vault.path, signer)
+        .unwrap()
+        .into_inner();
     enc_vault.file_key = VaultFileKey::new(vec![1u8; 32]);
     let dir = fx.files.versions(fx.id());
     fs::create_dir_all(&dir.path).unwrap();
-    fs::write(dir.file("1-0.json"), enc_vault.to_file_contents().unwrap()).unwrap();
+    fs::write(
+        dir.file("1-0.json"),
+        enc_vault.to_file_contents(signer).unwrap(),
+    )
+    .unwrap();
 
     assert!(matches!(
         fx.files

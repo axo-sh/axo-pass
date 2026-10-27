@@ -74,10 +74,17 @@ impl VaultWriter {
     /// It signs with the test device key.
     #[cfg(test)]
     pub fn isolated(root: impl Into<PathBuf>) -> Self {
+        Self::isolated_with_signer(root, TestSigner::device())
+    }
+
+    /// [`Self::isolated`] with `signer` instead of the test device key, as
+    /// another Mac.
+    #[cfg(test)]
+    pub fn isolated_with_signer(root: impl Into<PathBuf>, signer: TestSigner) -> Self {
         Self {
             root: root.into(),
             locks: VaultLocks::default(),
-            signer: Arc::new(TestSigner::device()),
+            signer: Arc::new(signer),
         }
     }
 
@@ -138,12 +145,13 @@ pub enum Unlock<'a> {
 }
 
 impl Unlock<'_> {
-    /// Vault id and unwrapped file key of the vault at `path`.
-    fn key(&self, path: &Path) -> Result<(Uuid, UnlockedKey), Error> {
+    /// Vault id and unwrapped file key of the vault at `path`. A file that is
+    /// unwrapped is verified under the key of `signer` first.
+    fn key(&self, path: &Path, signer: &dyn VaultSigner) -> Result<(Uuid, UnlockedKey), Error> {
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                Self::unwrap_key(path, AuthContext::SharedThreadLocal)
+                Self::unwrap_key(path, signer, AuthContext::SharedThreadLocal)
             },
             Unlock::Unlocked(vh) => Ok((vh.vault_id()?, vh.unlocked_key()?)),
             #[cfg(test)]
@@ -151,8 +159,12 @@ impl Unlock<'_> {
         }
     }
 
-    fn unwrap_key(path: &Path, context: AuthContext) -> Result<(Uuid, UnlockedKey), Error> {
-        let enc_vault = EncryptedVault::load(path)?;
+    fn unwrap_key(
+        path: &Path,
+        signer: &dyn VaultSigner,
+        context: AuthContext,
+    ) -> Result<(Uuid, UnlockedKey), Error> {
+        let enc_vault = EncryptedVault::load(path, signer)?;
         let managed_key = get_vault_encryption_key_on(context)?;
         let key = UnlockedKey::unwrap(&managed_key, &enc_vault)
             .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
@@ -245,16 +257,17 @@ impl VaultWriter {
         F: FnOnce(&mut VaultHandle) -> Result<R, E>,
     {
         // Unwrap the file key first. This may prompt.
-        let (id, file_key) = unlock.key(&target.path)?;
+        let (id, file_key) = unlock.key(&target.path, &*self.signer)?;
 
         // Take the per-vault mutex and the cross-process lock.
         let vault_lock = self.locks.entry(id, &target.path);
         let mut locked = self.lock_entry(&vault_lock, id)?;
         let path = locked.state.resolve(id, &target.path)?;
 
-        // Re-read the file under the locks and decrypt it with the file key.
+        // Re-read the file under the locks, verify it before the file key is
+        // compared, and decrypt it with the file key.
         let contents = EncryptedVault::read_file(&path)?;
-        let enc_vault = EncryptedVault::parse(&contents)?;
+        let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
         if enc_vault.id != id {
             return Err(Error::VaultNotFound(path.display().to_string()).into());
         }
@@ -276,7 +289,9 @@ impl VaultWriter {
         let value = f(&mut vh)?;
 
         // Save only if the vault changed. A key change writes the same path.
-        let changed = vault_file::commit(&path, &contents, &vh, |old| self.retain(id, old))?;
+        let changed = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
+            self.retain(id, old)
+        })?;
         let save_count = if changed {
             vault_lock.record_save()
         } else {
@@ -314,7 +329,7 @@ impl VaultWriter {
         let mut locked = self.lock_entry(&entry, id)?;
         vault_file::check_create_path(locked.state.path(), id, &vh.path)?;
 
-        let contents = vh.file_contents()?;
+        let contents = vh.file_contents(&*self.signer)?;
         if let Some(dir) = vh.path.parent() {
             fs::create_dir_all(dir).map_err(Error::VaultDirCreateError)?;
         }
@@ -351,8 +366,9 @@ impl VaultWriter {
             .map_err(Error::VaultReadError)
     }
 
-    /// Replace the vault with its retained version `name`. The replaced file
-    /// is retained in turn. The vault key is kept.
+    /// Replace the vault with its retained version `name`. The version is
+    /// verified first, and a version whose signature fails is not restored.
+    /// The replaced file is retained in turn. The vault key is kept.
     pub fn restore_version(
         &self,
         target: &Target,
@@ -369,7 +385,7 @@ impl VaultWriter {
                 Error::VaultNotFound(_) => Error::VaultVersionNotFound(name.to_string()),
                 e => e,
             })?;
-            let enc_vault = EncryptedVault::parse(&contents)?;
+            let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
             if enc_vault.id != id {
                 return Err(Error::VaultVersionNotFound(name.to_string()));
             }

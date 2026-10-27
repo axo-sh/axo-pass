@@ -26,7 +26,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
-    EncryptedVaultItemCredential, HistoryEntry, VaultFileKey,
+    EncryptedVaultItemCredential, HistoryEntry, VaultFileKey, VerifiedVault,
 };
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::fields::FieldKind;
@@ -47,10 +47,11 @@ pub struct UnlockedKey {
 }
 
 impl UnlockedKey {
-    /// Unwrap the file key of `enc_vault` with the vault encryption key.
+    /// Unwrap the file key of the verified vault file `enc_vault` with the
+    /// vault encryption key.
     pub(crate) fn unwrap(
         user_encryption_key: &ManagedKey,
-        enc_vault: &EncryptedVault,
+        enc_vault: &VerifiedVault,
     ) -> Result<Self, Error> {
         Ok(Self {
             file_key: enc_vault.file_key.clone(),
@@ -246,27 +247,37 @@ impl Vault {
         assert_eq!(deleted_items[0].deleted_credentials[0].key, "delta");
     }
 
-    // This converts an EncryptedVault into a Vault by decrypting all
-    // metadata and organizing data into the appropriate fields.
+    /// Decrypt a verified vault file with the vault encryption key. Only a
+    /// [`VerifiedVault`] is accepted, so the signature is checked first:
+    ///
+    /// ```compile_fail
+    /// use axo_pass_core::secrets::keychain::managed_key::ManagedKey;
+    /// use axo_pass_core::secrets::vaults::format::encrypted_vault::EncryptedVault;
+    /// use axo_pass_core::secrets::vaults::model::Vault;
+    ///
+    /// fn open(key: ManagedKey, vault: EncryptedVault) {
+    ///     let _ = Vault::from_encrypted(key, vault);
+    /// }
+    /// ```
     pub fn from_encrypted(
         user_encryption_key: ManagedKey,
-        enc_vault: EncryptedVault,
+        enc_vault: VerifiedVault,
     ) -> Result<Self, Error> {
         let vault_cipher = enc_vault.decrypt_file_key(&user_encryption_key)?;
-        Self::from_encrypted_with_cipher(vault_cipher, enc_vault)
+        Self::from_encrypted_with_cipher(vault_cipher, enc_vault.into_inner())
     }
 
-    /// Decrypt `enc_vault` with a file key unwrapped earlier, without the
-    /// keychain. Fails with `VaultFileKeyChanged` if the wrapped file key in
-    /// `enc_vault` differs from the one `key` was unwrapped from.
+    /// Decrypt a verified vault file with a file key unwrapped earlier,
+    /// without the keychain. Fails with `VaultFileKeyChanged` if the wrapped
+    /// file key in `enc_vault` differs from the one `key` was unwrapped from.
     pub(crate) fn from_unlocked_key(
         key: &UnlockedKey,
-        enc_vault: EncryptedVault,
+        enc_vault: VerifiedVault,
     ) -> Result<Self, Error> {
         if enc_vault.file_key != key.file_key || enc_vault.id != key.cipher.vault_id() {
             return Err(Error::VaultFileKeyChanged);
         }
-        Self::from_encrypted_with_cipher(key.cipher.duplicate(), enc_vault)
+        Self::from_encrypted_with_cipher(key.cipher.duplicate(), enc_vault.into_inner())
     }
 
     /// File key of this vault, for decrypting a reloaded copy.

@@ -15,9 +15,11 @@ use crate::secrets::vaults::bundle::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
+use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
+use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::storage::txn::VaultWriter;
@@ -272,7 +274,7 @@ fn bundle_exported_before_vault_format_2_imports() {
     let contents = imported
         .to_encrypted(true)
         .unwrap()
-        .to_file_contents()
+        .to_file_contents(&TestSigner::device())
         .unwrap();
     assert!(EncryptedVault::assert_short_ids_for_test(&contents) >= 4);
     assert!(!contents.contains(&bundled.id.hyphenated().to_string()));
@@ -372,6 +374,29 @@ fn imported_vault_holds_selected_key_and_is_named_by_id() {
     ];
     expected.sort();
     assert_eq!(keys, expected);
+}
+
+#[test]
+fn imported_vault_is_signed_by_writer() {
+    let _audit_dir = test_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let id = Uuid::new_v4();
+    let selection = BTreeMap::from([(id, "imported".to_string())]);
+
+    let imported = ImportableBundle::for_test(&[id])
+        .import_with(&selection, &dir.path().join("vaults"), &files, || {
+            Ok(Box::new(|raw: &[u8]| Ok(VaultFileKey::new(raw.to_vec()))))
+        })
+        .unwrap();
+
+    let path = &imported[0].path;
+    let verified = EncryptedVault::load(path, files.signer().as_ref()).unwrap();
+    assert_eq!(verified.id, id);
+    assert!(matches!(
+        EncryptedVault::load(path, &TestSigner::random()),
+        Err(Error::VaultSignatureInvalid)
+    ));
 }
 
 #[test]

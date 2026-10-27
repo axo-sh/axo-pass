@@ -474,6 +474,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
+    use crate::secrets::vaults::format::signing::TestSigner;
     use crate::secrets::vaults::storage::manager::VaultsManager;
     use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 
@@ -538,16 +540,17 @@ mod tests {
             self.catalog.files().locks().contains(id)
         }
 
-        /// Write the `personal` vault file to `path` after `edit`. `edit`
-        /// receives the `vault` object inside the file envelope, with its key
-        /// set to the file stem of `path`.
+        /// Write the `personal` vault file to `path` after `edit`, signed
+        /// again by the test device key. `edit` receives the `vault` object
+        /// inside the file envelope, with its key set to the file stem of
+        /// `path`.
         fn write_copy(&self, path: &Path, edit: impl FnOnce(&mut Value)) {
             let data = fs::read_to_string(self.vault_path("personal")).unwrap();
             let mut file: Value = serde_json::from_str(&data).unwrap();
             let stem = path.file_stem().unwrap().to_string_lossy();
             file["vault"]["key"] = json!(stem);
             edit(&mut file["vault"]);
-            let data = serde_json::to_string_pretty(&file).unwrap();
+            let data = EncryptedVault::sign_file_for_test(&file, &TestSigner::device());
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, data).unwrap();
         }
@@ -709,6 +712,66 @@ mod tests {
 
         assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
         assert!(scan.duplicates.is_empty(), "{:?}", scan.duplicates);
+    }
+
+    #[test]
+    fn external_vault_is_signed_and_verified() {
+        let fx = Fixture::with_external(&["outside"]);
+        let path = fx.external_path("outside");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let vh = VaultHandle::new_for_test_at(path.clone());
+        fx.catalog.files().create(&vh).unwrap();
+        let signer = fx.catalog.signer().as_ref();
+
+        assert_eq!(
+            EncryptedVault::load(&path, signer).unwrap().id,
+            vh.vault_id().unwrap()
+        );
+        let committed = fx
+            .catalog
+            .files()
+            .write_unlocked::<_, Error>(&vh, |vw| vw.add_item("item", "Item").map(|_| ()))
+            .unwrap();
+        assert!(committed.changed);
+        EncryptedVault::load(&path, signer).unwrap();
+        assert!(fx.catalog.list().contains_key("outside"));
+
+        // An edit by hand under the old signature is refused at the next
+        // write, and the file is not modified.
+        let saved = fs::read_to_string(&path).unwrap();
+        let edited = saved.replacen("\"key\": \"outside\"", "\"key\": \"edited\"", 1);
+        assert_ne!(edited, saved);
+        fs::write(&path, &edited).unwrap();
+        let result = fx
+            .catalog
+            .files()
+            .write_unlocked::<_, Error>(&vh, |vw| vw.add_item("other", "Other").map(|_| ()));
+        assert!(matches!(result, Err(Error::VaultSignatureInvalid)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+    }
+
+    #[test]
+    fn unsigned_file_that_claims_key_of_vault_refuses_both() {
+        // The scan reads headers without verifying them, so an unsigned file
+        // claims a key as a signed one does.
+        let fx = Fixture::new();
+        fx.write_edited("forged", other_vault("personal"));
+        let path = fx.vault_path("forged");
+        let mut fields: BTreeMap<String, Box<serde_json::value::RawValue>> =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        fields.remove("signature").unwrap();
+        fs::write(&path, serde_json::to_string_pretty(&fields).unwrap()).unwrap();
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicate_keys,
+            [DuplicateVaultKeys {
+                key: "personal".to_string(),
+                paths: vec![path, fx.vault_path("personal")],
+            }]
+        );
+        assert!(scan.vaults.is_empty());
     }
 
     #[test]

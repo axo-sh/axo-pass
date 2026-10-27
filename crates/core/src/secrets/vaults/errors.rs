@@ -83,6 +83,9 @@ pub enum Error {
     #[error("Vault signature is invalid")]
     VaultSignatureInvalid,
 
+    #[error("Vault file is not signed")]
+    VaultSignatureMissing,
+
     #[error("Invalid vault key, only a-zA-Z0-9-_ allowed: {0}")]
     InvalidVaultKey(String),
 

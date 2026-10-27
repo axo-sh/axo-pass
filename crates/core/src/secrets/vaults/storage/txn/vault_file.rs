@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::core::files::{write_atomic, write_atomic_new};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -68,21 +69,25 @@ pub(super) fn write_new(vh: &VaultHandle, contents: &str) -> Result<(), Error> {
     })
 }
 
-/// Save `vh` over `path`, whose contents were `old_contents`. `retain` is
-/// called with `old_contents` before the file is replaced. The path of `vh`
-/// is `path`, since no save moves a vault file. Returns whether anything was
-/// written.
+/// Commit of a save of vault `vh` to `path`, signed by `signer`. The raw vault
+/// bytes are compared to `old_contents`, not the file envelope since
+/// signatures may differ. If the raw vault bytes are equal, this is a no-op.
+/// Otherwise `retain` is called with `old_contents` before the file is
+/// replaced. The path of `vh` is expected to be `path`, because save does not
+/// move vault files. Returns a bool indicating whether anything was written.
 pub(super) fn commit(
     path: &Path,
     old_contents: &str,
     vh: &VaultHandle,
+    signer: &dyn VaultSigner,
     retain: impl FnOnce(&str),
 ) -> Result<bool, Error> {
     debug_assert_eq!(vh.path, path);
-    let contents = vh.file_contents()?;
-    if contents == old_contents {
+    let vault_json = vh.vault_json()?;
+    if vault_json == EncryptedVault::raw_vault_json(old_contents)? {
         return Ok(false);
     }
+    let contents = EncryptedVault::sign_vault_json(vault_json, signer)?;
     retain(old_contents);
     write_atomic(path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
     Ok(true)

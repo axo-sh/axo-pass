@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::path::Path;
 use std::{fs, io};
 
@@ -13,6 +14,7 @@ use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::short_id::ShortId;
+use crate::secrets::vaults::format::signing::{self, VaultSigner};
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
@@ -27,20 +29,28 @@ pub const VAULT_FORMAT: u32 = 2;
 const FORMAT_WITHOUT_ENVELOPE: u32 = 1;
 
 /// Outer object of a vault file.
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VaultEnvelope<'a> {
     format: u32,
+    /// DER signature by `device-signing-key` over
+    /// [`VaultEnvelope::signed_message`], written as base64. Read as optional
+    /// so the header of an unsigned file can be read. Load refuses an
+    /// unsigned file.
+    #[serde_as(as = "Option<Base64>")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<Vec<u8>>,
     #[serde(borrow)]
     vault: &'a RawValue,
 }
 
 impl<'a> VaultEnvelope<'a> {
-    /// `vault` field of the vault file `data`. Any format other than
+    /// Envelope of the vault file `data`. Any format other than
     /// [`VAULT_FORMAT`] fails with `UnsupportedVaultFormat` before the rest
     /// of the envelope is checked. A file without a `format` field is format
-    /// 1.
-    fn vault_json(data: &'a str) -> Result<&'a RawValue, Error> {
+    /// 1. The signature is not checked.
+    fn read(data: &'a str) -> Result<Self, Error> {
         let fields: BTreeMap<String, &RawValue> =
             serde_json::from_str(data).map_err(Error::VaultDeserializationError)?;
         let format = match fields.get("format") {
@@ -52,9 +62,72 @@ impl<'a> VaultEnvelope<'a> {
         if format != VAULT_FORMAT {
             return Err(Error::UnsupportedVaultFormat(format));
         }
-        let envelope: Self =
-            serde_json::from_str(data).map_err(Error::VaultDeserializationError)?;
-        Ok(envelope.vault)
+        serde_json::from_str(data).map_err(Error::VaultDeserializationError)
+    }
+
+    /// Message signed for the raw vault bytes `vault_json` in a file of format
+    /// `format`. The prefix names the format.
+    fn signed_message(format: u32, vault_json: &str) -> Vec<u8> {
+        let mut message = format!("ap-vault-v{format}:").into_bytes();
+        message.extend_from_slice(vault_json.as_bytes());
+        message
+    }
+
+    /// Raw vault bytes, after their signature is checked under the key of
+    /// `signer`. An unsigned file fails with `VaultSignatureMissing`, and any
+    /// other failure with `VaultSignatureInvalid`.
+    fn verified_vault_json(&self, signer: &dyn VaultSigner) -> Result<&'a str, Error> {
+        let signature = self
+            .signature
+            .as_deref()
+            .ok_or(Error::VaultSignatureMissing)?;
+        let message = Self::signed_message(self.format, self.vault.get());
+        signing::verify(&signer.verifying_key()?, &message, signature)?;
+        Ok(self.vault.get())
+    }
+
+    /// Contents of a vault file of format [`VAULT_FORMAT`] holding the raw
+    /// vault bytes `vault_json` unchanged, signed by `signer`.
+    fn sign(vault_json: String, signer: &dyn VaultSigner) -> Result<String, Error> {
+        let signature = signer.sign(&Self::signed_message(VAULT_FORMAT, &vault_json))?;
+        let vault = RawValue::from_string(vault_json).map_err(Error::VaultSerializationError)?;
+        let envelope = VaultEnvelope {
+            format: VAULT_FORMAT,
+            signature: Some(signature),
+            vault: &vault,
+        };
+        serde_json::to_string_pretty(&envelope).map_err(Error::VaultSerializationError)
+    }
+}
+
+/// Vault object of a vault file whose signature verified. Only
+/// [`EncryptedVault::load`] and [`EncryptedVault::parse`] build one, so a
+/// vault decrypted from a file was verified first.
+///
+/// The field is private, so code outside this module cannot wrap an
+/// unverified vault:
+///
+/// ```compile_fail
+/// use axo_pass_core::secrets::vaults::format::encrypted_vault::{EncryptedVault, VerifiedVault};
+///
+/// fn wrap(vault: EncryptedVault) -> VerifiedVault {
+///     VerifiedVault(vault)
+/// }
+/// ```
+pub struct VerifiedVault(EncryptedVault);
+
+impl VerifiedVault {
+    /// Verified vault, to decrypt.
+    pub(crate) fn into_inner(self) -> EncryptedVault {
+        self.0
+    }
+}
+
+impl Deref for VerifiedVault {
+    type Target = EncryptedVault;
+
+    fn deref(&self) -> &EncryptedVault {
+        &self.0
     }
 }
 
@@ -112,13 +185,13 @@ impl VaultHeader {
         Self::parse(&EncryptedVault::read_file(vault_path)?)
     }
 
-    /// Parse the header of a vault file. A missing key fails with
-    /// `VaultDeserializationError`, and an invalid key with
-    /// `InvalidVaultKey`.
+    /// Parse the header of a vault file without checking its signature. A
+    /// missing key fails with `VaultDeserializationError`, and an invalid key
+    /// with `InvalidVaultKey`.
     pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
-        let vault = VaultEnvelope::vault_json(vault_data)?;
+        let envelope = VaultEnvelope::read(vault_data)?;
         let header: Self =
-            serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)?;
+            serde_json::from_str(envelope.vault.get()).map_err(Error::VaultDeserializationError)?;
         EncryptedVault::check_key(&header.key)?;
         Ok(header)
     }
@@ -136,19 +209,35 @@ impl EncryptedVault {
         })
     }
 
-    pub fn load(vault_path: &Path) -> Result<Self, Error> {
+    /// Read the vault file at `vault_path` and verify it under the key of
+    /// `signer`. See [`Self::parse`].
+    pub fn load(vault_path: &Path, signer: &dyn VaultSigner) -> Result<VerifiedVault, Error> {
         log::debug!("Reading vault from file: {}", vault_path.display());
-        Self::parse(&Self::read_file(vault_path)?)
+        Self::parse(&Self::read_file(vault_path)?, signer)
     }
 
-    /// Parse the contents of a vault file. An invalid key fails with
-    /// `InvalidVaultKey`.
-    pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
-        let vault = VaultEnvelope::vault_json(vault_data)?;
+    /// Verify the contents of a vault file under the key of `signer`, then
+    /// parse the vault object. The signature is checked over the raw vault
+    /// bytes before they are parsed. An unsigned file fails with
+    /// `VaultSignatureMissing`, a signature that does not verify with
+    /// `VaultSignatureInvalid`, and an invalid key with `InvalidVaultKey`.
+    pub(crate) fn parse(
+        vault_data: &str,
+        signer: &dyn VaultSigner,
+    ) -> Result<VerifiedVault, Error> {
+        let envelope = VaultEnvelope::read(vault_data)?;
+        let vault_json = envelope.verified_vault_json(signer)?;
         let vault: Self =
-            serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)?;
+            serde_json::from_str(vault_json).map_err(Error::VaultDeserializationError)?;
         Self::check_key(&vault.key)?;
-        Ok(vault)
+        Ok(VerifiedVault(vault))
+    }
+
+    /// Raw vault bytes of the vault file `vault_data`, without checking the
+    /// signature. Used only to compare a file with the vault about to be
+    /// saved over it.
+    pub(crate) fn raw_vault_json(vault_data: &str) -> Result<&str, Error> {
+        Ok(VaultEnvelope::read(vault_data)?.vault.get())
     }
 
     /// Fail if a key read from a vault file is not a valid vault key. Keys are
@@ -160,19 +249,31 @@ impl EncryptedVault {
         Ok(())
     }
 
-    /// Contents of a vault file of format [`VAULT_FORMAT`] for this vault.
-    pub(crate) fn to_file_contents(&self) -> Result<String, Error> {
+    /// Raw vault bytes of this vault, as a vault file of format
+    /// [`VAULT_FORMAT`] holds them and signs them.
+    pub(crate) fn to_vault_json(&self) -> Result<String, Error> {
         // Indent the vault JSON to its depth in the envelope. JSON strings
         // hold no raw newlines, so only line breaks between tokens change.
-        let vault = serde_json::to_string_pretty(self)
+        Ok(serde_json::to_string_pretty(self)
             .map_err(Error::VaultSerializationError)?
-            .replace('\n', "\n  ");
-        let vault = RawValue::from_string(vault).map_err(Error::VaultSerializationError)?;
-        let envelope = VaultEnvelope {
-            format: VAULT_FORMAT,
-            vault: &vault,
-        };
-        serde_json::to_string_pretty(&envelope).map_err(Error::VaultSerializationError)
+            .replace('\n', "\n  "))
+    }
+
+    /// Contents of a vault file of format [`VAULT_FORMAT`] holding the raw
+    /// vault bytes `vault_json`, signed by `signer`.
+    pub(crate) fn sign_vault_json(
+        vault_json: String,
+        signer: &dyn VaultSigner,
+    ) -> Result<String, Error> {
+        VaultEnvelope::sign(vault_json, signer)
+    }
+
+    /// Contents of a vault file of format [`VAULT_FORMAT`] for this vault,
+    /// signed by `signer`. Saves sign through [`Self::sign_vault_json`], so
+    /// they can compare the raw vault bytes first.
+    #[cfg(test)]
+    pub(crate) fn to_file_contents(&self, signer: &dyn VaultSigner) -> Result<String, Error> {
+        Self::sign_vault_json(self.to_vault_json()?, signer)
     }
 
     pub fn decrypt_file_key(&self, user_encryption_key: &ManagedKey) -> Result<VaultCipher, Error> {
@@ -335,11 +436,34 @@ impl EncryptedVault {
         count
     }
 
-    /// Vault file `contents` with every short id in the vault object written
-    /// in the hyphenated form, as files were before short ids. Map keys and
-    /// `id` and `replica_id` values are rewritten. Blob plaintext is not.
+    /// Contents of the vault file `file`, edited as JSON, with its `vault`
+    /// object signed again by `signer` under the [`VAULT_FORMAT`] prefix. The
+    /// other top-level fields of `file` are kept, and `signature` is
+    /// replaced.
     #[cfg(test)]
-    pub(crate) fn hyphenate_ids_for_test(contents: &str) -> String {
+    pub(crate) fn sign_file_for_test(file: &serde_json::Value, signer: &dyn VaultSigner) -> String {
+        let vault_json = serde_json::to_string_pretty(&file["vault"])
+            .unwrap()
+            .replace('\n', "\n  ");
+        let signed = VaultEnvelope::sign(vault_json, signer).unwrap();
+        let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(&signed).unwrap();
+        for (key, value) in file.as_object().unwrap() {
+            if key != "signature" && key != "vault" {
+                fields.insert(
+                    key.clone(),
+                    RawValue::from_string(value.to_string()).unwrap(),
+                );
+            }
+        }
+        serde_json::to_string_pretty(&fields).unwrap()
+    }
+
+    /// Vault file `contents` with every short id in the vault object written
+    /// in the hyphenated form, as files were before short ids, and signed
+    /// again by `signer`. Map keys and `id` and `replica_id` values are
+    /// rewritten. Blob plaintext is not.
+    #[cfg(test)]
+    pub(crate) fn hyphenate_ids_for_test(contents: &str, signer: &dyn VaultSigner) -> String {
         use serde_json::Value;
 
         use crate::secrets::vaults::format::short_id::SHORT_ID_LEN;
@@ -373,7 +497,7 @@ impl EncryptedVault {
 
         let mut file: Value = serde_json::from_str(contents).unwrap();
         rewrite(&mut file["vault"]);
-        serde_json::to_string_pretty(&file).unwrap()
+        Self::sign_file_for_test(&file, signer)
     }
 }
 
@@ -453,10 +577,13 @@ pub struct DeletedCredential {
 
 #[cfg(test)]
 mod tests {
-    use secrecy::ExposeSecret;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use secrecy::{ExposeSecret, SecretString};
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::secrets::vaults::format::signing::TestSigner;
     use crate::secrets::vaults::model::fields::FieldKind;
     use crate::secrets::vaults::model::{Vault, VaultFolder};
 
@@ -482,10 +609,75 @@ mod tests {
         vault.to_encrypted(true).unwrap()
     }
 
+    /// Signer of the test files, the test device key.
+    fn signer() -> TestSigner {
+        TestSigner::device()
+    }
+
+    /// Format 2 file contents of `vault`, signed by [`signer`].
+    fn contents_of(vault: &EncryptedVault) -> String {
+        vault.to_file_contents(&signer()).unwrap()
+    }
+
+    /// Verify and parse `contents` under [`signer`].
+    fn parse(contents: &str) -> Result<EncryptedVault, Error> {
+        EncryptedVault::parse(contents, &signer()).map(VerifiedVault::into_inner)
+    }
+
+    /// Raw vault bytes of `contents`.
+    fn raw(contents: &str) -> String {
+        EncryptedVault::raw_vault_json(contents)
+            .unwrap()
+            .to_string()
+    }
+
     /// Format 2 file of [`filled_vault`], as JSON.
     fn filled_file() -> Value {
-        let contents = filled_vault().to_file_contents().unwrap();
-        serde_json::from_str(&contents).unwrap()
+        serde_json::from_str(&contents_of(&filled_vault())).unwrap()
+    }
+
+    /// `file`, edited as JSON, signed again by [`signer`].
+    fn signed(file: &Value) -> String {
+        EncryptedVault::sign_file_for_test(file, &signer())
+    }
+
+    /// Format 2 file contents of a filled vault that is synced.
+    fn synced_contents() -> String {
+        let mut vault = filled_vault();
+        vault.generation = 7;
+        vault.replica_id = Some(Uuid::new_v4());
+        contents_of(&vault)
+    }
+
+    /// Replace the text `from` with `to` in `contents`, once, and keep the
+    /// signature.
+    fn edit_raw(contents: &str, from: &str, to: &str) -> String {
+        assert_eq!(contents.matches(from).count(), 1, "{from}");
+        contents.replacen(from, to, 1)
+    }
+
+    /// `contents` with the top-level field `field` set to the JSON text
+    /// `json`. Every other field is kept byte for byte.
+    fn with_field(contents: &str, field: &str, json: String) -> String {
+        let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(contents).unwrap();
+        fields.insert(field.to_string(), RawValue::from_string(json).unwrap());
+        serde_json::to_string_pretty(&fields).unwrap()
+    }
+
+    /// `contents` with `signature` written as its signature.
+    fn with_signature(contents: &str, signature: &[u8]) -> String {
+        with_field(
+            contents,
+            "signature",
+            json!(B64.encode(signature)).to_string(),
+        )
+    }
+
+    fn assert_signature_invalid(result: Result<EncryptedVault, Error>, what: &str) {
+        assert!(
+            matches!(result, Err(Error::VaultSignatureInvalid)),
+            "{what} was not refused for its signature"
+        );
     }
 
     /// Pointer to the one entry of the map at `pointer` in `file`.
@@ -501,7 +693,7 @@ mod tests {
         let mut file = file.clone();
         let object = file.pointer_mut(pointer).unwrap().as_object_mut().unwrap();
         object.insert("unknown".to_string(), json!(1));
-        EncryptedVault::parse(&file.to_string())
+        parse(&signed(&file))
     }
 
     fn assert_refused(result: Result<EncryptedVault, Error>, pointer: &str) {
@@ -514,14 +706,30 @@ mod tests {
     #[test]
     fn format2_file_round_trips() {
         let vault = filled_vault();
-        let contents = vault.to_file_contents().unwrap();
-        let back = EncryptedVault::parse(&contents).unwrap();
-        assert_eq!(back.to_file_contents().unwrap(), contents);
+        let contents = contents_of(&vault);
+        let back = parse(&contents).unwrap();
+        assert_eq!(back.to_vault_json().unwrap(), raw(&contents));
 
         let file: Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(file["format"], json!(VAULT_FORMAT));
+        assert!(file["signature"].is_string());
         assert!(file["vault"].get("generation").is_none());
         assert!(file["vault"].get("replica_id").is_none());
+    }
+
+    #[test]
+    fn signature_covers_exact_raw_vault_bytes() {
+        let vault = filled_vault();
+        let contents = contents_of(&vault);
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        let signature = B64.decode(file["signature"].as_str().unwrap()).unwrap();
+        assert_eq!(with_signature(&contents, &signature), contents);
+
+        let message = format!("ap-vault-v2:{}", raw(&contents));
+        let key = signer().verifying_key().unwrap();
+        signing::verify(&key, message.as_bytes(), &signature).unwrap();
+        // The file holds the vault object as it was signed.
+        assert_eq!(raw(&contents), vault.to_vault_json().unwrap());
     }
 
     #[test]
@@ -530,7 +738,7 @@ mod tests {
         let replica_id = Uuid::new_v4();
         vault.generation = 7;
         vault.replica_id = Some(replica_id);
-        let contents = vault.to_file_contents().unwrap();
+        let contents = contents_of(&vault);
 
         let file: Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(file["vault"]["generation"], json!(7));
@@ -538,16 +746,155 @@ mod tests {
             file["vault"]["replica_id"],
             json!(ShortId::encode_uuid(replica_id))
         );
-        let back = EncryptedVault::parse(&contents).unwrap();
+        let back = parse(&contents).unwrap();
         assert_eq!(back.generation, 7);
         assert_eq!(back.replica_id, Some(replica_id));
+    }
+
+    #[test]
+    fn replaced_file_key_fails_verification() {
+        let contents = contents_of(&filled_vault());
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        let file_key = file["vault"]["file_key"].as_str().unwrap();
+        let planted = VaultFileKey::new(vec![9u8; 32]);
+        let planted = serde_json::to_value(&planted).unwrap();
+        let edited = edit_raw(&contents, &format!("\"{file_key}\""), &planted.to_string());
+        assert_signature_invalid(parse(&edited), "replaced file_key");
+    }
+
+    #[test]
+    fn spliced_blob_fails_verification() {
+        // A blob from an older copy of the same vault, under the same file
+        // key, decrypts. Only the signature refuses it.
+        let mut vault = Vault::new_for_test();
+        vault.fill_for_test();
+        let older = vault.to_encrypted(true).unwrap();
+        vault
+            .add_or_update_item_credential(
+                "kept",
+                "alpha",
+                "alpha",
+                FieldKind::default(),
+                SecretString::from("three".to_string()),
+            )
+            .unwrap();
+        let newer = vault.to_encrypted(true).unwrap();
+        let contents = contents_of(&newer);
+
+        // The newer vault with one item replaced by its older copy.
+        let item = *older.items.keys().next().unwrap();
+        let mut spliced = parse(&contents).unwrap();
+        let old_item = serde_json::to_value(&older.items[&item]).unwrap();
+        spliced
+            .items
+            .insert(item, serde_json::from_value(old_item).unwrap());
+        let spliced_json = spliced.to_vault_json().unwrap();
+        assert_ne!(spliced_json, raw(&contents));
+
+        // Signed again, the splice decrypts to the older value, so only the
+        // signature refuses it.
+        let resigned = EncryptedVault::parse(&contents_of(&spliced), &signer()).unwrap();
+        let back = Vault::from_unlocked_key(&vault.unlocked_key(), resigned).unwrap();
+        let value = back.get_item_credential_secret("kept", "alpha").unwrap();
+        assert_eq!(value.unwrap().expose_secret(), "two");
+        let spliced = with_field(&contents, "vault", spliced_json);
+        assert_signature_invalid(parse(&spliced), "spliced blob");
+    }
+
+    #[test]
+    fn changed_format_fails_verification() {
+        let contents = contents_of(&filled_vault());
+        // A file of another format is refused before its signature is read.
+        let edited = edit_raw(&contents, "\"format\": 2", "\"format\": 3");
+        assert!(matches!(
+            parse(&edited),
+            Err(Error::UnsupportedVaultFormat(3))
+        ));
+
+        // The signed prefix names the format, so a signature of the same raw
+        // vault bytes for another format does not verify as format 2.
+        let message = VaultEnvelope::signed_message(3, &raw(&contents));
+        let signature = signer().sign(&message).unwrap();
+        let edited = with_signature(&contents, &signature);
+        assert_signature_invalid(parse(&edited), "signature for format 3");
+    }
+
+    #[test]
+    fn edited_generation_fails_verification() {
+        let contents = synced_contents();
+        let edited = edit_raw(&contents, "\"generation\": 7", "\"generation\": 8");
+        assert_signature_invalid(parse(&edited), "edited generation");
+    }
+
+    #[test]
+    fn edited_replica_id_fails_verification() {
+        let contents = synced_contents();
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        let replica_id = file["vault"]["replica_id"].as_str().unwrap();
+        let other = ShortId::encode_uuid(Uuid::new_v4());
+        let edited = edit_raw(&contents, replica_id, &other);
+        assert_signature_invalid(parse(&edited), "edited replica_id");
+
+        // Removing the replica id turns the file into a vault that is not
+        // synced, and fails too.
+        let line = format!("\n    \"replica_id\": \"{replica_id}\",");
+        let edited = edit_raw(&contents, &line, "");
+        assert_signature_invalid(parse(&edited), "removed replica_id");
+    }
+
+    #[test]
+    fn edited_key_fails_verification() {
+        let contents = contents_of(&filled_vault());
+        let edited = edit_raw(&contents, "\"key\": \"personal\"", "\"key\": \"other\"");
+        assert_signature_invalid(parse(&edited), "edited key");
+        // The header is not verified and reads the edited key.
+        assert_eq!(VaultHeader::parse(&edited).unwrap().key, "other");
+    }
+
+    #[test]
+    fn reformatted_file_fails_verification() {
+        let contents = contents_of(&filled_vault());
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        let compact = serde_json::to_string(&file).unwrap();
+        assert_signature_invalid(parse(&compact), "compact file");
+
+        let indented = contents.replace("\n  ", "\n    ");
+        assert_ne!(indented, contents);
+        assert_signature_invalid(parse(&indented), "indented file");
+    }
+
+    #[test]
+    fn unsigned_format2_file_is_refused() {
+        let mut file = filled_file();
+        file.as_object_mut().unwrap().remove("signature");
+        let contents = file.to_string();
+        assert!(matches!(
+            parse(&contents),
+            Err(Error::VaultSignatureMissing)
+        ));
+        // The header of an unsigned file is still read, unverified.
+        assert_eq!(VaultHeader::parse(&contents).unwrap().key, "personal");
+    }
+
+    #[test]
+    fn file_signed_by_another_key_fails_verification() {
+        let contents = filled_vault()
+            .to_file_contents(&TestSigner::random())
+            .unwrap();
+        assert_signature_invalid(parse(&contents), "file signed by another key");
+    }
+
+    #[test]
+    fn signature_that_is_not_der_fails_verification() {
+        let contents = with_signature(&contents_of(&filled_vault()), b"sig");
+        assert_signature_invalid(parse(&contents), "signature that is not DER");
     }
 
     #[test]
     fn every_id_in_vault_file_is_short() {
         let mut vault = filled_vault();
         vault.replica_id = Some(Uuid::new_v4());
-        let contents = vault.to_file_contents().unwrap();
+        let contents = contents_of(&vault);
 
         // Vault id, replica id, and the ids of the item, its credential, its
         // history entry, its deleted credential, the deleted item, and the
@@ -562,15 +909,15 @@ mod tests {
     fn vault_file_with_hyphenated_ids_loads_and_saves_short_ids() {
         let mut vault = filled_vault();
         vault.replica_id = Some(Uuid::new_v4());
-        let short = vault.to_file_contents().unwrap();
-        let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short);
+        let short = contents_of(&vault);
+        let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short, &signer());
         assert!(hyphenated.contains(&format!("\"{}\"", vault.id.hyphenated())));
 
-        let back = EncryptedVault::parse(&hyphenated).unwrap();
+        let back = parse(&hyphenated).unwrap();
         assert_eq!(back.id, vault.id);
         assert_eq!(back.replica_id, vault.replica_id);
         assert_eq!(VaultHeader::parse(&hyphenated).unwrap().id, vault.id);
-        assert_eq!(back.to_file_contents().unwrap(), short);
+        assert_eq!(back.to_vault_json().unwrap(), raw(&short));
     }
 
     #[test]
@@ -633,7 +980,7 @@ mod tests {
             file["signature"] = json!("c2ln");
             let contents = file.to_string();
 
-            let result = EncryptedVault::parse(&contents);
+            let result = parse(&contents);
             assert!(
                 matches!(result, Err(Error::UnsupportedVaultFormat(f)) if f == format),
                 "format {format}"
@@ -655,7 +1002,7 @@ mod tests {
         for shape in shapes {
             let mut file = filled_file();
             file["vault"]["file_key"] = shape.clone();
-            let result = EncryptedVault::parse(&file.to_string());
+            let result = parse(&signed(&file));
             assert!(
                 matches!(result, Err(Error::VaultDeserializationError(_))),
                 "{shape}"
@@ -668,7 +1015,7 @@ mod tests {
         // A format 1 file is the vault object without an envelope.
         let contents = serde_json::to_string_pretty(&filled_vault()).unwrap();
         assert!(matches!(
-            EncryptedVault::parse(&contents),
+            parse(&contents),
             Err(Error::UnsupportedVaultFormat(1))
         ));
         assert!(matches!(
@@ -709,7 +1056,7 @@ mod tests {
     #[test]
     fn unknown_field_in_any_outer_struct_is_refused() {
         let file = filled_file();
-        EncryptedVault::parse(&file.to_string()).unwrap();
+        parse(&signed(&file)).unwrap();
 
         let item = only_entry(&file, "/vault/items");
         let credential = only_entry(&file, &format!("{item}/credentials"));
@@ -736,7 +1083,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = filled_vault();
         let path = dir.path().join("filled.json");
-        fs::write(&path, vault.to_file_contents().unwrap()).unwrap();
+        fs::write(&path, contents_of(&vault)).unwrap();
 
         let header = VaultHeader::peek(&path).unwrap();
         assert_eq!(header.id, vault.id);
@@ -746,12 +1093,12 @@ mod tests {
     #[test]
     fn header_holds_vault_key() {
         let vault = filled_vault();
-        let contents = vault.to_file_contents().unwrap();
+        let contents = contents_of(&vault);
 
         let file: Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(file["vault"]["key"], json!("personal"));
         assert_eq!(VaultHeader::parse(&contents).unwrap().key, "personal");
-        assert_eq!(EncryptedVault::parse(&contents).unwrap().key, "personal");
+        assert_eq!(parse(&contents).unwrap().key, "personal");
     }
 
     #[test]
@@ -761,7 +1108,7 @@ mod tests {
         let contents = file.to_string();
 
         assert!(matches!(
-            EncryptedVault::parse(&contents),
+            parse(&signed(&file)),
             Err(Error::VaultDeserializationError(_))
         ));
         assert!(matches!(
@@ -778,10 +1125,7 @@ mod tests {
             let contents = file.to_string();
 
             assert!(
-                matches!(
-                    EncryptedVault::parse(&contents),
-                    Err(Error::InvalidVaultKey(_))
-                ),
+                matches!(parse(&signed(&file)), Err(Error::InvalidVaultKey(_))),
                 "{key:?}"
             );
             assert!(

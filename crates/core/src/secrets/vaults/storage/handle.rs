@@ -21,7 +21,7 @@ use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBu
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
-use crate::secrets::vaults::format::signing::KeychainSigner;
+use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
@@ -134,9 +134,10 @@ impl VaultHandle {
     /// Unlock on a specific [`AuthContext`]. The app broker passes
     /// [`AuthContext::Foreign`] so the app that owns the context draws the
     /// prompt for a lapsed authentication.
+    /// The file is verified under `device-signing-key` before it is unwrapped.
     pub fn unlock_on(&mut self, auth_context: AuthContext) -> Result<(), Error> {
         // note: does not check if the LAContext is still valid
-        let encrypted_vault = EncryptedVault::load(&self.path)?;
+        let encrypted_vault = EncryptedVault::load(&self.path, &KeychainSigner)?;
         let managed_key = get_vault_encryption_key_on(auth_context)?;
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)
             .inspect_err(|e| log::debug!("failed to build vault: {e}"))
@@ -172,11 +173,17 @@ impl VaultHandle {
         }
     }
 
-    /// Contents of the vault file for the unlocked vault, always in the current
-    /// format.
-    pub(crate) fn file_contents(&self) -> Result<String, Error> {
+    /// Raw vault bytes of the unlocked vault, always in the current format.
+    /// The vault file holds them signed.
+    pub(crate) fn vault_json(&self) -> Result<String, Error> {
         let vault = self.get_unlocked_vault()?;
-        vault.to_encrypted(true)?.to_file_contents()
+        vault.to_encrypted(true)?.to_vault_json()
+    }
+
+    /// Contents of the vault file for the unlocked vault, always in the current
+    /// format, signed by `signer`.
+    pub(crate) fn file_contents(&self, signer: &dyn VaultSigner) -> Result<String, Error> {
+        EncryptedVault::sign_vault_json(self.vault_json()?, signer)
     }
 
     /// File key of the unlocked vault, for a transaction that reloads it.
