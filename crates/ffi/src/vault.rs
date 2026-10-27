@@ -30,6 +30,13 @@ pub struct DuplicateVaultInfo {
     pub paths: Vec<String>,
 }
 
+/// Vault key claimed by more than one file, with the path of each file.
+#[derive(uniffi::Record, Clone)]
+pub struct DuplicateVaultKeyInfo {
+    pub key: String,
+    pub paths: Vec<String>,
+}
+
 /// A retained version of a vault: the vault file as it was before a save.
 #[derive(uniffi::Record)]
 pub struct RetainedVersionInfo {
@@ -655,6 +662,25 @@ impl AxoPass {
             .collect())
     }
 
+    /// List vault keys claimed by more than one file. None of these files is
+    /// in `list_vaults`. A file can also be in `list_duplicate_vaults`. Does
+    /// not require authentication.
+    pub fn list_duplicate_vault_keys(&self) -> Result<Vec<DuplicateVaultKeyInfo>, FfiError> {
+        let manager = self.manager.lock().map_err(|_| FfiError::Poisoned)?;
+        Ok(manager
+            .duplicate_keys()
+            .iter()
+            .map(|duplicate| DuplicateVaultKeyInfo {
+                key: duplicate.key.clone(),
+                paths: duplicate
+                    .paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            })
+            .collect())
+    }
+
     /// List items for a vault. Decrypts the vault from disk using the
     /// shared LAContext — no additional Touch ID prompt if `unlock` has
     /// already been called. Triggers auth if called before `unlock`.
@@ -1079,13 +1105,16 @@ impl AxoPass {
     }
 
     /// Rename a vault and/or change its key, in one transaction that saves
-    /// once. Mirrors `update_vault` in the Tauri app.
+    /// once. Mirrors `update_vault` in the Tauri app. The new key is
+    /// normalized, and refused if another vault file claims it. The file name
+    /// is unchanged.
     pub async fn update_vault(
         &self,
         vault_key: String,
         new_vault_key: Option<String>,
         new_name: Option<String>,
     ) -> Result<(), FfiError> {
+        let store = self.store()?;
         let (renamed, rekeyed, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let mut renamed = None;
@@ -1097,11 +1126,12 @@ impl AxoPass {
                 }
 
                 let mut rekeyed = None;
-                if new_vault_key.as_deref() != Some(vw.key.as_str())
-                    && let Some(new_vault_key) = new_vault_key
-                {
-                    vw.set_vault_key(new_vault_key.clone())?;
-                    rekeyed = Some(new_vault_key);
+                if let Some(new_vault_key) = new_vault_key {
+                    let new_vault_key = store.unclaimed_key(&new_vault_key, Some(&vw.path))?;
+                    if new_vault_key != vw.key {
+                        vw.set_vault_key(new_vault_key.clone())?;
+                        rekeyed = Some(new_vault_key);
+                    }
                 }
 
                 Ok((renamed, rekeyed, audit::SubjectIds::vault(vw.vault_id()?)))

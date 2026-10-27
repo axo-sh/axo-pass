@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
@@ -55,7 +55,7 @@ impl Fixture {
             files.create(vw).unwrap();
             keys.insert(vw.vault_id().unwrap(), vw.unlocked_key().unwrap());
         }
-        let external = BTreeMap::from([("shared".to_string(), shared_path)]);
+        let external = vec![shared_path];
         Self {
             _dir: dir,
             vaults: VaultCatalog::with_unlocker(

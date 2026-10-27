@@ -6,6 +6,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::audit::test_support::test_dir;
 use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
@@ -15,10 +16,11 @@ use crate::secrets::vaults::bundle::exported_bundle::{
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey};
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::storage::txn::VaultWriter;
 
 #[test]
 fn test_passphrase_round_trip() {
@@ -250,7 +252,7 @@ fn bundle_exported_before_vault_format_2_imports() {
     assert_eq!(prepared.id, bundled.id);
     assert_eq!(prepared.default_key.as_deref(), Some("old"));
     let imported = prepared
-        .into_vault(VaultFileKey::new(vec![0u8; 32]))
+        .into_vault("old".to_string(), VaultFileKey::new(vec![0u8; 32]))
         .unwrap();
 
     let value = imported
@@ -334,6 +336,42 @@ fn bundle_is_written_with_short_ids() {
         )
         .unwrap();
     assert_eq!(raw.expose_secret().0.len(), 32);
+}
+
+#[test]
+fn imported_vault_holds_selected_key_and_is_named_by_id() {
+    // Import records an audit event.
+    let _audit_dir = test_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let vaults_dir = dir.path().join("vaults");
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let ids = [Uuid::new_v4(), Uuid::new_v4()];
+    let selection = BTreeMap::from([
+        (ids[0], "Work Vault".to_string()),
+        (ids[1], "shared".to_string()),
+    ]);
+
+    let imported = ImportableBundle::for_test(&ids)
+        .import_with(&selection, &vaults_dir, &files, || {
+            Ok(Box::new(|raw: &[u8]| Ok(VaultFileKey::new(raw.to_vec()))))
+        })
+        .unwrap();
+
+    let mut keys = Vec::new();
+    for vh in &imported {
+        let header = VaultHeader::peek(&vh.path).unwrap();
+        let name = format!("{}.json", ShortId::encode_uuid(header.id));
+        assert_eq!(vh.path, vaults_dir.join(name));
+        assert_eq!(header.key, vh.key);
+        keys.push((header.id, header.key));
+    }
+    keys.sort();
+    let mut expected = vec![
+        (ids[0], "work-vault".to_string()),
+        (ids[1], "shared".to_string()),
+    ];
+    expected.sort();
+    assert_eq!(keys, expected);
 }
 
 #[test]

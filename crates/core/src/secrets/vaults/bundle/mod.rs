@@ -37,6 +37,9 @@ use crate::secrets::vaults::storage::txn::VaultWriter;
 
 const FILE_KEY_LEN: usize = 32;
 
+/// Wraps a raw vault file key into the form the vault file stores.
+type FileKeyWrapper = Box<dyn Fn(&[u8]) -> Result<VaultFileKey, Error>>;
+
 /// Metadata about one vault inside an opened bundle, for the caller to build an
 /// import selection.
 pub struct BundleVaultInfo {
@@ -55,12 +58,14 @@ struct PreparedVault {
 }
 
 impl PreparedVault {
-    /// Decrypt the vault with its raw file key. `file_key` is the wrapped form
+    /// Decrypt the vault with its raw file key. `key` is the vault key the
+    /// vault is imported as, already validated. `file_key` is the wrapped form
     /// the vault file stores. The vault is not synced.
-    fn into_vault(self, file_key: VaultFileKey) -> Result<Vault, Error> {
+    fn into_vault(self, key: String, file_key: VaultFileKey) -> Result<Vault, Error> {
         let cipher = VaultCipher::new_with_bytes(self.raw_file_key.expose_secret(), self.id);
         let encrypted_vault = EncryptedVault {
             id: self.id,
+            key,
             name: self.name,
             generation: 0,
             replica_id: None,
@@ -154,6 +159,23 @@ impl ImportableBundle {
         Ok(Self { vaults })
     }
 
+    /// Bundle of empty vaults with ids `ids` and fixed file keys, for tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(ids: &[Uuid]) -> Self {
+        let vaults = ids
+            .iter()
+            .map(|id| PreparedVault {
+                id: *id,
+                name: None,
+                default_key: None,
+                raw_file_key: SecretBox::new(Box::new(vec![7u8; FILE_KEY_LEN])),
+                metadata: None,
+                items: BTreeMap::new(),
+            })
+            .collect();
+        Self { vaults }
+    }
+
     /// Metadata for every vault in the bundle, in file order.
     pub fn vaults(&self) -> Vec<BundleVaultInfo> {
         self.vaults
@@ -167,18 +189,41 @@ impl ImportableBundle {
     }
 
     /// Import the selected vaults. `selection` maps a bundle vault id to the
-    /// key it should be imported as. Every target key must be valid, unique
-    /// among the selection, and absent on disk. Each vault is written in its
-    /// own transaction, which never leaves a partial file. A vault id that
-    /// another vault file on this Mac already holds is refused. If a write
-    /// fails, the vaults this import already wrote are removed on a
-    /// best-effort basis.
+    /// key it should be imported as. Every target key must be valid and
+    /// unique among the selection. The caller checks that no vault file on
+    /// this Mac claims it. Each vault holds its key and is written to
+    /// `{id}.json` in `vault_dir`, in its own transaction, which never leaves
+    /// a partial file. A vault id that another vault file on this Mac already
+    /// holds is refused. If a write fails, the vaults this import already
+    /// wrote are removed on a best-effort basis.
     pub fn import(
         self,
         selection: &BTreeMap<Uuid, String>,
         vault_dir: &Path,
         files: &VaultWriter,
         auth_context: AuthContext,
+    ) -> Result<Vec<VaultHandle>, Error> {
+        self.import_with(selection, vault_dir, files, || {
+            let managed_key = get_vault_encryption_key_on(auth_context)?;
+            Ok(Box::new(move |raw: &[u8]| {
+                Ok(VaultFileKey::new(
+                    managed_key
+                        .encrypt(raw)
+                        .ok_or(Error::VaultFileKeyEncryptionError)?
+                        .into_bytes(),
+                ))
+            }))
+        })
+    }
+
+    /// [`Self::import`] with the file key wrapper from `wrapper`. `wrapper`
+    /// runs once, after every target key is checked.
+    fn import_with(
+        self,
+        selection: &BTreeMap<Uuid, String>,
+        vault_dir: &Path,
+        files: &VaultWriter,
+        wrapper: impl FnOnce() -> Result<FileKeyWrapper, Error>,
     ) -> Result<Vec<VaultHandle>, Error> {
         if selection.is_empty() {
             return Err(Error::VaultImportError(
@@ -211,10 +256,11 @@ impl ImportableBundle {
                 )));
             }
 
-            let path = vault_dir.join(format!("{key}.json"));
+            let path = VaultHandle::file_path(vault_dir, *id);
             if path.exists() {
-                return Err(Error::InvalidVaultKey(format!(
-                    "A vault file already exists for key '{key}'"
+                return Err(Error::DuplicateVaultId(format!(
+                    "A vault file already exists at {}",
+                    path.display()
                 )));
             }
             planned.push(Planned {
@@ -226,19 +272,14 @@ impl ImportableBundle {
 
         // re-wrap each file key with the local Secure Enclave key, and decrypt
         // each vault so a damaged one is refused before anything is written
-        let managed_key = get_vault_encryption_key_on(auth_context)?;
+        let wrap = wrapper()?;
         let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
         let mut audit_rows: Vec<(Uuid, String, Option<String>)> = Vec::with_capacity(planned.len());
         for p in planned {
             audit_rows.push((p.prepared.id, p.key.clone(), p.prepared.name.clone()));
-            let enc_file_key = VaultFileKey::new(
-                managed_key
-                    .encrypt(p.prepared.raw_file_key.expose_secret())
-                    .ok_or(Error::VaultFileKeyEncryptionError)?
-                    .into_bytes(),
-            );
-            let vault = p.prepared.into_vault(enc_file_key)?;
-            staged.push(VaultHandle::unlocked(p.key, p.path, vault));
+            let enc_file_key = wrap(p.prepared.raw_file_key.expose_secret())?;
+            let vault = p.prepared.into_vault(p.key, enc_file_key)?;
+            staged.push(VaultHandle::unlocked(p.path, vault));
         }
 
         let mut written: Vec<&Path> = Vec::with_capacity(staged.len());

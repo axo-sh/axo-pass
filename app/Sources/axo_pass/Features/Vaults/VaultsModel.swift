@@ -121,6 +121,15 @@ final class VaultsModel {
   var loadError: String? = nil
   // Vault ids held by more than one file. None of these files is in `vaults`.
   var duplicateVaults: [DuplicateVaultInfo] = []
+  // Vault keys claimed by more than one file. None of these files is in
+  // `vaults`. A file can also be in `duplicateVaults`.
+  var duplicateVaultKeys: [DuplicateVaultKeyInfo] = []
+
+  // Number of vault files not shown for a duplicate id or key. A file in both
+  // lists counts once.
+  var hiddenVaultFileCount: Int {
+    Set(duplicateVaults.flatMap(\.paths) + duplicateVaultKeys.flatMap(\.paths)).count
+  }
 
   // Global lock state — mirrors LockStore in the Tauri app
   var isAppUnlocked = false
@@ -193,6 +202,7 @@ final class VaultsModel {
         ($0.name ?? $0.key).localizedCaseInsensitiveCompare($1.name ?? $1.key) == .orderedAscending
       }
       duplicateVaults = try core.listDuplicateVaults()
+      duplicateVaultKeys = try core.listDuplicateVaultKeys()
       loadError = nil
       if sidebarSelection == nil, let key = vaults.first?.key {
         selectSidebarDestination(.vault(key))
@@ -200,6 +210,7 @@ final class VaultsModel {
     } catch {
       vaults = []
       duplicateVaults = []
+      duplicateVaultKeys = []
       loadError = String(describing: error)
     }
   }

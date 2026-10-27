@@ -18,6 +18,7 @@ use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
     VaultItemMetadata, VaultItemOverview, VaultMetadata,
 };
+use crate::secrets::vaults::storage::handle::validate_key;
 
 /// Vault file format written and read by this build.
 pub const VAULT_FORMAT: u32 = 2;
@@ -70,6 +71,8 @@ fn is_zero(value: &u64) -> bool {
 pub struct EncryptedVault {
     #[serde_as(as = "ShortId")]
     pub id: Uuid,
+    /// Vault key, unique among the vault files on this Mac. Required.
+    pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Save counter for sync. Absent if 0. Not read yet.
@@ -92,14 +95,15 @@ pub struct EncryptedVault {
     pub deleted: BTreeMap<Uuid, DeletedItem>,
 }
 
-/// Struct to read just the id and name of a vault file, without decrypting the
-/// vault itself Used for the locked vault list and the transaction registry.
-/// Other fields are ignored.
+/// Struct to read just the id, key, and name of a vault file, without
+/// decrypting the vault itself. Used for the locked vault list and the
+/// transaction registry. Other fields are ignored.
 #[serde_as]
 #[derive(Deserialize)]
 pub struct VaultHeader {
     #[serde_as(as = "ShortId")]
     pub id: Uuid,
+    pub key: String,
     pub name: Option<String>,
 }
 
@@ -108,9 +112,15 @@ impl VaultHeader {
         Self::parse(&EncryptedVault::read_file(vault_path)?)
     }
 
+    /// Parse the header of a vault file. A missing key fails with
+    /// `VaultDeserializationError`, and an invalid key with
+    /// `InvalidVaultKey`.
     pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
         let vault = VaultEnvelope::vault_json(vault_data)?;
-        serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)
+        let header: Self =
+            serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)?;
+        EncryptedVault::check_key(&header.key)?;
+        Ok(header)
     }
 }
 
@@ -131,10 +141,23 @@ impl EncryptedVault {
         Self::parse(&Self::read_file(vault_path)?)
     }
 
-    /// Parse the contents of a vault file.
+    /// Parse the contents of a vault file. An invalid key fails with
+    /// `InvalidVaultKey`.
     pub(crate) fn parse(vault_data: &str) -> Result<Self, Error> {
         let vault = VaultEnvelope::vault_json(vault_data)?;
-        serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)
+        let vault: Self =
+            serde_json::from_str(vault.get()).map_err(Error::VaultDeserializationError)?;
+        Self::check_key(&vault.key)?;
+        Ok(vault)
+    }
+
+    /// Fail if a key read from a vault file is not a valid vault key. Keys are
+    /// written normalized, so a key with an upper case letter is refused.
+    fn check_key(key: &str) -> Result<(), Error> {
+        if !validate_key(key) {
+            return Err(Error::InvalidVaultKey(key.to_string()));
+        }
+        Ok(())
     }
 
     /// Contents of a vault file of format [`VAULT_FORMAT`] for this vault.
@@ -440,6 +463,7 @@ mod tests {
     fn make_vault() -> EncryptedVault {
         EncryptedVault {
             id: Uuid::new_v4(),
+            key: "test-vault".to_string(),
             name: Some("test vault".to_string()),
             generation: 0,
             replica_id: None,
@@ -717,6 +741,57 @@ mod tests {
         let header = VaultHeader::peek(&path).unwrap();
         assert_eq!(header.id, vault.id);
         assert_eq!(header.name.as_deref(), Some("Filled"));
+    }
+
+    #[test]
+    fn header_holds_vault_key() {
+        let vault = filled_vault();
+        let contents = vault.to_file_contents().unwrap();
+
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(file["vault"]["key"], json!("personal"));
+        assert_eq!(VaultHeader::parse(&contents).unwrap().key, "personal");
+        assert_eq!(EncryptedVault::parse(&contents).unwrap().key, "personal");
+    }
+
+    #[test]
+    fn file_without_key_is_refused() {
+        let mut file = filled_file();
+        file["vault"].as_object_mut().unwrap().remove("key");
+        let contents = file.to_string();
+
+        assert!(matches!(
+            EncryptedVault::parse(&contents),
+            Err(Error::VaultDeserializationError(_))
+        ));
+        assert!(matches!(
+            VaultHeader::parse(&contents),
+            Err(Error::VaultDeserializationError(_))
+        ));
+    }
+
+    #[test]
+    fn file_with_key_that_is_not_normalized_is_refused() {
+        for key in ["Personal", "my vault", "", "1password"] {
+            let mut file = filled_file();
+            file["vault"]["key"] = json!(key);
+            let contents = file.to_string();
+
+            assert!(
+                matches!(
+                    EncryptedVault::parse(&contents),
+                    Err(Error::InvalidVaultKey(_))
+                ),
+                "{key:?}"
+            );
+            assert!(
+                matches!(
+                    VaultHeader::parse(&contents),
+                    Err(Error::InvalidVaultKey(_))
+                ),
+                "{key:?}"
+            );
+        }
     }
 
     #[test]

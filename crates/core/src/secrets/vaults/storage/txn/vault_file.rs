@@ -1,6 +1,5 @@
 //! Vault file paths and writes under the vault locks.
 
-use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -29,7 +28,8 @@ fn duplicate_vault_id(a: &Path, b: &Path) -> Error {
 
 /// Path of the vault file. `tracked` is the path in the vault locks.
 /// `caller_path` is where the caller found the vault. `tracked` is used if
-/// the vault was renamed since.
+/// `caller_path` no longer holds the vault. If both hold it, the vault id is
+/// held by two files and the write is refused.
 pub(super) fn resolve(tracked: &Path, id: Uuid, caller_path: &Path) -> Result<PathBuf, Error> {
     if same_path(tracked, caller_path) {
         return Ok(tracked.to_path_buf());
@@ -58,64 +58,32 @@ pub(super) fn check_create_path(tracked: &Path, id: Uuid, path: &Path) -> Result
 pub(super) fn write_new(vh: &VaultHandle, contents: &str) -> Result<(), Error> {
     write_atomic_new(&vh.path, contents.as_bytes()).map_err(|e| {
         if e.kind() == io::ErrorKind::AlreadyExists {
-            Error::InvalidVaultKey(format!("A vault file already exists for key '{}'", vh.key))
+            Error::DuplicateVaultId(format!(
+                "A vault file already exists at {}",
+                vh.path.display()
+            ))
         } else {
             Error::VaultWriteError(e)
         }
     })
 }
 
-/// Save `vh` over `old_path`, whose contents were `old_contents`. A vault
-/// whose path changed is written at the new path and removed at the old one.
-/// `retain` is called with `old_contents` before the file is replaced, or
-/// after a move succeeds. A failed move retains nothing. Returns whether
-/// anything was written.
+/// Save `vh` over `path`, whose contents were `old_contents`. `retain` is
+/// called with `old_contents` before the file is replaced. The path of `vh`
+/// is `path`, since no save moves a vault file. Returns whether anything was
+/// written.
 pub(super) fn commit(
-    old_path: &Path,
+    path: &Path,
     old_contents: &str,
     vh: &VaultHandle,
     retain: impl FnOnce(&str),
 ) -> Result<bool, Error> {
+    debug_assert_eq!(vh.path, path);
     let contents = vh.file_contents()?;
-    let moved = vh.path != old_path;
-    if !moved && contents == old_contents {
+    if contents == old_contents {
         return Ok(false);
     }
-    if moved {
-        move_vault_file(old_path, vh, &contents)?;
-        retain(old_contents);
-    } else {
-        retain(old_contents);
-        write_atomic(&vh.path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
-    }
+    retain(old_contents);
+    write_atomic(path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
     Ok(true)
-}
-
-/// Write `contents` at the path of `vh`, then remove the vault file at
-/// `old_path`. A file that exists at the new path is never replaced. The vault
-/// locks are per vault id, so another vault file can appear at the new path at
-/// any time. If any step fails, the file at `old_path` is unchanged.
-fn move_vault_file(old_path: &Path, vh: &VaultHandle, contents: &str) -> Result<(), Error> {
-    write_new(vh, contents).map_err(|e| match e {
-        Error::VaultWriteError(e) => Error::VaultKeyUpdateFailed(e),
-        e => e,
-    })?;
-    if let Err(e) = fs::remove_file(old_path) {
-        // Two files with one vault id would make every later write fail.
-        if let Err(undo) = fs::remove_file(&vh.path) {
-            log::error!(
-                "Failed to remove {} after a failed move: {undo}",
-                vh.path.display()
-            );
-        }
-        return Err(Error::VaultKeyUpdateFailed(e));
-    }
-    // Sync the directory so the removal is durable. A crash before the sync can
-    // leave both files.
-    if let Some(dir) = old_path.parent()
-        && let Err(e) = File::open(dir).and_then(|dir| dir.sync_all())
-    {
-        log::error!("Failed to sync {} after a move: {e}", dir.display());
-    }
-    Ok(())
 }

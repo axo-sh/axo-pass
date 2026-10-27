@@ -189,7 +189,7 @@ pub struct Committed<R> {
     pub vault: VaultHandle,
     pub vault_id: Uuid,
     /// Key the caller knew the vault by. It differs from the key of `vault` if
-    /// the transaction renamed the vault, or found it renamed.
+    /// the transaction changed the vault key, or found it changed.
     pub previous_key: String,
     /// Whether the vault changed and was written.
     pub changed: bool,
@@ -268,24 +268,16 @@ impl VaultWriter {
             other => other?,
         };
 
-        // Name the vault by the caller's key. If another writer renamed the
-        // vault since the caller found it, use the new file name.
-        let key = if path == target.path {
-            target.key.clone()
-        } else {
-            path.file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| target.key.clone())
-        };
-        let mut vh = VaultHandle::unlocked(key, path.clone(), vault);
+        // The key comes from the vault. It differs from the caller's key if
+        // another writer changed the key since the caller found the vault.
+        let mut vh = VaultHandle::unlocked(path.clone(), vault);
 
         // Apply the change. An error leaves the file unchanged.
         let value = f(&mut vh)?;
 
-        // Save only if the vault changed.
+        // Save only if the vault changed. A key change writes the same path.
         let changed = vault_file::commit(&path, &contents, &vh, |old| self.retain(id, old))?;
         let save_count = if changed {
-            locked.state.set_path(vh.path.clone());
             vault_lock.record_save()
         } else {
             vault_lock.save_count()
@@ -360,7 +352,7 @@ impl VaultWriter {
     }
 
     /// Replace the vault with its retained version `name`. The replaced file
-    /// is retained in turn.
+    /// is retained in turn. The vault key is kept.
     pub fn restore_version(
         &self,
         target: &Target,

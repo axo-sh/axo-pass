@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::storage::catalog::{DuplicateVaults, VaultCatalog, VaultScanResult};
+use crate::secrets::vaults::storage::catalog::{
+    DuplicateVaultKeys, DuplicateVaults, VaultCatalog, VaultScanResult,
+};
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 
@@ -20,6 +22,8 @@ pub struct VaultsManager {
     vaults: BTreeMap<String, VaultHandle>,
     /// Vault ids held by more than one file when the manager was created.
     duplicates: Vec<DuplicateVaults>,
+    /// Vault keys claimed by more than one file when the manager was created.
+    duplicate_keys: Vec<DuplicateVaultKeys>,
 }
 
 impl VaultsManager {
@@ -34,11 +38,16 @@ impl VaultsManager {
 
     /// A manager of every vault in `store`, locked.
     pub fn with(store: VaultCatalog) -> Self {
-        let VaultScanResult { vaults, duplicates } = store.scan();
+        let VaultScanResult {
+            vaults,
+            duplicates,
+            duplicate_keys,
+        } = store.scan();
         Self {
             store,
             vaults,
             duplicates,
+            duplicate_keys,
         }
     }
 
@@ -50,6 +59,12 @@ impl VaultsManager {
     /// manager.
     pub fn duplicates(&self) -> &[DuplicateVaults] {
         &self.duplicates
+    }
+
+    /// Vault keys claimed by more than one file. None of these files is in
+    /// the manager.
+    pub fn duplicate_keys(&self) -> &[DuplicateVaultKeys] {
+        &self.duplicate_keys
     }
 
     pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {
@@ -234,7 +249,7 @@ mod tests {
             let manager = VaultsManager::with(VaultCatalog::with_unlocker(
                 vaults_dir,
                 files,
-                BTreeMap::new(),
+                Vec::new(),
                 Arc::new(KeyUnlocker::default()),
             ));
             Self {
@@ -312,7 +327,10 @@ mod tests {
 
         assert!(fx.manager.get_vault("personal").is_none());
         assert!(fx.is_unlocked("renamed"));
-        assert!(fx.manager.store.vaults_dir().join("renamed.json").exists());
+        assert_eq!(
+            fx.manager.get_vault("renamed").unwrap().path,
+            fx.original.path
+        );
     }
 
     #[test]

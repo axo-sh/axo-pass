@@ -85,23 +85,24 @@ struct VaultsSidebar: View {
       VaultVersionsSheet(vaultKey: vaultKey, vaultName: existing?.name ?? vaultKey)
     }
     .sheet(isPresented: $showingDuplicates) {
-      DuplicateVaultsSheet(duplicates: model.duplicateVaults)
+      DuplicateVaultsSheet(
+        duplicates: model.duplicateVaults, duplicateKeys: model.duplicateVaultKeys)
     }
   }
 
   @ViewBuilder
   private var vaultItems: some View {
-    if !model.duplicateVaults.isEmpty {
+    let hidden = model.hiddenVaultFileCount
+    if hidden > 0 {
       Button {
         showingDuplicates = true
       } label: {
         SidebarWarningLabel(
-          model.duplicateVaults.count == 1
-            ? "1 vault not shown" : "\(model.duplicateVaults.count) vaults not shown"
+          hidden == 1 ? "1 vault file not shown" : "\(hidden) vault files not shown"
         )
       }
       .buttonStyle(.plain)
-      .help("Several vault files have the same vault id")
+      .help("Several vault files have the same vault id or vault key")
     }
 
     if let err = model.loadError {
@@ -203,10 +204,12 @@ private struct SidebarSectionHeader: View {
   }
 }
 
-/// Vault files that share a vault id, grouped by id, with a Show in Finder
-/// button for each file.
+/// Vault files that share a vault id or a vault key, grouped by id and then by
+/// key, with a Show in Finder button for each file. A file that shares both is
+/// in both groups.
 private struct DuplicateVaultsSheet: View {
   let duplicates: [DuplicateVaultInfo]
+  let duplicateKeys: [DuplicateVaultKeyInfo]
 
   @Environment(\.dismiss) private var dismiss
 
@@ -216,7 +219,7 @@ private struct DuplicateVaultsSheet: View {
         .font(.headline)
 
       Text(
-        "Vault files with duplicate ids found. Delete or move the duplicates out of the vault folder. then reopen this app."
+        "Vault files with duplicate ids or keys found. Delete or move the duplicates out of the vault folder, then reopen this app."
       )
       .font(.callout)
       .foregroundStyle(.secondary)
@@ -225,29 +228,10 @@ private struct DuplicateVaultsSheet: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 12) {
           ForEach(duplicates, id: \.vaultId) { duplicate in
-            VStack(alignment: .leading, spacing: 6) {
-              Text("Vault id \(duplicate.vaultId)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-              ForEach(duplicate.paths, id: \.self) { path in
-                HStack(spacing: 8) {
-                  Text(path)
-                    .font(.callout.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(path)
-                  Spacer(minLength: 0)
-                  Button("Show in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-                  }
-                  .controlSize(.small)
-                }
-              }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            DuplicateFilesGroup(title: "Vault id \(duplicate.vaultId)", paths: duplicate.paths)
+          }
+          ForEach(duplicateKeys, id: \.key) { duplicate in
+            DuplicateFilesGroup(title: "Vault key \(duplicate.key)", paths: duplicate.paths)
           }
         }
       }
@@ -261,6 +245,39 @@ private struct DuplicateVaultsSheet: View {
     }
     .padding(20)
     .frame(width: 520)
+  }
+}
+
+/// Paths of vault files that share one claim, under `title`, with a Show in
+/// Finder button for each file.
+private struct DuplicateFilesGroup: View {
+  let title: String
+  let paths: [String]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+      ForEach(paths, id: \.self) { path in
+        HStack(spacing: 8) {
+          Text(path)
+            .font(.callout.monospaced())
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(path)
+          Spacer(minLength: 0)
+          Button("Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+          }
+          .controlSize(.small)
+        }
+      }
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
   }
 }
 

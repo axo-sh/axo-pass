@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::btree_map::Entry;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
@@ -23,8 +22,10 @@ pub struct AppConfig {
     pub id: uuid::Uuid,
     pub update_check_disabled: Option<bool>,
     pub updates: Option<UpdateCheckRecord>,
-    #[serde(default)]
-    pub external_vaults: BTreeMap<String, ExternalVaultConfig>,
+    /// Vault files outside the vaults directory. The vault key is read from
+    /// each file.
+    #[serde(default, deserialize_with = "ExternalVaultConfig::read_list")]
+    pub external_vaults: Vec<ExternalVaultConfig>,
     /// `~/.ssh` keys the Axo agent advertises and loads on first use, keyed by
     /// canonical `SHA256:...` fingerprint. This file is user-writable, so an
     /// entry grants nothing: every use of a loaded key still prompts unless an
@@ -39,7 +40,7 @@ impl Default for AppConfig {
             id: uuid::Uuid::new_v4(),
             update_check_disabled: None,
             updates: None,
-            external_vaults: BTreeMap::new(),
+            external_vaults: Vec::new(),
             ssh_autoload: BTreeMap::new(),
         }
     }
@@ -107,10 +108,11 @@ impl AppConfig {
         });
     }
 
-    pub fn add_external_vault(&mut self, vault_key: &str, path: PathBuf) -> Result<(), io::Error> {
-        let vault_key = vault_key.to_string();
-        if let Entry::Vacant(e) = self.external_vaults.entry(vault_key) {
-            e.insert(ExternalVaultConfig { path });
+    /// Add the external vault file at `path`, and save the config. A path
+    /// already in the list is not added again.
+    pub fn add_external_vault(&mut self, path: PathBuf) -> Result<(), io::Error> {
+        if self.external_vaults.iter().all(|vault| vault.path != path) {
+            self.external_vaults.push(ExternalVaultConfig { path });
             self.save()?;
         }
         Ok(())
@@ -134,9 +136,33 @@ impl AppConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ExternalVaultConfig {
     pub path: PathBuf,
+}
+
+/// `external_vaults` as written by any build. Older builds wrote a table of
+/// paths by vault key.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ExternalVaultList {
+    List(Vec<ExternalVaultConfig>),
+    ByKey(BTreeMap<String, ExternalVaultConfig>),
+}
+
+impl ExternalVaultConfig {
+    /// Read `external_vaults` as a list, or as a table by vault key. The keys
+    /// of a table are ignored, since the vault key is read from each file.
+    /// The next save writes a list.
+    fn read_list<'de, D>(deserializer: D) -> Result<Vec<Self>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match ExternalVaultList::deserialize(deserializer)? {
+            ExternalVaultList::List(list) => list,
+            ExternalVaultList::ByKey(by_key) => by_key.into_values().collect(),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -147,6 +173,8 @@ pub struct AutoloadEntry {
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
+
     use super::*;
 
     #[test]
@@ -180,6 +208,45 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         let parsed: AppConfig = toml::from_str(&before).unwrap();
         assert_eq!(parsed.id, config.id);
+    }
+
+    #[test]
+    fn external_vaults_are_written_as_paths_without_keys() {
+        let mut config = AppConfig::default();
+        let path = PathBuf::from("/Users/me/Vaults/shared.json");
+        config
+            .external_vaults
+            .push(ExternalVaultConfig { path: path.clone() });
+
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+
+        assert_eq!(parsed.external_vaults, [ExternalVaultConfig { path }]);
+        assert!(!text.contains("[external_vaults."), "{text}");
+    }
+
+    #[test]
+    fn external_vaults_keyed_by_vault_key_are_read_as_paths() {
+        let text = indoc! {r#"
+            id = "6f1c2b7e-8a43-4c1d-9b55-0d2f3e4a5b6c"
+
+            [external_vaults.shared]
+            path = "/Users/me/Vaults/shared.json"
+
+            [external_vaults.work]
+            path = "/Users/me/Vaults/work.json"
+        "#};
+
+        let parsed: AppConfig = toml::from_str(text).unwrap();
+
+        let paths: Vec<_> = parsed.external_vaults.into_iter().map(|v| v.path).collect();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("/Users/me/Vaults/shared.json"),
+                PathBuf::from("/Users/me/Vaults/work.json"),
+            ]
+        );
     }
 
     #[test]

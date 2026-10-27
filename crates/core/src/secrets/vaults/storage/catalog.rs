@@ -14,6 +14,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::VaultSigner;
+use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key, normalized_key,
 };
@@ -27,8 +28,8 @@ use crate::secrets::vaults::storage::txn::{RetainedVersion, VaultWriter};
 pub struct VaultCatalog {
     vaults_dir: PathBuf,
     files: VaultWriter,
-    /// External vault paths by key. `None` reads the app config each time.
-    external: Option<BTreeMap<String, PathBuf>>,
+    /// External vault paths. `None` reads the app config each time.
+    external: Option<Vec<PathBuf>>,
     unlocker: Arc<dyn Unlocker>,
 }
 
@@ -39,6 +40,8 @@ pub struct VaultScanResult {
     pub vaults: BTreeMap<String, VaultHandle>,
     /// Vault ids held by more than one file, ordered by id.
     pub duplicates: Vec<DuplicateVaults>,
+    /// Vault keys claimed by more than one file, ordered by key.
+    pub duplicate_keys: Vec<DuplicateVaultKeys>,
 }
 
 /// Vault files that hold one vault id, or ids whose short forms differ only in
@@ -47,7 +50,16 @@ pub struct VaultScanResult {
 pub struct DuplicateVaults {
     /// Smallest vault id of the files.
     pub id: Uuid,
-    /// Paths of the files, ordered by vault key.
+    /// Paths of the files, ordered by path.
+    pub paths: Vec<PathBuf>,
+}
+
+/// Vault files that claim one vault key. None of them is listed or tracked in
+/// the vault locks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DuplicateVaultKeys {
+    pub key: String,
+    /// Paths of the files, ordered by path.
     pub paths: Vec<PathBuf>,
 }
 
@@ -90,7 +102,7 @@ impl VaultCatalog {
     pub fn with_unlocker(
         vaults_dir: PathBuf,
         files: VaultWriter,
-        external: BTreeMap<String, PathBuf>,
+        external: Vec<PathBuf>,
         unlocker: Arc<dyn Unlocker>,
     ) -> Self {
         Self {
@@ -114,8 +126,8 @@ impl VaultCatalog {
         self.files.signer()
     }
 
-    /// External vault paths by key.
-    fn external_vaults(&self) -> BTreeMap<String, PathBuf> {
+    /// External vault paths.
+    fn external_vaults(&self) -> Vec<PathBuf> {
         match &self.external {
             Some(external) => external.clone(),
             None => APP_CONFIG
@@ -123,7 +135,7 @@ impl VaultCatalog {
                 .unwrap_or_else(|e| e.into_inner())
                 .external_vaults
                 .iter()
-                .map(|(key, config)| (key.clone(), config.path.clone()))
+                .map(|config| config.path.clone())
                 .collect(),
         }
     }
@@ -133,69 +145,19 @@ impl VaultCatalog {
         self.scan().vaults
     }
 
-    /// Scan the vault dir for vaults. Every vault by key, locked, and the vault
-    /// ids held by more than one file. A vault file in the vaults directory
-    /// is used before an external vault with the same key. Files that fail
-    /// to load are skipped.
+    /// Scan the vault files. Every vault by key, locked, the vault ids held by
+    /// more than one file, and the vault keys claimed by more than one file.
+    /// The key of each vault is read from its file. Files that fail to load
+    /// are skipped.
     ///
     /// Every header is read before any path is tracked in the vault locks.
-    /// Files that share a vault id are not listed and not tracked, so no
-    /// handle from this list can write to them.
+    /// Files that share a vault id or a vault key are not listed and not
+    /// tracked, so no handle from this list can write to them. A file that
+    /// shares both is reported in both lists.
     pub fn scan(&self) -> VaultScanResult {
-        // Vaults found by key, with their ids. Nothing is tracked yet.
-        let mut found = BTreeMap::new();
-
-        let entries = fs::read_dir(&self.vaults_dir)
-            .into_iter()
-            .flatten()
-            .flatten();
-        for entry in entries {
-            let path = entry.path();
-            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-            let Some(key) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
-                continue;
-            };
-            match Self::read_locked(key.clone(), &path) {
-                Ok(vault) => {
-                    found.insert(key, vault);
-                },
-                Err(e) => log::error!("Skipping {key}, failed to load: {e:?}"),
-            }
-        }
-
-        for (key, path) in self.external_vaults() {
-            if found.contains_key(&key) {
-                log::error!(
-                    "Vault with duplicate {key} found at {}, skipping",
-                    path.display()
-                );
-                continue;
-            }
-            if let Ok(vault) = Self::read_locked(key.clone(), &path) {
-                found.insert(key, vault);
-            }
-        }
-
-        // Group by the folded short id, so ids that differ only in letter
-        // case are duplicates. They would name one `{id}.json` file on a file
-        // system that ignores case. Equal ids have equal folded forms.
-        let mut groups: BTreeMap<String, (Uuid, Vec<PathBuf>)> = BTreeMap::new();
-        for (id, vh) in found.values() {
-            let (first, paths) = groups
-                .entry(ShortId::folded(*id))
-                .or_insert_with(|| (*id, Vec::new()));
-            *first = (*first).min(*id);
-            paths.push(vh.path.clone());
-        }
-        let groups: BTreeMap<String, DuplicateVaults> = groups
-            .into_iter()
-            .filter(|(_, (_, paths))| Self::distinct_files(paths) > 1)
-            .map(|(folded, (id, paths))| (folded, DuplicateVaults { id, paths }))
-            .collect();
-        let mut duplicates: Vec<DuplicateVaults> = groups.values().cloned().collect();
-        duplicates.sort_by_key(|duplicate| duplicate.id);
+        let found = self.read_all();
+        let duplicates = Self::duplicate_ids(&found);
+        let duplicate_keys = Self::duplicate_keys(&found);
         for duplicate in &duplicates {
             log::error!(
                 "Skipping vault {}, vault id in use by multiple files: {:?}",
@@ -203,36 +165,146 @@ impl VaultCatalog {
                 duplicate.paths
             );
         }
+        for duplicate in &duplicate_keys {
+            log::error!(
+                "Skipping vault key {}, claimed by multiple files: {:?}",
+                duplicate.key,
+                duplicate.paths
+            );
+        }
+        let refused: BTreeSet<&Path> = duplicates
+            .iter()
+            .flat_map(|duplicate| &duplicate.paths)
+            .chain(duplicate_keys.iter().flat_map(|duplicate| &duplicate.paths))
+            .map(PathBuf::as_path)
+            .collect();
 
         let mut vaults = BTreeMap::new();
-        for (key, (id, vh)) in found {
-            // skip dupes
-            if groups.contains_key(&ShortId::folded(id)) {
+        for (id, vh) in found {
+            if refused.contains(vh.path.as_path()) {
                 continue;
             }
             self.files.locks().track(id, &vh.path);
-            vaults.insert(key, vh);
+            vaults.insert(vh.key.clone(), vh);
         }
 
-        VaultScanResult { vaults, duplicates }
+        VaultScanResult {
+            vaults,
+            duplicates,
+            duplicate_keys,
+        }
     }
 
-    /// Locked vault at `path` named `key`, and its vault id. Only the header
-    /// is read. The path is not tracked in the vault locks.
-    fn read_locked(key: String, path: &Path) -> Result<(Uuid, VaultHandle), Error> {
-        let header = VaultHeader::peek(path)?;
-        let id = header.id;
-        Ok((id, VaultHandle::from_header(Some(key), path, header)?))
+    /// Every vault file in the vaults directory and every external vault
+    /// file, with its vault id, locked, ordered by path. Only the headers are
+    /// read, and nothing is tracked in the vault locks. A path to a file
+    /// already read, such as an external vault path that points into the
+    /// vaults directory, is skipped. Files that fail to load are logged and
+    /// skipped.
+    fn read_all(&self) -> Vec<(Uuid, VaultHandle)> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(&self.vaults_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json")
+            })
+            .collect();
+        paths.sort();
+        paths.extend(self.external_vaults());
+
+        let mut seen = BTreeSet::new();
+        let mut found = Vec::new();
+        for path in paths {
+            if !seen.insert(Self::canonical(&path)) {
+                continue;
+            }
+            match VaultHeader::peek(&path) {
+                Ok(header) => found.push((header.id, VaultHandle::from_header(&path, header))),
+                Err(e) => log::error!("Skipping {}, failed to load: {e:?}", path.display()),
+            }
+        }
+        found.sort_by(|(_, a), (_, b)| a.path.cmp(&b.path));
+        found
     }
 
-    /// Number of distinct files in `paths`. Two paths to one file, such as an
-    /// external vault path that points into the vaults directory, count once.
-    fn distinct_files(paths: &[PathBuf]) -> usize {
-        paths
-            .iter()
-            .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
-            .collect::<BTreeSet<_>>()
-            .len()
+    /// Path with links and `..` resolved, or `path` if it cannot be resolved.
+    fn canonical(path: &Path) -> PathBuf {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Vault ids held by more than one of `found`, ordered by id. Files are
+    /// grouped by the folded short id, so ids that differ only in letter case
+    /// are duplicates. They would name one `{id}.json` file on a file system
+    /// that ignores case. Equal ids have equal folded forms.
+    fn duplicate_ids(found: &[(Uuid, VaultHandle)]) -> Vec<DuplicateVaults> {
+        let mut groups: BTreeMap<String, DuplicateVaults> = BTreeMap::new();
+        for (id, vh) in found {
+            let group = groups
+                .entry(ShortId::folded(*id))
+                .or_insert_with(|| DuplicateVaults {
+                    id: *id,
+                    paths: Vec::new(),
+                });
+            group.id = group.id.min(*id);
+            group.paths.push(vh.path.clone());
+        }
+        let mut duplicates: Vec<DuplicateVaults> = groups
+            .into_values()
+            .filter(|group| group.paths.len() > 1)
+            .collect();
+        duplicates.sort_by_key(|duplicate| duplicate.id);
+        duplicates
+    }
+
+    /// Vault keys claimed by more than one of `found`, ordered by key. Keys
+    /// are compared as stored, since a stored key is always normalized.
+    fn duplicate_keys(found: &[(Uuid, VaultHandle)]) -> Vec<DuplicateVaultKeys> {
+        let mut groups: BTreeMap<&str, Vec<PathBuf>> = BTreeMap::new();
+        for (_, vh) in found {
+            groups
+                .entry(vh.key.as_str())
+                .or_default()
+                .push(vh.path.clone());
+        }
+        groups
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .map(|(key, paths)| DuplicateVaultKeys {
+                key: key.to_string(),
+                paths,
+            })
+            .collect()
+    }
+
+    /// Normalized `key`, if no vault file claims it. A file that is not listed
+    /// for a duplicate id or key still claims its key. The file at `own`, the
+    /// vault that takes the key, is not counted. Fails with `InvalidVaultKey`.
+    ///
+    /// The check reads the files and is not atomic with the write that
+    /// follows it. Two writers that take one key at the same time both pass,
+    /// and the next scan reports both files.
+    pub fn unclaimed_key(&self, key: &str, own: Option<&Path>) -> Result<String, Error> {
+        let key = normalized_key(key).ok_or_else(|| Error::InvalidVaultKey(key.to_string()))?;
+        if self.claimed_keys(own).contains(&key) {
+            return Err(Self::claimed(&key));
+        }
+        Ok(key)
+    }
+
+    /// Keys claimed by every vault file except the file at `own`.
+    fn claimed_keys(&self, own: Option<&Path>) -> BTreeSet<String> {
+        let own = own.map(Self::canonical);
+        self.read_all()
+            .into_iter()
+            .filter(|(_, vh)| own.as_ref() != Some(&Self::canonical(&vh.path)))
+            .map(|(_, vh)| vh.key)
+            .collect()
+    }
+
+    fn claimed(key: &str) -> Error {
+        Error::InvalidVaultKey(format!("A vault with key '{key}' already exists"))
     }
 
     /// Menu labels of every vault, `name (key)` or the key alone, mapped to
@@ -247,19 +319,39 @@ impl VaultCatalog {
             .collect()
     }
 
-    /// Load one vault by key, locked, without reading the other vault files. A
-    /// file in the vaults directory is used before an external vault, as in
-    /// [`Self::list`].
+    /// Load one vault by key, locked, through [`Self::scan`]. A key claimed by
+    /// two files fails with `DuplicateVaultKey`. A key whose file shares its
+    /// vault id with another file fails with `DuplicateVaultId`. Every header
+    /// is read on each call.
     pub fn load(&self, key: &str) -> Result<VaultHandle, Error> {
-        let locks = self.files.locks();
-        match VaultHandle::load(&self.vaults_dir, Some(key.to_string()), locks) {
-            Err(Error::VaultNotFound(_)) => {},
-            other => return other,
+        let mut scan = self.scan();
+        if let Some(vh) = scan.vaults.remove(key) {
+            return Ok(vh);
         }
-        match self.external_vaults().get(key) {
-            Some(path) => VaultHandle::load_from_path(Some(key.to_string()), path, locks),
+        if let Some(duplicate) = scan.duplicate_keys.iter().find(|d| d.key == key) {
+            return Err(Error::DuplicateVaultKey(Self::joined(&duplicate.paths)));
+        }
+        // The key is not in a duplicate key group, so at most one file claims
+        // it. Read the headers again to find whether that file was refused
+        // for its id.
+        let refused_for_id = scan.duplicates.iter().find(|duplicate| {
+            duplicate
+                .paths
+                .iter()
+                .any(|path| VaultHeader::peek(path).is_ok_and(|header| header.key == key))
+        });
+        match refused_for_id {
+            Some(duplicate) => Err(Error::DuplicateVaultId(Self::joined(&duplicate.paths))),
             None => Err(Error::VaultNotFound(key.to_string())),
         }
+    }
+
+    fn joined(paths: &[PathBuf]) -> String {
+        paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" and ")
     }
 
     /// Load one vault by key and unlock it on `context`. This can prompt.
@@ -274,12 +366,21 @@ impl VaultCatalog {
         self.unlocker.unlock(vw, context)
     }
 
-    /// Create and write a new vault. Returns it unlocked.
+    /// Create and write a new vault with key `key`, normalized. A key that
+    /// another vault file claims is refused before the keychain is read.
+    /// Returns the vault unlocked.
     pub fn create(&self, name: Option<String>, key: &str) -> Result<VaultHandle, Error> {
+        let key = self.unclaimed_key(key, None)?;
         let user_encryption_key = get_vault_encryption_key()?;
-        let vw = VaultHandle::new_vault(name, &self.vaults_dir, key, user_encryption_key)?;
-        self.files.create(&vw)?;
-        Ok(vw)
+        self.create_vault(Vault::new(name, key, user_encryption_key)?)
+    }
+
+    /// Write `vault` as a new file in the vaults directory, named by its id.
+    /// Returns it unlocked.
+    fn create_vault(&self, vault: Vault) -> Result<VaultHandle, Error> {
+        let vh = VaultHandle::new_in(&self.vaults_dir, vault);
+        self.files.create(&vh)?;
+        Ok(vh)
     }
 
     /// Move a vault file to the Trash under the vault locks, so a save in
@@ -310,8 +411,8 @@ impl VaultCatalog {
 
     /// Import the selected vaults of an opened bundle, re-wrapping each file
     /// key on `context`. `selection` maps a bundle vault id to the key it is
-    /// imported as. A key that a vault already has is refused. Returns the
-    /// imported vaults, locked.
+    /// imported as. A key that a vault file already claims is refused before
+    /// anything is written. Returns the imported vaults, locked.
     pub fn import(
         &self,
         bundle: ImportableBundle,
@@ -321,17 +422,13 @@ impl VaultCatalog {
         // Keys are normalized before the check, since `import` normalizes
         // too, and a key that only collides after normalization would
         // otherwise pass.
+        let claimed = self.claimed_keys(None);
         let mut targets = BTreeMap::new();
         for (id, requested_key) in selection {
             let key = normalized_key(requested_key)
                 .ok_or_else(|| Error::InvalidVaultKey(requested_key.clone()))?;
-            match self.load(&key) {
-                Err(Error::VaultNotFound(_)) => {},
-                _ => {
-                    return Err(Error::InvalidVaultKey(format!(
-                        "A vault with key '{key}' already exists"
-                    )));
-                },
+            if claimed.contains(&key) {
+                return Err(Self::claimed(&key));
             }
             targets.insert(*id, key);
         }
@@ -371,11 +468,13 @@ impl VaultCatalog {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
     use super::*;
+    use crate::secrets::vaults::storage::manager::VaultsManager;
     use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 
     /// Catalog of one vault named "Personal" at key `personal`, in a temp
@@ -391,19 +490,19 @@ mod tests {
         }
 
         /// Same as [`Self::new`], with an external vault at
-        /// `external/{key}.json` for each of `keys`. The files are not
+        /// `external/{name}.json` for each of `names`. The files are not
         /// written. The `personal` vault is written by another writer, so the
         /// catalog locks track no vault yet.
-        fn with_external(keys: &[&str]) -> Self {
+        fn with_external(names: &[&str]) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let vaults_dir = dir.path().join("vaults");
             let data_dir = dir.path().join("data");
             let mut vh = VaultHandle::new_for_test_at(vaults_dir.join("personal.json"));
             vh.set_vault_name("Personal".to_string()).unwrap();
             VaultWriter::isolated(data_dir.clone()).create(&vh).unwrap();
-            let external = keys
+            let external = names
                 .iter()
-                .map(|key| (key.to_string(), Self::external_path_in(&dir, key)))
+                .map(|name| Self::external_path_in(&dir, name))
                 .collect();
             let unlock_keys = HashMap::from([(vh.vault_id().unwrap(), vh.unlocked_key().unwrap())]);
             let catalog = VaultCatalog::with_unlocker(
@@ -415,18 +514,18 @@ mod tests {
             Self { dir, catalog }
         }
 
-        fn external_path_in(dir: &TempDir, key: &str) -> PathBuf {
-            dir.path().join("external").join(format!("{key}.json"))
+        fn external_path_in(dir: &TempDir, name: &str) -> PathBuf {
+            dir.path().join("external").join(format!("{name}.json"))
         }
 
-        /// Path of external vault `key`.
-        fn external_path(&self, key: &str) -> PathBuf {
-            Self::external_path_in(&self.dir, key)
+        /// Path of external vault `name`.
+        fn external_path(&self, name: &str) -> PathBuf {
+            Self::external_path_in(&self.dir, name)
         }
 
-        /// Path of vault file `key` in the vaults directory.
-        fn vault_path(&self, key: &str) -> PathBuf {
-            self.catalog.vaults_dir().join(format!("{key}.json"))
+        /// Path of vault file `name` in the vaults directory.
+        fn vault_path(&self, name: &str) -> PathBuf {
+            self.catalog.vaults_dir().join(format!("{name}.json"))
         }
 
         /// Vault id of the `personal` vault.
@@ -440,28 +539,32 @@ mod tests {
         }
 
         /// Write the `personal` vault file to `path` after `edit`. `edit`
-        /// receives the `vault` object inside the file envelope.
+        /// receives the `vault` object inside the file envelope, with its key
+        /// set to the file stem of `path`.
         fn write_copy(&self, path: &Path, edit: impl FnOnce(&mut Value)) {
             let data = fs::read_to_string(self.vault_path("personal")).unwrap();
             let mut file: Value = serde_json::from_str(&data).unwrap();
+            let stem = path.file_stem().unwrap().to_string_lossy();
+            file["vault"]["key"] = json!(stem);
             edit(&mut file["vault"]);
             let data = serde_json::to_string_pretty(&file).unwrap();
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, data).unwrap();
         }
 
-        /// Write the `personal` vault object to `{key}.json` without its
+        /// Write the `personal` vault object to `{name}.json` without its
         /// envelope, as a format 1 file is.
-        fn write_without_envelope(&self, key: &str) {
+        fn write_without_envelope(&self, name: &str) {
             let data = fs::read_to_string(self.vault_path("personal")).unwrap();
             let file: Value = serde_json::from_str(&data).unwrap();
             let data = serde_json::to_string_pretty(&file["vault"]).unwrap();
-            fs::write(self.vault_path(key), data).unwrap();
+            fs::write(self.vault_path(name), data).unwrap();
         }
 
-        /// Write the `personal` vault file to `{key}.json` after `edit`.
-        fn write_edited(&self, key: &str, edit: impl FnOnce(&mut Value)) {
-            self.write_copy(&self.vault_path(key), edit);
+        /// Write the `personal` vault file to `{name}.json` after `edit`, as
+        /// [`Self::write_copy`] does.
+        fn write_edited(&self, name: &str, edit: impl FnOnce(&mut Value)) {
+            self.write_copy(&self.vault_path(name), edit);
         }
 
         /// Replace the `personal` vault items with an entry that fails to
@@ -470,6 +573,15 @@ mod tests {
             self.write_edited("personal", |vault| {
                 vault["items"] = json!({ "00000000-0000-0000-0000-000000000001": "not an item" });
             });
+        }
+    }
+
+    /// Edit that gives a vault a new id and the key `key`.
+    fn other_vault(key: &str) -> impl FnOnce(&mut Value) {
+        let key = key.to_string();
+        move |vault| {
+            vault["id"] = json!(ShortId::encode_uuid(Uuid::new_v4()));
+            vault["key"] = json!(key);
         }
     }
 
@@ -653,10 +765,262 @@ mod tests {
         let scan = fx.catalog.scan();
 
         assert!(scan.duplicates.is_empty(), "{:?}", scan.duplicates);
-        assert_eq!(
-            scan.vaults.into_keys().collect::<Vec<_>>(),
-            ["alias", "personal"]
-        );
+        assert!(scan.duplicate_keys.is_empty(), "{:?}", scan.duplicate_keys);
+        assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
         assert!(fx.is_tracked(fx.personal_id()));
+    }
+
+    #[test]
+    fn vault_key_is_read_from_file_and_not_from_file_name() {
+        let fx = Fixture::new();
+        fx.write_edited("misnamed", other_vault("work"));
+
+        let vaults = fx.catalog.list();
+
+        assert_eq!(vaults.into_keys().collect::<Vec<_>>(), ["personal", "work"]);
+    }
+
+    #[test]
+    fn file_without_key_is_not_listed() {
+        let fx = Fixture::new();
+        fx.write_edited("keyless", |vault| {
+            vault["id"] = json!(ShortId::encode_uuid(Uuid::new_v4()));
+            vault.as_object_mut().unwrap().remove("key");
+        });
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+        assert!(scan.duplicate_keys.is_empty(), "{:?}", scan.duplicate_keys);
+    }
+
+    #[test]
+    fn files_that_claim_one_key_are_both_reported() {
+        let fx = Fixture::new();
+        fx.write_edited("other", other_vault("personal"));
+        let other_id = VaultHeader::peek(&fx.vault_path("other")).unwrap().id;
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicate_keys,
+            [DuplicateVaultKeys {
+                key: "personal".to_string(),
+                paths: vec![fx.vault_path("other"), fx.vault_path("personal")],
+            }]
+        );
+        assert!(scan.duplicates.is_empty(), "{:?}", scan.duplicates);
+        assert!(scan.vaults.is_empty(), "{:?}", scan.vaults.keys());
+        assert!(!fx.is_tracked(fx.personal_id()));
+        assert!(!fx.is_tracked(other_id));
+    }
+
+    #[test]
+    fn internal_and_external_files_that_claim_one_key_are_both_reported() {
+        let fx = Fixture::with_external(&["outside"]);
+        fx.write_copy(&fx.external_path("outside"), other_vault("personal"));
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicate_keys,
+            [DuplicateVaultKeys {
+                key: "personal".to_string(),
+                paths: vec![fx.external_path("outside"), fx.vault_path("personal")],
+            }]
+        );
+        assert!(scan.vaults.is_empty(), "{:?}", scan.vaults.keys());
+        assert!(!fx.is_tracked(fx.personal_id()));
+    }
+
+    #[test]
+    fn file_with_duplicate_id_and_key_is_reported_for_each() {
+        let fx = Fixture::new();
+        fx.write_edited("copy", |vault| vault["key"] = json!("personal"));
+        let paths = vec![fx.vault_path("copy"), fx.vault_path("personal")];
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicates,
+            [DuplicateVaults {
+                id: fx.personal_id(),
+                paths: paths.clone(),
+            }]
+        );
+        assert_eq!(
+            scan.duplicate_keys,
+            [DuplicateVaultKeys {
+                key: "personal".to_string(),
+                paths,
+            }]
+        );
+        assert!(scan.vaults.is_empty());
+    }
+
+    #[test]
+    fn file_whose_key_differs_only_in_case_is_not_listed() {
+        let fx = Fixture::new();
+        fx.write_edited("upper", other_vault("Personal"));
+
+        let scan = fx.catalog.scan();
+
+        // A stored key must already be normalized, so `Personal` is refused
+        // as an invalid key and does not claim `personal`.
+        assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+        assert!(scan.duplicate_keys.is_empty(), "{:?}", scan.duplicate_keys);
+    }
+
+    #[test]
+    fn load_refuses_key_whose_id_is_held_by_two_files() {
+        let fx = Fixture::new();
+        fx.write_edited("copy", |_| {});
+
+        for key in ["personal", "copy"] {
+            let result = fx.catalog.load(key);
+            assert!(
+                matches!(result, Err(Error::DuplicateVaultId(_))),
+                "{key}: {:?}",
+                result.err()
+            );
+        }
+        assert!(!fx.is_tracked(fx.personal_id()));
+    }
+
+    #[test]
+    fn load_refuses_key_held_by_two_files() {
+        let fx = Fixture::new();
+        fx.write_edited("other", other_vault("personal"));
+
+        let result = fx.catalog.load("personal");
+
+        assert!(
+            matches!(result, Err(Error::DuplicateVaultKey(_))),
+            "{:?}",
+            result.err()
+        );
+        assert!(!fx.is_tracked(fx.personal_id()));
+    }
+
+    #[test]
+    fn load_finds_vault_by_key_stored_in_file() {
+        let fx = Fixture::new();
+        fx.write_edited("misnamed", other_vault("work"));
+
+        let vh = fx.catalog.load("work").unwrap();
+
+        assert_eq!(vh.path, fx.vault_path("misnamed"));
+        assert!(matches!(
+            fx.catalog.load("misnamed"),
+            Err(Error::VaultNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn write_through_key_of_one_of_two_files_with_one_id_fails_and_writes_nothing() {
+        let fx = Fixture::new();
+        fx.write_edited("copy", |_| {});
+        let before = [
+            fs::read_to_string(fx.vault_path("personal")).unwrap(),
+            fs::read_to_string(fx.vault_path("copy")).unwrap(),
+        ];
+        let manager = Mutex::new(VaultsManager::with(fx.catalog.clone()));
+
+        for key in ["personal", "copy"] {
+            let result = VaultsManager::write_vault::<_, _, Error>(&manager, key, |vh| {
+                vh.add_item("item", "Item").map(|_| ())
+            });
+            assert!(
+                matches!(result, Err(Error::DuplicateVaultId(_))),
+                "{key}: {:?}",
+                result.err()
+            );
+        }
+
+        let after = [
+            fs::read_to_string(fx.vault_path("personal")).unwrap(),
+            fs::read_to_string(fx.vault_path("copy")).unwrap(),
+        ];
+        assert_eq!(after, before);
+        let versions = fx.catalog.files().list_versions(fx.personal_id()).unwrap();
+        assert!(versions.is_empty());
+    }
+
+    #[test]
+    fn created_vault_is_named_by_id_and_holds_its_key() {
+        let fx = Fixture::new();
+        let key = fx.catalog.unclaimed_key("Work Vault", None).unwrap();
+        let mut vault = Vault::new_for_test();
+        vault.set_key(key);
+
+        let vh = fx.catalog.create_vault(vault).unwrap();
+
+        let id = vh.vault_id().unwrap();
+        let name = format!("{}.json", ShortId::encode_uuid(id));
+        assert_eq!(vh.path, fx.catalog.vaults_dir().join(name));
+        let header = VaultHeader::peek(&vh.path).unwrap();
+        assert_eq!(header.id, id);
+        assert_eq!(header.key, "work-vault");
+        assert_eq!(fx.catalog.load("work-vault").unwrap().path, vh.path);
+    }
+
+    #[test]
+    fn create_refuses_key_another_vault_holds_in_any_letter_case() {
+        let fx = Fixture::new();
+
+        // `normalized_key` lowercases and replaces whitespace with `-`, so
+        // each of these is `personal`. The check runs before the keychain is
+        // read.
+        for key in ["personal", "Personal", " PERSONAL "] {
+            let result = fx.catalog.create(None, key);
+            assert!(
+                matches!(&result, Err(Error::InvalidVaultKey(message)) if message.contains("already exists")),
+                "{key}: {:?}",
+                result.err()
+            );
+        }
+        assert_eq!(fs::read_dir(fx.catalog.vaults_dir()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn key_of_file_refused_for_its_id_is_still_claimed() {
+        let fx = Fixture::new();
+        fx.write_edited("copy", |_| {});
+
+        assert!(fx.catalog.unclaimed_key("copy", None).is_err());
+        assert!(fx.catalog.unclaimed_key("personal", None).is_err());
+        assert_eq!(fx.catalog.unclaimed_key("work", None).unwrap(), "work");
+    }
+
+    #[test]
+    fn key_of_another_vault_is_claimed_and_own_key_is_not() {
+        let fx = Fixture::new();
+        fx.write_edited("work", other_vault("work"));
+        let own = fx.vault_path("personal");
+
+        assert!(fx.catalog.unclaimed_key("work", Some(&own)).is_err());
+        assert_eq!(
+            fx.catalog.unclaimed_key("personal", Some(&own)).unwrap(),
+            "personal"
+        );
+    }
+
+    #[test]
+    fn import_refuses_key_another_vault_holds_and_writes_nothing() {
+        let fx = Fixture::new();
+        let id = Uuid::new_v4();
+        let bundle = ImportableBundle::for_test(&[id]);
+        let selection = BTreeMap::from([(id, "PERSONAL".to_string())]);
+
+        let result = fx
+            .catalog
+            .import(bundle, &selection, AuthContext::SharedThreadLocal);
+
+        assert!(
+            matches!(&result, Err(Error::InvalidVaultKey(message)) if message.contains("already exists")),
+            "{:?}",
+            result.err()
+        );
+        assert_eq!(fs::read_dir(fx.catalog.vaults_dir()).unwrap().count(), 1);
     }
 }

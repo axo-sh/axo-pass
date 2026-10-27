@@ -44,9 +44,6 @@ pub enum Error {
     #[error("Failed to save vault: {0}")]
     VaultWriteError(#[source] std::io::Error),
 
-    #[error("Failed to update vault key: {0}")]
-    VaultKeyUpdateFailed(#[source] std::io::Error),
-
     #[error("Failed to delete vault: {0}")]
     VaultDeleteError(#[source] std::io::Error),
 
@@ -55,6 +52,9 @@ pub enum Error {
 
     #[error("Two vault files have the same vault id: {0}")]
     DuplicateVaultId(String),
+
+    #[error("Two vault files have the same vault key: {0}")]
+    DuplicateVaultKey(String),
 
     #[error("Failed to lock vault: {0}")]
     VaultLockError(#[source] std::io::Error),

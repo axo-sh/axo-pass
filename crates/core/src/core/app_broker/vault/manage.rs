@@ -81,7 +81,8 @@ pub(super) fn import_vaults(
 }
 
 /// Unlock the vault at `path` to validate it, then register it as an external
-/// vault in the app config.
+/// vault in the app config. The vault key is read from the file. A key that
+/// another vault file claims is refused.
 pub(super) fn add_external_vault(
     vaults: &VaultCatalog,
     path: &str,
@@ -91,8 +92,11 @@ pub(super) fn add_external_vault(
         .canonicalize()
         .map_err(|e| format!("Could not resolve path {path}: {e}"))?;
 
-    let mut vh = VaultHandle::load_from_path(None, &path, vaults.files().locks())
+    let mut vh = VaultHandle::load_from_path(&path, vaults.files().locks())
         .map_err(|e| format!("Not a valid vault file: {e}"))?;
+    vaults
+        .unclaimed_key(&vh.key, Some(&path))
+        .map_err(|e| format!("Failed to add vault: {e}"))?;
     vaults
         .unlock(&mut vh, AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to unlock vault: {e}"))?;
@@ -102,7 +106,7 @@ pub(super) fn add_external_vault(
     APP_CONFIG
         .lock()
         .map_err(|e| format!("Failed to lock config: {e}"))?
-        .add_external_vault(&vh.key, path)
+        .add_external_vault(path)
         .map_err(|e| format!("Failed to add vault: {e}"))?;
 
     Ok(Served::new(

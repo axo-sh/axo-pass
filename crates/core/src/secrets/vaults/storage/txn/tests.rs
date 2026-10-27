@@ -55,7 +55,7 @@ impl Fixture {
         let enc_vault = EncryptedVault::parse(&contents).unwrap();
         let vault =
             Vault::from_unlocked_key(&self.vault.unlocked_key().unwrap(), enc_vault).unwrap();
-        VaultHandle::unlocked("personal".to_string(), path.to_path_buf(), vault)
+        VaultHandle::unlocked(path.to_path_buf(), vault)
     }
 
     fn value(&self, path: &Path, cred: &str) -> Option<String> {
@@ -105,7 +105,7 @@ fn creating_a_vault_over_an_existing_file_fails() {
     let other = VaultHandle::new_for_test_at(fx.vault.path.clone());
     assert!(matches!(
         fx.files.create(&other),
-        Err(Error::InvalidVaultKey(_))
+        Err(Error::DuplicateVaultId(_))
     ));
     assert_eq!(VaultHeader::peek(&fx.vault.path).unwrap().id, fx.id());
 }
@@ -142,7 +142,7 @@ fn filled_vault(dir: &TempDir, files: &VaultWriter) -> VaultHandle {
     let mut vault = Vault::new_for_test();
     vault.fill_for_test();
     let path = dir.path().join("vaults").join("personal.json");
-    let vh = VaultHandle::unlocked("personal".to_string(), path, vault);
+    let vh = VaultHandle::unlocked(path, vault);
     files.create(&vh).unwrap();
     vh
 }
@@ -322,7 +322,7 @@ fn writers_through_different_path_spellings_share_one_entry() {
 }
 
 #[test]
-fn a_rename_moves_the_file_and_retains_one_version() {
+fn key_change_writes_vault_keeps_file_name_and_retains_one_version() {
     let fx = Fixture::new();
     let committed = fx
         .files
@@ -332,29 +332,38 @@ fn a_rename_moves_the_file_and_retains_one_version() {
         })
         .unwrap();
 
-    let new_path = fx.dir.path().join("vaults/renamed.json");
-    assert_eq!(committed.vault.path, new_path);
+    assert!(committed.changed);
+    assert_eq!(committed.vault.path, fx.vault.path);
+    assert_eq!(committed.vault.key, "renamed");
     assert_eq!(committed.previous_key, "personal");
-    assert!(!fx.vault.path.exists());
-    assert_eq!(fx.read(&new_path).vault_name(), Some("Renamed"));
+    let header = VaultHeader::peek(&fx.vault.path).unwrap();
+    assert_eq!(header.key, "renamed");
+    assert_eq!(header.name.as_deref(), Some("Renamed"));
+    assert!(!fx.dir.path().join("vaults/renamed.json").exists());
     assert_eq!(fx.versions().len(), 1);
 }
 
 #[test]
-fn a_rename_onto_an_existing_vault_fails() {
+fn restoring_version_from_before_key_change_keeps_current_key() {
     let fx = Fixture::new();
-    let other = VaultHandle::new_for_test_at(fx.dir.path().join("vaults/work.json"));
-    fx.files.create(&other).unwrap();
+    fx.add(&fx.target(), "alpha", "one");
+    let committed = fx
+        .files
+        .write::<_, Error>(&fx.target(), fx.unlock(), |vw| {
+            vw.set_vault_key("renamed".to_string())
+        })
+        .unwrap();
+    let target = Target::of(&committed.vault);
+    // Newest first. The second version is the file from before the first
+    // write, with key `personal`.
+    let name = fx.versions()[1].name.clone();
 
-    let result = fx.files.write::<_, Error>(&fx.target(), fx.unlock(), |vw| {
-        vw.set_vault_key("work".to_string())
-    });
-    assert!(matches!(result, Err(Error::InvalidVaultKey(_))));
-    assert!(fx.vault.path.exists());
-    assert_eq!(
-        VaultHeader::peek(&other.path).unwrap().id,
-        other.vault_id().unwrap()
-    );
+    fx.files
+        .restore_version(&target, fx.unlock(), &name)
+        .unwrap();
+
+    assert_eq!(VaultHeader::peek(&fx.vault.path).unwrap().key, "renamed");
+    assert_eq!(fx.value(&fx.vault.path, "alpha"), None);
 }
 
 #[test]
@@ -395,9 +404,8 @@ fn a_rename_concurrent_with_a_write_keeps_both_changes() {
         });
         s.spawn(|| fx.add(&target, "alpha", "one"));
     });
-    let new_path = fx.dir.path().join("vaults/renamed.json");
-    assert_eq!(fx.value(&new_path, "alpha").as_deref(), Some("one"));
-    assert!(!fx.vault.path.exists());
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("one"));
+    assert_eq!(VaultHeader::peek(&fx.vault.path).unwrap().key, "renamed");
 }
 
 #[test]

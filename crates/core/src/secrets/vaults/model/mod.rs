@@ -80,6 +80,8 @@ impl UnlockedKey {
 /// section.
 pub struct Vault {
     id: Uuid,
+    // Vault key, already validated. Written to the vault file.
+    key: String,
     pub name: Option<String>,
     file_key: VaultFileKey,
     cipher: VaultCipher,
@@ -115,7 +117,13 @@ pub struct Vault {
 }
 
 impl Vault {
-    pub fn new(name: Option<String>, user_encryption_key: ManagedKey) -> Result<Self, Error> {
+    /// New empty vault with a random id and file key. `key` must be a valid
+    /// vault key.
+    pub fn new(
+        name: Option<String>,
+        key: String,
+        user_encryption_key: ManagedKey,
+    ) -> Result<Self, Error> {
         let vault_id = Uuid::new_v4();
         let actual_file_key = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
 
@@ -130,12 +138,19 @@ impl Vault {
         // wrap actual key in VaultCipher to simplify operations
         let cipher = VaultCipher::new_with_bytes(&actual_file_key, vault_id);
 
-        Ok(Self::empty(vault_id, name, enc_file_key, cipher))
+        Ok(Self::empty(vault_id, key, name, enc_file_key, cipher))
     }
 
-    fn empty(id: Uuid, name: Option<String>, file_key: VaultFileKey, cipher: VaultCipher) -> Self {
+    fn empty(
+        id: Uuid,
+        key: String,
+        name: Option<String>,
+        file_key: VaultFileKey,
+        cipher: VaultCipher,
+    ) -> Self {
         Self {
             id,
+            key,
             name,
             file_key,
             cipher,
@@ -157,12 +172,14 @@ impl Vault {
         }
     }
 
-    /// An empty vault with a random file key and no keychain involvement.
+    /// An empty vault with key `personal`, a random file key, and no keychain
+    /// involvement.
     #[cfg(test)]
     pub(crate) fn new_for_test() -> Self {
         let id = Uuid::new_v4();
         Self::empty(
             id,
+            "personal".to_string(),
             None,
             VaultFileKey::new(vec![0u8; 32]),
             VaultCipher::new(id),
@@ -264,7 +281,13 @@ impl Vault {
         cipher: VaultCipher,
         enc_vault: EncryptedVault,
     ) -> Result<Self, Error> {
-        let mut vault = Self::empty(enc_vault.id, enc_vault.name, enc_vault.file_key, cipher);
+        let mut vault = Self::empty(
+            enc_vault.id,
+            enc_vault.key,
+            enc_vault.name,
+            enc_vault.file_key,
+            cipher,
+        );
         vault.generation = enc_vault.generation;
         vault.replica_id = enc_vault.replica_id;
 
@@ -480,6 +503,7 @@ impl Vault {
     pub fn to_encrypted(&self, include_deleted: bool) -> Result<EncryptedVault, Error> {
         let mut vault = EncryptedVault {
             id: self.id,
+            key: self.key.clone(),
             name: self.name.clone(),
             generation: self.generation,
             replica_id: self.replica_id,
@@ -597,6 +621,16 @@ impl Vault {
 
     pub fn id(&self) -> Uuid {
         self.id
+    }
+
+    /// Vault key, as stored in the vault file.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Set the vault key. The caller validates it.
+    pub(crate) fn set_key(&mut self, key: String) {
+        self.key = key;
     }
 
     pub fn list_folders(&self) -> Vec<&VaultFolder> {

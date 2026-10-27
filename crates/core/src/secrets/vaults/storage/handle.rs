@@ -56,38 +56,30 @@ enum VaultState {
 
 // in-memory representation of a vault
 pub struct VaultHandle {
+    /// Vault key, as stored in the vault file.
     pub key: String,
     pub path: PathBuf,
     state: VaultState,
 }
 
-fn vault_file_path(vault_dir: &Path, vault_key: &str) -> Result<PathBuf, Error> {
-    let vault_key =
-        normalized_key(vault_key).ok_or_else(|| Error::InvalidVaultKey(vault_key.to_string()))?;
-    Ok(vault_dir.join(format!("{vault_key}.json")))
-}
-
 impl VaultHandle {
-    /// A new, unlocked vault that is not written yet. Write it with
-    /// [`super::txn::VaultWriter::create`].
-    pub fn new_vault(
-        name: Option<String>,
-        vault_dir: &Path,
-        vault_key: &str,
-        user_encryption_key: ManagedKey,
-    ) -> Result<Self, Error> {
-        log::debug!("Creating new vault...");
-        let vault_key = normalized_key(vault_key)
-            .ok_or_else(|| Error::InvalidVaultKey(vault_key.to_string()))?;
-
-        let vault_path = vault_file_path(vault_dir, &vault_key)?;
-        let vault_overview = Vault::new(name, user_encryption_key)?;
-        Ok(Self::unlocked(vault_key, vault_path, vault_overview))
+    /// Path of the file of vault `id` in the vaults directory `vaults_dir`,
+    /// named by its short id.
+    pub fn file_path(vaults_dir: &Path, id: Uuid) -> PathBuf {
+        vaults_dir.join(format!("{}.json", ShortId::encode_uuid(id)))
     }
 
-    pub(crate) fn unlocked(key: String, path: PathBuf, vault: Vault) -> Self {
+    /// A new, unlocked vault at its file path in `vaults_dir`, not written
+    /// yet. Write it with [`super::txn::VaultWriter::create`].
+    pub fn new_in(vaults_dir: &Path, vault: Vault) -> Self {
+        let path = Self::file_path(vaults_dir, vault.id());
+        Self::unlocked(path, vault)
+    }
+
+    /// Unlocked vault at `path`, named by the key stored in `vault`.
+    pub(crate) fn unlocked(path: PathBuf, vault: Vault) -> Self {
         Self {
-            key,
+            key: vault.key().to_string(),
             path,
             state: VaultState::Unlocked {
                 vault: Box::new(vault),
@@ -101,62 +93,38 @@ impl VaultHandle {
         Self::new_for_test_at(PathBuf::from(format!("/nonexistent/{vault_key}.json")))
     }
 
-    /// An unlocked, empty vault at `path`, not yet written.
+    /// An unlocked, empty vault at `path`, not yet written. Its key is the
+    /// file stem of `path`.
     #[cfg(test)]
     pub(crate) fn new_for_test_at(path: PathBuf) -> Self {
         let key = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        Self::unlocked(key, path, Vault::new_for_test())
-    }
-
-    pub fn load(
-        vault_dir: &Path,
-        vault_key: Option<String>,
-        locks: &VaultLocks,
-    ) -> Result<Self, Error> {
-        let vault_key = vault_key.unwrap_or(DEFAULT_VAULT.to_string());
-        let vault_path = vault_file_path(vault_dir, &vault_key)?;
-        Self::load_from_path(Some(vault_key), &vault_path, locks)
+        let mut vault = Vault::new_for_test();
+        vault.set_key(key);
+        Self::unlocked(path, vault)
     }
 
     /// Load a locked vault and record its path in `locks`. Only the file header
     /// is read. The rest of the file is parsed at unlock.
-    pub fn load_from_path(
-        vault_key: Option<String>,
-        vault_path: &Path,
-        locks: &VaultLocks,
-    ) -> Result<Self, Error> {
+    pub fn load_from_path(vault_path: &Path, locks: &VaultLocks) -> Result<Self, Error> {
         let header = VaultHeader::peek(vault_path)?;
         let id = header.id;
-        let vh = Self::from_header(vault_key, vault_path, header)?;
+        let vh = Self::from_header(vault_path, header);
         locks.track(id, vault_path);
         Ok(vh)
     }
 
     /// Locked vault at `vault_path` with `header`, already read from the file.
+    /// The key comes from the header, which [`VaultHeader::parse`] validated.
     /// The path is not tracked in the vault locks.
-    pub(crate) fn from_header(
-        vault_key: Option<String>,
-        vault_path: &Path,
-        header: VaultHeader,
-    ) -> Result<Self, Error> {
-        // todo: decide what to do for key for external vaults, some options:
-        // 1. use file name as key
-        // 2. use the vault.id as the key
-        // 3. use the vault.name
-        // 4. add a key field to the vault file and use that
-        let vault_key = vault_key.unwrap_or_else(|| header.id.to_string());
-        if !validate_key(&vault_key) {
-            return Err(Error::InvalidVaultKey(vault_key.to_string()));
-        }
-
-        Ok(Self {
-            key: vault_key,
+    pub(crate) fn from_header(vault_path: &Path, header: VaultHeader) -> Self {
+        Self {
+            key: header.key,
             path: vault_path.to_path_buf(),
             state: VaultState::Locked { name: header.name },
-        })
+        }
     }
 
     pub fn unlock(&mut self) -> Result<(), Error> {
@@ -216,25 +184,25 @@ impl VaultHandle {
         Ok(self.get_unlocked_vault()?.unlocked_key())
     }
 
-    /// Replace the unlocked vault, as when a retained version is restored.
-    pub(crate) fn replace_vault(&mut self, vault: Vault) {
+    /// Replace the unlocked vault, as when a retained version is restored. The
+    /// current key is kept, so a version saved before a key change does not
+    /// restore its old key.
+    pub(crate) fn replace_vault(&mut self, mut vault: Vault) {
+        vault.set_key(self.key.clone());
         self.state = VaultState::Unlocked {
             vault: Box::new(vault),
         };
     }
 
-    /// Change the vault key, and so the file name. The transaction that runs
-    /// this moves the file when it saves.
+    /// Change the vault key stored in the vault. The file name is unchanged.
+    /// The caller checks that no other vault file claims the key, with
+    /// [`super::catalog::VaultCatalog::unclaimed_key`].
     pub fn set_vault_key(&mut self, new_vault_key: String) -> Result<(), Error> {
         if !validate_key(&new_vault_key) {
             return Err(Error::InvalidVaultKey(new_vault_key));
         }
-
-        let vault_dir = self
-            .path
-            .parent()
-            .ok_or_else(|| Error::VaultNotFound(self.path.display().to_string()))?;
-        self.path = vault_file_path(vault_dir, &new_vault_key)?;
+        self.get_unlocked_vault_mut()?
+            .set_key(new_vault_key.clone());
         self.key = new_vault_key;
         Ok(())
     }
