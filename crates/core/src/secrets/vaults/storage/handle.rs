@@ -671,10 +671,11 @@ impl VaultHandle {
 }
 
 /// Export one or more unlocked vaults into a single bundle file. A random
-/// bundle key is generated, each vault's file key is wrapped with it, and the
-/// bundle key itself is protected once with `export_mode`. Every vault must be
-/// unlocked. Passkeys are left out of the bundle unless `include_passkeys` is
-/// set.
+/// bundle key is generated. Each vault is encrypted again under a new file
+/// key, that key is wrapped with the bundle key, and the bundle key itself is
+/// protected once with `export_mode`. The source vaults are unchanged. Every
+/// vault must be unlocked. Passkeys are left out of the bundle unless
+/// `include_passkeys` is set.
 pub fn export_bundle(
     vaults: &[&VaultHandle],
     path: &Path,

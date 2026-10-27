@@ -271,9 +271,10 @@ impl Vault {
         signals
     }
 
-    /// Check that the vault holds the entries [`Self::fill_for_test`] adds.
+    /// Check that the vault holds the live entries [`Self::fill_for_test`]
+    /// adds, the passkey credential included. Deleted entries are not checked.
     #[cfg(test)]
-    pub(crate) fn assert_filled_for_test(&self) {
+    pub(crate) fn assert_live_filled_for_test(&self) {
         let value = self.get_item_credential_secret("kept", "alpha").unwrap();
         assert_eq!(value.unwrap().expose_secret(), "two");
         let history = self.list_history("kept", "alpha").unwrap();
@@ -300,6 +301,13 @@ impl Vault {
         assert_eq!(alpha.section, Some(sections[0].id));
         assert_eq!(kept.autofill.password, Some(alpha.id));
         assert_eq!(self.passkey_signals(), &Self::signals_filled_for_test());
+    }
+
+    /// Check that the vault holds the entries [`Self::fill_for_test`] adds.
+    #[cfg(test)]
+    pub(crate) fn assert_filled_for_test(&self) {
+        self.assert_live_filled_for_test();
+        let kept = self.get_item("kept").unwrap();
 
         let deleted = self.list_deleted("kept").unwrap();
         assert_eq!(deleted.len(), 1);
@@ -774,6 +782,17 @@ impl Vault {
         new_id: Option<Uuid>,
         wrap: impl FnOnce(&[u8]) -> Result<VaultFileKey, Error>,
     ) -> Result<Self, Error> {
+        self.rekeyed_in(RekeyScope::All, new_id, wrap)
+    }
+
+    /// Copy of this vault as [`Self::rekeyed`] builds it, holding only the
+    /// entries in `scope`. Entries outside `scope` are not decrypted.
+    fn rekeyed_in(
+        &self,
+        scope: RekeyScope,
+        new_id: Option<Uuid>,
+        wrap: impl FnOnce(&[u8]) -> Result<VaultFileKey, Error>,
+    ) -> Result<Self, Error> {
         let id = new_id.unwrap_or(self.id);
         let raw_key = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
         let file_key = wrap(&raw_key)?;
@@ -787,6 +806,17 @@ impl Vault {
         }
         let (from, to) = (&self.cipher, &vault.cipher);
 
+        let mut items = self.items.clone();
+        let mut item_credential_index = self.item_credential_index.clone();
+        if matches!(scope, RekeyScope::Live { passkeys: false }) {
+            for item in items.values_mut() {
+                item.credentials
+                    .retain(|_, cred| !matches!(cred.kind, FieldKind::Passkey));
+            }
+            item_credential_index
+                .retain(|_, (item_id, cred_id)| items[item_id].credentials.contains_key(cred_id));
+        }
+
         // Every cache is rebuilt under the new key, so no old blob is kept.
         let metadata = self.vault_metadata();
         let metadata_blob = if metadata.is_empty() {
@@ -799,7 +829,7 @@ impl Vault {
         let mut cred_blobs = BTreeMap::new();
         let mut secrets = BTreeMap::new();
         let mut history = BTreeMap::new();
-        for (item_id, item) in &self.items {
+        for (item_id, item) in &items {
             item_blobs.insert(
                 *item_id,
                 to.encrypt_item_metadata(*item_id, &item.to_metadata())?,
@@ -829,22 +859,25 @@ impl Vault {
                 }
             }
         }
-        let deleted = self
-            .deleted
-            .iter()
-            .map(|(cred_id, entry)| Ok((*cred_id, entry.rekeyed(from, to)?)))
-            .collect::<Result<_, Error>>()?;
-        let deleted_items = self
-            .deleted_items
-            .iter()
-            .map(|(item_id, entry)| Ok((*item_id, entry.rekeyed(from, to)?)))
-            .collect::<Result<_, Error>>()?;
+        let (deleted, deleted_items) = match scope {
+            RekeyScope::All => (
+                self.deleted
+                    .iter()
+                    .map(|(cred_id, entry)| Ok((*cred_id, entry.rekeyed(from, to)?)))
+                    .collect::<Result<_, Error>>()?,
+                self.deleted_items
+                    .iter()
+                    .map(|(item_id, entry)| Ok((*item_id, entry.rekeyed(from, to)?)))
+                    .collect::<Result<_, Error>>()?,
+            ),
+            RekeyScope::Live { .. } => (BTreeMap::new(), BTreeMap::new()),
+        };
 
         vault.folders = self.folders.clone();
         vault.passkey_signals = self.passkey_signals.clone();
-        vault.items = self.items.clone();
+        vault.items = items;
         vault.item_index = self.item_index.clone();
-        vault.item_credential_index = self.item_credential_index.clone();
+        vault.item_credential_index = item_credential_index;
         vault.secrets = secrets;
         vault.history = history;
         vault.deleted = deleted;
@@ -862,8 +895,11 @@ impl Vault {
     ///
     /// Deleted items and credentials are not exported.
     ///
-    /// The exported vault carries this vault's own file key. An imported copy
-    /// shares that key with the source; export does not re-key.
+    /// Each export encrypts every exported blob again under a new random file
+    /// key, so the bundle never holds the file key of this vault. The vault id
+    /// is kept. Entries left out are not decrypted, so a deleted entry or a
+    /// left out passkey whose blob fails to decrypt does not fail the export.
+    /// This vault is unchanged.
     pub fn to_bundled_vault(
         &self,
         key: Option<String>,
@@ -871,22 +907,16 @@ impl Vault {
         bundle_cipher: &Aes256Gcm,
         include_passkeys: bool,
     ) -> Result<BundledVault, Error> {
-        let mut encrypted_vault = self.to_encrypted(false)?;
-        if !include_passkeys {
-            for item in self.items.values() {
-                let Some(encrypted_item) = encrypted_vault.items.get_mut(&item.id) else {
-                    continue;
-                };
-                for cred in item.credentials.values() {
-                    if matches!(cred.kind, FieldKind::Passkey) {
-                        encrypted_item.credentials.remove(&cred.id);
-                    }
-                }
-            }
-        }
-        let wrapped_file_key = self.cipher.wrap_raw_key(
+        // A bundle holds no wrapped file key, so the copy gets an empty one.
+        // The copy is dropped at return and is never saved.
+        let scope = RekeyScope::Live {
+            passkeys: include_passkeys,
+        };
+        let copy = self.rekeyed_in(scope, None, |_| Ok(VaultFileKey::new(Vec::new())))?;
+        let encrypted_vault = copy.to_encrypted(false)?;
+        let wrapped_file_key = copy.cipher.wrap_raw_key(
             bundle_cipher,
-            ExportedBundle::file_key_aad(bundle_id, self.id),
+            ExportedBundle::file_key_aad(bundle_id, copy.id),
         )?;
         Ok(BundledVault {
             id: encrypted_vault.id,
@@ -2210,6 +2240,16 @@ fn assign_positions<T>(
         }
     }
     true
+}
+
+/// Entries a re-key carries into the copy.
+#[derive(Clone, Copy)]
+enum RekeyScope {
+    /// Every entry, deleted items and deleted credentials included.
+    All,
+    /// Live entries only. Passkey credentials are left out unless `passkeys`
+    /// is set.
+    Live { passkeys: bool },
 }
 
 struct DeletedEntry {

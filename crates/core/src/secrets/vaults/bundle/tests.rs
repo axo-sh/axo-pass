@@ -7,7 +7,6 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::audit::test_support::test_dir;
-use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -15,11 +14,13 @@ use crate::secrets::vaults::bundle::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
+use crate::secrets::vaults::bundle::{ImportableBundle, PreparedVault};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::TestSigner;
+use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::storage::txn::VaultWriter;
@@ -397,6 +398,199 @@ fn imported_vault_is_signed_by_writer() {
         EncryptedVault::load(path, &TestSigner::random()),
         Err(Error::VaultSignatureInvalid)
     ));
+}
+
+/// Vault with the entries of [`Vault::fill_for_test`], saved and loaded under
+/// its own file key, so its caches hold the blobs of the file.
+fn filled_vault() -> Vault {
+    let mut vault = Vault::new_for_test();
+    vault.fill_for_test();
+    let cipher = vault.unlocked_key().cipher_for_test();
+    Vault::from_encrypted_with_cipher(cipher, vault.to_encrypted(true).unwrap()).unwrap()
+}
+
+/// Raw file key of `vault`.
+fn file_key_of(vault: &Vault) -> Vec<u8> {
+    vault.unlocked_key().cipher_for_test().key_bytes_for_test()
+}
+
+/// Export `vault` to a bundle file and open the file again.
+fn export_and_open(vault: &Vault, include_passkeys: bool) -> PreparedVault {
+    let bundle_id = Uuid::new_v4();
+    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundled = vault
+        .to_bundled_vault(
+            None,
+            bundle_id,
+            &Aes256Gcm::new(&bundle_key),
+            include_passkeys,
+        )
+        .unwrap();
+    let identity = age::x25519::Identity::generate();
+    let export_mode = ExportMode::Recipient(identity.to_public().to_string());
+    let bundle = ExportedBundle {
+        version: BUNDLE_VERSION,
+        id: bundle_id,
+        exported_at: time::OffsetDateTime::now_utc(),
+        age_bundle_key: export_mode.encrypt(bundle_key.as_slice()).unwrap(),
+        vaults: vec![bundled],
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("export.axovault");
+    fs::write(&path, serde_json::to_string_pretty(&bundle).unwrap()).unwrap();
+
+    let opened = ImportableBundle::open(&path, ImportIdentity::Identity(identity)).unwrap();
+    opened.vaults.into_iter().next().unwrap()
+}
+
+/// Cipher of the file key an opened bundle vault holds.
+fn export_cipher(prepared: &PreparedVault) -> VaultCipher {
+    VaultCipher::new_with_bytes(prepared.raw_file_key.expose_secret(), prepared.id)
+}
+
+#[test]
+fn export_file_key_differs_from_source_and_source_is_unchanged() {
+    let vault = filled_vault();
+    let source_key = file_key_of(&vault);
+    let before = vault.to_encrypted(true).unwrap().to_vault_json().unwrap();
+
+    let prepared = export_and_open(&vault, true);
+
+    assert_ne!(*prepared.raw_file_key.expose_secret(), source_key);
+    assert_eq!(file_key_of(&vault), source_key);
+    let after = vault.to_encrypted(true).unwrap().to_vault_json().unwrap();
+    assert_eq!(after, before);
+    vault.assert_filled_for_test();
+}
+
+#[test]
+fn two_exports_of_one_vault_have_different_file_keys() {
+    let vault = filled_vault();
+
+    let first = export_and_open(&vault, true);
+    let second = export_and_open(&vault, true);
+
+    assert_ne!(
+        first.raw_file_key.expose_secret(),
+        second.raw_file_key.expose_secret()
+    );
+}
+
+#[test]
+fn export_imports_with_values_and_history() {
+    let vault = filled_vault();
+
+    let prepared = export_and_open(&vault, true);
+    assert_eq!(prepared.id, vault.id());
+    let imported = prepared
+        .into_vault("imported".to_string(), VaultFileKey::new(vec![0u8; 32]))
+        .unwrap();
+
+    imported.assert_live_filled_for_test();
+    assert_eq!(imported.id(), vault.id());
+    // Deleted entries are not exported.
+    assert!(imported.list_deleted("kept").unwrap().is_empty());
+    assert!(imported.list_deleted_items().is_empty());
+}
+
+#[test]
+fn bundle_blobs_fail_to_decrypt_under_source_file_key() {
+    let vault = filled_vault();
+    let prepared = export_and_open(&vault, true);
+    let cipher = export_cipher(&prepared);
+    let exported = EncryptedVault {
+        id: prepared.id,
+        key: "exported".to_string(),
+        name: None,
+        generation: 0,
+        replica_id: None,
+        file_key: VaultFileKey::new(Vec::new()),
+        metadata: prepared.metadata,
+        items: prepared.items,
+        deleted: BTreeMap::new(),
+    };
+
+    let under_export_key = cipher.blob_results_for_test(&exported);
+    let under_source_key = vault
+        .unlocked_key()
+        .cipher_for_test()
+        .blob_results_for_test(&exported);
+
+    let kinds: Vec<&str> = under_export_key.keys().map(String::as_str).collect();
+    assert_eq!(
+        kinds,
+        [
+            "live: credential metadata",
+            "live: history info",
+            "live: history value",
+            "live: item autofill",
+            "live: item metadata",
+            "live: value",
+            "live: vault metadata",
+        ]
+    );
+    for (kind, oks) in &under_export_key {
+        assert!(oks.iter().all(|ok| *ok), "{kind}: {oks:?}");
+    }
+    for (kind, oks) in &under_source_key {
+        assert!(oks.iter().all(|ok| !*ok), "{kind}: {oks:?}");
+    }
+}
+
+#[test]
+fn export_without_passkeys_holds_no_passkey_credential() {
+    let vault = filled_vault();
+    let kept_id = vault.get_item("kept").unwrap().id;
+    let passkey_id = vault.get_item_credential("kept", "passkey").unwrap().id;
+
+    let prepared = export_and_open(&vault, false);
+
+    let cipher = export_cipher(&prepared);
+    assert!(
+        !prepared.items[&kept_id]
+            .credentials
+            .contains_key(&passkey_id)
+    );
+    for (item_id, item) in &prepared.items {
+        for (cred_id, cred) in &item.credentials {
+            let metadata = cipher
+                .decrypt_cred_metadata(*item_id, *cred_id, &cred.metadata)
+                .unwrap();
+            assert_ne!(metadata.expose_secret().kind, FieldKind::Passkey);
+            let value = cipher
+                .decrypt_cred_value(*item_id, *cred_id, &cred.value)
+                .unwrap();
+            assert_ne!(value.expose_secret(), Vault::PASSKEY_VALUE_FOR_TEST);
+        }
+    }
+    let imported = prepared
+        .into_vault("imported".to_string(), VaultFileKey::new(vec![0u8; 32]))
+        .unwrap();
+    assert!(imported.get_item_credential("kept", "passkey").is_err());
+    let alpha = imported
+        .get_item_credential_secret("kept", "alpha")
+        .unwrap();
+    assert_eq!(alpha.unwrap().expose_secret(), "two");
+}
+
+#[test]
+fn export_with_passkeys_holds_passkey_record_unchanged() {
+    let vault = filled_vault();
+    let kept_id = vault.get_item("kept").unwrap().id;
+    let passkey_id = vault.get_item_credential("kept", "passkey").unwrap().id;
+
+    let prepared = export_and_open(&vault, true);
+
+    let cipher = export_cipher(&prepared);
+    let passkey = &prepared.items[&kept_id].credentials[&passkey_id];
+    let metadata = cipher
+        .decrypt_cred_metadata(kept_id, passkey_id, &passkey.metadata)
+        .unwrap();
+    assert_eq!(metadata.expose_secret().kind, FieldKind::Passkey);
+    let value = cipher
+        .decrypt_cred_value(kept_id, passkey_id, &passkey.value)
+        .unwrap();
+    assert_eq!(value.expose_secret(), Vault::PASSKEY_VALUE_FOR_TEST);
 }
 
 #[test]

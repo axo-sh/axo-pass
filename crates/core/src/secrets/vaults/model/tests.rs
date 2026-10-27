@@ -2128,6 +2128,58 @@ fn stale_credential_metadata_field_is_dropped_by_rekey() {
     assert_eq!(value.unwrap().unwrap().expose_secret(), "secret");
 }
 
+/// Filled vault in which `breaks` replaces value blobs of item `kept` with the
+/// value blob of `alpha`. `breaks` receives the source vault, the encrypted
+/// item, and that blob. A replaced blob fails to decrypt, since its AAD names
+/// another credential.
+fn filled_vault_with_broken_values(
+    breaks: impl FnOnce(&Vault, &mut EncryptedVaultItem, &EncryptedBlob<String>),
+) -> Vault {
+    let source = filled_test_vault();
+    let (item_id, alpha_id) = source.get_credential_ids("kept", "alpha").unwrap();
+    let mut encrypted = source.to_encrypted(true).unwrap();
+    let item = encrypted.items.get_mut(&item_id).unwrap();
+    let alpha_value = item.credentials[&alpha_id].value.clone();
+    breaks(&source, item, &alpha_value);
+    Vault::from_encrypted_with_cipher(source.cipher.duplicate(), encrypted).unwrap()
+}
+
+#[test]
+fn deleted_entry_that_fails_to_decrypt_does_not_fail_export() {
+    let vault = filled_vault_with_broken_values(|_, item, value| {
+        for entry in item.deleted.values_mut() {
+            entry.credential.value = value.clone();
+        }
+    });
+    let cipher = Aes256Gcm::new(&Aes256Gcm::generate_key(OsRng));
+
+    assert!(vault.rekeyed(None, plain_wrap).is_err());
+    for include_passkeys in [true, false] {
+        let bundled = vault.to_bundled_vault(None, Uuid::new_v4(), &cipher, include_passkeys);
+        assert!(bundled.is_ok());
+    }
+}
+
+#[test]
+fn left_out_passkey_that_fails_to_decrypt_does_not_fail_export() {
+    let vault = filled_vault_with_broken_values(|source, item, value| {
+        let (_, passkey_id) = source.get_credential_ids("kept", "passkey").unwrap();
+        item.credentials.get_mut(&passkey_id).unwrap().value = value.clone();
+    });
+    let cipher = Aes256Gcm::new(&Aes256Gcm::generate_key(OsRng));
+
+    assert!(
+        vault
+            .to_bundled_vault(None, Uuid::new_v4(), &cipher, false)
+            .is_ok()
+    );
+    assert!(
+        vault
+            .to_bundled_vault(None, Uuid::new_v4(), &cipher, true)
+            .is_err()
+    );
+}
+
 #[test]
 fn unknown_field_kind_is_kept_by_rekey() {
     let kind = serde_json::json!({"type": "wifi", "ssid": "home", "band": 5});
