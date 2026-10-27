@@ -23,6 +23,13 @@ pub struct VaultInfo {
     pub name: Option<String>,
 }
 
+/// Vault id held by more than one file, with the path of each file.
+#[derive(uniffi::Record, Clone)]
+pub struct DuplicateVaultInfo {
+    pub vault_id: String,
+    pub paths: Vec<String>,
+}
+
 /// A retained version of a vault: the vault file as it was before a save.
 #[derive(uniffi::Record)]
 pub struct RetainedVersionInfo {
@@ -618,6 +625,24 @@ impl AxoPass {
             .collect();
         vaults.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(vaults)
+    }
+
+    /// List vault ids held by more than one file. None of these files is in
+    /// `list_vaults`. Does not require authentication.
+    pub fn list_duplicate_vaults(&self) -> Result<Vec<DuplicateVaultInfo>, FfiError> {
+        let manager = self.manager.lock().map_err(|_| FfiError::Poisoned)?;
+        Ok(manager
+            .duplicates()
+            .iter()
+            .map(|duplicate| DuplicateVaultInfo {
+                vault_id: duplicate.id.to_string(),
+                paths: duplicate
+                    .paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            })
+            .collect())
     }
 
     /// List items for a vault. Decrypts the vault from disk using the

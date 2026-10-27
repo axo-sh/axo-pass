@@ -128,7 +128,19 @@ impl VaultHandle {
         locks: &VaultLocks,
     ) -> Result<Self, Error> {
         let header = VaultHeader::peek(vault_path)?;
+        let id = header.id;
+        let vh = Self::from_header(vault_key, vault_path, header)?;
+        locks.track(id, vault_path);
+        Ok(vh)
+    }
 
+    /// Locked vault at `vault_path` with `header`, already read from the file.
+    /// The path is not tracked in the vault locks.
+    pub(crate) fn from_header(
+        vault_key: Option<String>,
+        vault_path: &Path,
+        header: VaultHeader,
+    ) -> Result<Self, Error> {
         // todo: decide what to do for key for external vaults, some options:
         // 1. use file name as key
         // 2. use the vault.id as the key
@@ -138,7 +150,6 @@ impl VaultHandle {
         if !validate_key(&vault_key) {
             return Err(Error::InvalidVaultKey(vault_key.to_string()));
         }
-        locks.track(header.id, vault_path);
 
         Ok(Self {
             key: vault_key,

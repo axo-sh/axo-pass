@@ -76,7 +76,7 @@ impl VaultLocks {
 
     /// Whether there is a lock entry for vault `id`.
     #[cfg(test)]
-    pub(super) fn contains(&self, id: Uuid) -> bool {
+    pub(crate) fn contains(&self, id: Uuid) -> bool {
         self.entries().contains_key(&id)
     }
 

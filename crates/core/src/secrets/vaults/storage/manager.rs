@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::storage::catalog::VaultCatalog;
+use crate::secrets::vaults::storage::catalog::{DuplicateVaults, VaultCatalog, VaultScanResult};
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 
@@ -18,6 +18,8 @@ use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 pub struct VaultsManager {
     store: VaultCatalog,
     vaults: BTreeMap<String, VaultHandle>,
+    /// Vault ids held by more than one file when the manager was created.
+    duplicates: Vec<DuplicateVaults>,
 }
 
 impl VaultsManager {
@@ -32,14 +34,22 @@ impl VaultsManager {
 
     /// A manager of every vault in `store`, locked.
     pub fn with(store: VaultCatalog) -> Self {
+        let VaultScanResult { vaults, duplicates } = store.scan();
         Self {
-            vaults: store.list(),
             store,
+            vaults,
+            duplicates,
         }
     }
 
     pub fn store(&self) -> &VaultCatalog {
         &self.store
+    }
+
+    /// Vault ids held by more than one file. None of these files is in the
+    /// manager.
+    pub fn duplicates(&self) -> &[DuplicateVaults] {
+        &self.duplicates
     }
 
     pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {

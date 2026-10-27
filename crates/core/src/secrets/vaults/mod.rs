@@ -17,6 +17,6 @@ pub use model::{
     CredentialPlacement, CredentialUpdate, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection, display_order,
 };
-pub use storage::catalog::{Unlocker, VaultCatalog};
+pub use storage::catalog::{DuplicateVaults, Unlocker, VaultCatalog, VaultScanResult};
 pub use storage::handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use storage::manager::VaultsManager;
