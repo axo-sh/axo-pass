@@ -1893,3 +1893,265 @@ fn deleted_info_is_bound_to_its_credential() {
     let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
     assert!(Vault::from_encrypted_with_cipher(cipher, encrypted).is_err());
 }
+
+/// File key wrapper that stores the raw key as is.
+fn plain_wrap(raw: &[u8]) -> Result<VaultFileKey, Error> {
+    Ok(VaultFileKey::new(raw.to_vec()))
+}
+
+/// Vault with the entries of [`Vault::fill_for_test`], saved and loaded, so
+/// its caches hold the blobs of the file.
+fn filled_test_vault() -> Vault {
+    let mut vault = test_vault();
+    vault.fill_for_test();
+    reload(&vault)
+}
+
+/// Save and load a vault under its own file key.
+fn reload_own_key(vault: &Vault) -> Vault {
+    let encrypted = vault.to_encrypted(true).unwrap();
+    Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted).unwrap()
+}
+
+/// Place and kind of every blob in a vault filled by [`Vault::fill_for_test`],
+/// as [`VaultCipher::blob_results_for_test`] names them.
+const FILLED_BLOB_KINDS: [&str; 24] = [
+    "deleted item deleted credential: credential metadata",
+    "deleted item deleted credential: deleted info",
+    "deleted item deleted credential: history info",
+    "deleted item deleted credential: history value",
+    "deleted item deleted credential: value",
+    "deleted item: credential metadata",
+    "deleted item: deleted item info",
+    "deleted item: history info",
+    "deleted item: history value",
+    "deleted item: item autofill",
+    "deleted item: item metadata",
+    "deleted item: value",
+    "live deleted credential: credential metadata",
+    "live deleted credential: deleted info",
+    "live deleted credential: history info",
+    "live deleted credential: history value",
+    "live deleted credential: value",
+    "live: credential metadata",
+    "live: history info",
+    "live: history value",
+    "live: item autofill",
+    "live: item metadata",
+    "live: value",
+    "live: vault metadata",
+];
+
+/// Check that `cipher` decrypts every blob of the filled vault `encrypted` if
+/// `decrypts` is set, and none of them otherwise.
+fn assert_blobs_decrypt(cipher: &VaultCipher, encrypted: &EncryptedVault, decrypts: bool) {
+    let results = cipher.blob_results_for_test(encrypted);
+    let kinds: Vec<&str> = results.keys().map(String::as_str).collect();
+    assert_eq!(kinds, FILLED_BLOB_KINDS);
+    for (kind, oks) in &results {
+        assert!(oks.iter().all(|ok| *ok == decrypts), "{kind}: {oks:?}");
+    }
+}
+
+/// Credential metadata plaintext read as a JSON object.
+#[derive(serde::Serialize, serde::Deserialize, zeroize::Zeroize)]
+struct LooseMetadata {
+    #[serde(flatten)]
+    #[zeroize(skip)]
+    fields: BTreeMap<String, serde_json::Value>,
+}
+
+/// Credential metadata plaintext of `item_id/cred_id` as `vault` writes it.
+fn stored_cred_metadata(
+    vault: &Vault,
+    item_id: Uuid,
+    cred_id: Uuid,
+) -> BTreeMap<String, serde_json::Value> {
+    let encrypted = vault.to_encrypted(true).unwrap();
+    let blob = &encrypted.items[&item_id].credentials[&cred_id].metadata;
+    let metadata: SecretBox<LooseMetadata> = vault
+        .cipher
+        .decrypt_cred_metadata_as_for_test(item_id, cred_id, blob);
+    metadata.expose_secret().fields.clone()
+}
+
+#[test]
+fn every_blob_kind_decrypts_under_new_key_and_fails_under_old_key() {
+    let source = filled_test_vault();
+    assert_blobs_decrypt(&source.cipher, &source.to_encrypted(true).unwrap(), true);
+
+    let rekeyed = source.rekeyed(None, plain_wrap).unwrap();
+    let encrypted = rekeyed.to_encrypted(true).unwrap();
+
+    assert_eq!(encrypted.id, source.id());
+    assert_blobs_decrypt(&rekeyed.cipher, &encrypted, true);
+    assert_blobs_decrypt(&source.cipher, &encrypted, false);
+}
+
+#[test]
+fn copy_decrypts_under_new_vault_id_and_fails_under_old_vault_id() {
+    let source = filled_test_vault();
+    let new_id = Uuid::new_v4();
+
+    let copy = source.rekeyed(Some(new_id), plain_wrap).unwrap();
+    let encrypted = copy.to_encrypted(true).unwrap();
+
+    assert_eq!(copy.id(), new_id);
+    assert_eq!(encrypted.id, new_id);
+    assert_blobs_decrypt(&copy.cipher, &encrypted, true);
+    let old_id = copy.cipher.with_vault_id_for_test(source.id());
+    assert_blobs_decrypt(&old_id, &encrypted, false);
+    assert_blobs_decrypt(&source.cipher, &encrypted, false);
+}
+
+#[test]
+fn rekeyed_vault_holds_every_entry_of_source() {
+    let source = filled_test_vault();
+    for new_id in [None, Some(Uuid::new_v4())] {
+        let rekeyed = source.rekeyed(new_id, plain_wrap).unwrap();
+        rekeyed.assert_filled_for_test();
+        assert_eq!(rekeyed.entry_ids_for_test(), source.entry_ids_for_test());
+
+        let reloaded = reload_own_key(&rekeyed);
+        reloaded.assert_filled_for_test();
+        assert_eq!(reloaded.entry_ids_for_test(), source.entry_ids_for_test());
+    }
+}
+
+#[test]
+fn copy_keeps_key_and_name_and_is_not_synced() {
+    let mut source = filled_test_vault();
+    source.generation = 5;
+    source.replica_id = Some(Uuid::new_v4());
+
+    let rekeyed = source.rekeyed(None, plain_wrap).unwrap();
+    assert_eq!(rekeyed.id(), source.id());
+    assert_eq!(rekeyed.generation, 5);
+    assert_eq!(rekeyed.replica_id, source.replica_id);
+
+    let new_id = Uuid::new_v4();
+    let copy = source.rekeyed(Some(new_id), plain_wrap).unwrap();
+    assert_eq!(copy.id(), new_id);
+    assert_eq!(copy.generation, 0);
+    assert_eq!(copy.replica_id, None);
+    for vault in [&rekeyed, &copy] {
+        assert_eq!(vault.key(), source.key());
+        assert_eq!(vault.name, source.name);
+    }
+}
+
+#[test]
+fn source_is_unchanged_and_its_file_key_still_decrypts_it() {
+    let source = filled_test_vault();
+    let before = source.to_encrypted(true).unwrap().to_vault_json().unwrap();
+
+    source.rekeyed(None, plain_wrap).unwrap();
+    source.rekeyed(Some(Uuid::new_v4()), plain_wrap).unwrap();
+
+    let after = source.to_encrypted(true).unwrap();
+    assert_eq!(after.to_vault_json().unwrap(), before);
+    assert_eq!(source.cipher.key_bytes_for_test(), TEST_FILE_KEY);
+    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, source.id());
+    assert_blobs_decrypt(&cipher, &after, true);
+    reload(&source).assert_filled_for_test();
+}
+
+#[test]
+fn two_rekeys_of_one_vault_have_different_file_keys() {
+    let source = filled_test_vault();
+
+    let first = source.rekeyed(None, plain_wrap).unwrap();
+    let second = source.rekeyed(None, plain_wrap).unwrap();
+
+    let first_key = first.cipher.key_bytes_for_test();
+    let second_key = second.cipher.key_bytes_for_test();
+    assert_ne!(first_key, second_key);
+    assert_ne!(first_key, TEST_FILE_KEY);
+    assert_ne!(second_key, TEST_FILE_KEY);
+    assert!(first.file_key != second.file_key);
+}
+
+#[test]
+fn wrapper_receives_raw_key_of_rekeyed_vault() {
+    let source = filled_test_vault();
+    let mut seen = Vec::new();
+
+    let rekeyed = source
+        .rekeyed(None, |raw| {
+            seen = raw.to_vec();
+            Ok(VaultFileKey::new(vec![9u8; 4]))
+        })
+        .unwrap();
+
+    assert_eq!(seen, rekeyed.cipher.key_bytes_for_test());
+    let wrapped = VaultFileKey::new(vec![9u8; 4]);
+    assert!(rekeyed.file_key == wrapped);
+    assert!(rekeyed.to_encrypted(true).unwrap().file_key == wrapped);
+}
+
+#[test]
+fn failed_wrap_fails_rekey() {
+    let source = filled_test_vault();
+    let result = source.rekeyed(None, |_| Err(Error::VaultFileKeyEncryptionError));
+    assert!(matches!(result, Err(Error::VaultFileKeyEncryptionError)));
+}
+
+#[test]
+fn stale_credential_metadata_field_is_dropped_by_rekey() {
+    let mut vault = vault_with_credentials("site", &["password"]);
+    let (item_id, cred_id) = vault.get_credential_ids("site", "password").unwrap();
+    let mut encrypted = vault.to_encrypted(true).unwrap();
+    let stale = LooseMetadata {
+        fields: BTreeMap::from([
+            ("title".to_string(), serde_json::json!("Password")),
+            ("key".to_string(), serde_json::json!("password")),
+            ("last_used_at".to_string(), serde_json::json!(1_700_000_000)),
+        ]),
+    };
+    let blob = vault
+        .cipher
+        .encrypt_cred_metadata_as_for_test(item_id, cred_id, &stale);
+    let credentials = &mut encrypted.items.get_mut(&item_id).unwrap().credentials;
+    credentials.get_mut(&cred_id).unwrap().metadata = blob;
+    vault = Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted).unwrap();
+    // The loaded vault writes the cached blob unchanged.
+    assert!(stored_cred_metadata(&vault, item_id, cred_id).contains_key("last_used_at"));
+
+    let rekeyed = vault.rekeyed(None, plain_wrap).unwrap();
+
+    let fields = stored_cred_metadata(&rekeyed, item_id, cred_id);
+    assert!(!fields.contains_key("last_used_at"));
+    assert_eq!(fields["title"], "Password");
+    assert_eq!(fields["key"], "password");
+    let reloaded = reload_own_key(&rekeyed);
+    let value = reloaded.get_item_credential_secret("site", "password");
+    assert_eq!(value.unwrap().unwrap().expose_secret(), "secret");
+}
+
+#[test]
+fn unknown_field_kind_is_kept_by_rekey() {
+    let kind = serde_json::json!({"type": "wifi", "ssid": "home", "band": 5});
+    let mut vault = test_vault();
+    vault.add_or_update_item("net", "Net").unwrap();
+    vault
+        .add_or_update_item_credential(
+            "net",
+            "wifi",
+            "Wifi",
+            FieldKind::Unknown(kind.clone()),
+            SecretString::from("hunter2"),
+        )
+        .unwrap();
+    let vault = reload(&vault);
+    let (item_id, cred_id) = vault.get_credential_ids("net", "wifi").unwrap();
+
+    let rekeyed = vault.rekeyed(None, plain_wrap).unwrap();
+
+    assert_eq!(
+        stored_cred_metadata(&rekeyed, item_id, cred_id)["kind"],
+        kind
+    );
+    let reloaded = reload_own_key(&rekeyed);
+    let cred = reloaded.get_item_credential("net", "wifi").unwrap();
+    assert_eq!(cred.kind, FieldKind::Unknown(kind));
+}

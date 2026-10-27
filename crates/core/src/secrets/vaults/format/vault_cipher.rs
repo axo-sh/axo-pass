@@ -6,6 +6,9 @@ use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::bundle::exported_bundle::RawFileKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+#[cfg(test)]
+use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
+use crate::secrets::vaults::format::encrypted_vault::HistoryEntry;
 use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
 };
@@ -283,6 +286,75 @@ impl VaultCipher {
         blob.decrypt(&self.cipher, self.deleted_item_info_aad(item_id))
     }
 
+    /// Credential value decrypted with this cipher and encrypted with `to`.
+    pub(crate) fn rekey_cred_value(
+        &self,
+        to: &VaultCipher,
+        item_id: Uuid,
+        cred_id: Uuid,
+        blob: &EncryptedBlob<String>,
+    ) -> Result<EncryptedBlob<String>, Error> {
+        let value = self.decrypt_cred_value(item_id, cred_id, blob)?;
+        to.encrypt_cred_value(item_id, cred_id, value.expose_secret())
+    }
+
+    /// Previous values of a credential decrypted with this cipher and
+    /// encrypted with `to`. Entry ids and order are kept.
+    pub(crate) fn rekey_history(
+        &self,
+        to: &VaultCipher,
+        item_id: Uuid,
+        cred_id: Uuid,
+        history: &[HistoryEntry],
+    ) -> Result<Vec<HistoryEntry>, Error> {
+        history
+            .iter()
+            .map(|entry| {
+                let value = self.decrypt_history_value(item_id, cred_id, entry.id, &entry.value)?;
+                let info = self.decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
+                Ok(HistoryEntry {
+                    id: entry.id,
+                    value: to.encrypt_history_value(
+                        item_id,
+                        cred_id,
+                        entry.id,
+                        value.expose_secret(),
+                    )?,
+                    info: to.encrypt_history_info(
+                        item_id,
+                        cred_id,
+                        entry.id,
+                        info.expose_secret(),
+                    )?,
+                })
+            })
+            .collect()
+    }
+
+    /// Deleted credential info decrypted with this cipher and encrypted with
+    /// `to`.
+    pub(crate) fn rekey_deleted_info(
+        &self,
+        to: &VaultCipher,
+        item_id: Uuid,
+        cred_id: Uuid,
+        blob: &EncryptedBlob<DeletedInfo>,
+    ) -> Result<EncryptedBlob<DeletedInfo>, Error> {
+        let info = self.decrypt_deleted_info(item_id, cred_id, blob)?;
+        to.encrypt_deleted_info(item_id, cred_id, info.expose_secret())
+    }
+
+    /// Deleted item info decrypted with this cipher and encrypted with `to`.
+    pub(crate) fn rekey_deleted_item_info(
+        &self,
+        to: &VaultCipher,
+        item_id: Uuid,
+        blob: &EncryptedBlob<DeletedInfo>,
+    ) -> Result<EncryptedBlob<DeletedInfo>, Error> {
+        let info = self.decrypt_deleted_item_info(item_id, blob)?;
+        to.encrypt_deleted_item_info(item_id, info.expose_secret())
+    }
+
     /// Encrypt this vault's raw file key with the bundle cipher for export.
     pub fn wrap_raw_key(
         &self,
@@ -291,6 +363,152 @@ impl VaultCipher {
     ) -> Result<EncryptedBlob<RawFileKey>, Error> {
         let raw = RawFileKey(self.cipher_bytes.expose_secret().clone());
         EncryptedBlob::encrypt(&raw, bundle_cipher, aad)
+    }
+
+    /// Raw file key, for tests.
+    #[cfg(test)]
+    pub(crate) fn key_bytes_for_test(&self) -> Vec<u8> {
+        self.cipher_bytes.expose_secret().clone()
+    }
+
+    /// Cipher with the same key and another vault id, for tests.
+    #[cfg(test)]
+    pub(crate) fn with_vault_id_for_test(&self, vault_id: Uuid) -> Self {
+        Self::new_with_bytes(self.cipher_bytes.expose_secret(), vault_id)
+    }
+
+    /// Credential metadata blob whose plaintext is `value`, for tests that
+    /// store fields `VaultCredentialMetadata` does not hold.
+    #[cfg(test)]
+    pub(crate) fn encrypt_cred_metadata_as_for_test<T>(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        value: &T,
+    ) -> EncryptedBlob<VaultCredentialMetadata>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + zeroize::Zeroize,
+    {
+        let blob = EncryptedBlob::encrypt(
+            value,
+            &self.cipher,
+            self.cred_aad(item_id, cred_id, "metadata"),
+        )
+        .unwrap();
+        serde_json::from_value(serde_json::to_value(&blob).unwrap()).unwrap()
+    }
+
+    /// Plaintext of a credential metadata blob read as `T`, for tests.
+    #[cfg(test)]
+    pub(crate) fn decrypt_cred_metadata_as_for_test<T>(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        blob: &EncryptedBlob<VaultCredentialMetadata>,
+    ) -> SecretBox<T>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + zeroize::Zeroize,
+    {
+        let blob: EncryptedBlob<T> =
+            serde_json::from_value(serde_json::to_value(blob).unwrap()).unwrap();
+        blob.decrypt(&self.cipher, self.cred_aad(item_id, cred_id, "metadata"))
+            .unwrap()
+    }
+
+    /// Whether each blob in `vault` decrypts under this cipher, by place and
+    /// blob kind. Keys are `"{place}: {kind}"`. Places are `live`,
+    /// `live deleted credential`, `deleted item`, and
+    /// `deleted item deleted credential`.
+    #[cfg(test)]
+    pub(crate) fn blob_results_for_test(
+        &self,
+        vault: &EncryptedVault,
+    ) -> std::collections::BTreeMap<String, Vec<bool>> {
+        use std::collections::BTreeMap;
+
+        use crate::secrets::vaults::format::encrypted_vault::{
+            EncryptedVaultItem, EncryptedVaultItemCredential,
+        };
+
+        type Results = BTreeMap<String, Vec<bool>>;
+
+        fn record(results: &mut Results, place: &str, kind: &str, ok: bool) {
+            results
+                .entry(format!("{place}: {kind}"))
+                .or_default()
+                .push(ok);
+        }
+
+        fn credential(
+            cipher: &VaultCipher,
+            results: &mut Results,
+            place: &str,
+            item_id: Uuid,
+            cred_id: Uuid,
+            cred: &EncryptedVaultItemCredential,
+        ) {
+            let metadata = cipher.decrypt_cred_metadata(item_id, cred_id, &cred.metadata);
+            record(results, place, "credential metadata", metadata.is_ok());
+            let value = cipher.decrypt_cred_value(item_id, cred_id, &cred.value);
+            record(results, place, "value", value.is_ok());
+            for entry in &cred.history {
+                let value = cipher.decrypt_history_value(item_id, cred_id, entry.id, &entry.value);
+                record(results, place, "history value", value.is_ok());
+                let info = cipher.decrypt_history_info(item_id, cred_id, entry.id, &entry.info);
+                record(results, place, "history info", info.is_ok());
+            }
+        }
+
+        fn item(
+            cipher: &VaultCipher,
+            results: &mut Results,
+            place: &str,
+            item_id: Uuid,
+            item: &EncryptedVaultItem,
+        ) {
+            let metadata = cipher.decrypt_item_metadata(item_id, &item.metadata);
+            record(results, place, "item metadata", metadata.is_ok());
+            if let Some(blob) = &item.autofill {
+                let autofill = cipher.decrypt_item_autofill(item_id, blob);
+                record(results, place, "item autofill", autofill.is_ok());
+            }
+            for (cred_id, cred) in &item.credentials {
+                credential(cipher, results, place, item_id, *cred_id, cred);
+            }
+            let deleted_place = format!("{place} deleted credential");
+            for (cred_id, deleted) in &item.deleted {
+                credential(
+                    cipher,
+                    results,
+                    &deleted_place,
+                    item_id,
+                    *cred_id,
+                    &deleted.credential,
+                );
+                let info = cipher.decrypt_deleted_info(item_id, *cred_id, &deleted.info);
+                record(results, &deleted_place, "deleted info", info.is_ok());
+            }
+        }
+
+        let mut results = Results::new();
+        if let Some(blob) = &vault.metadata {
+            let metadata = self.decrypt_vault_metadata(blob);
+            record(&mut results, "live", "vault metadata", metadata.is_ok());
+        }
+        for (item_id, encrypted) in &vault.items {
+            item(self, &mut results, "live", *item_id, encrypted);
+        }
+        for (item_id, deleted) in &vault.deleted {
+            let info = self.decrypt_deleted_item_info(*item_id, &deleted.info);
+            record(
+                &mut results,
+                "deleted item",
+                "deleted item info",
+                info.is_ok(),
+            );
+            item(self, &mut results, "deleted item", *item_id, &deleted.item);
+        }
+        results
     }
 }
 

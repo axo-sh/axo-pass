@@ -314,6 +314,49 @@ fn unchanged_vault_with_every_entry_kind_saves_nothing() {
 }
 
 #[test]
+fn rekeyed_copy_saves_beside_source_and_reloads_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let source = filled_vault(&dir, &files);
+    let source_vault = {
+        let enc_vault = EncryptedVault::load(&source.path, files.signer().as_ref()).unwrap();
+        Vault::from_unlocked_key(&source.unlocked_key().unwrap(), enc_vault).unwrap()
+    };
+    let source_before = fs::read_to_string(&source.path).unwrap();
+
+    let new_id = Uuid::new_v4();
+    let mut copy = source_vault
+        .rekeyed(Some(new_id), |raw| Ok(VaultFileKey::new(raw.to_vec())))
+        .unwrap();
+    copy.set_key("copy".to_string());
+    let path = VaultHandle::file_path(&dir.path().join("vaults"), new_id);
+    let vh = VaultHandle::unlocked(path.clone(), copy);
+    files.create(&vh).unwrap();
+
+    let enc_vault = EncryptedVault::load(&path, files.signer().as_ref()).unwrap();
+    let reloaded = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), enc_vault).unwrap();
+    assert_eq!(reloaded.id(), new_id);
+    assert_eq!(reloaded.key(), "copy");
+    reloaded.assert_filled_for_test();
+    assert_eq!(
+        reloaded.entry_ids_for_test(),
+        source_vault.entry_ids_for_test()
+    );
+
+    // The source file is unchanged and still opens with its own key.
+    assert_eq!(fs::read_to_string(&source.path).unwrap(), source_before);
+    let enc_vault = EncryptedVault::load(&source.path, files.signer().as_ref()).unwrap();
+    let source_reloaded =
+        Vault::from_unlocked_key(&source.unlocked_key().unwrap(), enc_vault).unwrap();
+    source_reloaded.assert_filled_for_test();
+    let enc_vault = EncryptedVault::load(&path, files.signer().as_ref()).unwrap();
+    assert!(matches!(
+        Vault::from_unlocked_key(&source.unlocked_key().unwrap(), enc_vault),
+        Err(Error::VaultFileKeyChanged)
+    ));
+}
+
+#[test]
 fn vault_with_hyphenated_ids_loads_and_next_save_writes_short_ids() {
     let dir = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(dir.path().join("data"));

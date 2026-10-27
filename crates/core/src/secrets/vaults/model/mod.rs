@@ -188,9 +188,15 @@ impl Vault {
     }
 
     /// Add entries of every kind the vault file holds, for tests. Item `kept`
-    /// has credential `alpha` with value `two` and one previous value, and the
-    /// deleted credential `beta`. The deleted item `removed` has credential
-    /// `gamma` and the deleted credential `delta`.
+    /// is in folder `Folder` and has section `Section`. It has credential
+    /// `alpha` in that section with value `two` and one previous value, the
+    /// passkey credential `passkey` with [`Self::PASSKEY_VALUE_FOR_TEST`], and
+    /// the deleted credential `beta`. Its autofill password is `alpha`. The
+    /// deleted item `removed` has credential `gamma` and the deleted
+    /// credential `delta`, and its autofill password is `gamma`. `beta`,
+    /// `gamma`, and `delta` have value `secret` and the previous value `one`.
+    /// The vault holds one passkey site report,
+    /// [`Self::signals_filled_for_test`].
     #[cfg(test)]
     pub(crate) fn fill_for_test(&mut self) {
         self.add_or_update_item("kept", "Kept").unwrap();
@@ -198,8 +204,11 @@ impl Vault {
         let values = [
             ("kept", "alpha", "one"),
             ("kept", "alpha", "two"),
+            ("kept", "beta", "one"),
             ("kept", "beta", "secret"),
+            ("removed", "gamma", "one"),
             ("removed", "gamma", "secret"),
+            ("removed", "delta", "one"),
             ("removed", "delta", "secret"),
         ];
         for (item, cred, value) in values {
@@ -212,9 +221,54 @@ impl Vault {
             )
             .unwrap();
         }
+        self.add_or_update_item_credential(
+            "kept",
+            "passkey",
+            "Passkey",
+            FieldKind::Passkey,
+            SecretString::from(Self::PASSKEY_VALUE_FOR_TEST.to_string()),
+        )
+        .unwrap();
+
+        let folder_id = self.create_folder("Folder").id;
+        self.move_item("kept", Some(folder_id)).unwrap();
+        let section_id = self.create_item_section("kept", "Section").unwrap().id;
+        self.move_item_credential("kept", "alpha", Some(section_id))
+            .unwrap();
+        for (item, cred) in [("kept", "alpha"), ("removed", "gamma")] {
+            let password = self.get_item_credential(item, cred).unwrap().id;
+            let autofill = ItemAutofill {
+                password: Some(password),
+                ..ItemAutofill::default()
+            };
+            self.set_item_autofill(item, autofill).unwrap();
+        }
+        self.update_passkey_signals(|signals| *signals = Self::signals_filled_for_test());
+
         self.delete_item_credential("kept", "beta").unwrap();
         self.delete_item_credential("removed", "delta").unwrap();
         self.delete_item("removed").unwrap();
+    }
+
+    /// Value of the passkey credential [`Self::fill_for_test`] adds. Its
+    /// fields are not in sorted order, so a value parsed and written again as
+    /// JSON would differ.
+    #[cfg(test)]
+    pub(crate) const PASSKEY_VALUE_FOR_TEST: &str =
+        r#"{"rp_id":"example.com","credential_id":"AQID","user_name":"me","private_key":"k"}"#;
+
+    /// Passkey site reports [`Self::fill_for_test`] adds.
+    #[cfg(test)]
+    pub(crate) fn signals_filled_for_test() -> SignalStore {
+        use crate::secrets::vaults::passkey::signals::Report;
+
+        let mut signals = SignalStore::new();
+        let report = Report::Unknown {
+            rp_id: "example.com".to_string(),
+            credential_id: vec![1, 2, 3],
+        };
+        signals.record(report, 1_700_000_000);
+        signals
     }
 
     /// Check that the vault holds the entries [`Self::fill_for_test`] adds.
@@ -229,22 +283,123 @@ impl Vault {
             .unwrap();
         assert_eq!(previous.expose_secret(), "one");
 
+        let passkey = self.get_item_credential("kept", "passkey").unwrap();
+        assert_eq!(passkey.kind, FieldKind::Passkey);
+        let value = self.get_item_credential_secret("kept", "passkey").unwrap();
+        assert_eq!(value.unwrap().expose_secret(), Self::PASSKEY_VALUE_FOR_TEST);
+
+        let folders = self.list_folders();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].title, "Folder");
+        let kept = self.get_item("kept").unwrap();
+        assert_eq!(kept.folder, Some(folders[0].id));
+        let sections: Vec<&VaultItemSection> = kept.sections.values().collect();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "Section");
+        let alpha = self.get_item_credential("kept", "alpha").unwrap();
+        assert_eq!(alpha.section, Some(sections[0].id));
+        assert_eq!(kept.autofill.password, Some(alpha.id));
+        assert_eq!(self.passkey_signals(), &Self::signals_filled_for_test());
+
         let deleted = self.list_deleted("kept").unwrap();
         assert_eq!(deleted.len(), 1);
         assert_eq!(deleted[0].credential.key, "beta");
+        let beta = &self.deleted[&deleted[0].credential.id];
+        self.assert_deleted_credential_filled_for_test(
+            kept.id,
+            beta.overview.credential.id,
+            &beta.blobs.credential.value,
+            &beta.blobs.credential.history,
+        );
 
         let deleted_items = self.list_deleted_items();
         assert_eq!(deleted_items.len(), 1);
         assert_eq!(deleted_items[0].item.key, "removed");
-        assert!(
-            deleted_items[0]
-                .item
-                .credentials
-                .values()
-                .any(|cred| cred.key == "gamma")
+        let removed = &self.deleted_items[&deleted_items[0].item.id].item;
+        let gamma = removed
+            .overview
+            .credentials
+            .values()
+            .find(|cred| cred.key == "gamma")
+            .unwrap();
+        assert_eq!(removed.overview.autofill.password, Some(gamma.id));
+        let gamma_blobs = &removed.credentials[&gamma.id];
+        self.assert_deleted_credential_filled_for_test(
+            removed.overview.id,
+            gamma.id,
+            &gamma_blobs.value,
+            &gamma_blobs.history,
         );
         assert_eq!(deleted_items[0].deleted_credentials.len(), 1);
         assert_eq!(deleted_items[0].deleted_credentials[0].key, "delta");
+        let delta = removed.deleted.values().next().unwrap();
+        self.assert_deleted_credential_filled_for_test(
+            removed.overview.id,
+            delta.overview.credential.id,
+            &delta.blobs.credential.value,
+            &delta.blobs.credential.history,
+        );
+    }
+
+    /// Ids of every folder, item, section, credential, history entry, deleted
+    /// item, and deleted credential, each with its kind, for tests.
+    #[cfg(test)]
+    pub(crate) fn entry_ids_for_test(&self) -> BTreeSet<(&'static str, Uuid)> {
+        fn history(ids: &mut BTreeSet<(&'static str, Uuid)>, entries: &[HistoryEntry]) {
+            ids.extend(entries.iter().map(|entry| ("history entry", entry.id)));
+        }
+        fn item(ids: &mut BTreeSet<(&'static str, Uuid)>, overview: &VaultItemOverview) {
+            ids.extend(overview.sections.keys().map(|id| ("section", *id)));
+            ids.extend(overview.credentials.keys().map(|id| ("credential", *id)));
+        }
+
+        let mut ids = BTreeSet::new();
+        ids.extend(self.folders.keys().map(|id| ("folder", *id)));
+        for overview in self.items.values() {
+            ids.insert(("item", overview.id));
+            item(&mut ids, overview);
+        }
+        for entries in self.history.values() {
+            history(&mut ids, entries);
+        }
+        let mut deleted: Vec<&DeletedEntry> = self.deleted.values().collect();
+        for entry in self.deleted_items.values() {
+            ids.insert(("deleted item", entry.item.overview.id));
+            item(&mut ids, &entry.item.overview);
+            for cred in entry.item.credentials.values() {
+                history(&mut ids, &cred.history);
+            }
+            deleted.extend(entry.item.deleted.values());
+        }
+        for entry in deleted {
+            ids.insert(("deleted credential", entry.overview.credential.id));
+            history(&mut ids, &entry.blobs.credential.history);
+        }
+        ids
+    }
+
+    /// Check that a credential of a deleted entry has value `secret` and one
+    /// previous value `one`.
+    #[cfg(test)]
+    fn assert_deleted_credential_filled_for_test(
+        &self,
+        item_id: ItemId,
+        cred_id: CredentialId,
+        value: &EncryptedBlob<String>,
+        history: &[HistoryEntry],
+    ) {
+        let value = self.cipher.decrypt_cred_value(item_id, cred_id, value);
+        assert_eq!(value.unwrap().expose_secret(), "secret");
+        assert_eq!(history.len(), 1);
+        let entry = &history[0];
+        let previous = self
+            .cipher
+            .decrypt_history_value(item_id, cred_id, entry.id, &entry.value);
+        assert_eq!(previous.unwrap().expose_secret(), "one");
+        let info = self
+            .cipher
+            .decrypt_history_info(item_id, cred_id, entry.id, &entry.info);
+        assert!(info.is_ok());
     }
 
     /// Decrypt a verified vault file with the vault encryption key. Only a
@@ -524,15 +679,11 @@ impl Vault {
             deleted: BTreeMap::new(),
         };
 
-        let metadata = VaultMetadata {
-            folders: self
-                .folders
-                .values()
-                .map(VaultFolder::to_metadata)
-                .collect(),
-            passkey_signals: self.passkey_signals.clone(),
-        };
-        vault.set_metadata(&self.cipher, self.metadata_blob.as_ref(), &metadata)?;
+        vault.set_metadata(
+            &self.cipher,
+            self.metadata_blob.as_ref(),
+            &self.vault_metadata(),
+        )?;
 
         for item_overview in self.items.values() {
             let existing_metadata = self.item_blobs.get(&item_overview.id);
@@ -585,6 +736,123 @@ impl Vault {
             }
         }
 
+        Ok(vault)
+    }
+
+    /// Plaintext of the vault metadata blob.
+    fn vault_metadata(&self) -> VaultMetadata {
+        VaultMetadata {
+            folders: self
+                .folders
+                .values()
+                .map(VaultFolder::to_metadata)
+                .collect(),
+            passkey_signals: self.passkey_signals.clone(),
+        }
+    }
+
+    /// Copy of this vault with every blob encrypted again under a new random
+    /// file key. Deleted items and deleted credentials are included. This
+    /// vault is unchanged.
+    ///
+    /// If `new_id` is set, the copy takes that vault id, and every blob is
+    /// bound to it. The copy is then a new vault that is not synced, so it has
+    /// generation 0 and no replica id. Otherwise the id, generation, and
+    /// replica id are kept. The vault key, name, and every item, credential,
+    /// history entry, folder, and section id are kept in both cases.
+    ///
+    /// `wrap` receives the raw new file key and returns the form the vault
+    /// file stores. The raw key is zeroized once the copy cipher is built. The
+    /// cipher holds its own copy of the key in a `SecretBox`.
+    ///
+    /// Metadata blobs are encrypted from the decrypted overviews, so fields
+    /// this build does not read are dropped. Values, previous values, and
+    /// deleted and history info are decrypted under the old key and
+    /// encrypted again. A blob that fails to decrypt fails the call.
+    pub fn rekeyed(
+        &self,
+        new_id: Option<Uuid>,
+        wrap: impl FnOnce(&[u8]) -> Result<VaultFileKey, Error>,
+    ) -> Result<Self, Error> {
+        let id = new_id.unwrap_or(self.id);
+        let raw_key = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
+        let file_key = wrap(&raw_key)?;
+        let cipher = VaultCipher::new_with_bytes(&raw_key, id);
+        drop(raw_key);
+
+        let mut vault = Self::empty(id, self.key.clone(), self.name.clone(), file_key, cipher);
+        if new_id.is_none() {
+            vault.generation = self.generation;
+            vault.replica_id = self.replica_id;
+        }
+        let (from, to) = (&self.cipher, &vault.cipher);
+
+        // Every cache is rebuilt under the new key, so no old blob is kept.
+        let metadata = self.vault_metadata();
+        let metadata_blob = if metadata.is_empty() {
+            None
+        } else {
+            Some(to.encrypt_vault_metadata(&metadata)?)
+        };
+        let mut item_blobs = BTreeMap::new();
+        let mut autofill_blobs = BTreeMap::new();
+        let mut cred_blobs = BTreeMap::new();
+        let mut secrets = BTreeMap::new();
+        let mut history = BTreeMap::new();
+        for (item_id, item) in &self.items {
+            item_blobs.insert(
+                *item_id,
+                to.encrypt_item_metadata(*item_id, &item.to_metadata())?,
+            );
+            if !item.autofill.is_empty() {
+                autofill_blobs.insert(
+                    *item_id,
+                    to.encrypt_item_autofill(*item_id, &item.autofill)?,
+                );
+            }
+            for (cred_id, cred) in &item.credentials {
+                cred_blobs.insert(
+                    *cred_id,
+                    to.encrypt_cred_metadata(*item_id, *cred_id, &cred.to_metadata())?,
+                );
+                if let Some(value) = self.secrets.get(cred_id) {
+                    secrets.insert(
+                        *cred_id,
+                        from.rekey_cred_value(to, *item_id, *cred_id, value)?,
+                    );
+                }
+                if let Some(entries) = self.history.get(cred_id) {
+                    history.insert(
+                        *cred_id,
+                        from.rekey_history(to, *item_id, *cred_id, entries)?,
+                    );
+                }
+            }
+        }
+        let deleted = self
+            .deleted
+            .iter()
+            .map(|(cred_id, entry)| Ok((*cred_id, entry.rekeyed(from, to)?)))
+            .collect::<Result<_, Error>>()?;
+        let deleted_items = self
+            .deleted_items
+            .iter()
+            .map(|(item_id, entry)| Ok((*item_id, entry.rekeyed(from, to)?)))
+            .collect::<Result<_, Error>>()?;
+
+        vault.folders = self.folders.clone();
+        vault.passkey_signals = self.passkey_signals.clone();
+        vault.items = self.items.clone();
+        vault.item_index = self.item_index.clone();
+        vault.item_credential_index = self.item_credential_index.clone();
+        vault.secrets = secrets;
+        vault.history = history;
+        vault.deleted = deleted;
+        vault.deleted_items = deleted_items;
+        vault.metadata_blob = metadata_blob;
+        vault.item_blobs = item_blobs;
+        vault.autofill_blobs = autofill_blobs;
+        vault.cred_blobs = cred_blobs;
         Ok(vault)
     }
 
@@ -1974,6 +2242,90 @@ struct DecryptedCredential {
     metadata_current: bool,
     value: EncryptedBlob<String>,
     history: Vec<HistoryEntry>,
+}
+
+impl DeletedEntry {
+    /// Entry with every blob encrypted again from `from` to `to`. The
+    /// credential metadata is encrypted from the overview.
+    fn rekeyed(&self, from: &VaultCipher, to: &VaultCipher) -> Result<Self, Error> {
+        let item_id = self.overview.item_id;
+        let credential = &self.overview.credential;
+        let blobs = &self.blobs.credential;
+        Ok(Self {
+            blobs: DeletedCredential {
+                credential: EncryptedVaultItemCredential {
+                    metadata: to.encrypt_cred_metadata(
+                        item_id,
+                        credential.id,
+                        &credential.to_metadata(),
+                    )?,
+                    value: from.rekey_cred_value(to, item_id, credential.id, &blobs.value)?,
+                    history: from.rekey_history(to, item_id, credential.id, &blobs.history)?,
+                },
+                info: from.rekey_deleted_info(to, item_id, credential.id, &self.blobs.info)?,
+            },
+            overview: self.overview.clone(),
+        })
+    }
+}
+
+impl DeletedItemEntry {
+    /// Entry with every blob encrypted again from `from` to `to`.
+    fn rekeyed(&self, from: &VaultCipher, to: &VaultCipher) -> Result<Self, Error> {
+        let item_id = self.item.overview.id;
+        Ok(Self {
+            item: self.item.rekeyed(from, to)?,
+            info: from.rekey_deleted_item_info(to, item_id, &self.info)?,
+            deleted_at: self.deleted_at,
+        })
+    }
+}
+
+impl DecryptedItem {
+    /// Item with every blob encrypted again from `from` to `to`. Metadata
+    /// and autofill blobs are encrypted from the overview and are current.
+    fn rekeyed(&self, from: &VaultCipher, to: &VaultCipher) -> Result<Self, Error> {
+        let item_id = self.overview.id;
+        let autofill = if self.overview.autofill.is_empty() {
+            None
+        } else {
+            Some(to.encrypt_item_autofill(item_id, &self.overview.autofill)?)
+        };
+        let mut credentials = BTreeMap::new();
+        for (cred_id, cred) in &self.credentials {
+            let overview = self
+                .overview
+                .credentials
+                .get(cred_id)
+                .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_id}/{cred_id}")))?;
+            credentials.insert(
+                *cred_id,
+                DecryptedCredential {
+                    metadata: to.encrypt_cred_metadata(
+                        item_id,
+                        *cred_id,
+                        &overview.to_metadata(),
+                    )?,
+                    metadata_current: true,
+                    value: from.rekey_cred_value(to, item_id, *cred_id, &cred.value)?,
+                    history: from.rekey_history(to, item_id, *cred_id, &cred.history)?,
+                },
+            );
+        }
+        let deleted = self
+            .deleted
+            .iter()
+            .map(|(cred_id, entry)| Ok((*cred_id, entry.rekeyed(from, to)?)))
+            .collect::<Result<_, Error>>()?;
+        Ok(Self {
+            overview: self.overview.clone(),
+            metadata: to.encrypt_item_metadata(item_id, &self.overview.to_metadata())?,
+            metadata_current: true,
+            autofill,
+            credentials,
+            deleted,
+        })
+    }
 }
 
 /// Changes for [`Vault::update_item_credential`]. `None` fields are left
