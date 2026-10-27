@@ -18,6 +18,7 @@ use crate::core::app_broker::{
     AGENT_EXECUTABLE_NAME, AUTOFILL_EXTENSION_NAME, BROWSER_HOST_EXECUTABLE_NAME,
 };
 use crate::core::provenance::ProcessNode;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::passkey;
 
 /// The current schema version. Bump when a field changes meaning.
@@ -161,11 +162,17 @@ impl AuditEvent {
         super::record_async(self).await
     }
 
-    /// Record the vault, item, and credential ids of the subject in `detail`.
+    /// Record the vault, item, and credential ids of the subject in `detail`,
+    /// as short ids.
     pub fn subject_ids(self, ids: SubjectIds) -> Self {
-        self.maybe_detail("vault_id", ids.vault_id.map(|id| id.to_string()))
-            .maybe_detail("item_id", ids.item_id.map(|id| id.to_string()))
-            .maybe_detail("credential_id", ids.credential_id.map(|id| id.to_string()))
+        self.maybe_id("vault_id", ids.vault_id)
+            .maybe_id("item_id", ids.item_id)
+            .maybe_id("credential_id", ids.credential_id)
+    }
+
+    /// Record `id` in `detail` as a short id, if set.
+    pub fn maybe_id(self, key: impl Into<String>, id: Option<Uuid>) -> Self {
+        self.maybe_detail(key, id.map(ShortId::encode_uuid))
     }
 
     /// Record the WebAuthn credential id of a passkey under

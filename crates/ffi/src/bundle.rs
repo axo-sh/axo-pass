@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use axo_pass_core::core::auth::AuthContext;
-use axo_pass_core::secrets::vaults::ExportProgress as CoreExportProgress;
 use axo_pass_core::secrets::vaults::bundle::{
     BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity, ImportableBundle,
     WorkFactor as CoreWorkFactor,
 };
+use axo_pass_core::secrets::vaults::{ExportProgress as CoreExportProgress, ShortId};
 
 use crate::*;
 
 #[derive(uniffi::Record)]
 pub struct BundleVaultInfo {
-    /// Vault id as a UUID string. Pass back verbatim in a
+    /// Vault id as a short id. Pass back verbatim in a
     /// `BundleImportSelection`.
     pub id: String,
     pub name: Option<String>,
@@ -22,7 +22,7 @@ pub struct BundleVaultInfo {
 impl From<CoreBundleVaultInfo> for BundleVaultInfo {
     fn from(v: CoreBundleVaultInfo) -> Self {
         BundleVaultInfo {
-            id: v.id.to_string(),
+            id: ShortId::encode_uuid(v.id),
             name: v.name,
             default_key: v.default_key,
         }
@@ -187,7 +187,7 @@ impl AxoPass {
 
             let mut targets = std::collections::BTreeMap::new();
             for entry in selection {
-                let id = uuid::Uuid::parse_str(&entry.id).map_err(|_| {
+                let id = ShortId::parse_uuid(&entry.id).map_err(|_| {
                     FfiError::InvalidInput(format!("Invalid vault id: {}", entry.id))
                 })?;
                 targets.insert(id, entry.target_key);

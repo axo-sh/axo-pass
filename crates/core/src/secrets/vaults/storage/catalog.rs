@@ -12,6 +12,7 @@ use crate::core::dirs::vaults_dir;
 use crate::secrets::vaults::bundle::{ExportMode, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key, normalized_key,
@@ -40,10 +41,11 @@ pub struct VaultScanResult {
     pub duplicates: Vec<DuplicateVaults>,
 }
 
-/// Vault files that hold one vault id. None of them is listed or tracked in
-/// the vault locks.
+/// Vault files that hold one vault id, or ids whose short forms differ only in
+/// letter case. None of them is listed or tracked in the vault locks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DuplicateVaults {
+    /// Smallest vault id of the files.
     pub id: Uuid,
     /// Paths of the files, ordered by vault key.
     pub paths: Vec<PathBuf>,
@@ -176,19 +178,28 @@ impl VaultCatalog {
             }
         }
 
-        let mut paths_by_id: BTreeMap<Uuid, Vec<PathBuf>> = BTreeMap::new();
+        // Group by the folded short id, so ids that differ only in letter
+        // case are duplicates. They would name one `{id}.json` file on a file
+        // system that ignores case. Equal ids have equal folded forms.
+        let mut groups: BTreeMap<String, (Uuid, Vec<PathBuf>)> = BTreeMap::new();
         for (id, vh) in found.values() {
-            paths_by_id.entry(*id).or_default().push(vh.path.clone());
+            let (first, paths) = groups
+                .entry(ShortId::folded(*id))
+                .or_insert_with(|| (*id, Vec::new()));
+            *first = (*first).min(*id);
+            paths.push(vh.path.clone());
         }
-        let duplicates: Vec<DuplicateVaults> = paths_by_id
+        let groups: BTreeMap<String, DuplicateVaults> = groups
             .into_iter()
-            .filter(|(_, paths)| Self::distinct_files(paths) > 1)
-            .map(|(id, paths)| DuplicateVaults { id, paths })
+            .filter(|(_, (_, paths))| Self::distinct_files(paths) > 1)
+            .map(|(folded, (id, paths))| (folded, DuplicateVaults { id, paths }))
             .collect();
+        let mut duplicates: Vec<DuplicateVaults> = groups.values().cloned().collect();
+        duplicates.sort_by_key(|duplicate| duplicate.id);
         for duplicate in &duplicates {
             log::error!(
                 "Skipping vault {}, vault id in use by multiple files: {:?}",
-                duplicate.id,
+                ShortId::new(duplicate.id),
                 duplicate.paths
             );
         }
@@ -196,7 +207,7 @@ impl VaultCatalog {
         let mut vaults = BTreeMap::new();
         for (key, (id, vh)) in found {
             // skip dupes
-            if duplicates.iter().any(|duplicate| duplicate.id == id) {
+            if groups.contains_key(&ShortId::folded(id)) {
                 continue;
             }
             self.files.locks().track(id, &vh.path);
@@ -526,6 +537,55 @@ mod tests {
                 paths: vec![fx.vault_path("copy"), fx.vault_path("personal")],
             }]
         );
+    }
+
+    #[test]
+    fn files_whose_ids_differ_only_in_case_are_both_reported() {
+        let fx = Fixture::new();
+        let lower = "bhRFe93MKwHktZwXKG599a";
+        let upper = "bhRFe93MKwHktZwXKG599A";
+        fx.write_edited("lower", |vault| vault["id"] = json!(lower));
+        fx.write_edited("upper", |vault| vault["id"] = json!(upper));
+        let lower_id = ShortId::parse_uuid(lower).unwrap();
+        let upper_id = ShortId::parse_uuid(upper).unwrap();
+        assert_ne!(lower_id, upper_id);
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicates,
+            [DuplicateVaults {
+                id: lower_id.min(upper_id),
+                paths: vec![fx.vault_path("lower"), fx.vault_path("upper")],
+            }]
+        );
+        assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+        assert!(!fx.is_tracked(lower_id));
+        assert!(!fx.is_tracked(upper_id));
+    }
+
+    #[test]
+    fn hyphenated_and_short_forms_of_one_id_are_both_reported() {
+        let fx = Fixture::new();
+        let short = ShortId::encode_uuid(fx.personal_id());
+        fx.write_edited("short", |vault| vault["id"] = json!(short));
+        let hyphenated = fx.personal_id().hyphenated().to_string().to_uppercase();
+        fx.write_edited("upper", |vault| vault["id"] = json!(hyphenated));
+
+        let scan = fx.catalog.scan();
+
+        assert_eq!(
+            scan.duplicates,
+            [DuplicateVaults {
+                id: fx.personal_id(),
+                paths: vec![
+                    fx.vault_path("personal"),
+                    fx.vault_path("short"),
+                    fx.vault_path("upper"),
+                ],
+            }]
+        );
+        assert!(scan.vaults.is_empty());
     }
 
     #[test]

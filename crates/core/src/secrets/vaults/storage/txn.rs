@@ -22,6 +22,7 @@ use crate::core::auth::AuthContext;
 use crate::core::dirs::app_data_dir;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+use crate::secrets::vaults::format::short_id::ShortId;
 #[cfg(test)]
 use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
@@ -89,12 +90,14 @@ impl VaultWriter {
         &self.signer
     }
 
-    /// Retained versions of vault `id`.
+    /// Retained versions of vault `id`, in a directory named by its short id.
     fn versions(&self, id: Uuid) -> VersionsDir {
-        VersionsDir::at(self.root.join("versions").join(id.to_string()))
+        VersionsDir::at(self.root.join("versions").join(ShortId::encode_uuid(id)))
     }
 
+    /// Lock file of vault `id`, named by its short id.
     fn lock_path(&self, id: Uuid) -> PathBuf {
+        let id = ShortId::encode_uuid(id);
         self.root.join("locks").join(format!("{id}.lock"))
     }
 

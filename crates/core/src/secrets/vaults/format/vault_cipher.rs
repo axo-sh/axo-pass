@@ -44,7 +44,8 @@ impl VaultCipher {
     }
 
     // AAD binding each blob to its location in the vault. Changing any of
-    // these makes existing vaults undecryptable.
+    // these makes existing vaults undecryptable. Ids are in the hyphenated
+    // UUID form, not the short form of the vault file.
 
     fn vault_metadata_aad(&self) -> Vec<String> {
         vec![self.vault_id.to_string(), "metadata".to_string()]
@@ -296,6 +297,34 @@ impl VaultCipher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secrets::vaults::format::short_id::ShortId;
+
+    #[test]
+    fn blob_under_hyphenated_aad_decrypts() {
+        let vault_id = Uuid::parse_str("5355e6aa-868d-43ce-824e-7b7002baddd2").unwrap();
+        let item_id = Uuid::parse_str("f81d4fae-7dec-11d0-a765-00a0c91e6bf6").unwrap();
+        let cred_id = Uuid::parse_str("00000001-0000-4000-8000-000000000000").unwrap();
+        let cipher = VaultCipher::new(vault_id);
+        let aad = vec![
+            "5355e6aa-868d-43ce-824e-7b7002baddd2".to_string(),
+            "f81d4fae-7dec-11d0-a765-00a0c91e6bf6".to_string(),
+            "00000001-0000-4000-8000-000000000000".to_string(),
+            "value".to_string(),
+        ];
+        let blob = EncryptedBlob::encrypt(&"secret".to_string(), &cipher.cipher, aad).unwrap();
+
+        let value = cipher.decrypt_cred_value(item_id, cred_id, &blob).unwrap();
+        assert_eq!(value.expose_secret(), "secret");
+
+        // The short form is not the AAD.
+        let short_aad = vec![
+            ShortId::encode_uuid(vault_id),
+            ShortId::encode_uuid(item_id),
+            ShortId::encode_uuid(cred_id),
+            "value".to_string(),
+        ];
+        assert!(blob.decrypt(&cipher.cipher, short_aad).is_err());
+    }
 
     #[test]
     fn aad_layout_is_unchanged() {

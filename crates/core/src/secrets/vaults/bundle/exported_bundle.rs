@@ -9,10 +9,12 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVaultItem;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::VaultMetadata;
 
-/// Current bundle format version. Import rejects anything newer.
-pub const BUNDLE_VERSION: u32 = 1;
+/// Current bundle format version. Import rejects anything newer. Version 2
+/// writes short ids. Version 1 has hyphenated ids, which import still reads.
+pub const BUNDLE_VERSION: u32 = 2;
 
 /// A vault file key in raw (unwrapped) form. Serializes as base64 so it can be
 /// stored as the plaintext of an `EncryptedBlob`.
@@ -28,9 +30,11 @@ pub struct RawFileKey(#[serde_as(as = "Base64")] pub Vec<u8>);
 /// plaintext and are not covered by any AAD, so one bundle file discloses the
 /// name and key of every vault in it, and anyone with write access to the file
 /// can rename or reorder entries undetected.
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct ExportedBundle {
     pub version: u32,
+    #[serde_as(as = "ShortId")]
     pub id: Uuid,
 
     #[serde(with = "time::serde::rfc3339", default = "OffsetDateTime::now_utc")]
@@ -45,8 +49,10 @@ pub struct ExportedBundle {
 }
 
 /// One vault inside a bundle.
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct BundledVault {
+    #[serde_as(as = "ShortId")]
     pub id: Uuid,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,11 +70,13 @@ pub struct BundledVault {
     /// the on-disk vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EncryptedBlob<VaultMetadata>>,
+    #[serde_as(as = "BTreeMap<ShortId, _>")]
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
 }
 
 impl ExportedBundle {
-    /// AAD binding a wrapped file key to its bundle and vault.
+    /// AAD binding a wrapped file key to its bundle and vault. Ids are in the
+    /// hyphenated UUID form, not the short form of the bundle file.
     pub fn file_key_aad(bundle_id: Uuid, vault_id: Uuid) -> Vec<String> {
         vec![
             bundle_id.to_string(),

@@ -20,6 +20,7 @@ use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::KeychainSigner;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
@@ -747,7 +748,7 @@ pub fn export_bundle(
     let json = serde_json::to_string_pretty(&bundle).map_err(Error::VaultSerializationError)?;
     fs::write(path, json).map_err(Error::VaultWriteError)?;
 
-    let bundle_id = bundle_id.to_string();
+    let bundle_id = ShortId::encode_uuid(bundle_id);
     for vw in vaults {
         audit::record(
             AuditEvent::new(

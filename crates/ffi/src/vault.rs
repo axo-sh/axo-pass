@@ -8,8 +8,8 @@ use axo_pass_core::secrets::vaults::model::totp;
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey::signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
-    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, Site,
-    TextField, VaultCatalog, VaultFolder, VaultHandle, VaultItemCredentialOverview,
+    CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, ShortId,
+    Site, TextField, VaultCatalog, VaultFolder, VaultHandle, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection, VaultsManager, Website, autofill, display_order, passkey,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -42,7 +42,7 @@ pub struct RetainedVersionInfo {
 
 #[derive(uniffi::Record)]
 pub struct CredentialInfo {
-    /// Credential id as a UUID string. It does not change when the key does.
+    /// Credential id as a short id. It does not change when the key does.
     pub id: String,
     pub key: String,
     pub title: String,
@@ -136,7 +136,7 @@ fn passkey_ref(summary: &passkey::PasskeySummary) -> signals::PasskeyRef<'_> {
 /// `get_credential_history_value`.
 #[derive(uniffi::Record)]
 pub struct HistoryEntryInfo {
-    /// Entry id as a UUID string.
+    /// Entry id as a short id.
     pub id: String,
     /// Time the value was replaced, as a Unix timestamp in seconds.
     pub replaced_at: i64,
@@ -146,7 +146,7 @@ pub struct HistoryEntryInfo {
 /// included.
 #[derive(uniffi::Record)]
 pub struct DeletedItemInfo {
-    /// Item id as a UUID string. Pass back to `restore_item` or `purge_item`.
+    /// Item id as a short id. Pass back to `restore_item` or `purge_item`.
     pub id: String,
     pub key: String,
     pub title: String,
@@ -162,7 +162,7 @@ pub struct DeletedItemInfo {
 /// `get_deleted_credential_secret`.
 #[derive(uniffi::Record)]
 pub struct DeletedItemCredentialInfo {
-    /// Credential id as a UUID string.
+    /// Credential id as a short id.
     pub id: String,
     pub key: String,
     pub title: String,
@@ -175,7 +175,7 @@ pub struct DeletedItemCredentialInfo {
 /// is not included. Read it with `get_deleted_credential_secret`.
 #[derive(uniffi::Record)]
 pub struct DeletedCredentialInfo {
-    /// Credential id as a UUID string. Pass back to `restore_credential` or
+    /// Credential id as a short id. Pass back to `restore_credential` or
     /// `purge_credential`.
     pub id: String,
     pub key: String,
@@ -192,7 +192,7 @@ pub struct DeletedCredentialInfo {
 /// A vault folder. Folders are listed in display order.
 #[derive(uniffi::Record)]
 pub struct FolderInfo {
-    /// Folder id as a UUID string.
+    /// Folder id as a short id.
     pub id: String,
     pub title: String,
 }
@@ -200,7 +200,7 @@ pub struct FolderInfo {
 impl From<&VaultFolder> for FolderInfo {
     fn from(f: &VaultFolder) -> Self {
         Self {
-            id: f.id.to_string(),
+            id: ShortId::encode_uuid(f.id),
             title: f.title.clone(),
         }
     }
@@ -209,7 +209,7 @@ impl From<&VaultFolder> for FolderInfo {
 /// A section of an item. Sections are listed in display order.
 #[derive(uniffi::Record)]
 pub struct SectionInfo {
-    /// Section id as a UUID string.
+    /// Section id as a short id.
     pub id: String,
     pub title: String,
 }
@@ -217,7 +217,7 @@ pub struct SectionInfo {
 impl From<&VaultItemSection> for SectionInfo {
     fn from(s: &VaultItemSection) -> Self {
         Self {
-            id: s.id.to_string(),
+            id: ShortId::encode_uuid(s.id),
             title: s.title.clone(),
         }
     }
@@ -354,7 +354,7 @@ fn parse_role(role: &str) -> Result<autofill::Role, FfiError> {
 
 #[derive(uniffi::Record)]
 pub struct ItemInfo {
-    /// Item id as a UUID string. It does not change when the key does.
+    /// Item id as a short id. It does not change when the key does.
     pub id: String,
     pub key: String,
     pub title: String,
@@ -390,8 +390,9 @@ pub struct TotpCodeInfo {
 pub struct AutofillItemInfo {
     pub vault_key: String,
     pub item_key: String,
-    /// `<vault uuid>/<item uuid>/<password credential uuid>`. The identifier
-    /// the AutoFill index stores, and the broker's login requests take.
+    /// `<vault id>/<item id>/<password credential id>`, as short ids. The
+    /// identifier the AutoFill index stores, and the broker's login requests
+    /// take.
     pub record_id: String,
     pub title: String,
     pub username: Option<String>,
@@ -414,7 +415,7 @@ pub struct PasskeyIdentityInfo {
     pub vault_key: String,
     pub item_key: String,
     pub credential_key: String,
-    /// `<vault uuid>/<item uuid>/<credential uuid>`.
+    /// `<vault id>/<item id>/<credential id>`, as short ids.
     pub record_id: String,
     pub rp_id: String,
     pub credential_id: Vec<u8>,
@@ -505,8 +506,17 @@ fn item_display_order(
     (sections, credential_order)
 }
 
+/// Read an id passed from Swift. The short form and the hex forms are
+/// accepted.
 fn parse_id(id: &str) -> Result<Uuid, FfiError> {
-    Uuid::parse_str(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
+    ShortId::parse_uuid(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
+}
+
+/// Short form of an id given in the short or a hex form. `None` if `id` is not
+/// an id. For ids that Swift stored before ids were short.
+#[uniffi::export]
+pub fn short_id(id: String) -> Option<String> {
+    ShortId::decode(&id).ok().map(ShortId::encode)
 }
 
 fn parse_optional_id(id: Option<String>) -> Result<Option<Uuid>, FfiError> {
@@ -635,7 +645,7 @@ impl AxoPass {
             .duplicates()
             .iter()
             .map(|duplicate| DuplicateVaultInfo {
-                vault_id: duplicate.id.to_string(),
+                vault_id: ShortId::encode_uuid(duplicate.id),
                 paths: duplicate
                     .paths
                     .iter()
@@ -693,12 +703,12 @@ impl AxoPass {
                                 .and_then(|value| passkey::summary(value.expose_secret()))
                                 .map(|s| passkey_info(s, &signals));
                             CredentialInfo {
-                                id: c.id.to_string(),
+                                id: ShortId::encode_uuid(c.id),
                                 key: c.key.clone(),
                                 title: c.title.clone(),
                                 kind,
                                 position: c.position,
-                                section_id: c.section.map(|id| id.to_string()),
+                                section_id: c.section.map(ShortId::encode_uuid),
                                 role: role.map(str::to_string),
                                 last_used_day_at: c.last_used_day_at,
                                 passkey,
@@ -715,10 +725,10 @@ impl AxoPass {
                         .flatten()
                         .is_some();
                     ItemInfo {
-                        id: item.id.to_string(),
+                        id: ShortId::encode_uuid(item.id),
                         key: item.key.clone(),
                         title: item.title.clone(),
-                        folder_id: item.folder.map(|id| id.to_string()),
+                        folder_id: item.folder.map(ShortId::encode_uuid),
                         sections: sections.into_iter().map(SectionInfo::from).collect(),
                         credentials,
                         category: item.category.clone(),
@@ -922,7 +932,7 @@ impl AxoPass {
             Ok(history
                 .into_iter()
                 .map(|h| HistoryEntryInfo {
-                    id: h.id.to_string(),
+                    id: ShortId::encode_uuid(h.id),
                     replaced_at: h.replaced_at,
                 })
                 .collect())
@@ -1262,7 +1272,7 @@ impl AxoPass {
                     let credentials = credentials
                         .into_iter()
                         .map(|(c, deleted_before_item)| DeletedItemCredentialInfo {
-                            id: c.id.to_string(),
+                            id: ShortId::encode_uuid(c.id),
                             key: c.key.clone(),
                             title: c.title.clone(),
                             kind: FieldKindInfo::from(&c.kind),
@@ -1270,7 +1280,7 @@ impl AxoPass {
                         })
                         .collect();
                     DeletedItemInfo {
-                        id: d.item.id.to_string(),
+                        id: ShortId::encode_uuid(d.item.id),
                         key: d.item.key.clone(),
                         title: d.item.title.clone(),
                         credentials,
@@ -1519,11 +1529,11 @@ impl AxoPass {
             Ok(deleted
                 .into_iter()
                 .map(|d| DeletedCredentialInfo {
-                    id: d.credential.credential.id.to_string(),
+                    id: ShortId::encode_uuid(d.credential.credential.id),
                     key: d.credential.credential.key.clone(),
                     title: d.credential.credential.title.clone(),
                     kind: FieldKindInfo::from(&d.credential.credential.kind),
-                    item_id: d.item.id.to_string(),
+                    item_id: ShortId::encode_uuid(d.item.id),
                     item_key: d.item.key.clone(),
                     item_title: d.item.title.clone(),
                     deleted_at: d.credential.deleted_at,
@@ -1909,11 +1919,11 @@ impl AxoPass {
             .passkey_credential_id(&webauthn_id)
             .detail("dest_vault", dest_vault)
             .detail("dest_item", dest_item)
-            .maybe_detail("dest_vault_id", dest.vault_id.map(|id| id.to_string()))
-            .maybe_detail("dest_item_id", dest.item_id.map(|id| id.to_string()))
+            .maybe_detail("dest_vault_id", dest.vault_id.map(ShortId::encode_uuid))
+            .maybe_detail("dest_item_id", dest.item_id.map(ShortId::encode_uuid))
             .maybe_detail(
                 "dest_credential_id",
-                dest.credential_id.map(|id| id.to_string()),
+                dest.credential_id.map(ShortId::encode_uuid),
             );
         // The destination holds the passkey even if removing the source failed,
         // so that is recorded as a failed move.
@@ -2047,7 +2057,7 @@ impl AxoPass {
             .await?;
         change_event(audit::Action::ItemMerged, &key, subject, ids)
             .detail("source_item", source_item)
-            .maybe_detail("source_item_id", source.item_id.map(|id| id.to_string()))
+            .maybe_detail("source_item_id", source.item_id.map(ShortId::encode_uuid))
             .record_async()
             .await;
         Ok(())

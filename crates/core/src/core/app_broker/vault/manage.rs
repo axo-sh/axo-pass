@@ -8,7 +8,7 @@ use crate::audit::SubjectIds;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
 use crate::secrets::vaults::bundle::{ImportIdentity, ImportableBundle};
-use crate::secrets::vaults::{VaultCatalog, VaultHandle};
+use crate::secrets::vaults::{ShortId, VaultCatalog, VaultHandle};
 
 /// Unlock every named vault on the app's context and write the export bundle.
 pub(super) fn export_vaults(
@@ -59,7 +59,7 @@ pub(super) fn import_vaults(
 
     let mut selection: BTreeMap<uuid::Uuid, String> = BTreeMap::new();
     for (id, key) in import.selection {
-        let id = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid vault id {id}: {e}"))?;
+        let id = ShortId::parse_uuid(&id).map_err(|e| format!("Invalid vault id {id}: {e}"))?;
         selection.insert(id, key);
     }
 

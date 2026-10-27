@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
 use axo_pass_core::core::provenance::Provenance;
+use axo_pass_core::secrets::vaults::ShortId;
 use axo_pass_core::secrets::vaults::bundle::{BundleVaultInfo, ImportIdentity, ImportableBundle};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
@@ -88,7 +89,7 @@ impl VaultImportCommand {
 
         let wire_selection: Vec<(String, String)> = selection
             .iter()
-            .map(|(id, key)| (id.to_string(), key.clone()))
+            .map(|(id, key)| (ShortId::encode_uuid(*id), key.clone()))
             .collect();
 
         let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
@@ -133,11 +134,12 @@ impl VaultImportCommand {
     }
 }
 
+/// Whether `selector` is the default key, the name, or the id of the vault. An
+/// id selector is a short id or a 32 or 36 character hex id.
 fn vault_matches(info: &BundleVaultInfo, selector: &str) -> bool {
     info.default_key.as_deref() == Some(selector)
         || info.name.as_deref() == Some(selector)
-        || info.id.to_string() == selector
-        || info.id.simple().to_string() == selector
+        || ShortId::parse_uuid(selector).is_ok_and(|id| id == info.id)
 }
 
 /// Resolve a selector to exactly one vault. Names and default keys are not
@@ -162,9 +164,9 @@ fn match_vault<'a>(
 fn bundle_label(info: &BundleVaultInfo) -> String {
     match (&info.name, &info.default_key) {
         (Some(name), Some(key)) => format!("{name} ({key})"),
-        (Some(name), None) => format!("{name} [{}]", info.id.simple()),
+        (Some(name), None) => format!("{name} [{}]", ShortId::new(info.id)),
         (None, Some(key)) => key.clone(),
-        (None, None) => info.id.to_string(),
+        (None, None) => ShortId::encode_uuid(info.id),
     }
 }
 
@@ -181,7 +183,7 @@ fn unique_labels(infos: &[BundleVaultInfo]) -> Vec<String> {
         .zip(infos)
         .map(|(label, info)| {
             if counts[label.as_str()] > 1 {
-                let id = info.id.simple();
+                let id = ShortId::new(info.id);
                 format!("{label} [{id}]")
             } else {
                 label.clone()

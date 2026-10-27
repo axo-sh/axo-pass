@@ -6,9 +6,11 @@
 use std::fs;
 
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::audit::event::{Action, ActionKind, AuditEvent, Category, Outcome, Requester};
 use crate::audit::writer::audit_dir;
+use crate::secrets::vaults::format::short_id::ShortId;
 
 /// Narrows a `read`. Every field is optional; an empty filter returns
 /// everything up to `limit`.
@@ -44,30 +46,48 @@ pub struct AuditPage {
 ///
 /// An event names the id if its detail holds `key` equal to `id`, or holds the
 /// plural key, such as `item_ids`, as a comma-separated list that contains
-/// `id`.
+/// `id`. If `id` is a vault entity id in the short or hex form, a detail value
+/// in any of those forms with the same UUID also matches. Events recorded with
+/// hyphenated ids are found by short id this way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailId {
     /// Detail key of a single id, such as `item_id`.
     pub key: String,
     pub id: String,
+    /// `id` read as a short or hex id.
+    uuid: Option<Uuid>,
 }
 
 impl DetailId {
     pub fn new(key: impl Into<String>, id: impl Into<String>) -> Self {
+        let id = id.into();
         Self {
             key: key.into(),
-            id: id.into(),
+            uuid: ShortId::parse_uuid(&id).ok(),
+            id,
         }
     }
 
+    /// Whether the detail value `value` names this id.
+    fn is(&self, value: &str) -> bool {
+        value == self.id
+            || self
+                .uuid
+                .is_some_and(|uuid| ShortId::parse_uuid(value).is_ok_and(|other| other == uuid))
+    }
+
     fn matches(&self, event: &AuditEvent) -> bool {
-        if event.detail.get(&self.key) == Some(&self.id) {
+        if event
+            .detail
+            .get(&self.key)
+            .is_some_and(|value| self.is(value))
+        {
             return true;
         }
         event
             .detail
             .get(&format!("{}s", self.key))
-            .is_some_and(|ids| ids.split(',').any(|id| id.trim() == self.id))
+            .is_some_and(|ids| ids.split(',').any(|id| self.is(id.trim())))
     }
 }
 

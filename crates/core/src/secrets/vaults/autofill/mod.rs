@@ -27,7 +27,7 @@ use uuid::Uuid;
 use super::model::totp::{self, TotpCode};
 use super::storage::handle::validate_key;
 use super::{
-    CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, VaultHandle,
+    CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, ShortId, VaultHandle,
     VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, Website,
 };
 
@@ -187,7 +187,12 @@ fn candidate(
     Ok(Some(AutofillItem {
         vault_key: vw.key.clone(),
         item_key: overview.key.clone(),
-        record_id: format!("{vault_id}/{}/{}", overview.id, password.id),
+        record_id: format!(
+            "{}/{}/{}",
+            ShortId::new(vault_id),
+            ShortId::new(overview.id),
+            ShortId::new(password.id)
+        ),
         title: overview.title.clone(),
         username,
         password_key: password.key.clone(),
@@ -277,11 +282,13 @@ pub fn places_for_rp<'a>(places: &'a [LoginPlace], rp_id: &str) -> Vec<&'a Login
 }
 
 /// The three ids of a record identifier: vault, item, and password credential.
+/// Record identifiers are written with short ids. The hex forms are also read,
+/// since the AutoFill index can hold identifiers registered before.
 pub fn parse_record_id(record_id: &str) -> Option<(Uuid, Uuid, Uuid)> {
     let mut parts = record_id.split('/');
-    let vault = Uuid::parse_str(parts.next()?).ok()?;
-    let item = Uuid::parse_str(parts.next()?).ok()?;
-    let credential = Uuid::parse_str(parts.next()?).ok()?;
+    let vault = ShortId::parse_uuid(parts.next()?).ok()?;
+    let item = ShortId::parse_uuid(parts.next()?).ok()?;
+    let credential = ShortId::parse_uuid(parts.next()?).ok()?;
     parts.next().is_none().then_some((vault, item, credential))
 }
 
@@ -297,7 +304,7 @@ pub fn find_login(
     record_id: &str,
     frame_url: &str,
 ) -> Result<Option<AutofillItem>, Error> {
-    let Some((vault_id, item_id, _)) = parse_record_id(record_id) else {
+    let Some(ids @ (vault_id, item_id, _)) = parse_record_id(record_id) else {
         return Ok(None);
     };
     if vw.vault_id()? != vault_id {
@@ -309,10 +316,8 @@ pub fn find_login(
     let Some(overview) = vw.get_item_overview_by_id(item_id)? else {
         return Ok(None);
     };
-    Ok(
-        candidate(vw, vault_id, overview, Some(&target))?
-            .filter(|item| item.record_id == record_id),
-    )
+    Ok(candidate(vw, vault_id, overview, Some(&target))?
+        .filter(|item| parse_record_id(&item.record_id) == Some(ids)))
 }
 
 /// What a fill returns: the username and password roles and nothing else on the
@@ -865,7 +870,7 @@ fn unused_credential_key(vw: &VaultHandle, item_key: &str, base: &str) -> Result
 /// [`find_login`] this does not check a page, so the caller decides what an
 /// unmatched page means.
 pub fn find_login_record(vw: &VaultHandle, record_id: &str) -> Result<Option<AutofillItem>, Error> {
-    let Some((vault_id, item_id, _)) = parse_record_id(record_id) else {
+    let Some(ids @ (vault_id, item_id, _)) = parse_record_id(record_id) else {
         return Ok(None);
     };
     if vw.vault_id()? != vault_id {
@@ -874,7 +879,8 @@ pub fn find_login_record(vw: &VaultHandle, record_id: &str) -> Result<Option<Aut
     let Some(overview) = vw.get_item_overview_by_id(item_id)? else {
         return Ok(None);
     };
-    Ok(candidate(vw, vault_id, overview, None)?.filter(|item| item.record_id == record_id))
+    Ok(candidate(vw, vault_id, overview, None)?
+        .filter(|item| parse_record_id(&item.record_id) == Some(ids)))
 }
 
 /// Whether `frame_url` is a page the login is stored for.
@@ -1746,6 +1752,31 @@ mod tests {
         let wrong_credential = format!("{vault}/{item_id}/{}", Uuid::new_v4());
         assert!(find_login_record(&vw, &wrong_credential).unwrap().is_none());
         assert!(find_login_record(&vw, "not-a-record").unwrap().is_none());
+    }
+
+    #[test]
+    fn record_id_with_hyphenated_ids_finds_its_login() {
+        let mut vw = VaultHandle::new_for_test("personal");
+        let websites = vec!["github.com".to_string()];
+        write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
+        let item = collect_items(&vw, None).unwrap().remove(0);
+        let (vault, item_id, credential) = parse_record_id(&item.record_id).unwrap();
+        assert_eq!(
+            item.record_id,
+            format!(
+                "{}/{}/{}",
+                ShortId::new(vault),
+                ShortId::new(item_id),
+                ShortId::new(credential)
+            )
+        );
+
+        // Identifier registered in the AutoFill index before ids were short.
+        let hyphenated = format!("{vault}/{item_id}/{credential}");
+        let found = find_login_record(&vw, &hyphenated).unwrap().unwrap();
+        assert_eq!(found.record_id, item.record_id);
+        let found = find_login(&vw, &hyphenated, "https://github.com/login").unwrap();
+        assert_eq!(found.unwrap().record_id, item.record_id);
     }
 
     #[test]

@@ -24,6 +24,7 @@ use crate::audit::test_support::test_dir;
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, PASSKEY_CREDENTIAL_ID, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::vaults::bundle::ExportMode;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::passkey::signals::Report;
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
@@ -238,7 +239,7 @@ fn recorded_ids(event: &AuditEvent) -> SubjectIds {
         event
             .detail
             .get(key)
-            .map(|value| uuid::Uuid::parse_str(value).unwrap())
+            .map(|value| ShortId::parse_uuid(value).unwrap())
     };
     SubjectIds {
         vault_id: id("vault_id"),
@@ -456,7 +457,8 @@ fn a_resolve_across_vaults_lists_the_credentials_it_resolved() {
     );
     let personal = fx.read("personal").credential_ids("item", "token").unwrap();
     let shared = fx.read("shared").credential_ids("item", "token").unwrap();
-    let list = |ids: [Option<uuid::Uuid>; 2]| ids.map(|id| id.unwrap().to_string()).join(",");
+    let list =
+        |ids: [Option<uuid::Uuid>; 2]| ids.map(|id| ShortId::encode_uuid(id.unwrap())).join(",");
     assert_eq!(
         event.detail["vault_ids"],
         list([personal.vault_id, shared.vault_id])
@@ -488,7 +490,7 @@ fn an_export_lists_the_vaults_it_exported() {
             include_passkeys: false,
         })),
     );
-    let id = |key: &str| fx.originals[key].vault_id().unwrap().to_string();
+    let id = |key: &str| ShortId::encode_uuid(fx.originals[key].vault_id().unwrap());
     assert_eq!(
         event.detail["vault_ids"],
         format!("{},{}", id("personal"), id("shared"))

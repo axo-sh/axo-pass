@@ -111,6 +111,7 @@ mod tests {
 
     use super::test_support::test_dir;
     use super::*;
+    use crate::secrets::vaults::format::short_id::ShortId;
 
     fn event(action: Action, outcome: Outcome) -> AuditEvent {
         AuditEvent::new(Source::Cli, action, outcome)
@@ -237,8 +238,8 @@ mod tests {
         let (vault_id, item_id) = (Uuid::new_v4(), Uuid::new_v4());
         let named = event(Action::ItemUpdated, Outcome::Succeeded)
             .subject_ids(SubjectIds::item(vault_id, item_id));
-        assert_eq!(named.detail["vault_id"], vault_id.to_string());
-        assert_eq!(named.detail["item_id"], item_id.to_string());
+        assert_eq!(named.detail["vault_id"], ShortId::encode_uuid(vault_id));
+        assert_eq!(named.detail["item_id"], ShortId::encode_uuid(item_id));
         assert!(!named.detail.contains_key("credential_id"));
         record(named);
 
@@ -247,10 +248,42 @@ mod tests {
         record(none);
 
         let found = read(&AuditFilter {
-            detail_id: Some(DetailId::new("item_id", item_id.to_string())),
+            detail_id: Some(DetailId::new("item_id", ShortId::encode_uuid(item_id))),
             ..Default::default()
         });
         assert_eq!(found.events.len(), 1);
+    }
+
+    #[test]
+    fn query_by_short_id_finds_events_with_hyphenated_ids() {
+        let _t = test_dir();
+        let item_id = Uuid::new_v4();
+        let other_id = Uuid::new_v4();
+        // Events recorded before ids were written in the short form.
+        let hyphenated = item_id.hyphenated().to_string();
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", &hyphenated));
+        let list = format!("{other_id},{hyphenated}");
+        record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_ids", list));
+        record(
+            event(Action::ItemUpdated, Outcome::Succeeded)
+                .subject_ids(SubjectIds::item(Uuid::new_v4(), item_id)),
+        );
+        record(
+            event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", other_id.to_string()),
+        );
+
+        let found = |id: String| {
+            read(&AuditFilter {
+                detail_id: Some(DetailId::new("item_id", id)),
+                ..Default::default()
+            })
+            .events
+            .len()
+        };
+        assert_eq!(found(ShortId::encode_uuid(item_id)), 3);
+        assert_eq!(found(hyphenated.to_uppercase()), 3);
+        assert_eq!(found(item_id.simple().to_string()), 3);
+        assert_eq!(found(ShortId::encode_uuid(other_id)), 2);
     }
 
     #[test]

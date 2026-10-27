@@ -15,7 +15,8 @@ use crate::secrets::vaults::bundle::exported_bundle::{
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::format::encrypted_vault::VaultFileKey;
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey};
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
 
@@ -263,6 +264,76 @@ fn bundle_exported_before_vault_format_2_imports() {
         .get_history_value("login", "password", history[0].id)
         .unwrap();
     assert_eq!(previous.expose_secret(), "old");
+
+    // The bundle holds hyphenated ids. The imported vault is written with
+    // short ids.
+    let contents = imported
+        .to_encrypted(true)
+        .unwrap()
+        .to_file_contents()
+        .unwrap();
+    assert!(EncryptedVault::assert_short_ids_for_test(&contents) >= 4);
+    assert!(!contents.contains(&bundled.id.hyphenated().to_string()));
+}
+
+#[test]
+fn bundle_is_written_with_short_ids() {
+    let bundle_id = Uuid::new_v4();
+    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundle_cipher = Aes256Gcm::new(&bundle_key);
+    let mut vault = Vault::new_for_test();
+    vault.add_or_update_item("login", "Login").unwrap();
+    vault
+        .add_or_update_item_credential(
+            "login",
+            "password",
+            "Password",
+            FieldKind::default(),
+            SecretString::from("secret".to_string()),
+        )
+        .unwrap();
+    let bundled = vault
+        .to_bundled_vault(None, bundle_id, &bundle_cipher, true)
+        .unwrap();
+    let bundle = ExportedBundle {
+        version: BUNDLE_VERSION,
+        id: bundle_id,
+        exported_at: time::OffsetDateTime::now_utc(),
+        age_bundle_key: String::new(),
+        vaults: vec![bundled],
+    };
+
+    let json = serde_json::to_value(&bundle).unwrap();
+
+    assert_eq!(json["version"], json!(2));
+    assert_eq!(json["id"], json!(ShortId::encode_uuid(bundle_id)));
+    let vault_json = &json["vaults"][0];
+    assert_eq!(vault_json["id"], json!(ShortId::encode_uuid(vault.id())));
+    let items = vault_json["items"].as_object().unwrap();
+    assert_eq!(items.len(), 1);
+    for (item_id, item) in items {
+        assert!(ShortId::decode(item_id).is_ok(), "{item_id}");
+        assert_eq!(item_id.len(), 22);
+        for cred_id in item["credentials"].as_object().unwrap().keys() {
+            assert!(ShortId::decode(cred_id).is_ok(), "{cred_id}");
+            assert_eq!(cred_id.len(), 22);
+        }
+    }
+
+    // The wrapped file key AAD keeps the hyphenated ids.
+    let read: ExportedBundle = serde_json::from_value(json).unwrap();
+    let raw = read.vaults[0]
+        .wrapped_file_key
+        .decrypt(
+            &bundle_cipher,
+            vec![
+                bundle_id.hyphenated().to_string(),
+                vault.id().hyphenated().to_string(),
+                "file-key".to_string(),
+            ],
+        )
+        .unwrap();
+    assert_eq!(raw.expose_secret().0.len(), 32);
 }
 
 #[test]

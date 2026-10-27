@@ -2,6 +2,7 @@ use super::super::wire::WireResponse;
 use super::serve::AccessIds;
 use super::{ClientIdentity, LoginPage, ResolvePurpose, VaultAccessPrompt, VaultAction};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
+use crate::secrets::vaults::format::short_id::ShortId;
 
 /// Record a vault access. Reads are recorded by `vault/item/credential` path,
 /// and listings by item count.
@@ -212,7 +213,7 @@ fn access_ids(event: AuditEvent, ids: &AccessIds) -> AuditEvent {
         }
         (!seen.is_empty()).then(|| {
             seen.iter()
-                .map(uuid::Uuid::to_string)
+                .map(|id| ShortId::encode_uuid(*id))
                 .collect::<Vec<_>>()
                 .join(",")
         })

@@ -54,7 +54,7 @@ use uuid::Uuid;
 
 use super::model::last_used;
 use super::storage::txn::VaultWriter;
-use super::{Error, FieldKind, VaultHandle, autofill};
+use super::{Error, FieldKind, ShortId, VaultHandle, autofill};
 use crate::audit::SubjectIds;
 
 /// Identifies Axo Pass as the authenticator model in attestation data. A fixed
@@ -149,10 +149,15 @@ pub struct StoredPasskey {
 }
 
 impl StoredPasskey {
-    /// `<vault uuid>/<item uuid>/<credential uuid>`, the record identifier the
-    /// AutoFill index stores for the passkey.
+    /// `<vault id>/<item id>/<credential id>` as short ids, the record
+    /// identifier the AutoFill index stores for the passkey.
     pub fn record_id(&self) -> String {
-        format!("{}/{}/{}", self.vault_id, self.item_id, self.credential_id)
+        format!(
+            "{}/{}/{}",
+            ShortId::new(self.vault_id),
+            ShortId::new(self.item_id),
+            ShortId::new(self.credential_id)
+        )
     }
 }
 

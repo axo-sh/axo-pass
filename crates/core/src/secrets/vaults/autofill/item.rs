@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
 use crate::secrets::vaults::FieldKind;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::{VaultItemCredentialOverview, VaultItemOverview};
 
 /// The `category` value for items created as logins.
@@ -20,17 +22,21 @@ pub enum Role {
 
 /// Role slots and websites for autofill. Stored in its own encrypted blob so
 /// that edits here do not conflict with item renames.
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct ItemAutofill {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub websites: Vec<Website>,
     /// Credential filled as the account name.
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<Uuid>,
     /// Credential filled as the password.
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Uuid>,
     /// Credential the one-time code is generated from.
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub totp: Option<Uuid>,
 }

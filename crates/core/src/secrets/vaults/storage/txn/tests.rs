@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use super::versions::{DAY_MS, HOUR_MS, kept_versions};
 use super::*;
 use crate::secrets::vaults::format::encrypted_vault::{VAULT_FORMAT, VaultFileKey};
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
 
 /// A vault written to a temp directory, with its retained versions and lock
@@ -184,6 +185,50 @@ fn unchanged_vault_with_every_entry_kind_saves_nothing() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn vault_with_hyphenated_ids_loads_and_next_save_writes_short_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(dir.path().join("data"));
+    let vh = filled_vault(&dir, &files);
+    let id = vh.vault_id().unwrap();
+    let short = fs::read_to_string(&vh.path).unwrap();
+    let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short);
+    fs::write(&vh.path, &hyphenated).unwrap();
+
+    assert_eq!(VaultHeader::peek(&vh.path).unwrap().id, id);
+    let committed = files
+        .write_unlocked::<_, Error>(&vh, |vw| vw.list_items().map(|_| ()))
+        .unwrap();
+
+    // The file bytes differ from the saved form, so the save rewrites them.
+    assert!(committed.changed);
+    let saved = fs::read_to_string(&vh.path).unwrap();
+    assert_eq!(saved, short);
+    assert!(EncryptedVault::assert_short_ids_for_test(&saved) > 0);
+    let enc_vault = EncryptedVault::load(&vh.path).unwrap();
+    let vault = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), enc_vault).unwrap();
+    vault.assert_filled_for_test();
+
+    // The replaced file is retained unchanged, in a directory named by the
+    // short id.
+    let versions = files.list_versions(id).unwrap();
+    assert_eq!(versions.len(), 1);
+    let short_id = ShortId::encode_uuid(id);
+    let retained = dir
+        .path()
+        .join("data")
+        .join("versions")
+        .join(&short_id)
+        .join(&versions[0].name);
+    assert_eq!(fs::read_to_string(retained).unwrap(), hyphenated);
+    let lock = dir
+        .path()
+        .join("data")
+        .join("locks")
+        .join(format!("{short_id}.lock"));
+    assert!(lock.exists());
 }
 
 #[test]

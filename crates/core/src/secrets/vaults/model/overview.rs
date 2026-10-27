@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
 use super::ItemId;
 use crate::secrets::vaults::autofill::item::{ItemAutofill, Role};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::normalized_key;
@@ -272,8 +274,10 @@ impl VaultMetadata {
     }
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct VaultFolderMetadata {
+    #[serde_as(as = "ShortId")]
     #[zeroize(skip)]
     pub id: Uuid,
     pub title: String,
@@ -281,10 +285,12 @@ pub struct VaultFolderMetadata {
     pub position: Option<u32>,
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct VaultItemMetadata {
     pub title: String,
     pub key: String,
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     pub folder: Option<Uuid>,
@@ -294,8 +300,10 @@ pub struct VaultItemMetadata {
     pub category: Option<String>,
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct VaultSectionMetadata {
+    #[serde_as(as = "ShortId")]
     #[zeroize(skip)]
     pub id: Uuid,
     pub title: String,
@@ -303,6 +311,7 @@ pub struct VaultSectionMetadata {
     pub position: Option<u32>,
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
 pub struct VaultCredentialMetadata {
     pub title: String,
@@ -314,6 +323,7 @@ pub struct VaultCredentialMetadata {
     /// after set ones, by title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[zeroize(skip)]
     pub section: Option<Uuid>,

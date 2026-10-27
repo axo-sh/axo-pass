@@ -12,6 +12,7 @@ use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{
     DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
@@ -61,10 +62,13 @@ fn is_zero(value: &u64) -> bool {
 }
 
 // EncryptedVault is the on disk representation of a vault, with metadata and
-// secrets encrypted. We don't persist this in memory; see Vault
+// secrets encrypted. We don't persist this in memory; see Vault. Ids are
+// written as short ids and read in any form ShortId accepts.
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EncryptedVault {
+    #[serde_as(as = "ShortId")]
     pub id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -73,14 +77,17 @@ pub struct EncryptedVault {
     pub generation: u64,
     /// Sync replica id of this copy of the vault. Absent if the vault is not
     /// synced. Not read yet.
+    #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replica_id: Option<Uuid>,
     pub file_key: VaultFileKey,
     /// Vault-level metadata such as folders. Absent for a vault with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EncryptedBlob<VaultMetadata>>,
+    #[serde_as(as = "BTreeMap<ShortId, _>")]
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
     /// Deleted items that can still be restored. Absent if empty.
+    #[serde_as(as = "BTreeMap<ShortId, _>")]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub deleted: BTreeMap<Uuid, DeletedItem>,
 }
@@ -88,8 +95,10 @@ pub struct EncryptedVault {
 /// Struct to read just the id and name of a vault file, without decrypting the
 /// vault itself Used for the locked vault list and the transaction registry.
 /// Other fields are ignored.
+#[serde_as]
 #[derive(Deserialize)]
 pub struct VaultHeader {
+    #[serde_as(as = "ShortId")]
     pub id: Uuid,
     pub name: Option<String>,
 }
@@ -245,6 +254,104 @@ impl EncryptedVault {
     pub fn add_deleted_item(&mut self, item_id: Uuid, deleted: DeletedItem) {
         self.deleted.insert(item_id, deleted);
     }
+
+    /// Check that every id in the vault file `contents` is a short id. Returns
+    /// the number of ids checked.
+    #[cfg(test)]
+    pub(crate) fn assert_short_ids_for_test(contents: &str) -> usize {
+        use serde_json::Value;
+
+        use crate::secrets::vaults::format::short_id::SHORT_ID_LEN;
+
+        fn check(id: &str, at: &str, count: &mut usize) {
+            assert_eq!(id.len(), SHORT_ID_LEN, "{at}: {id}");
+            assert!(ShortId::decode(id).is_ok(), "{at}: {id}");
+            *count += 1;
+        }
+
+        fn check_item(item: &Value, at: &str, count: &mut usize) {
+            let credentials = item["credentials"].as_object().unwrap();
+            let deleted = item.get("deleted").and_then(Value::as_object);
+            for (id, credential) in credentials {
+                check(id, &format!("{at}/credentials"), count);
+                check_credential(credential, at, count);
+            }
+            for (id, deleted) in deleted.into_iter().flatten() {
+                check(id, &format!("{at}/deleted"), count);
+                check_credential(&deleted["credential"], at, count);
+            }
+        }
+
+        fn check_credential(credential: &Value, at: &str, count: &mut usize) {
+            let history = credential.get("history").and_then(Value::as_array);
+            for entry in history.into_iter().flatten() {
+                check(
+                    entry["id"].as_str().unwrap(),
+                    &format!("{at}/history"),
+                    count,
+                );
+            }
+        }
+
+        let file: Value = serde_json::from_str(contents).unwrap();
+        let vault = &file["vault"];
+        let mut count = 0;
+        check(vault["id"].as_str().unwrap(), "id", &mut count);
+        if let Some(replica_id) = vault.get("replica_id") {
+            check(replica_id.as_str().unwrap(), "replica_id", &mut count);
+        }
+        for (id, item) in vault["items"].as_object().unwrap() {
+            check(id, "items", &mut count);
+            check_item(item, &format!("items/{id}"), &mut count);
+        }
+        let deleted = vault.get("deleted").and_then(Value::as_object);
+        for (id, deleted) in deleted.into_iter().flatten() {
+            check(id, "deleted", &mut count);
+            check_item(&deleted["item"], &format!("deleted/{id}"), &mut count);
+        }
+        count
+    }
+
+    /// Vault file `contents` with every short id in the vault object written
+    /// in the hyphenated form, as files were before short ids. Map keys and
+    /// `id` and `replica_id` values are rewritten. Blob plaintext is not.
+    #[cfg(test)]
+    pub(crate) fn hyphenate_ids_for_test(contents: &str) -> String {
+        use serde_json::Value;
+
+        use crate::secrets::vaults::format::short_id::SHORT_ID_LEN;
+
+        fn hyphenated(text: &str) -> Option<String> {
+            (text.len() == SHORT_ID_LEN)
+                .then(|| ShortId::parse_uuid(text).ok())
+                .flatten()
+                .map(|id| id.hyphenated().to_string())
+        }
+
+        fn rewrite(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    let entries = std::mem::take(map);
+                    for (key, mut entry) in entries {
+                        let is_id = key == "id" || key == "replica_id";
+                        match (&entry, is_id) {
+                            (Value::String(text), true) => {
+                                entry = Value::String(hyphenated(text).unwrap());
+                            },
+                            _ => rewrite(&mut entry),
+                        }
+                        map.insert(hyphenated(&key).unwrap_or(key), entry);
+                    }
+                },
+                Value::Array(values) => values.iter_mut().for_each(rewrite),
+                _ => {},
+            }
+        }
+
+        let mut file: Value = serde_json::from_str(contents).unwrap();
+        rewrite(&mut file["vault"]);
+        serde_json::to_string_pretty(&file).unwrap()
+    }
 }
 
 /// Vault file key wrapped by `vault-encryption-key`. Written as a base64
@@ -264,14 +371,17 @@ impl VaultFileKey {
     }
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EncryptedVaultItem {
     pub metadata: EncryptedBlob<VaultItemMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autofill: Option<EncryptedBlob<ItemAutofill>>,
+    #[serde_as(as = "BTreeMap<ShortId, _>")]
     pub credentials: BTreeMap<Uuid, EncryptedVaultItemCredential>,
     /// Deleted credentials that can still be restored. Absent if empty.
+    #[serde_as(as = "BTreeMap<ShortId, _>")]
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub deleted: BTreeMap<Uuid, DeletedCredential>,
 }
@@ -299,9 +409,11 @@ pub struct EncryptedVaultItemCredential {
 /// A previous value of a credential. The value is encrypted under the entry id
 /// as well as the credential, so it cannot be swapped into the live value's
 /// place.
+#[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryEntry {
+    #[serde_as(as = "ShortId")]
     pub id: Uuid,
     pub value: EncryptedBlob<String>,
     pub info: EncryptedBlob<HistoryInfo>,
@@ -398,10 +510,93 @@ mod tests {
 
         let file: Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(file["vault"]["generation"], json!(7));
-        assert_eq!(file["vault"]["replica_id"], json!(replica_id));
+        assert_eq!(
+            file["vault"]["replica_id"],
+            json!(ShortId::encode_uuid(replica_id))
+        );
         let back = EncryptedVault::parse(&contents).unwrap();
         assert_eq!(back.generation, 7);
         assert_eq!(back.replica_id, Some(replica_id));
+    }
+
+    #[test]
+    fn every_id_in_vault_file_is_short() {
+        let mut vault = filled_vault();
+        vault.replica_id = Some(Uuid::new_v4());
+        let contents = vault.to_file_contents().unwrap();
+
+        // Vault id, replica id, and the ids of the item, its credential, its
+        // history entry, its deleted credential, the deleted item, and the
+        // credential and deleted credential of the deleted item.
+        assert!(EncryptedVault::assert_short_ids_for_test(&contents) >= 9);
+        let file: Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(file["vault"]["id"], json!(ShortId::encode_uuid(vault.id)));
+        assert!(!contents.contains(&vault.id.hyphenated().to_string()));
+    }
+
+    #[test]
+    fn vault_file_with_hyphenated_ids_loads_and_saves_short_ids() {
+        let mut vault = filled_vault();
+        vault.replica_id = Some(Uuid::new_v4());
+        let short = vault.to_file_contents().unwrap();
+        let hyphenated = EncryptedVault::hyphenate_ids_for_test(&short);
+        assert!(hyphenated.contains(&format!("\"{}\"", vault.id.hyphenated())));
+
+        let back = EncryptedVault::parse(&hyphenated).unwrap();
+        assert_eq!(back.id, vault.id);
+        assert_eq!(back.replica_id, vault.replica_id);
+        assert_eq!(VaultHeader::parse(&hyphenated).unwrap().id, vault.id);
+        assert_eq!(back.to_file_contents().unwrap(), short);
+    }
+
+    #[test]
+    fn blob_plaintext_with_hyphenated_ids_loads_and_saves_short_ids() {
+        let folder = Uuid::new_v4();
+        let section = Uuid::new_v4();
+        let cred = Uuid::new_v4();
+        let short = |id: Uuid| json!(ShortId::encode_uuid(id));
+
+        let item: VaultItemMetadata = serde_json::from_value(json!({
+            "title": "Item",
+            "key": "item",
+            "folder": folder,
+            "sections": [{ "id": section, "title": "Section" }],
+        }))
+        .unwrap();
+        assert_eq!(item.folder, Some(folder));
+        let item = serde_json::to_value(&item).unwrap();
+        assert_eq!(item["folder"], short(folder));
+        assert_eq!(item["sections"][0]["id"], short(section));
+
+        let credential: VaultCredentialMetadata = serde_json::from_value(json!({
+            "title": "Password",
+            "key": "password",
+            "section": section,
+        }))
+        .unwrap();
+        assert_eq!(credential.section, Some(section));
+        let credential = serde_json::to_value(&credential).unwrap();
+        assert_eq!(credential["section"], short(section));
+
+        let autofill: ItemAutofill = serde_json::from_value(json!({
+            "username": cred,
+            "password": cred,
+            "totp": cred,
+        }))
+        .unwrap();
+        assert_eq!(autofill.password, Some(cred));
+        let autofill = serde_json::to_value(&autofill).unwrap();
+        for slot in ["username", "password", "totp"] {
+            assert_eq!(autofill[slot], short(cred), "{slot}");
+        }
+
+        let metadata: VaultMetadata = serde_json::from_value(json!({
+            "folders": [{ "id": folder, "title": "Work" }],
+        }))
+        .unwrap();
+        assert_eq!(metadata.folders[0].id, folder);
+        let metadata = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(metadata["folders"][0]["id"], short(folder));
     }
 
     #[test]

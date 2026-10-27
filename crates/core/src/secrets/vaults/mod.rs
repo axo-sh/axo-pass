@@ -12,6 +12,7 @@ pub use autofill::{
     OtherLogin, Site, write_login,
 };
 pub use errors::Error;
+pub use format::short_id::ShortId;
 pub use model::fields::{FieldKind, TextField};
 pub use model::{
     CredentialPlacement, CredentialUpdate, VaultFolder, VaultItemCredentialOverview,

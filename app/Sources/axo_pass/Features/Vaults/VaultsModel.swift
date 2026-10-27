@@ -1607,10 +1607,12 @@ final class VaultsModel {
 
   // MARK: - Conversion banner
 
-  /// The UUIDs of items whose "Use this item for AutoFill?" banner the user
-  /// dismissed. A UUID survives renaming the item or moving it between vaults.
+  /// The ids of items whose "Use this item for AutoFill?" banner the user
+  /// dismissed. An id survives renaming the item or moving it between vaults.
+  /// Ids stored in the hyphenated form are read as short ids.
   private(set) var dismissedConversions: Set<String> = Set(
-    UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedConversions) ?? [])
+    (UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedConversions) ?? [])
+      .map { shortId(id: $0) ?? $0 })
 
   func dismissConversion(_ item: ItemInfo) {
     dismissedConversions.insert(item.id)
@@ -1620,14 +1622,22 @@ final class VaultsModel {
 
   // MARK: - Merge banner
 
-  /// Item pairs whose "Merge logins?" banner the user dismissed.
+  /// Item pairs whose "Merge logins?" banner the user dismissed. Keys stored
+  /// with hyphenated ids are read with short ids.
   private(set) var dismissedMerges: Set<String> = Set(
-    UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedMerges) ?? [])
+    (UserDefaults.standard.stringArray(forKey: Preferences.Key.dismissedMerges) ?? [])
+      .map(shortMergeKey))
 
-  /// The key a dismissed merge is stored under: the two item UUIDs, sorted, so
+  /// The key a dismissed merge is stored under: the two item ids, sorted, so
   /// the order of the two items does not matter.
   static func mergeKey(_ a: ItemInfo, _ b: ItemInfo) -> String {
     [a.id, b.id].sorted().joined(separator: "|")
+  }
+
+  /// A stored merge key with each id in the short form, sorted again.
+  nonisolated private static func shortMergeKey(_ key: String) -> String {
+    key.split(separator: "|").map { shortId(id: String($0)) ?? String($0) }.sorted()
+      .joined(separator: "|")
   }
 
   func dismissMerge(_ a: ItemInfo, _ b: ItemInfo) {
