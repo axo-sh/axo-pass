@@ -35,11 +35,13 @@ pub struct EncryptedVault {
     pub deleted: BTreeMap<Uuid, DeletedItem>,
 }
 
-/// Id of a vault file, read without decrypting anything, for the transaction
-/// registry.
+/// Struct to read just the id and name of a vault file, without decrypting the
+/// vault itself Used for the locked vault list and the transaction registry.
+/// Other fields are ignored.
 #[derive(Deserialize)]
 pub struct VaultHeader {
     pub id: Uuid,
+    pub name: Option<String>,
 }
 
 impl VaultHeader {

@@ -120,31 +120,30 @@ impl VaultHandle {
         Self::load_from_path(Some(vault_key), &vault_path, locks)
     }
 
-    /// Load a locked vault and record its path in `locks`.
+    /// Load a locked vault and record its path in `locks`. Only the file header
+    /// is read. The rest of the file is parsed at unlock.
     pub fn load_from_path(
         vault_key: Option<String>,
         vault_path: &Path,
         locks: &VaultLocks,
     ) -> Result<Self, Error> {
-        let vault = EncryptedVault::load(vault_path)?;
+        let header = VaultHeader::peek(vault_path)?;
 
         // todo: decide what to do for key for external vaults, some options:
         // 1. use file name as key
         // 2. use the vault.id as the key
         // 3. use the vault.name
         // 4. add a key field to the vault file and use that
-        let vault_key = vault_key.unwrap_or_else(|| vault.id.to_string());
+        let vault_key = vault_key.unwrap_or_else(|| header.id.to_string());
         if !validate_key(&vault_key) {
             return Err(Error::InvalidVaultKey(vault_key.to_string()));
         }
-        locks.track(vault.id, vault_path);
+        locks.track(header.id, vault_path);
 
         Ok(Self {
             key: vault_key,
             path: vault_path.to_path_buf(),
-            state: VaultState::Locked {
-                name: vault.name.clone(),
-            },
+            state: VaultState::Locked { name: header.name },
         })
     }
 

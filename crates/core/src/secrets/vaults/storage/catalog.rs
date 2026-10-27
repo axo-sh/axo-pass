@@ -283,3 +283,108 @@ impl VaultCatalog {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::{Value, json};
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
+
+    /// Catalog of one vault named "Personal" at key `personal`, in a temp
+    /// directory. The unlocker holds its file key.
+    struct Fixture {
+        _dir: TempDir,
+        catalog: VaultCatalog,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let vaults_dir = dir.path().join("vaults");
+            let files = VaultWriter::isolated(dir.path().join("data"));
+            let mut vh = VaultHandle::new_for_test_at(vaults_dir.join("personal.json"));
+            vh.set_vault_name("Personal".to_string()).unwrap();
+            files.create(&vh).unwrap();
+            let keys = HashMap::from([(vh.vault_id().unwrap(), vh.unlocked_key().unwrap())]);
+            let catalog = VaultCatalog::with_unlocker(
+                vaults_dir,
+                files,
+                BTreeMap::new(),
+                Arc::new(KeyUnlocker(keys)),
+            );
+            Self { _dir: dir, catalog }
+        }
+
+        /// Write the `personal` vault file to `{key}.json` after `edit`.
+        fn write_edited(&self, key: &str, edit: impl FnOnce(&mut Value)) {
+            let dir = self.catalog.vaults_dir();
+            let data = fs::read_to_string(dir.join("personal.json")).unwrap();
+            let mut vault: Value = serde_json::from_str(&data).unwrap();
+            edit(&mut vault);
+            let data = serde_json::to_string_pretty(&vault).unwrap();
+            fs::write(dir.join(format!("{key}.json")), data).unwrap();
+        }
+
+        /// Replace the `personal` vault items with an entry that fails to
+        /// parse.
+        fn break_items(&self) {
+            self.write_edited("personal", |vault| {
+                vault["items"] = json!({ "00000000-0000-0000-0000-000000000001": "not an item" });
+            });
+        }
+    }
+
+    #[test]
+    fn vault_with_unparsable_items_is_listed_by_name() {
+        let fx = Fixture::new();
+        fx.break_items();
+
+        let vaults = fx.catalog.list();
+
+        let vh = vaults.get("personal").expect("vault is listed");
+        assert_eq!(vh.vault_name(), Some("Personal"));
+    }
+
+    #[test]
+    fn vault_with_unparsable_items_fails_to_unlock() {
+        let fx = Fixture::new();
+        fx.break_items();
+
+        let err = fx
+            .catalog
+            .open("personal", AuthContext::SharedThreadLocal)
+            .err()
+            .expect("unlock fails");
+
+        assert!(
+            matches!(err, Error::VaultDeserializationError(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn file_without_id_is_not_listed() {
+        let fx = Fixture::new();
+        fx.write_edited("missing-id", |vault| {
+            vault.as_object_mut().unwrap().remove("id");
+        });
+
+        let vaults = fx.catalog.list();
+
+        assert_eq!(vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+    }
+
+    #[test]
+    fn file_whose_id_is_not_a_uuid_is_not_listed() {
+        let fx = Fixture::new();
+        fx.write_edited("bad-id", |vault| vault["id"] = json!("not-a-uuid"));
+
+        let vaults = fx.catalog.list();
+
+        assert_eq!(vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
+    }
+}
