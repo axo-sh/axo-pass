@@ -1,9 +1,11 @@
+import AppKit
 import AxoPassFFI
 import SwiftUI
 
 struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
   @State private var showingNewVaultSheet = false
+  @State private var showingDuplicates = false
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
@@ -82,14 +84,28 @@ struct VaultsSidebar: View {
       let existing = model.vaults.first { $0.key == vaultKey }
       VaultVersionsSheet(vaultKey: vaultKey, vaultName: existing?.name ?? vaultKey)
     }
+    .sheet(isPresented: $showingDuplicates) {
+      DuplicateVaultsSheet(duplicates: model.duplicateVaults)
+    }
   }
 
   @ViewBuilder
   private var vaultItems: some View {
+    if !model.duplicateVaults.isEmpty {
+      Button {
+        showingDuplicates = true
+      } label: {
+        SidebarWarningLabel(
+          model.duplicateVaults.count == 1
+            ? "1 vault not shown" : "\(model.duplicateVaults.count) vaults not shown"
+        )
+      }
+      .buttonStyle(.plain)
+      .help("Several vault files have the same vault id")
+    }
+
     if let err = model.loadError {
-      Label(err, systemImage: "exclamationmark.triangle")
-        .font(.caption)
-        .foregroundStyle(.red)
+      SidebarWarningLabel(err)
     } else if model.vaults.isEmpty {
       Text("No vaults")
         .font(.caption)
@@ -142,6 +158,26 @@ struct VaultsSidebar: View {
   }
 }
 
+/// Sidebar warning with a red icon and secondary text.
+private struct SidebarWarningLabel: View {
+  let text: String
+
+  init(_ text: String) {
+    self.text = text
+  }
+
+  var body: some View {
+    Label {
+      Text(text)
+        .foregroundStyle(.secondary)
+    } icon: {
+      Image(systemName: "exclamationmark.circle.fill")
+        .foregroundStyle(.red)
+    }
+    .font(.caption)
+  }
+}
+
 private struct SidebarSectionHeader: View {
   let title: String
   let onTap: () -> Void
@@ -164,6 +200,67 @@ private struct SidebarSectionHeader: View {
     .contentShape(.rect)
     .padding(.top, 6)
     .onTapGesture(perform: onTap)
+  }
+}
+
+/// Vault files that share a vault id, grouped by id, with a Show in Finder
+/// button for each file.
+private struct DuplicateVaultsSheet: View {
+  let duplicates: [DuplicateVaultInfo]
+
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Vaults Not Shown")
+        .font(.headline)
+
+      Text(
+        "Vault files with duplicate ids found. Delete or move the duplicates out of the vault folder. then reopen this app."
+      )
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          ForEach(duplicates, id: \.vaultId) { duplicate in
+            VStack(alignment: .leading, spacing: 6) {
+              Text("Vault id \(duplicate.vaultId)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+              ForEach(duplicate.paths, id: \.self) { path in
+                HStack(spacing: 8) {
+                  Text(path)
+                    .font(.callout.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
+                  Spacer(minLength: 0)
+                  Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                  }
+                  .controlSize(.small)
+                }
+              }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+          }
+        }
+      }
+      .frame(maxHeight: 320)
+
+      HStack {
+        Spacer()
+        Button("Done") { dismiss() }
+          .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(20)
+    .frame(width: 520)
   }
 }
 
