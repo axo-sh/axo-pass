@@ -688,6 +688,19 @@ mod tests {
         format!("{pointer}/{key}")
     }
 
+    /// Pointer to the one entry of the map at `pointer` in `file` that has a
+    /// previous value.
+    fn only_entry_with_history(file: &Value, pointer: &str) -> String {
+        let map = file.pointer(pointer).unwrap().as_object().unwrap();
+        let mut keys = map
+            .iter()
+            .filter(|(_, entry)| entry["history"].as_array().is_some_and(|h| !h.is_empty()))
+            .map(|(key, _)| key);
+        let key = keys.next().unwrap();
+        assert!(keys.next().is_none(), "{pointer}");
+        format!("{pointer}/{key}")
+    }
+
     /// Parse `file` after adding an unknown field to the object at `pointer`.
     fn parse_with_unknown_field(file: &Value, pointer: &str) -> Result<EncryptedVault, Error> {
         let mut file = file.clone();
@@ -1059,7 +1072,7 @@ mod tests {
         parse(&signed(&file)).unwrap();
 
         let item = only_entry(&file, "/vault/items");
-        let credential = only_entry(&file, &format!("{item}/credentials"));
+        let credential = only_entry_with_history(&file, &format!("{item}/credentials"));
         let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
         let deleted_item = only_entry(&file, "/vault/deleted");
         let pointers = [
