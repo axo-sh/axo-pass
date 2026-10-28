@@ -117,6 +117,25 @@ impl<'a> VaultEnvelope<'a> {
 pub struct VerifiedVault(EncryptedVault);
 
 impl VerifiedVault {
+    /// Unwrap the file key of this vault with the vault encryption key. Only a
+    /// verified vault is unwrapped, so a planted `file_key` never reaches the
+    /// keychain:
+    ///
+    /// ```compile_fail
+    /// use axo_pass_core::secrets::keychain::managed_key::ManagedKey;
+    /// use axo_pass_core::secrets::vaults::format::encrypted_vault::EncryptedVault;
+    ///
+    /// fn unwrap(key: &ManagedKey, vault: &EncryptedVault) {
+    ///     let _ = vault.decrypt_file_key(key);
+    /// }
+    /// ```
+    pub fn decrypt_file_key(&self, user_encryption_key: &ManagedKey) -> Result<VaultCipher, Error> {
+        let decrypted_key = user_encryption_key
+            .decrypt(self.0.file_key.as_bytes())
+            .ok_or(Error::VaultFileKeyDecryptionError)?;
+        Ok(VaultCipher::new_with_bytes(&decrypted_key, self.0.id))
+    }
+
     /// Verified vault, to decrypt.
     pub(crate) fn into_inner(self) -> EncryptedVault {
         self.0
@@ -137,7 +156,9 @@ fn is_zero(value: &u64) -> bool {
 
 // EncryptedVault is the on disk representation of a vault, with metadata and
 // secrets encrypted. We don't persist this in memory; see Vault. Ids are
-// written as short ids and read in any form ShortId accepts.
+// written as short ids and read in any form ShortId accepts. A parsed
+// EncryptedVault that was not verified can be read but not unwrapped or
+// decrypted. See VerifiedVault.
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,13 +295,6 @@ impl EncryptedVault {
     #[cfg(test)]
     pub(crate) fn to_file_contents(&self, signer: &dyn VaultSigner) -> Result<String, Error> {
         Self::sign_vault_json(self.to_vault_json()?, signer)
-    }
-
-    pub fn decrypt_file_key(&self, user_encryption_key: &ManagedKey) -> Result<VaultCipher, Error> {
-        let decrypted_key = user_encryption_key
-            .decrypt(self.file_key.as_bytes())
-            .ok_or(Error::VaultFileKeyDecryptionError)?;
-        Ok(VaultCipher::new_with_bytes(&decrypted_key, self.id))
     }
 
     /// Set the vault metadata. If `value` is empty, the field is left as none.

@@ -1811,7 +1811,7 @@ fn bundled_export_leaves_out_deleted_items() {
 }
 
 #[test]
-fn a_vault_file_without_a_deleted_field_loads_with_no_deleted_items() {
+fn vault_file_without_deleted_field_loads_with_no_deleted_items() {
     let vault = vault_with_credentials("item", &["alpha"]);
     let json = serde_json::to_value(vault.to_encrypted(true).unwrap()).unwrap();
     assert!(json.get("deleted").is_none());
@@ -1860,7 +1860,7 @@ fn bundled_export_leaves_out_the_deleted() {
 }
 
 #[test]
-fn a_vault_file_without_a_deleted_field_loads_with_an_empty_deleted() {
+fn vault_file_without_item_deleted_field_loads_with_empty_deleted() {
     let vault = vault_with_credentials("item", &["alpha"]);
     let json = serde_json::to_value(vault.to_encrypted(true).unwrap()).unwrap();
     for item in json["items"].as_object().unwrap().values() {

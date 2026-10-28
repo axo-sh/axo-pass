@@ -427,7 +427,7 @@ impl Vault {
         enc_vault: VerifiedVault,
     ) -> Result<Self, Error> {
         let vault_cipher = enc_vault.decrypt_file_key(&user_encryption_key)?;
-        Self::from_encrypted_with_cipher(vault_cipher, enc_vault.into_inner())
+        Self::decrypt(vault_cipher, enc_vault.into_inner())
     }
 
     /// Decrypt a verified vault file with a file key unwrapped earlier,
@@ -440,7 +440,7 @@ impl Vault {
         if enc_vault.file_key != key.file_key || enc_vault.id != key.cipher.vault_id() {
             return Err(Error::VaultFileKeyChanged);
         }
-        Self::from_encrypted_with_cipher(key.cipher.duplicate(), enc_vault.into_inner())
+        Self::decrypt(key.cipher.duplicate(), enc_vault.into_inner())
     }
 
     /// File key of this vault, for decrypting a reloaded copy.
@@ -451,10 +451,43 @@ impl Vault {
         }
     }
 
+    /// Decrypt a bundle vault under its raw file key in `cipher`. The vault
+    /// takes the id of `cipher`, holds no wrapped file key and no deleted
+    /// entries, and is not synced. It cannot be unwrapped if saved, so import
+    /// re-keys it first.
+    pub(crate) fn from_bundled(
+        cipher: VaultCipher,
+        key: String,
+        name: Option<String>,
+        metadata: Option<EncryptedBlob<VaultMetadata>>,
+        items: BTreeMap<Uuid, EncryptedVaultItem>,
+    ) -> Result<Self, Error> {
+        let enc_vault = EncryptedVault {
+            id: cipher.vault_id(),
+            key,
+            name,
+            generation: 0,
+            replica_id: None,
+            file_key: VaultFileKey::new(Vec::new()),
+            metadata,
+            items,
+            deleted: BTreeMap::new(),
+        };
+        Self::decrypt(cipher, enc_vault)
+    }
+
+    /// Decrypt a vault built in memory, without a signature check.
+    #[cfg(test)]
     pub(crate) fn from_encrypted_with_cipher(
         cipher: VaultCipher,
         enc_vault: EncryptedVault,
     ) -> Result<Self, Error> {
+        Self::decrypt(cipher, enc_vault)
+    }
+
+    /// Decrypt `enc_vault` under `cipher`. Callers outside this module pass
+    /// a [`VerifiedVault`] or the parts of a bundle vault.
+    fn decrypt(cipher: VaultCipher, enc_vault: EncryptedVault) -> Result<Self, Error> {
         let mut vault = Self::empty(
             enc_vault.id,
             enc_vault.key,

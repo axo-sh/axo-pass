@@ -25,9 +25,7 @@ pub use crate::secrets::vaults::bundle::exported_bundle::{
 pub use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
-use crate::secrets::vaults::format::encrypted_vault::{
-    EncryptedVault, EncryptedVaultItem, VaultFileKey,
-};
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVaultItem, VaultFileKey};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{Vault, VaultMetadata};
@@ -114,18 +112,7 @@ impl PreparedVault {
         let cipher = VaultCipher::new_with_bytes(self.raw_file_key.expose_secret(), self.id);
         // The decrypted vault has no wrapped file key. It is dropped at
         // return and is never saved.
-        let encrypted_vault = EncryptedVault {
-            id: self.id,
-            key,
-            name: self.name,
-            generation: 0,
-            replica_id: None,
-            file_key: VaultFileKey::new(Vec::new()),
-            metadata: self.metadata,
-            items: self.items,
-            deleted: BTreeMap::new(),
-        };
-        let decrypted = Vault::from_encrypted_with_cipher(cipher, encrypted_vault)?;
+        let decrypted = Vault::from_bundled(cipher, key, self.name, self.metadata, self.items)?;
         decrypted.rekeyed(new_id, wrap)
     }
 }
