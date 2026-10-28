@@ -1,0 +1,58 @@
+[
+  {
+    "folders": [
+      {
+        "id": "111111111111111111111e",
+        "title": "Folder",
+        "position": 1
+      },
+      {
+        "id": "111111111111111111111f",
+        "title": "Other"
+      }
+    ],
+    "passkey_signals": {
+      "unknown": [
+        {
+          "rp_id": "example.com",
+          "credential_id": "AQID",
+          "at": 1700000001
+        }
+      ],
+      "accepted": [
+        {
+          "rp_id": "example.com",
+          "user_handle": "CQ",
+          "credential_ids": [
+            "AQID",
+            "BAUG"
+          ],
+          "at": 1700000002
+        }
+      ],
+      "renames": [
+        {
+          "rp_id": "example.com",
+          "user_handle": "CQ",
+          "name": "ada",
+          "at": 1700000003
+        }
+      ],
+      "dismissed": [
+        {
+          "rp_id": "example.com",
+          "credential_id": "AQID",
+          "kind": "rejection",
+          "at": 1700000004
+        },
+        {
+          "rp_id": "example.com",
+          "credential_id": "AQID",
+          "kind": "rename",
+          "at": 1700000004
+        }
+      ]
+    }
+  },
+  {}
+]

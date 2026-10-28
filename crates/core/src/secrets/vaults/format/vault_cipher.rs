@@ -111,20 +111,20 @@ impl VaultCipher {
         blob.decrypt(&self.cipher, self.item_metadata_aad(item_id))
     }
 
+    fn item_autofill_aad(&self, item_id: Uuid) -> Vec<String> {
+        vec![
+            self.vault_id.to_string(),
+            item_id.to_string(),
+            "autofill".to_string(),
+        ]
+    }
+
     pub fn encrypt_item_autofill(
         &self,
         item_id: Uuid,
         value: &ItemAutofill,
     ) -> Result<EncryptedBlob<ItemAutofill>, Error> {
-        EncryptedBlob::encrypt(
-            value,
-            &self.cipher,
-            vec![
-                self.vault_id.to_string(),
-                item_id.to_string(),
-                "autofill".to_string(),
-            ],
-        )
+        EncryptedBlob::encrypt(value, &self.cipher, self.item_autofill_aad(item_id))
     }
 
     pub fn decrypt_item_autofill(
@@ -132,14 +132,7 @@ impl VaultCipher {
         item_id: Uuid,
         blob: &EncryptedBlob<ItemAutofill>,
     ) -> Result<SecretBox<ItemAutofill>, Error> {
-        blob.decrypt(
-            &self.cipher,
-            vec![
-                self.vault_id.to_string(),
-                item_id.to_string(),
-                "autofill".to_string(),
-            ],
-        )
+        blob.decrypt(&self.cipher, self.item_autofill_aad(item_id))
     }
 
     pub fn encrypt_cred_metadata(
@@ -298,6 +291,20 @@ impl VaultCipher {
         to.encrypt_cred_value(item_id, cred_id, value.expose_secret())
     }
 
+    /// Check that the info of each previous value of a credential decrypts
+    /// and parses. The values are not decrypted.
+    pub(crate) fn check_history_info(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        history: &[HistoryEntry],
+    ) -> Result<(), Error> {
+        for entry in history {
+            self.decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
+        }
+        Ok(())
+    }
+
     /// Previous values of a credential decrypted with this cipher and
     /// encrypted with `to`. Entry ids and order are kept.
     pub(crate) fn rekey_history(
@@ -413,6 +420,111 @@ impl VaultCipher {
             serde_json::from_value(serde_json::to_value(blob).unwrap()).unwrap();
         blob.decrypt(&self.cipher, self.cred_aad(item_id, cred_id, "metadata"))
             .unwrap()
+    }
+
+    /// Add the field `unknown_field` to the plaintext object of the blob
+    /// number `n` in `vault`, for tests. Only blobs whose plaintext is a
+    /// struct are counted, in a fixed order. Returns the place and kind of the
+    /// blob as [`Self::blob_results_for_test`] names them, or `None` if the
+    /// vault has `n` or fewer such blobs.
+    #[cfg(test)]
+    pub(crate) fn add_unknown_field_for_test(
+        &self,
+        vault: &mut EncryptedVault,
+        n: usize,
+    ) -> Option<String> {
+        use crate::secrets::vaults::format::encrypted_vault::{
+            EncryptedVaultItem, EncryptedVaultItemCredential,
+        };
+
+        /// Blob plaintext read as any JSON value.
+        #[derive(serde::Serialize, serde::Deserialize, zeroize::Zeroize)]
+        #[serde(transparent)]
+        struct LoosePlaintext(#[zeroize(skip)] serde_json::Value);
+
+        struct Walk<'a> {
+            cipher: &'a VaultCipher,
+            target: usize,
+            seen: usize,
+            found: Option<String>,
+        }
+
+        impl Walk<'_> {
+            fn visit<T>(
+                &mut self,
+                place: &str,
+                kind: &str,
+                blob: &mut EncryptedBlob<T>,
+                aad: Vec<String>,
+            ) {
+                if self.seen == self.target {
+                    let loose: EncryptedBlob<LoosePlaintext> =
+                        serde_json::from_value(serde_json::to_value(&*blob).unwrap()).unwrap();
+                    let plaintext = loose.decrypt(&self.cipher.cipher, aad.clone()).unwrap();
+                    let mut value = plaintext.expose_secret().0.clone();
+                    let object = value.as_object_mut().unwrap();
+                    object.insert("unknown_field".to_string(), serde_json::Value::from(1));
+                    let edited =
+                        EncryptedBlob::encrypt(&LoosePlaintext(value), &self.cipher.cipher, aad)
+                            .unwrap();
+                    *blob = serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+                    self.found = Some(format!("{place}: {kind}"));
+                }
+                self.seen += 1;
+            }
+
+            fn credential(
+                &mut self,
+                place: &str,
+                item_id: Uuid,
+                cred_id: Uuid,
+                cred: &mut EncryptedVaultItemCredential,
+            ) {
+                let aad = self.cipher.cred_aad(item_id, cred_id, "metadata");
+                self.visit(place, "credential metadata", &mut cred.metadata, aad);
+                for entry in &mut cred.history {
+                    let aad = self.cipher.history_info_aad(item_id, cred_id, entry.id);
+                    self.visit(place, "history info", &mut entry.info, aad);
+                }
+            }
+
+            fn item(&mut self, place: &str, item_id: Uuid, item: &mut EncryptedVaultItem) {
+                let aad = self.cipher.item_metadata_aad(item_id);
+                self.visit(place, "item metadata", &mut item.metadata, aad);
+                if let Some(blob) = &mut item.autofill {
+                    let aad = self.cipher.item_autofill_aad(item_id);
+                    self.visit(place, "item autofill", blob, aad);
+                }
+                for (cred_id, cred) in &mut item.credentials {
+                    self.credential(place, item_id, *cred_id, cred);
+                }
+                let deleted_place = format!("{place} deleted credential");
+                for (cred_id, deleted) in &mut item.deleted {
+                    self.credential(&deleted_place, item_id, *cred_id, &mut deleted.credential);
+                    let aad = self.cipher.cred_aad(item_id, *cred_id, "deleted");
+                    self.visit(&deleted_place, "deleted info", &mut deleted.info, aad);
+                }
+            }
+        }
+
+        let mut walk = Walk {
+            cipher: self,
+            target: n,
+            seen: 0,
+            found: None,
+        };
+        if let Some(blob) = &mut vault.metadata {
+            walk.visit("live", "vault metadata", blob, self.vault_metadata_aad());
+        }
+        for (item_id, item) in &mut vault.items {
+            walk.item("live", *item_id, item);
+        }
+        for (item_id, deleted) in &mut vault.deleted {
+            let aad = self.deleted_item_info_aad(*item_id);
+            walk.visit("deleted item", "deleted item info", &mut deleted.info, aad);
+            walk.item("deleted item", *item_id, &mut deleted.item);
+        }
+        walk.found
     }
 
     /// Whether each blob in `vault` decrypts under this cipher, by place and

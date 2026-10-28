@@ -1,0 +1,25 @@
+[
+  {
+    "websites": [
+      {
+        "url": "example.com"
+      },
+      {
+        "url": "example.com",
+        "match": "host"
+      },
+      {
+        "url": "example.com",
+        "match": "starts-with"
+      },
+      {
+        "url": "example.com",
+        "match": "never"
+      }
+    ],
+    "username": "111111111111111111111i",
+    "password": "111111111111111111111j",
+    "totp": "111111111111111111111k"
+  },
+  {}
+]

@@ -501,7 +501,8 @@ impl Vault {
     }
 
     /// Decrypt the metadata of an item, its credentials, and its deleted
-    /// credentials. Secret values stay encrypted.
+    /// credentials, and check the info of every previous value. Secret values
+    /// stay encrypted.
     fn decrypt_item(
         cipher: &VaultCipher,
         folders: &BTreeMap<FolderId, VaultFolder>,
@@ -532,6 +533,7 @@ impl Vault {
             let mut cred_overview = cipher
                 .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
                 .map(|m| VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret()))?;
+            cipher.check_history_info(item_id, cred_id, &encrypted_cred.history)?;
 
             // Same as above, for a credential in a missing section.
             let mut cred_metadata_current = true;
@@ -560,6 +562,7 @@ impl Vault {
             let credential = cipher
                 .decrypt_cred_metadata(item_id, cred_id, &encrypted_deleted.credential.metadata)
                 .map(|m| VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret()))?;
+            cipher.check_history_info(item_id, cred_id, &encrypted_deleted.credential.history)?;
             let info = cipher.decrypt_deleted_info(item_id, cred_id, &encrypted_deleted.info)?;
             deleted.insert(
                 cred_id,

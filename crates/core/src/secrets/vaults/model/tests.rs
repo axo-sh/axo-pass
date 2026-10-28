@@ -1,4 +1,5 @@
 use super::*;
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::TextField;
 
 const TEST_FILE_KEY: [u8; 32] = [7u8; 32];
@@ -1580,7 +1581,7 @@ fn restoring_the_only_previous_value_over_an_empty_value_clears_the_history() {
 }
 
 #[test]
-fn listing_history_skips_an_entry_that_fails_to_decrypt() {
+fn history_info_that_fails_to_decrypt_fails_the_load() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
@@ -1598,9 +1599,9 @@ fn listing_history_skips_an_entry_that_fails_to_decrypt() {
     let first_info = cred.history[0].info.clone();
     cred.history[1].info = first_info;
     let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
 
-    assert_eq!(history_values(&vault, "item", "alpha"), vec!["secret"]);
+    let result = Vault::from_encrypted_with_cipher(cipher, encrypted);
+    assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));
 }
 
 #[test]
@@ -2097,8 +2098,90 @@ fn failed_wrap_fails_rekey() {
 }
 
 #[test]
-fn stale_credential_metadata_field_is_dropped_by_rekey() {
-    let mut vault = vault_with_credentials("site", &["password"]);
+fn folder_and_section_metadata_refuse_unknown_fields() {
+    let id = ShortId::encode_uuid(Uuid::new_v4());
+    let folder = serde_json::json!({"id": id, "title": "Folder"});
+    let section = serde_json::json!({"id": id, "title": "Section"});
+    let metadata = |folder: &serde_json::Value| serde_json::json!({"folders": [folder]});
+    let item = |section: &serde_json::Value| serde_json::json!({"title": "Item", "key": "item", "sections": [section]});
+    assert!(serde_json::from_value::<VaultMetadata>(metadata(&folder)).is_ok());
+    assert!(serde_json::from_value::<VaultItemMetadata>(item(&section)).is_ok());
+
+    let mut folder = folder;
+    folder["x"] = serde_json::json!(1);
+    let mut section = section;
+    section["x"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<VaultMetadata>(metadata(&folder)).is_err());
+    assert!(serde_json::from_value::<VaultItemMetadata>(item(&section)).is_err());
+}
+
+#[test]
+fn blob_with_unknown_field_fails_the_load() {
+    let source = filled_test_vault();
+    let mut edited = BTreeSet::new();
+    for n in 0.. {
+        let mut encrypted = source.to_encrypted(true).unwrap();
+        let Some(kind) = source.cipher.add_unknown_field_for_test(&mut encrypted, n) else {
+            break;
+        };
+
+        let result = Vault::from_encrypted_with_cipher(source.cipher.duplicate(), encrypted);
+
+        assert!(
+            matches!(result, Err(Error::VaultSecretDecryptionError)),
+            "{kind}"
+        );
+        edited.insert(kind);
+    }
+    // Every blob kind but values and previous values holds a struct.
+    let expected: BTreeSet<String> = FILLED_BLOB_KINDS
+        .iter()
+        .filter(|kind| !kind.ends_with(": value") && !kind.ends_with(": history value"))
+        .map(|kind| kind.to_string())
+        .collect();
+    assert_eq!(edited, expected);
+}
+
+#[test]
+fn credential_with_unknown_field_kind_loads_and_saves_kind_unchanged() {
+    let kind = serde_json::json!({"band": 5, "ssid": "home", "type": "wifi"});
+    let vault = vault_with_credentials("net", &["wifi"]);
+    let (item_id, cred_id) = vault.get_credential_ids("net", "wifi").unwrap();
+    let mut encrypted = vault.to_encrypted(true).unwrap();
+    let newer = LooseMetadata {
+        fields: BTreeMap::from([
+            ("title".to_string(), serde_json::json!("Wifi")),
+            ("key".to_string(), serde_json::json!("wifi")),
+            ("kind".to_string(), kind.clone()),
+        ]),
+    };
+    let blob = vault
+        .cipher
+        .encrypt_cred_metadata_as_for_test(item_id, cred_id, &newer);
+    let credentials = &mut encrypted.items.get_mut(&item_id).unwrap().credentials;
+    credentials.get_mut(&cred_id).unwrap().metadata = blob;
+
+    let mut loaded =
+        Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted).unwrap();
+
+    let cred = loaded.get_item_credential("net", "wifi").unwrap();
+    assert_eq!(cred.kind, FieldKind::Unknown(kind.clone()));
+    // Moving the credential writes its metadata again from the parsed kind.
+    let section_id = loaded.create_item_section("net", "Section").unwrap().id;
+    loaded
+        .move_item_credential("net", "wifi", Some(section_id))
+        .unwrap();
+    let fields = stored_cred_metadata(&loaded, item_id, cred_id);
+    assert_eq!(fields["kind"], kind);
+    assert_eq!(fields["section"], ShortId::encode_uuid(section_id));
+    let reloaded = reload_own_key(&loaded);
+    let cred = reloaded.get_item_credential("net", "wifi").unwrap();
+    assert_eq!(cred.kind, FieldKind::Unknown(kind));
+}
+
+#[test]
+fn stale_credential_metadata_field_fails_the_load() {
+    let vault = vault_with_credentials("site", &["password"]);
     let (item_id, cred_id) = vault.get_credential_ids("site", "password").unwrap();
     let mut encrypted = vault.to_encrypted(true).unwrap();
     let stale = LooseMetadata {
@@ -2113,19 +2196,9 @@ fn stale_credential_metadata_field_is_dropped_by_rekey() {
         .encrypt_cred_metadata_as_for_test(item_id, cred_id, &stale);
     let credentials = &mut encrypted.items.get_mut(&item_id).unwrap().credentials;
     credentials.get_mut(&cred_id).unwrap().metadata = blob;
-    vault = Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted).unwrap();
-    // The loaded vault writes the cached blob unchanged.
-    assert!(stored_cred_metadata(&vault, item_id, cred_id).contains_key("last_used_at"));
 
-    let rekeyed = vault.rekeyed(None, plain_wrap).unwrap();
-
-    let fields = stored_cred_metadata(&rekeyed, item_id, cred_id);
-    assert!(!fields.contains_key("last_used_at"));
-    assert_eq!(fields["title"], "Password");
-    assert_eq!(fields["key"], "password");
-    let reloaded = reload_own_key(&rekeyed);
-    let value = reloaded.get_item_credential_secret("site", "password");
-    assert_eq!(value.unwrap().unwrap().expose_secret(), "secret");
+    let result = Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted);
+    assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));
 }
 
 /// Filled vault in which `breaks` replaces value blobs of item `kept` with the

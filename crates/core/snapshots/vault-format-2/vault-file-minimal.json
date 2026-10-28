@@ -1,0 +1,20 @@
+{
+  "format": 2,
+  "signature": "AAAA",
+  "vault": {
+    "id": "1111111111111111111112",
+    "key": "personal",
+    "file_key": "AAAA",
+    "items": {
+      "1111111111111111111114": {
+        "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+        "credentials": {
+          "1111111111111111111115": {
+            "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+            "value": "AAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      }
+    }
+  }
+}

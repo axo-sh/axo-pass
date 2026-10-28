@@ -69,6 +69,7 @@ pub struct PasskeyRef<'a> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct UnknownEntry {
     rp_id: String,
     credential_id: String,
@@ -76,6 +77,7 @@ struct UnknownEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct AcceptedEntry {
     rp_id: String,
     user_handle: String,
@@ -84,6 +86,7 @@ struct AcceptedEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct RenameEntry {
     rp_id: String,
     user_handle: String,
@@ -103,6 +106,7 @@ pub enum DismissKind {
 
 /// A dismissal applies to reports made at or before `at`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct DismissEntry {
     rp_id: String,
     credential_id: String,
@@ -112,6 +116,7 @@ struct DismissEntry {
 
 /// All recorded reports and dismissals.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SignalStore {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     unknown: Vec<UnknownEntry>,
@@ -160,6 +165,46 @@ impl SignalStore {
             accepted: Vec::new(),
             renames: Vec::new(),
             dismissed: Vec::new(),
+        }
+    }
+
+    /// Store with an entry in every list and a dismissal of every kind, for
+    /// the vault schema snapshot. Built from struct literals, so a new field
+    /// or kind fails to compile here until the sample sets it.
+    #[cfg(test)]
+    pub(crate) fn schema_sample_for_test() -> Self {
+        // A new kind fails to compile here until it is added to `kinds`.
+        let _ = |kind: DismissKind| match kind {
+            DismissKind::Rejection | DismissKind::Rename => {},
+        };
+        let kinds = [DismissKind::Rejection, DismissKind::Rename];
+        Self {
+            unknown: vec![UnknownEntry {
+                rp_id: "example.com".to_string(),
+                credential_id: "AQID".to_string(),
+                at: 1_700_000_001,
+            }],
+            accepted: vec![AcceptedEntry {
+                rp_id: "example.com".to_string(),
+                user_handle: "CQ".to_string(),
+                credential_ids: vec!["AQID".to_string(), "BAUG".to_string()],
+                at: 1_700_000_002,
+            }],
+            renames: vec![RenameEntry {
+                rp_id: "example.com".to_string(),
+                user_handle: "CQ".to_string(),
+                name: "ada".to_string(),
+                at: 1_700_000_003,
+            }],
+            dismissed: kinds
+                .into_iter()
+                .map(|kind| DismissEntry {
+                    rp_id: "example.com".to_string(),
+                    credential_id: "AQID".to_string(),
+                    kind,
+                    at: 1_700_000_004,
+                })
+                .collect(),
         }
     }
 
@@ -447,6 +492,49 @@ mod tests {
             user_handle: Some(user_handle),
             current_name: Some("ada"),
         }
+    }
+
+    #[test]
+    fn report_entries_with_unknown_field_are_refused() {
+        let entries = [
+            (
+                "unknown",
+                serde_json::json!({"rp_id": RP, "credential_id": "AQ", "at": 1}),
+            ),
+            (
+                "accepted",
+                serde_json::json!({
+                    "rp_id": RP, "user_handle": "CQ", "credential_ids": ["AQ"], "at": 1
+                }),
+            ),
+            (
+                "renames",
+                serde_json::json!({"rp_id": RP, "user_handle": "CQ", "name": "ada", "at": 1}),
+            ),
+            (
+                "dismissed",
+                serde_json::json!({
+                    "rp_id": RP, "credential_id": "AQ", "kind": "rejection", "at": 1
+                }),
+            ),
+        ];
+        for (list, entry) in entries {
+            let store = serde_json::json!({ list: [entry.clone()] });
+            assert!(
+                serde_json::from_value::<SignalStore>(store).is_ok(),
+                "{list}"
+            );
+
+            let mut extra = entry;
+            extra["x"] = serde_json::json!(1);
+            let store = serde_json::json!({ list: [extra] });
+            assert!(
+                serde_json::from_value::<SignalStore>(store).is_err(),
+                "{list}"
+            );
+        }
+        let store = serde_json::json!({"x": []});
+        assert!(serde_json::from_value::<SignalStore>(store).is_err());
     }
 
     #[test]

@@ -1,0 +1,86 @@
+{
+  "format": 2,
+  "signature": "AAAA",
+  "vault": {
+    "id": "1111111111111111111112",
+    "key": "personal",
+    "name": "Personal",
+    "generation": 3,
+    "replica_id": "1111111111111111111113",
+    "file_key": "AAAA",
+    "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+    "items": {
+      "1111111111111111111114": {
+        "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+        "autofill": "AAAAAAAAAAAAAAAAAAAAAAAA",
+        "credentials": {
+          "1111111111111111111115": {
+            "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+            "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+            "history": [
+              {
+                "id": "1111111111111111111116",
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+              }
+            ]
+          }
+        },
+        "deleted": {
+          "1111111111111111111117": {
+            "credential": {
+              "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+              "history": [
+                {
+                  "id": "1111111111111111111118",
+                  "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                  "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                }
+              ]
+            },
+            "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      }
+    },
+    "deleted": {
+      "1111111111111111111119": {
+        "item": {
+          "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+          "autofill": "AAAAAAAAAAAAAAAAAAAAAAAA",
+          "credentials": {
+            "111111111111111111111a": {
+              "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+              "history": [
+                {
+                  "id": "111111111111111111111b",
+                  "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                  "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                }
+              ]
+            }
+          },
+          "deleted": {
+            "111111111111111111111c": {
+              "credential": {
+                "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                "history": [
+                  {
+                    "id": "111111111111111111111d",
+                    "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                    "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                  }
+                ]
+              },
+              "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+            }
+          }
+        },
+        "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    }
+  }
+}

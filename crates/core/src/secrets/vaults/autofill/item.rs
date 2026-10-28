@@ -24,6 +24,7 @@ pub enum Role {
 /// that edits here do not conflict with item renames.
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ItemAutofill {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub websites: Vec<Website>,
@@ -149,6 +150,7 @@ impl ItemAutofill {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct Website {
     pub url: String,
     #[serde(
@@ -226,6 +228,17 @@ mod tests {
             serde_json::to_value(&site).unwrap(),
             serde_json::json!({"url": "github.com", "match": "never"})
         );
+    }
+
+    #[test]
+    fn website_with_unknown_field_is_refused() {
+        let autofill = serde_json::json!({"websites": [{"url": "github.com"}]});
+        assert!(serde_json::from_value::<ItemAutofill>(autofill).is_ok());
+
+        let autofill = serde_json::json!({"websites": [{"url": "github.com", "x": 1}]});
+        assert!(serde_json::from_value::<ItemAutofill>(autofill).is_err());
+        let autofill = serde_json::json!({"websites": [], "x": 1});
+        assert!(serde_json::from_value::<ItemAutofill>(autofill).is_err());
     }
 
     #[test]

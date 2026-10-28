@@ -241,12 +241,14 @@ pub struct HistoryOverview {
 
 /// Details of a previous value, stored as one encrypted blob.
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoryInfo {
     pub replaced_at: i64,
 }
 
 /// Details of a deleted credential or item, stored as one encrypted blob.
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct DeletedInfo {
     pub deleted_at: i64,
     /// Autofill role the credential had when deleted. Restoring the credential
@@ -259,6 +261,7 @@ pub struct DeletedInfo {
 
 /// Vault-level metadata, stored as one encrypted blob.
 #[derive(Default, Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<VaultFolderMetadata>,
@@ -276,6 +279,7 @@ impl VaultMetadata {
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultFolderMetadata {
     #[serde_as(as = "ShortId")]
     #[zeroize(skip)]
@@ -287,6 +291,7 @@ pub struct VaultFolderMetadata {
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultItemMetadata {
     pub title: String,
     pub key: String,
@@ -302,6 +307,7 @@ pub struct VaultItemMetadata {
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultSectionMetadata {
     #[serde_as(as = "ShortId")]
     #[zeroize(skip)]
@@ -313,6 +319,7 @@ pub struct VaultSectionMetadata {
 
 #[serde_as]
 #[derive(Serialize, Deserialize, Zeroize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultCredentialMetadata {
     pub title: String,
     pub key: String,

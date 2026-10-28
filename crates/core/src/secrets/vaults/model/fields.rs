@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use zeroize::Zeroize;
 
 #[derive(Serialize, Deserialize, Zeroize, Default, Clone, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct TextField {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multiline: Option<bool>,
@@ -11,13 +13,18 @@ pub struct TextField {
 /// adding code to handle its value and UI. `Text` is the freeform single-value
 /// case and carries its own open subtype.
 ///
-/// Serialized as an internally tagged object, `{"type": "..."}`. Any object
-/// this build cannot parse as a known variant (an unrecognized `type`, or a
-/// known `type` with an unexpected shape) deserializes to `Unknown`, which
-/// keeps the raw object so a round-trip through an older client preserves it
-/// unchanged.
+/// Serialized as an internally tagged object, `{"type": "..."}`. A known
+/// variant is read only if it serializes back to the same JSON. Any other
+/// object deserializes to `Unknown`, which keeps the raw object so a
+/// round-trip through an older client preserves it unchanged. This covers an
+/// unrecognized `type`, a known `type` with an unexpected shape, and a known
+/// `type` with an extra field.
+///
+/// `remote = "Self"` makes the derives generate the inherent functions
+/// `FieldKind::serialize` and `FieldKind::deserialize` instead of trait impls.
+/// The trait impls below call them.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(tag = "type", rename_all = "kebab-case", remote = "Self")]
 pub enum FieldKind {
     Text(TextField),
     Confidential(TextField),
@@ -32,7 +39,28 @@ pub enum FieldKind {
     Passkey,
     /// Unknown or newer kind written by another client. Rendered read-only.
     #[serde(untagged)]
-    Unknown(serde_json::Value),
+    Unknown(Value),
+}
+
+impl Serialize for FieldKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Derived function, not this trait method.
+        FieldKind::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for FieldKind {
+    /// Known variant if it serializes back to the same JSON, and `Unknown`
+    /// holding the object otherwise. Unit variants of an internally tagged
+    /// enum ignore extra fields, so the derived function alone would drop
+    /// them.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        // Derived function, not this trait method.
+        let kind = FieldKind::deserialize(&value).map_err(serde::de::Error::custom)?;
+        let same = serde_json::to_value(&kind).is_ok_and(|json| json == value);
+        Ok(if same { kind } else { Self::Unknown(value) })
+    }
 }
 
 impl Default for FieldKind {
@@ -120,5 +148,46 @@ mod tests {
         // a string) is preserved as `Unknown` rather than failing the load.
         let kind: FieldKind = serde_json::from_str(r#"{"type":"text","multiline":"yes"}"#).unwrap();
         assert!(matches!(kind, FieldKind::Unknown(_)));
+    }
+
+    #[test]
+    fn known_kind_with_extra_field_is_kept_as_unknown() {
+        for src in [
+            r#"{"type":"email","x":1}"#,
+            r#"{"type":"passkey","x":1}"#,
+            r#"{"multiline":true,"type":"text","x":1}"#,
+            r#"{"type":"confidential","x":{"y":[1,2]}}"#,
+        ] {
+            let kind: FieldKind = serde_json::from_str(src).unwrap();
+            assert!(matches!(kind, FieldKind::Unknown(_)), "{src}");
+            assert_eq!(serde_json::to_string(&kind).unwrap(), src);
+        }
+    }
+
+    #[test]
+    fn every_known_kind_reads_as_itself() {
+        let kinds = [
+            FieldKind::Text(TextField { multiline: None }),
+            FieldKind::Text(TextField {
+                multiline: Some(true),
+            }),
+            FieldKind::Confidential(TextField {
+                multiline: Some(false),
+            }),
+            FieldKind::Email,
+            FieldKind::Url,
+            FieldKind::Phone,
+            FieldKind::Date,
+            FieldKind::Totp,
+            FieldKind::Passkey,
+        ];
+        for kind in kinds {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(
+                serde_json::from_str::<FieldKind>(&json).unwrap(),
+                kind,
+                "{json}"
+            );
+        }
     }
 }

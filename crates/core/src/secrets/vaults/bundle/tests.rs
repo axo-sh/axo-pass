@@ -776,7 +776,7 @@ struct LooseMetadata {
 }
 
 #[test]
-fn stale_last_used_at_in_bundle_is_not_in_imported_vault() {
+fn stale_last_used_at_in_bundle_fails_import_before_anything_is_written() {
     let _audit_dir = test_dir();
     let mut vault = Vault::new_for_test();
     vault.add_or_update_item("site", "Site").unwrap();
@@ -808,19 +808,10 @@ fn stale_last_used_at_in_bundle_is_not_in_imported_vault() {
     };
     let target = ImportTarget::new();
 
-    let imported = target.import(bundle, &[vault.id()]).unwrap();
+    let result = target.import(bundle, &[vault.id()]);
 
-    let (cipher, encrypted) = target.load(&imported[0].path);
-    let blob = &encrypted.items[&item_id].credentials[&cred_id].metadata;
-    let metadata: SecretBox<LooseMetadata> =
-        cipher.decrypt_cred_metadata_as_for_test(item_id, cred_id, blob);
-    let fields = &metadata.expose_secret().fields;
-    assert!(!fields.contains_key("last_used_at"), "{fields:?}");
-    assert_eq!(fields["title"], "Password");
-    assert_eq!(fields["key"], "password");
-    let loaded = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
-    let value = loaded.get_item_credential_secret("site", "password");
-    assert_eq!(value.unwrap().unwrap().expose_secret(), "secret");
+    assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));
+    assert_eq!(target.vault_dir_names(), Vec::<String>::new());
 }
 
 #[test]
