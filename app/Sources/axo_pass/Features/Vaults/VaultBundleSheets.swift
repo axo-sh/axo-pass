@@ -254,12 +254,21 @@ struct VaultImportSheet: View {
   @State private var error: String?
   @State private var rows: [Row] = []
 
-  /// One vault in an opened bundle, with the user's import choices.
+  /// One vault in an opened bundle, with the user's import choices. A vault
+  /// whose id exists on this Mac is imported as a copy or skipped, and is
+  /// skipped until the user picks a copy.
   private struct Row: Identifiable {
     let info: BundleVaultInfo
     var include: Bool
+    var copy: Bool
     var targetKey: String
     var id: String { info.id }
+
+    /// Whether the vault is written by the import.
+    var imports: Bool { info.idExists ? copy : include }
+
+    /// Action sent for the vault. Only read if the vault is imported.
+    var action: BundleImportAction { info.idExists ? .copy : .default }
   }
 
   private var opened: Bool { !rows.isEmpty }
@@ -267,10 +276,28 @@ struct VaultImportSheet: View {
   private var canOpen: Bool { source != nil && !passphrase.isEmpty && !isOpening }
 
   private var canImport: Bool {
-    let chosen = rows.filter(\.include)
+    let chosen = rows.filter(\.imports)
     return !chosen.isEmpty
       && chosen.allSatisfy { !$0.targetKey.trimmingCharacters(in: .whitespaces).isEmpty }
       && !isImporting
+  }
+
+  /// Key suggested for a vault of the bundle. A vault whose id exists on this
+  /// Mac is suggested `{key}-copy`, since its bundle key is usually the key of
+  /// the vault it was exported from. Keys of vaults on this Mac and of earlier
+  /// rows are skipped.
+  private func suggestedKey(for info: BundleVaultInfo, taken: Set<String>) -> String {
+    let base = info.defaultKey ?? info.name ?? "imported"
+    guard info.idExists else { return base }
+    let existing = Set(model.vaults.map(\.key)).union(taken)
+    let copy = "\(base)-copy"
+    var candidate = copy
+    var n = 2
+    while existing.contains(candidate) {
+      candidate = "\(copy)-\(n)"
+      n += 1
+    }
+    return candidate
   }
 
   var body: some View {
@@ -302,14 +329,28 @@ struct VaultImportSheet: View {
           ScrollView {
             VStack(alignment: .leading, spacing: 8) {
               ForEach($rows) { $row in
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                   Toggle("", isOn: $row.include).labelsHidden()
-                  VStack(alignment: .leading, spacing: 1) {
+                    .disabled(row.info.idExists)
+                    .opacity(row.info.idExists ? 0 : 1)
+                  VStack(alignment: .leading, spacing: 4) {
                     Text(row.info.name ?? row.info.defaultKey ?? row.info.id)
                       .lineLimit(1)
+                    if row.info.idExists {
+                      Text("This vault is already on this Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                      Picker("", selection: $row.copy) {
+                        Text("Skip").tag(false)
+                        Text("Import as Copy").tag(true)
+                      }
+                      .pickerStyle(.segmented)
+                      .labelsHidden()
+                      .fixedSize()
+                    }
                     TextField("Import as", text: $row.targetKey)
                       .textFieldStyle(.roundedBorder)
-                      .disabled(!row.include)
+                      .disabled(!row.imports)
                   }
                 }
               }
@@ -376,10 +417,11 @@ struct VaultImportSheet: View {
       isOpening = false
       if let vaults = result.vaults {
         error = nil
+        var taken = Set<String>()
         rows = vaults.map { info in
-          Row(
-            info: info, include: true,
-            targetKey: info.defaultKey ?? info.name ?? "imported")
+          let key = suggestedKey(for: info, taken: taken)
+          taken.insert(key)
+          return Row(info: info, include: true, copy: false, targetKey: key)
         }
       } else {
         error = result.message
@@ -389,9 +431,10 @@ struct VaultImportSheet: View {
 
   private func performImport() {
     guard canImport, let source else { return }
-    let selection = rows.filter(\.include).map {
+    let selection = rows.filter(\.imports).map { row in
       BundleImportSelection(
-        id: $0.info.id, targetKey: $0.targetKey.trimmingCharacters(in: .whitespaces))
+        id: row.info.id, targetKey: row.targetKey.trimmingCharacters(in: .whitespaces),
+        action: row.action)
     }
     Task {
       isImporting = true

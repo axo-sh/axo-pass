@@ -36,11 +36,10 @@ impl BundleVaultInfo {
 
 /// What an import does with one selected vault. Mirrors the core
 /// `ImportAction`.
-#[derive(uniffi::Enum, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum BundleImportAction {
     /// Import under the bundle vault id. Refused if the id exists on this
     /// Mac.
-    #[default]
     Default,
     /// Import under a new vault id.
     Copy,
@@ -62,7 +61,6 @@ pub struct BundleImportSelection {
     /// `id` from a `BundleVaultInfo`.
     pub id: String,
     pub target_key: String,
-    #[uniffi(default)]
     pub action: BundleImportAction,
 }
 

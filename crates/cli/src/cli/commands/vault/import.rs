@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity, WireImportSelection};
 use axo_pass_core::core::provenance::Provenance;
-use axo_pass_core::secrets::vaults::ShortId;
 use axo_pass_core::secrets::vaults::bundle::{
     BundleVaultInfo, ImportAction, ImportIdentity, ImportableBundle,
 };
-use clap::{Parser, ValueHint};
+use axo_pass_core::secrets::vaults::{ShortId, VaultCatalog};
+use clap::{Parser, ValueEnum, ValueHint};
 use clml::cprintln;
-use inquire::MultiSelect;
+use inquire::{MultiSelect, Select};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
@@ -34,6 +34,11 @@ pub struct VaultImportCommand {
     /// Key to assign to the imported vault. Only allowed when the selection
     /// resolves to a single vault.
     vault_key: Option<String>,
+
+    /// What to do with each selected vault whose id already exists on this
+    /// Mac. Asks for each such vault if not given.
+    #[arg(long, value_enum)]
+    existing: Option<ExistingChoice>,
 
     #[command(flatten)]
     import_encryption: ImportIdentityFlags,
@@ -83,14 +88,34 @@ impl VaultImportCommand {
             );
         }
 
-        let selection: Vec<WireImportSelection> = selected
-            .iter()
-            .map(|info| WireImportSelection {
+        // A vault whose id a vault file on this Mac holds cannot be imported
+        // under its id. Each one is imported as a copy or left out.
+        let catalog = VaultCatalog::app();
+        let existing = catalog.existing_ids(selected.iter().map(|info| info.id));
+        let mut selection: Vec<WireImportSelection> = Vec::with_capacity(selected.len());
+        for info in &selected {
+            let mut key = self.resolve_target_key(info);
+            let mut action = ImportAction::Default;
+            if existing.contains(&info.id) {
+                if self.existing_choice(info)? == ExistingChoice::Skip {
+                    continue;
+                }
+                action = ImportAction::Copy;
+                if !self.key_given(info) {
+                    let taken: Vec<&String> = selection.iter().map(|s| &s.key).collect();
+                    key = copy_key(&catalog, &key, &taken);
+                }
+            }
+            selection.push(WireImportSelection {
                 id: ShortId::encode_uuid(info.id),
-                key: self.resolve_target_key(info),
-                action: ImportAction::Default,
-            })
-            .collect();
+                key,
+                action,
+            });
+        }
+        if selection.is_empty() {
+            cprintln!("Nothing to import, every selected vault was skipped");
+            return Ok(());
+        }
 
         let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
         // The app serves the request from its own working directory, so it
@@ -118,6 +143,36 @@ impl VaultImportCommand {
         Ok(())
     }
 
+    /// Choice for a selected vault whose id exists on this Mac. Read from
+    /// `--existing`, or asked for if it is not given.
+    fn existing_choice(&self, info: &BundleVaultInfo) -> Result<ExistingChoice, String> {
+        if let Some(existing) = self.existing {
+            return Ok(existing);
+        }
+        let label = bundle_label(info);
+        let options = vec![EXISTING_COPY, EXISTING_SKIP];
+        let answer = Select::new(
+            &format!("A vault with the id of {label} is already on this Mac:"),
+            options,
+        )
+        .prompt()
+        .map_err(|e| format!("Selection cancelled: {e}"))?;
+        Ok(if answer == EXISTING_COPY {
+            ExistingChoice::Copy
+        } else {
+            ExistingChoice::Skip
+        })
+    }
+
+    /// Whether the target key of `info` was given on the command line.
+    fn key_given(&self, info: &BundleVaultInfo) -> bool {
+        self.vault_key.is_some()
+            || self
+                .key_overrides
+                .iter()
+                .any(|(old, _)| vault_matches(info, old))
+    }
+
     fn resolve_target_key(&self, info: &BundleVaultInfo) -> String {
         for (old, new) in &self.key_overrides {
             if vault_matches(info, old) {
@@ -132,6 +187,41 @@ impl VaultImportCommand {
         }
         format!("imported-{}", &Uuid::new_v4().simple().to_string()[..8])
     }
+}
+
+const EXISTING_COPY: &str = "Import as a copy with a new id";
+const EXISTING_SKIP: &str = "Skip";
+
+/// What to do with a selected vault whose id already exists on this Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum ExistingChoice {
+    /// Import it under a new id.
+    Copy,
+    /// Leave it out.
+    Skip,
+}
+
+/// Key for a copy of a vault that would be imported as `key`. The bundle key
+/// is usually the key of the vault the copy was made from, so the copy takes
+/// `{key}-copy`, or `{key}-copy-{n}` if a vault file or another vault of this
+/// import claims that key.
+fn copy_key(catalog: &VaultCatalog, key: &str, taken: &[&String]) -> String {
+    let base = format!("{key}-copy");
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find_map(|candidate| {
+            catalog
+                .unclaimed_key(&candidate, None)
+                .ok()
+                .filter(|key| !taken.contains(&key))
+        })
+        .unwrap_or(base)
 }
 
 /// Whether `selector` is the default key, the name, or the id of the vault. An
