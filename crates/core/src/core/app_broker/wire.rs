@@ -10,7 +10,7 @@ use super::ssh::{ManagedIdentity, SignPurpose};
 use super::{BrokerError, age, keychain, vault};
 use crate::core::provenance::ProcessNode;
 use crate::secrets::password::PasswordPolicy;
-use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity, WorkFactor};
+use crate::secrets::vaults::bundle::{ExportMode, ImportAction, ImportIdentity, WorkFactor};
 use crate::secrets::vaults::model::totp::TotpCode;
 use crate::secrets::vaults::passkey::{
     PrfAssertionInput, PrfRegistrationInput, PrfRegistrationOutput, PrfValues,
@@ -370,8 +370,7 @@ pub(super) enum WireRequest {
     ImportVaults {
         import_path: String,
         identity: WireImportIdentity,
-        /// `(bundle vault id, target key)` pairs.
-        selection: Vec<(String, String)>,
+        selection: Vec<WireImportSelection>,
         #[serde(default)]
         caller: Option<String>,
     },
@@ -891,6 +890,17 @@ pub enum WireImportIdentity {
     Identity {
         identity: String,
     },
+}
+
+/// One vault to import from a bundle, as it crosses the socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireImportSelection {
+    /// Bundle vault id, in any form `ShortId::parse_uuid` accepts.
+    pub id: String,
+    /// Key the vault is imported as.
+    pub key: String,
+    #[serde(default)]
+    pub action: ImportAction,
 }
 
 impl TryFrom<WireImportIdentity> for ImportIdentity {

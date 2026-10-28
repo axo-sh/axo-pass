@@ -1,10 +1,12 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity};
+use axo_pass_core::core::app_broker::{self, BrokerError, WireImportIdentity, WireImportSelection};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::vaults::ShortId;
-use axo_pass_core::secrets::vaults::bundle::{BundleVaultInfo, ImportIdentity, ImportableBundle};
+use axo_pass_core::secrets::vaults::bundle::{
+    BundleVaultInfo, ImportAction, ImportIdentity, ImportableBundle,
+};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use inquire::MultiSelect;
@@ -81,15 +83,13 @@ impl VaultImportCommand {
             );
         }
 
-        let mut selection: BTreeMap<Uuid, String> = BTreeMap::new();
-        for info in &selected {
-            let key = self.resolve_target_key(info);
-            selection.insert(info.id, key);
-        }
-
-        let wire_selection: Vec<(String, String)> = selection
+        let selection: Vec<WireImportSelection> = selected
             .iter()
-            .map(|(id, key)| (ShortId::encode_uuid(*id), key.clone()))
+            .map(|info| WireImportSelection {
+                id: ShortId::encode_uuid(info.id),
+                key: self.resolve_target_key(info),
+                action: ImportAction::Default,
+            })
             .collect();
 
         let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
@@ -105,7 +105,7 @@ impl VaultImportCommand {
         let keys = match app_broker::request_import_vaults(
             &import_path_str,
             wire_identity,
-            &wire_selection,
+            selection,
             caller.as_deref(),
         ) {
             Ok(keys) => keys,

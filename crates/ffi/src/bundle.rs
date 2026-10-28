@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axo_pass_core::core::auth::AuthContext;
 use axo_pass_core::secrets::vaults::bundle::{
-    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportIdentity, ImportableBundle,
-    WorkFactor as CoreWorkFactor,
+    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportAction, ImportIdentity,
+    ImportSelection, ImportableBundle, WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{ExportProgress as CoreExportProgress, ShortId};
 
@@ -17,24 +17,53 @@ pub struct BundleVaultInfo {
     pub name: Option<String>,
     /// The key the vault was exported under, if any. A suggested import key.
     pub default_key: Option<String>,
+    /// Whether a vault file on this Mac holds the vault id. Importing it
+    /// under its id is refused, so the caller asks for a copy or leaves the
+    /// vault out.
+    pub id_exists: bool,
 }
 
-impl From<CoreBundleVaultInfo> for BundleVaultInfo {
-    fn from(v: CoreBundleVaultInfo) -> Self {
+impl BundleVaultInfo {
+    fn new(v: CoreBundleVaultInfo, id_exists: bool) -> Self {
         BundleVaultInfo {
             id: ShortId::encode_uuid(v.id),
             name: v.name,
             default_key: v.default_key,
+            id_exists,
         }
     }
 }
 
-/// One vault the caller has chosen to import, and the key to import it under.
+/// What an import does with one selected vault. Mirrors the core
+/// `ImportAction`.
+#[derive(uniffi::Enum, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BundleImportAction {
+    /// Import under the bundle vault id. Refused if the id exists on this
+    /// Mac.
+    #[default]
+    Default,
+    /// Import under a new vault id.
+    Copy,
+}
+
+impl From<BundleImportAction> for ImportAction {
+    fn from(action: BundleImportAction) -> Self {
+        match action {
+            BundleImportAction::Default => ImportAction::Default,
+            BundleImportAction::Copy => ImportAction::Copy,
+        }
+    }
+}
+
+/// One vault the caller has chosen to import, the key to import it under, and
+/// the action for it.
 #[derive(uniffi::Record)]
 pub struct BundleImportSelection {
     /// `id` from a `BundleVaultInfo`.
     pub id: String,
     pub target_key: String,
+    #[uniffi(default)]
+    pub action: BundleImportAction,
 }
 
 /// Passphrase key-derivation cost for a bundle export. Mirrors the core
@@ -147,22 +176,34 @@ impl AxoPass {
         .map_err(|e| FfiError::Internal(e.to_string()))?
     }
 
-    /// Open a bundle file and list the vaults it contains. Writes nothing.
+    /// Open a bundle file and list the vaults it contains, each with whether
+    /// its id exists on this Mac. Reads only the headers of the vault files
+    /// and makes no keychain call. Writes nothing.
     pub async fn inspect_vault_bundle(
         &self,
         src_path: String,
         passphrase: String,
     ) -> Result<Vec<BundleVaultInfo>, FfiError> {
+        let store = self
+            .manager
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .store()
+            .clone();
         tokio::task::spawn_blocking(move || {
             let bundle = ImportableBundle::open(
                 std::path::Path::new(&src_path),
                 ImportIdentity::Passphrase(passphrase.into()),
             )
             .map_err(FfiError::from)?;
-            Ok(bundle
-                .vaults()
+            let vaults = bundle.vaults();
+            let existing = store.existing_ids(vaults.iter().map(|v| v.id));
+            Ok(vaults
                 .into_iter()
-                .map(BundleVaultInfo::from)
+                .map(|v| {
+                    let id_exists = existing.contains(&v.id);
+                    BundleVaultInfo::new(v, id_exists)
+                })
                 .collect())
         })
         .await
@@ -170,7 +211,9 @@ impl AxoPass {
     }
 
     /// Import the selected vaults from a bundle file. Returns the keys of the
-    /// newly created vaults.
+    /// newly created vaults. A vault
+    /// imported under an id that exists on this Mac fails the whole import
+    /// before anything is written.
     pub async fn import_vault_bundle(
         &self,
         src_path: String,
@@ -190,7 +233,10 @@ impl AxoPass {
                 let id = ShortId::parse_uuid(&entry.id).map_err(|_| {
                     FfiError::InvalidInput(format!("Invalid vault id: {}", entry.id))
                 })?;
-                targets.insert(id, entry.target_key);
+                targets.insert(
+                    id,
+                    ImportSelection::new(entry.target_key, entry.action.into()),
+                );
             }
 
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;

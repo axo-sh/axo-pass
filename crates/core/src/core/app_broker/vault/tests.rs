@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
+use std::{fs, thread};
 
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
@@ -10,20 +11,20 @@ use super::super::PromptOutcome;
 use super::super::in_flight::InFlightRequest;
 use super::super::login_index::LoginIndex;
 use super::super::placement::PasskeyChoices;
-use super::super::wire::WireResponse;
+use super::super::wire::{WireImportIdentity, WireImportSelection, WireResponse};
 use super::audit::access_event;
 use super::logins::{save_login, serve_logins, update_login_password};
 use super::passkeys::record_passkey_report;
 use super::serve::{AccessIds, Served, authorize_and_serve, serve_on_context};
 use super::{
-    AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, LoginPage,
-    ResolvePurpose, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt, VaultAction,
-    VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
+    AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, ImportPayload,
+    LoginPage, ResolvePurpose, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt,
+    VaultAction, VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
 };
 use crate::audit::test_support::test_dir;
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, PASSKEY_CREDENTIAL_ID, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
-use crate::secrets::vaults::bundle::ExportMode;
+use crate::secrets::vaults::bundle::{ExportMode, ImportAction};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::passkey::signals::Report;
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
@@ -495,6 +496,151 @@ fn an_export_lists_the_vaults_it_exported() {
         event.detail["vault_ids"],
         format!("{},{}", id("personal"), id("shared"))
     );
+}
+
+/// Export `personal` and `shared` through the broker, then remove the
+/// `shared` file, so the bundle holds one id that exists on this Mac and one
+/// that does not. Returns the bundle path and the identity that opens it.
+fn export_then_remove_shared(fx: &Fixture) -> (PathBuf, WireImportIdentity) {
+    let path = fx._dir.path().join("export.axovault");
+    let identity = age::x25519::Identity::generate();
+    fx.serve(
+        "personal, shared",
+        VaultAction::ExportVaults {
+            vault_keys: vec!["personal".to_string(), "shared".to_string()],
+        },
+        Some(VaultPayload::Export(ExportPayload {
+            dest_path: path.clone(),
+            mode: ExportMode::Recipient(identity.to_public().to_string()),
+            include_passkeys: true,
+        })),
+    )
+    .unwrap();
+    fs::remove_file(&fx.originals["shared"].path).unwrap();
+    let identity = WireImportIdentity::Identity {
+        identity: identity.to_string().expose_secret().to_string(),
+    };
+    (path, identity)
+}
+
+/// Wire selection of bundle vault `id` as `key` with `action`.
+fn selected(id: &str, key: &str, action: ImportAction) -> WireImportSelection {
+    WireImportSelection {
+        id: id.to_string(),
+        key: key.to_string(),
+        action,
+    }
+}
+
+/// Serve an import of `selection` from the bundle at `path`.
+fn serve_import(
+    fx: &Fixture,
+    path: &Path,
+    identity: WireImportIdentity,
+    selection: Vec<WireImportSelection>,
+) -> Result<Served, String> {
+    fx.serve(
+        "export.axovault",
+        VaultAction::ImportVaults {
+            count: selection.len(),
+        },
+        Some(VaultPayload::Import(ImportPayload {
+            import_path: path.to_path_buf(),
+            identity,
+            selection,
+        })),
+    )
+}
+
+#[test]
+fn default_import_of_existing_id_writes_nothing_and_names_id() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    fx.broker_write("personal", "token", "secret");
+    let (path, identity) = export_then_remove_shared(&fx);
+    let personal_id = fx.originals["personal"].vault_id().unwrap();
+    let shared_id = fx.originals["shared"].vault_id().unwrap();
+    let before = fs::read_dir(fx.vaults.vaults_dir()).unwrap().count();
+
+    let error = serve_import(
+        &fx,
+        &path,
+        identity,
+        vec![
+            selected(
+                &ShortId::encode_uuid(personal_id),
+                "restored",
+                ImportAction::Default,
+            ),
+            selected(
+                &ShortId::encode_uuid(shared_id),
+                "shared",
+                ImportAction::Default,
+            ),
+        ],
+    )
+    .err()
+    .expect("import is refused");
+
+    assert!(
+        error.contains(&ShortId::encode_uuid(personal_id)),
+        "{error}"
+    );
+    assert!(!error.contains(&ShortId::encode_uuid(shared_id)), "{error}");
+    assert_eq!(
+        fs::read_dir(fx.vaults.vaults_dir()).unwrap().count(),
+        before
+    );
+}
+
+#[test]
+fn broker_import_applies_action_to_existing_id_only() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    fx.broker_write("personal", "token", "a");
+    fx.broker_write("shared", "token", "b");
+    let (path, identity) = export_then_remove_shared(&fx);
+    let personal_id = fx.originals["personal"].vault_id().unwrap();
+    let shared_id = fx.originals["shared"].vault_id().unwrap();
+
+    // Ids are read in every form.
+    let served = serve_import(
+        &fx,
+        &path,
+        identity,
+        vec![
+            selected(
+                &personal_id.hyphenated().to_string().to_uppercase(),
+                "personal-copy",
+                ImportAction::Copy,
+            ),
+            selected(
+                &shared_id.simple().to_string(),
+                "shared",
+                ImportAction::Default,
+            ),
+        ],
+    )
+    .unwrap();
+
+    let WireResponse::VaultsImported { mut keys } = served.response else {
+        panic!("unexpected response");
+    };
+    keys.sort();
+    assert_eq!(keys, ["personal-copy", "shared"]);
+    let copy = fx.read("personal-copy");
+    assert_ne!(copy.vault_id().unwrap(), personal_id);
+    assert_eq!(
+        copy.get_secret("item", "token")
+            .unwrap()
+            .map(|s| s.expose_secret().to_string())
+            .as_deref(),
+        Some("a")
+    );
+    assert_eq!(fx.read("shared").vault_id().unwrap(), shared_id);
+    assert_eq!(fx.value("shared", "token").as_deref(), Some("b"));
+    assert_eq!(fx.read("personal").vault_id().unwrap(), personal_id);
+    assert_eq!(fx.value("personal", "token").as_deref(), Some("a"));
 }
 
 #[test]

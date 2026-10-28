@@ -3,9 +3,9 @@ use secrecy::{ExposeSecret, SecretString};
 use super::super::BrokerError;
 use super::super::client::send_request;
 use super::super::wire::{
-    BrowserClient, WireExportMode, WireImportIdentity, WirePrfAssertion, WirePrfCredentialValues,
-    WirePrfRegistration, WirePrfValues, WireRequest, WireResponse, b64_decode, b64_encode,
-    decode_prf_values,
+    BrowserClient, WireExportMode, WireImportIdentity, WireImportSelection, WirePrfAssertion,
+    WirePrfCredentialValues, WirePrfRegistration, WirePrfValues, WireRequest, WireResponse,
+    b64_decode, b64_encode, decode_prf_values,
 };
 use super::{BrokerVaultItem, ResolvePurpose, VaultRef, WireLogin};
 use crate::audit::SubjectIds;
@@ -140,19 +140,18 @@ pub fn request_export_vaults(
 }
 
 /// Ask the app to import the selected vaults from a bundle, re-wrapping each
-/// file key with the local encryption key. `selection` is `(bundle vault id,
-/// target key)` pairs. Returns the keys of the imported vaults. Blocking, same
-/// as [`request_vault_items`].
+/// file key with the local encryption key. Returns the keys of the imported
+/// vaults. Blocking, same as [`request_vault_items`].
 pub fn request_import_vaults(
     import_path: &str,
     identity: WireImportIdentity,
-    selection: &[(String, String)],
+    selection: Vec<WireImportSelection>,
     caller: Option<&str>,
 ) -> Result<Vec<String>, BrokerError> {
     let request = WireRequest::ImportVaults {
         import_path: import_path.to_string(),
         identity,
-        selection: selection.to_vec(),
+        selection,
         caller: caller.map(String::from),
     };
     exchange(&request, "vault import", |response| match response {

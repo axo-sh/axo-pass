@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
-use crate::secrets::vaults::bundle::ImportableBundle;
+use crate::secrets::vaults::bundle::{ImportSelection, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::{
     DuplicateVaultKeys, DuplicateVaults, VaultCatalog, VaultScanResult,
@@ -136,11 +136,12 @@ impl VaultsManager {
     }
 
     /// Import the selected vaults of an opened bundle on the shared context,
-    /// and keep them, locked. Returns their keys.
+    /// as [`VaultCatalog::import`] does, and keep them, locked. Returns their
+    /// keys.
     pub fn import_bundle(
         &mut self,
         bundle: ImportableBundle,
-        selection: &BTreeMap<Uuid, String>,
+        selection: &BTreeMap<Uuid, ImportSelection>,
     ) -> Result<Vec<String>, Error> {
         let imported = self
             .store

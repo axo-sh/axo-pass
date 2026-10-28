@@ -56,6 +56,9 @@ pub enum Error {
     #[error("Two vault files have the same vault key: {0}")]
     DuplicateVaultKey(String),
 
+    #[error("Vault ids already held by a vault file on this Mac: {0}")]
+    VaultIdExists(String),
+
     #[error("Failed to lock vault: {0}")]
     VaultLockError(#[source] std::io::Error),
 

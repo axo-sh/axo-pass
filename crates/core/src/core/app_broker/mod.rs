@@ -68,7 +68,7 @@ pub use vault::{
     request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
     request_vault_secret, request_write_vault_secret,
 };
-pub use wire::{WireExportMode, WireImportIdentity};
+pub use wire::{WireExportMode, WireImportIdentity, WireImportSelection};
 
 /// The AutoFill credential provider extension, staged under `Contents/PlugIns`.
 /// Matches the `target_name` of the `[[extensions]]` entry in strudel.toml.

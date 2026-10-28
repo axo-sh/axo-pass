@@ -16,7 +16,9 @@ use crate::secrets::vaults::bundle::exported_bundle::{
     BUNDLE_VERSION, BundledVault, ExportedBundle, RawFileKey,
 };
 use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
-use crate::secrets::vaults::bundle::{ImportableBundle, PreparedVault};
+use crate::secrets::vaults::bundle::{
+    ImportAction, ImportSelection, ImportableBundle, PreparedVault,
+};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
@@ -257,7 +259,9 @@ fn bundle_exported_before_vault_format_2_imports() {
     let prepared = opened.vaults.into_iter().next().unwrap();
     assert_eq!(prepared.id, bundled.id);
     assert_eq!(prepared.default_key.as_deref(), Some("old"));
-    let imported = prepared.into_vault("old".to_string(), plain_wrap).unwrap();
+    let imported = prepared
+        .into_vault("old".to_string(), None, plain_wrap)
+        .unwrap();
 
     let value = imported
         .get_item_credential_secret("login", "password")
@@ -351,8 +355,8 @@ fn imported_vault_holds_selected_key_and_is_named_by_id() {
     let files = VaultWriter::isolated(dir.path().join("data"));
     let ids = [Uuid::new_v4(), Uuid::new_v4()];
     let selection = BTreeMap::from([
-        (ids[0], "Work Vault".to_string()),
-        (ids[1], "shared".to_string()),
+        (ids[0], import_as("Work Vault")),
+        (ids[1], import_as("shared")),
     ]);
 
     let imported = ImportableBundle::for_test(&ids)
@@ -384,7 +388,7 @@ fn imported_vault_is_signed_by_writer() {
     let dir = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(dir.path().join("data"));
     let id = Uuid::new_v4();
-    let selection = BTreeMap::from([(id, "imported".to_string())]);
+    let selection = BTreeMap::from([(id, import_as("imported"))]);
 
     let imported = ImportableBundle::for_test(&[id])
         .import_with(&selection, &dir.path().join("vaults"), &files, || {
@@ -511,7 +515,7 @@ fn export_imports_with_values_and_history() {
     let prepared = export_and_open(&vault, true);
     assert_eq!(prepared.id, vault.id());
     let imported = prepared
-        .into_vault("imported".to_string(), plain_wrap)
+        .into_vault("imported".to_string(), None, plain_wrap)
         .unwrap();
 
     imported.assert_live_filled_for_test();
@@ -593,7 +597,7 @@ fn export_without_passkeys_holds_no_passkey_credential() {
         }
     }
     let imported = prepared
-        .into_vault("imported".to_string(), plain_wrap)
+        .into_vault("imported".to_string(), None, plain_wrap)
         .unwrap();
     assert!(imported.get_item_credential("kept", "passkey").is_err());
     let alpha = imported
@@ -620,6 +624,11 @@ fn export_with_passkeys_holds_passkey_record_unchanged() {
         .decrypt_cred_value(kept_id, passkey_id, &passkey.value)
         .unwrap();
     assert_eq!(value.expose_secret(), Vault::PASSKEY_VALUE_FOR_TEST);
+}
+
+/// Selection of a vault imported under its bundle id as `key`.
+fn import_as(key: &str) -> ImportSelection {
+    ImportSelection::new(key, ImportAction::Default)
 }
 
 /// File key wrapper that stores the raw key as is.
@@ -652,7 +661,7 @@ impl ImportTarget {
         let selection = ids
             .iter()
             .enumerate()
-            .map(|(n, id)| (*id, format!("imported-{n}")))
+            .map(|(n, id)| (*id, import_as(&format!("imported-{n}"))))
             .collect();
         bundle.import_with(&selection, &self.vaults_dir, &self.files, || {
             Ok(Box::new(plain_wrap))
@@ -862,7 +871,7 @@ fn interrupted_import_leaves_no_vault_file() {
     // writer tracks it there. The second create then fails after the first
     // vault is written, since vaults are written in id order.
     let elsewhere = target.dir.path().join("elsewhere");
-    let selection = BTreeMap::from([(ids[1], "elsewhere".to_string())]);
+    let selection = BTreeMap::from([(ids[1], import_as("elsewhere"))]);
     let other = ImportableBundle::for_test(&[ids[1]])
         .import_with(&selection, &elsewhere, &target.files, || {
             Ok(Box::new(plain_wrap))
@@ -879,6 +888,45 @@ fn interrupted_import_leaves_no_vault_file() {
     );
     assert_eq!(target.vault_dir_names(), Vec::<String>::new());
     assert_eq!(fs::read_to_string(&other[0].path).unwrap(), other_contents);
+}
+
+#[test]
+fn copy_keeps_name_and_passkeys_under_new_id_and_file_key() {
+    let _audit_dir = test_dir();
+    let mut vault = filled_vault();
+    vault.name = Some("Work".to_string());
+    let export = ExportFile::new(&vault, true);
+    let export_key = export.open().raw_file_key.expose_secret().clone();
+    let target = ImportTarget::new();
+    let selection =
+        BTreeMap::from([(vault.id(), ImportSelection::new("copy", ImportAction::Copy))]);
+
+    let imported = export
+        .open_bundle()
+        .import_with(&selection, &target.vaults_dir, &target.files, || {
+            Ok(Box::new(plain_wrap))
+        })
+        .unwrap();
+
+    let (cipher, encrypted) = target.load(&imported[0].path);
+    assert_ne!(encrypted.id, vault.id());
+    assert_eq!(
+        target.vault_dir_names(),
+        [format!("{}.json", ShortId::encode_uuid(encrypted.id))]
+    );
+    assert_eq!(encrypted.key, "copy");
+    assert_eq!(encrypted.name.as_deref(), Some("Work"));
+    assert_eq!(encrypted.generation, 0);
+    assert_eq!(encrypted.replica_id, None);
+    assert_ne!(cipher.key_bytes_for_test(), export_key);
+    assert_ne!(cipher.key_bytes_for_test(), file_key_of(&vault));
+    let loaded = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+    loaded.assert_live_filled_for_test();
+    let passkey = loaded
+        .get_item_credential_secret("kept", "passkey")
+        .unwrap()
+        .unwrap();
+    assert_eq!(passkey.expose_secret(), Vault::PASSKEY_VALUE_FOR_TEST);
 }
 
 #[test]

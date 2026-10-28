@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use uuid::Uuid;
+
 use super::super::wire::WireResponse;
 use super::VaultPayload;
 use super::serve::{AccessIds, Served};
 use crate::audit::SubjectIds;
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::config::APP_CONFIG;
-use crate::secrets::vaults::bundle::{ImportIdentity, ImportableBundle};
+use crate::secrets::vaults::bundle::{ImportIdentity, ImportSelection, ImportableBundle};
 use crate::secrets::vaults::{ShortId, VaultCatalog, VaultHandle};
 
 /// Unlock every named vault on the app's context and write the export bundle.
@@ -45,7 +47,9 @@ pub(super) fn export_vaults(
 }
 
 /// Re-open the bundle and import the selected vaults, re-wrapping each file key
-/// with the local encryption key on the app's context.
+/// with the local encryption key on the app's context. Ids are read in every
+/// form [`ShortId::parse_uuid`] accepts. A vault imported under its bundle id
+/// whose id exists on this Mac fails the whole import.
 pub(super) fn import_vaults(
     vaults: &VaultCatalog,
     payload: Option<VaultPayload>,
@@ -57,10 +61,11 @@ pub(super) fn import_vaults(
     let identity =
         ImportIdentity::try_from(import.identity).map_err(|e| format!("Invalid identity: {e}"))?;
 
-    let mut selection: BTreeMap<uuid::Uuid, String> = BTreeMap::new();
-    for (id, key) in import.selection {
-        let id = ShortId::parse_uuid(&id).map_err(|e| format!("Invalid vault id {id}: {e}"))?;
-        selection.insert(id, key);
+    let mut selection: BTreeMap<Uuid, ImportSelection> = BTreeMap::new();
+    for selected in import.selection {
+        let id = ShortId::parse_uuid(&selected.id)
+            .map_err(|e| format!("Invalid vault id {}: {e}", selected.id))?;
+        selection.insert(id, ImportSelection::new(selected.key, selected.action));
     }
 
     let bundle = ImportableBundle::open(&import.import_path, identity)

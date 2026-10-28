@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use aes_gcm::{Aes256Gcm, KeyInit};
 use secrecy::{ExposeSecret, SecretBox};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
-use crate::core::auth::AuthContext;
 pub use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -28,17 +28,48 @@ use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
     EncryptedVault, EncryptedVaultItem, VaultFileKey,
 };
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{Vault, VaultMetadata};
-use crate::secrets::vaults::storage::handle::{
-    VaultHandle, get_vault_encryption_key_on, normalized_key,
-};
+use crate::secrets::vaults::storage::handle::{VaultHandle, normalized_key};
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
 const FILE_KEY_LEN: usize = 32;
 
+/// Audit detail key of the bundle vault id that an import copy was made from.
+pub const SOURCE_VAULT_ID: &str = "source_vault_id";
+
 /// Wraps a raw vault file key into the form the vault file stores.
-type FileKeyWrapper = Box<dyn Fn(&[u8]) -> Result<VaultFileKey, Error>>;
+pub type FileKeyWrapper = Box<dyn Fn(&[u8]) -> Result<VaultFileKey, Error>>;
+
+/// What an import does with one selected vault.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportAction {
+    /// Import under the bundle vault id. Refused if a vault file on this Mac
+    /// holds the id.
+    #[default]
+    Default,
+    /// Import under a new vault id.
+    Copy,
+}
+
+/// Target key and action of one selected vault.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportSelection {
+    /// Key the vault is imported as.
+    pub key: String,
+    pub action: ImportAction,
+}
+
+impl ImportSelection {
+    pub fn new(key: impl Into<String>, action: ImportAction) -> Self {
+        Self {
+            key: key.into(),
+            action,
+        }
+    }
+}
 
 /// Metadata about one vault inside an opened bundle, for the caller to build an
 /// import selection.
@@ -46,6 +77,16 @@ pub struct BundleVaultInfo {
     pub id: Uuid,
     pub name: Option<String>,
     pub default_key: Option<String>,
+}
+
+/// Vault written by an import, for its audit event.
+struct ImportedRow {
+    /// Vault id of the written vault.
+    id: Uuid,
+    /// Bundle vault id, if the vault is a copy.
+    source_id: Option<Uuid>,
+    key: String,
+    name: Option<String>,
 }
 
 struct PreparedVault {
@@ -62,10 +103,12 @@ impl PreparedVault {
     /// new file key, so the vault shares no key with the bundle. `key` is the
     /// vault key the vault is imported as, already validated. `wrap` receives
     /// the raw new file key and returns the form the vault file stores. The
-    /// vault keeps the bundle vault id and is not synced.
+    /// vault takes `new_id` if set, and keeps the bundle vault id otherwise.
+    /// It keeps the bundle vault name and every passkey, and is not synced.
     fn into_vault(
         self,
         key: String,
+        new_id: Option<Uuid>,
         wrap: impl FnOnce(&[u8]) -> Result<VaultFileKey, Error>,
     ) -> Result<Vault, Error> {
         let cipher = VaultCipher::new_with_bytes(self.raw_file_key.expose_secret(), self.id);
@@ -83,7 +126,7 @@ impl PreparedVault {
             deleted: BTreeMap::new(),
         };
         let decrypted = Vault::from_encrypted_with_cipher(cipher, encrypted_vault)?;
-        decrypted.rekeyed(None, wrap)
+        decrypted.rekeyed(new_id, wrap)
     }
 }
 
@@ -197,40 +240,22 @@ impl ImportableBundle {
             .collect()
     }
 
-    /// Import the selected vaults. `selection` maps a bundle vault id to the
-    /// key it should be imported as. Every target key must be valid and
-    /// unique among the selection. The caller checks that no vault file on
-    /// this Mac claims it. Each vault is encrypted again under a new file key
-    /// before anything is written. Each vault holds its key and is written to
+    /// Import the selected vaults. `selection` maps a bundle vault id to its
+    /// target key and action. A vault imported as a copy takes a new vault
+    /// id. Every target key must be valid and unique among the selection. The
+    /// caller checks that no vault file on this Mac claims a key or holds an
+    /// imported id. Each vault is encrypted again under a new file key before
+    /// anything is written. Each vault holds its key and is written to
     /// `{id}.json` in `vault_dir`, in its own transaction, which never leaves
-    /// a partial file. A vault id that another vault file on this Mac already
+    /// a partial file. A vault id that another tracked vault file already
     /// holds is refused. If a write fails, the vaults this import already
     /// wrote are removed on a best-effort basis.
-    pub fn import(
+    ///
+    /// `wrapper` returns the file key wrapper and runs once, after every
+    /// target key is checked.
+    pub(crate) fn import_with(
         self,
-        selection: &BTreeMap<Uuid, String>,
-        vault_dir: &Path,
-        files: &VaultWriter,
-        auth_context: AuthContext,
-    ) -> Result<Vec<VaultHandle>, Error> {
-        self.import_with(selection, vault_dir, files, || {
-            let managed_key = get_vault_encryption_key_on(auth_context)?;
-            Ok(Box::new(move |raw: &[u8]| {
-                Ok(VaultFileKey::new(
-                    managed_key
-                        .encrypt(raw)
-                        .ok_or(Error::VaultFileKeyEncryptionError)?
-                        .into_bytes(),
-                ))
-            }))
-        })
-    }
-
-    /// [`Self::import`] with the file key wrapper from `wrapper`. `wrapper`
-    /// runs once, after every target key is checked.
-    fn import_with(
-        self,
-        selection: &BTreeMap<Uuid, String>,
+        selection: &BTreeMap<Uuid, ImportSelection>,
         vault_dir: &Path,
         files: &VaultWriter,
         wrapper: impl FnOnce() -> Result<FileKeyWrapper, Error>,
@@ -248,15 +273,22 @@ impl ImportableBundle {
         struct Planned {
             prepared: PreparedVault,
             key: String,
+            new_id: Option<Uuid>,
             path: PathBuf,
         }
         let mut planned: Vec<Planned> = Vec::with_capacity(selection.len());
         let mut seen_keys: BTreeMap<String, Uuid> = BTreeMap::new();
-        for (id, requested_key) in selection {
+        for (id, selected) in selection {
             let prepared = by_id
                 .remove(id)
                 .ok_or_else(|| Error::VaultImportError(format!("Bundle has no vault {id}")))?;
 
+            let new_id = match selected.action {
+                ImportAction::Default => None,
+                ImportAction::Copy => Some(Uuid::new_v4()),
+            };
+
+            let requested_key = &selected.key;
             let key = normalized_key(requested_key)
                 .ok_or_else(|| Error::InvalidVaultKey(requested_key.clone()))?;
 
@@ -266,7 +298,7 @@ impl ImportableBundle {
                 )));
             }
 
-            let path = VaultHandle::file_path(vault_dir, *id);
+            let path = VaultHandle::file_path(vault_dir, new_id.unwrap_or(*id));
             if path.exists() {
                 return Err(Error::DuplicateVaultId(format!(
                     "A vault file already exists at {}",
@@ -276,6 +308,7 @@ impl ImportableBundle {
             planned.push(Planned {
                 prepared,
                 key,
+                new_id,
                 path,
             });
         }
@@ -285,10 +318,15 @@ impl ImportableBundle {
         // written
         let wrap = wrapper()?;
         let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
-        let mut audit_rows: Vec<(Uuid, String, Option<String>)> = Vec::with_capacity(planned.len());
+        let mut audit_rows: Vec<ImportedRow> = Vec::with_capacity(planned.len());
         for p in planned {
-            audit_rows.push((p.prepared.id, p.key.clone(), p.prepared.name.clone()));
-            let vault = p.prepared.into_vault(p.key, |raw| wrap(raw))?;
+            audit_rows.push(ImportedRow {
+                id: p.new_id.unwrap_or(p.prepared.id),
+                source_id: p.new_id.map(|_| p.prepared.id),
+                key: p.key.clone(),
+                name: p.prepared.name.clone(),
+            });
+            let vault = p.prepared.into_vault(p.key, p.new_id, |raw| wrap(raw))?;
             staged.push(VaultHandle::unlocked(p.path, vault));
         }
 
@@ -312,17 +350,19 @@ impl ImportableBundle {
         }
 
         let count = audit_rows.len();
-        for (id, key, name) in audit_rows {
-            audit::record(
-                AuditEvent::new(
-                    audit::process_source(),
-                    Action::VaultImported,
-                    Outcome::Succeeded,
-                )
-                .subject(Subject::new(SubjectKind::Vault, key).maybe_label(name))
-                .subject_ids(SubjectIds::vault(id))
-                .detail("vault_count", count.to_string()),
-            );
+        for row in audit_rows {
+            let mut event = AuditEvent::new(
+                audit::process_source(),
+                Action::VaultImported,
+                Outcome::Succeeded,
+            )
+            .subject(Subject::new(SubjectKind::Vault, row.key).maybe_label(row.name))
+            .subject_ids(SubjectIds::vault(row.id))
+            .detail("vault_count", count.to_string());
+            if let Some(source_id) = row.source_id {
+                event = event.detail(SOURCE_VAULT_ID, ShortId::encode_uuid(source_id));
+            }
+            audit::record(event);
         }
 
         Ok(staged

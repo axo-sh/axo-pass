@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 
 use super::PromptOutcome;
 use super::placement::{PasskeyChoices, PasskeyPlacement};
-use super::wire::WireImportIdentity;
 #[cfg(doc)]
 use super::wire::WireRequest;
+use super::wire::{WireImportIdentity, WireImportSelection};
 use crate::audit::Actor;
 use crate::core::auth::ForeignContext;
 use crate::core::provenance::ProcessNode;
@@ -296,14 +296,13 @@ pub struct ExportPayload {
     pub include_passkeys: bool,
 }
 
-/// The bundle an [`VaultAction::ImportVaults`] reads, its decryption identity
-/// and the id-to-key selection. Kept out of [`VaultAccessPrompt`].
+/// The bundle an [`VaultAction::ImportVaults`] reads, its decryption identity,
+/// and the selected vaults. Kept out of [`VaultAccessPrompt`].
 #[derive(Clone)]
 pub struct ImportPayload {
     pub import_path: PathBuf,
     pub identity: WireImportIdentity,
-    /// `(bundle vault id, target key)` pairs.
-    pub selection: Vec<(String, String)>,
+    pub selection: Vec<WireImportSelection>,
 }
 
 /// The WebAuthn registration request for an [`VaultAction::CreatePasskey`],
