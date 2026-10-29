@@ -18,6 +18,10 @@ pub struct Versioned<T> {
     pub value: T,
 }
 
+/// Highest counter a mint takes. Later mints take it too and are ordered by
+/// write id.
+pub const MAX_COUNTER: u64 = 1 << 62;
+
 /// Write id, counter, and time of one transaction. Every register the
 /// transaction changes is written with the same mint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +29,25 @@ pub struct Mint {
     pub write_id: WriteId,
     pub counter: u64,
     pub written_at: i64,
+}
+
+impl Mint {
+    /// Order key of a value written by this mint.
+    pub fn order_key(&self) -> OrderKey {
+        OrderKey {
+            counter: self.counter,
+            write_id: self.write_id,
+        }
+    }
+}
+
+/// Order of concurrent values. Counter, then actor, then sequence number.
+///
+/// The derived order follows the field order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OrderKey {
+    pub counter: u64,
+    pub write_id: WriteId,
 }
 
 /// Conflict policy of a register. Decides the shown value and the conflict
@@ -81,6 +104,46 @@ impl<T, P: Policy> MvRegister<T, P> {
                 value,
             },
         );
+    }
+
+    /// Add `value` as a repair value written by `mint`, and keep the other
+    /// values.
+    ///
+    /// Counter is one below the lowest counter in the register, and at least
+    /// 1, so the value orders below the values it is added to. In an empty
+    /// register it is the mint counter.
+    pub fn write_repair(&mut self, mint: &Mint, value: T) {
+        let counter = self
+            .values
+            .values()
+            .map(|v| v.counter)
+            .min()
+            .map_or(mint.counter, |lowest| lowest.saturating_sub(1).max(1));
+        self.values.insert(
+            mint.write_id,
+            Versioned {
+                counter,
+                written_at: mint.written_at,
+                value,
+            },
+        );
+    }
+
+    /// Values in order of [`OrderKey`], lowest first.
+    pub fn ordered(&self) -> Vec<(OrderKey, &Versioned<T>)> {
+        let mut values: Vec<_> = self
+            .values
+            .iter()
+            .map(|(id, value)| {
+                let key = OrderKey {
+                    counter: value.counter,
+                    write_id: *id,
+                };
+                (key, value)
+            })
+            .collect();
+        values.sort_by_key(|(key, _)| *key);
+        values
     }
 
     /// Value written by `id`.

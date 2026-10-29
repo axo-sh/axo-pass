@@ -31,6 +31,12 @@ impl CausalContext {
         *seq = (*seq).max(id.seq);
     }
 
+    /// Whether this context holds a higher sequence number than `other` for
+    /// any actor.
+    pub fn is_ahead_of(&self, other: &Self) -> bool {
+        self.0.iter().any(|(actor, seq)| *seq > other.get(*actor))
+    }
+
     /// Join `other` into this context. Each actor takes the higher sequence
     /// number.
     pub fn join(&mut self, other: Self) {
