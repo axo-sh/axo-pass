@@ -3,6 +3,7 @@ use uuid::Uuid;
 use super::*;
 
 mod checks;
+mod properties;
 
 /// Test store shaped like `SyncItem`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
