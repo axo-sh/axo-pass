@@ -2297,3 +2297,5 @@ fn unknown_field_kind_is_kept_by_rekey() {
     let cred = reloaded.get_item_credential("net", "wifi").unwrap();
     assert_eq!(cred.kind, FieldKind::Unknown(kind));
 }
+
+mod sync;

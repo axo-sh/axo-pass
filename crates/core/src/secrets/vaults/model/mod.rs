@@ -1,6 +1,7 @@
 pub mod fields;
 pub mod last_used;
 mod overview;
+mod sync;
 pub mod totp;
 
 use std::collections::{BTreeMap, BTreeSet};
