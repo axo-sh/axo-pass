@@ -3,7 +3,9 @@ use uuid::Uuid;
 use super::*;
 
 mod checks;
+mod histories;
 mod properties;
+mod simulator;
 
 /// Test store shaped like `SyncItem`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -12,6 +14,7 @@ struct Item {
     folder: MvRegister<Option<u32>, Order>,
     websites: OrMap<&'static str, MvRegister<u32, Order>>,
     trashed: MvRegister<Option<i64>, Trash>,
+    history: OrMap<u32, MvRegister<&'static str, Order>>,
 }
 
 impl CausalStore for Item {
@@ -20,6 +23,7 @@ impl CausalStore for Item {
             && self.folder.is_empty()
             && self.websites.is_empty()
             && self.trashed.is_empty()
+            && self.history.is_empty()
     }
 
     fn each_value(&self, f: &mut dyn FnMut(WriteId, u64)) {
@@ -27,6 +31,7 @@ impl CausalStore for Item {
         self.folder.each_value(f);
         self.websites.each_value(f);
         self.trashed.each_value(f);
+        self.history.each_value(f);
     }
 
     fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
@@ -35,6 +40,7 @@ impl CausalStore for Item {
             .or_else(|| self.folder.find_duplicate_write_id(&other.folder))
             .or_else(|| self.websites.find_duplicate_write_id(&other.websites))
             .or_else(|| self.trashed.find_duplicate_write_id(&other.trashed))
+            .or_else(|| self.history.find_duplicate_write_id(&other.history))
     }
 
     fn join(&mut self, ctx: &CausalContext, other: Self, other_ctx: &CausalContext) {
@@ -42,6 +48,7 @@ impl CausalStore for Item {
         self.folder.join(ctx, other.folder, other_ctx);
         self.websites.join(ctx, other.websites, other_ctx);
         self.trashed.join(ctx, other.trashed, other_ctx);
+        self.history.join(ctx, other.history, other_ctx);
     }
 }
 
@@ -50,33 +57,38 @@ impl CausalStore for Item {
 struct Vault {
     name: MvRegister<&'static str, Ask>,
     items: OrMap<u32, Item>,
+    signals: OrMap<u32, MvRegister<i64, Merge>>,
 }
 
 impl CausalStore for Vault {
     fn is_empty(&self) -> bool {
-        self.name.is_empty() && self.items.is_empty()
+        self.name.is_empty() && self.items.is_empty() && self.signals.is_empty()
     }
 
     fn each_value(&self, f: &mut dyn FnMut(WriteId, u64)) {
         self.name.each_value(f);
         self.items.each_value(f);
+        self.signals.each_value(f);
     }
 
     fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
         self.name
             .find_duplicate_write_id(&other.name)
             .or_else(|| self.items.find_duplicate_write_id(&other.items))
+            .or_else(|| self.signals.find_duplicate_write_id(&other.signals))
     }
 
     fn join(&mut self, ctx: &CausalContext, other: Self, other_ctx: &CausalContext) {
         self.name.join(ctx, other.name, other_ctx);
         self.items.join(ctx, other.items, other_ctx);
+        self.signals.join(ctx, other.signals, other_ctx);
     }
 }
 
 type State = CausalState<Vault>;
 
-/// Time of every mint in the tests.
+/// Time of every mint in the tests, except the mints of a replica whose clock
+/// is behind.
 const NOW: i64 = 1_000;
 
 /// Session of replica `n` with seeded actor ids. Actor `k` of replica `n` is
