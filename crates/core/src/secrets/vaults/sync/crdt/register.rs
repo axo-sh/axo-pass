@@ -157,7 +157,7 @@ impl<T, P: Policy> MvRegister<T, P> {
     }
 }
 
-impl<T, P: Policy> CausalStore for MvRegister<T, P> {
+impl<T: PartialEq, P: Policy> CausalStore for MvRegister<T, P> {
     fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -166,6 +166,13 @@ impl<T, P: Policy> CausalStore for MvRegister<T, P> {
         for (id, value) in &self.values {
             f(*id, value.counter);
         }
+    }
+
+    fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
+        self.values
+            .iter()
+            .find(|(id, value)| other.values.get(id).is_some_and(|o| o != *value))
+            .map(|(id, _)| *id)
     }
 
     /// Keep a local value if `other` holds its write id or `other_ctx` does

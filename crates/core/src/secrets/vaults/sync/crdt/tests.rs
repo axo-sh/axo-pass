@@ -2,6 +2,8 @@ use uuid::Uuid;
 
 use super::*;
 
+mod checks;
+
 /// Test store shaped like `SyncItem`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Item {
@@ -24,6 +26,14 @@ impl CausalStore for Item {
         self.folder.each_value(f);
         self.websites.each_value(f);
         self.trashed.each_value(f);
+    }
+
+    fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
+        self.title
+            .find_duplicate_write_id(&other.title)
+            .or_else(|| self.folder.find_duplicate_write_id(&other.folder))
+            .or_else(|| self.websites.find_duplicate_write_id(&other.websites))
+            .or_else(|| self.trashed.find_duplicate_write_id(&other.trashed))
     }
 
     fn join(&mut self, ctx: &CausalContext, other: Self, other_ctx: &CausalContext) {
@@ -49,6 +59,12 @@ impl CausalStore for Vault {
     fn each_value(&self, f: &mut dyn FnMut(WriteId, u64)) {
         self.name.each_value(f);
         self.items.each_value(f);
+    }
+
+    fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
+        self.name
+            .find_duplicate_write_id(&other.name)
+            .or_else(|| self.items.find_duplicate_write_id(&other.items))
     }
 
     fn join(&mut self, ctx: &CausalContext, other: Self, other_ctx: &CausalContext) {

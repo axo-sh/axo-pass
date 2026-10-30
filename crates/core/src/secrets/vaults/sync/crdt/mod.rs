@@ -1,5 +1,6 @@
 //! State-based CRDT primitives and their join.
 
+mod checks;
 mod context;
 mod ids;
 mod or_map;
@@ -11,6 +12,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+pub use checks::{JoinAction, JoinError, JoinOutcome};
 pub use context::CausalContext;
 pub use ids::{ActorId, ReplicaId, WriteId};
 pub use or_map::OrMap;
@@ -37,6 +39,22 @@ pub trait CausalStore: Default {
         self.each_value(&mut |_, counter| highest = highest.max(counter));
         highest
     }
+
+    /// Write id and counter of the first value for which `f` returns true.
+    fn find_value(&self, f: &mut dyn FnMut(WriteId, u64) -> bool) -> Option<(WriteId, u64)> {
+        let mut found = None;
+        self.each_value(&mut |id, counter| {
+            if found.is_none() && f(id, counter) {
+                found = Some((id, counter));
+            }
+        });
+        found
+    }
+
+    /// First write id that this store and `other` both hold in one register
+    /// with values that differ. Values are compared whole, with counter and
+    /// write time.
+    fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId>;
 
     /// Join `other` into this store. `ctx` is the context of this store and
     /// `other_ctx` the context of `other`, both as they were before the join.

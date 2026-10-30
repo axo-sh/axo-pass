@@ -69,6 +69,14 @@ impl<K: Ord, V: CausalStore> CausalStore for OrMap<K, V> {
         }
     }
 
+    /// Compare the entries at each key that both maps hold.
+    fn find_duplicate_write_id(&self, other: &Self) -> Option<WriteId> {
+        self.entries.iter().find_map(|(key, value)| {
+            let other_value = other.entries.get(key)?;
+            value.find_duplicate_write_id(other_value)
+        })
+    }
+
     /// Join each key of either side, with an empty entry for a missing side.
     /// Drop each entry that is empty after the join.
     fn join(&mut self, ctx: &CausalContext, other: Self, other_ctx: &CausalContext) {
