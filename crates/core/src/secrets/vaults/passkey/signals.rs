@@ -129,16 +129,10 @@ impl SignalEntry {
     /// key if `SignalStore::merge` treats them as the same report.
     pub(crate) fn key(&self) -> String {
         match self {
-            Self::Unknown(e) => format!("unknown:{}:{}", e.rp_id, e.credential_id),
-            Self::Accepted(e) => format!("accepted:{}:{}", e.rp_id, e.user_handle),
-            Self::Rename(e) => format!("renames:{}:{}", e.rp_id, e.user_handle),
-            Self::Dismissed(e) => {
-                let kind = match e.kind {
-                    DismissKind::Rejection => "rejection",
-                    DismissKind::Rename => "rename",
-                };
-                format!("dismissed:{kind}:{}:{}", e.rp_id, e.credential_id)
-            },
+            Self::Unknown(e) => e.key(),
+            Self::Accepted(e) => e.key(),
+            Self::Rename(e) => e.key(),
+            Self::Dismissed(e) => e.key(),
         }
     }
 }
@@ -248,19 +242,38 @@ impl SignalStore {
     /// account replaces this one if it is at least as new. Returns whether the
     /// store changed.
     pub fn merge(&mut self, other: &SignalStore) -> bool {
-        let unknown = merge_entries(&mut self.unknown, &other.unknown, |a, b| {
-            a.rp_id == b.rp_id && a.credential_id == b.credential_id
-        });
-        let accepted = merge_entries(&mut self.accepted, &other.accepted, |a, b| {
-            a.rp_id == b.rp_id && a.user_handle == b.user_handle
-        });
-        let renames = merge_entries(&mut self.renames, &other.renames, |a, b| {
-            a.rp_id == b.rp_id && a.user_handle == b.user_handle
-        });
-        let dismissed = merge_entries(&mut self.dismissed, &other.dismissed, |a, b| {
-            a.rp_id == b.rp_id && a.credential_id == b.credential_id && a.kind == b.kind
-        });
+        let unknown = merge_entries(&mut self.unknown, &other.unknown);
+        let accepted = merge_entries(&mut self.accepted, &other.accepted);
+        let renames = merge_entries(&mut self.renames, &other.renames);
+        let dismissed = merge_entries(&mut self.dismissed, &other.dismissed);
         unknown || accepted || renames || dismissed
+    }
+
+    /// Add `entry` with the entry rule of [`Self::merge`], without the trim.
+    pub(crate) fn add_untrimmed(&mut self, entry: &SignalEntry) {
+        match entry {
+            SignalEntry::Unknown(e) => merge_entry(&mut self.unknown, e),
+            SignalEntry::Accepted(e) => merge_entry(&mut self.accepted, e),
+            SignalEntry::Rename(e) => merge_entry(&mut self.renames, e),
+            SignalEntry::Dismissed(e) => merge_entry(&mut self.dismissed, e),
+        };
+    }
+
+    /// Order each list by report time, then by [`SignalEntry::key`].
+    pub(crate) fn sort_lists(&mut self) {
+        sort_entries(&mut self.unknown);
+        sort_entries(&mut self.accepted);
+        sort_entries(&mut self.renames);
+        sort_entries(&mut self.dismissed);
+    }
+
+    /// Entries of every list, in list order. Lists are in field order.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = SignalEntry> + '_ {
+        let unknown = self.unknown.iter().cloned().map(SignalEntry::Unknown);
+        let accepted = self.accepted.iter().cloned().map(SignalEntry::Accepted);
+        let renames = self.renames.iter().cloned().map(SignalEntry::Rename);
+        let dismissed = self.dismissed.iter().cloned().map(SignalEntry::Dismissed);
+        unknown.chain(accepted).chain(renames).chain(dismissed)
     }
 
     /// Remove the entries equal to one in `other`.
@@ -449,59 +462,111 @@ fn trim<T>(entries: &mut Vec<T>) {
     }
 }
 
-/// Entries with a report time.
-trait Timed {
+/// Entry of one report list.
+trait ListEntry: Clone + PartialEq {
+    /// Report time.
     fn at(&self) -> i64;
+
+    /// Whether `other` is about the same credential or account.
+    fn same_report(&self, other: &Self) -> bool;
+
+    /// Map key of the entry in the sync model. See [`SignalEntry::key`].
+    fn key(&self) -> String;
 }
 
-impl Timed for UnknownEntry {
+impl ListEntry for UnknownEntry {
     fn at(&self) -> i64 {
         self.at
     }
-}
 
-impl Timed for AcceptedEntry {
-    fn at(&self) -> i64 {
-        self.at
+    fn same_report(&self, other: &Self) -> bool {
+        self.rp_id == other.rp_id && self.credential_id == other.credential_id
+    }
+
+    fn key(&self) -> String {
+        format!("unknown:{}:{}", self.rp_id, self.credential_id)
     }
 }
 
-impl Timed for RenameEntry {
+impl ListEntry for AcceptedEntry {
     fn at(&self) -> i64 {
         self.at
     }
-}
 
-impl Timed for DismissEntry {
-    fn at(&self) -> i64 {
-        self.at
+    fn same_report(&self, other: &Self) -> bool {
+        self.rp_id == other.rp_id && self.user_handle == other.user_handle
+    }
+
+    fn key(&self) -> String {
+        format!("accepted:{}:{}", self.rp_id, self.user_handle)
     }
 }
 
-/// Add `from` to `into`. An entry that `same` matches is replaced if the new
-/// one is at least as new and differs. Returns whether `into` changed.
-fn merge_entries<T: Clone + PartialEq + Timed>(
-    into: &mut Vec<T>,
-    from: &[T],
-    same: impl Fn(&T, &T) -> bool,
-) -> bool {
+impl ListEntry for RenameEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+
+    fn same_report(&self, other: &Self) -> bool {
+        self.rp_id == other.rp_id && self.user_handle == other.user_handle
+    }
+
+    fn key(&self) -> String {
+        format!("renames:{}:{}", self.rp_id, self.user_handle)
+    }
+}
+
+impl ListEntry for DismissEntry {
+    fn at(&self) -> i64 {
+        self.at
+    }
+
+    fn same_report(&self, other: &Self) -> bool {
+        self.rp_id == other.rp_id
+            && self.credential_id == other.credential_id
+            && self.kind == other.kind
+    }
+
+    fn key(&self) -> String {
+        let kind = match self.kind {
+            DismissKind::Rejection => "rejection",
+            DismissKind::Rename => "rename",
+        };
+        format!("dismissed:{kind}:{}:{}", self.rp_id, self.credential_id)
+    }
+}
+
+/// Add `from` to `into` with [`merge_entry`], then trim. Returns whether
+/// `into` changed.
+fn merge_entries<T: ListEntry>(into: &mut Vec<T>, from: &[T]) -> bool {
     let mut changed = false;
     for entry in from {
-        match into.iter().position(|existing| same(existing, entry)) {
-            Some(index) if entry.at() >= into[index].at() && into[index] != *entry => {
-                into.remove(index);
-                into.push(entry.clone());
-                changed = true;
-            },
-            Some(_) => {},
-            None => {
-                into.push(entry.clone());
-                changed = true;
-            },
-        }
+        changed |= merge_entry(into, entry);
     }
     trim(into);
     changed
+}
+
+/// Add `entry` to `into`. An entry about the same report is replaced if the
+/// new one is at least as new and differs. Returns whether `into` changed.
+fn merge_entry<T: ListEntry>(into: &mut Vec<T>, entry: &T) -> bool {
+    match into.iter().position(|existing| existing.same_report(entry)) {
+        Some(index) if entry.at() >= into[index].at() && into[index] != *entry => {
+            into.remove(index);
+            into.push(entry.clone());
+            true
+        },
+        Some(_) => false,
+        None => {
+            into.push(entry.clone());
+            true
+        },
+    }
+}
+
+/// Order `entries` by report time, then by key.
+fn sort_entries<T: ListEntry>(entries: &mut [T]) {
+    entries.sort_by_cached_key(|e| (e.at(), e.key()));
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use uuid::Uuid;
 use super::crdt::{ReplicaId, Session};
 
 mod model;
+mod view;
 
 /// Time of every mint in the tests.
 const NOW: i64 = 1_000;
