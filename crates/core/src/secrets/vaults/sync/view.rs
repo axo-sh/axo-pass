@@ -522,7 +522,7 @@ impl<'a> Asks<'a> {
 
 impl<T, P: Policy> MvRegister<T, P> {
     /// Value with the highest order key.
-    fn shown(&self) -> Option<&T> {
+    pub(super) fn shown(&self) -> Option<&T> {
         self.ordered().pop().map(|(_, v)| &v.value)
     }
 }
@@ -550,6 +550,6 @@ fn shown_by_key<K: Ord + Clone, T: Clone + PartialEq, P: Policy>(
 
 /// Sort key of folders, sections, and the credentials of one section.
 /// Position, with no position last, then title, then id.
-fn list_order(position: Option<u32>, title: &str, id: Uuid) -> ((u32, &str), Uuid) {
+pub(super) fn list_order(position: Option<u32>, title: &str, id: Uuid) -> ((u32, &str), Uuid) {
     (display_order(position, title), id)
 }

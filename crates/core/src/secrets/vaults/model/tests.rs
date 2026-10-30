@@ -477,6 +477,23 @@ fn one_credential_cannot_fill_both_roles() {
 }
 
 #[test]
+fn two_websites_with_one_url_are_refused() {
+    use crate::secrets::vaults::autofill::item::{MatchKind, Website};
+
+    let mut vault = vault_with_credentials("item", &["password"]);
+    let autofill = ItemAutofill {
+        websites: vec![
+            Website::new("github.com", MatchKind::Domain),
+            Website::new("github.com", MatchKind::Host),
+        ],
+        ..Default::default()
+    };
+    let err = vault.set_item_autofill("item", autofill).unwrap_err();
+    assert!(matches!(err, Error::InvalidAutofill(_)));
+    assert!(vault.get_item("item").unwrap().autofill.websites.is_empty());
+}
+
+#[test]
 fn a_role_slot_must_point_into_the_item() {
     let mut vault = vault_with_credentials("item", &["password"]);
     let elsewhere = cred_id(&vault, "other-item", "elsewhere");

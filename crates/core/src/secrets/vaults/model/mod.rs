@@ -386,6 +386,29 @@ impl Vault {
         ids
     }
 
+    /// Replace the autofill data of an item without any check, as a vault
+    /// file written by an older build can hold it.
+    #[cfg(test)]
+    pub(crate) fn set_item_autofill_unchecked_for_test(
+        &mut self,
+        item_key: &str,
+        autofill: ItemAutofill,
+    ) {
+        let item_id = self.item_index[item_key];
+        if let Some(item) = self.items.get_mut(&item_id) {
+            item.autofill = autofill;
+        }
+        self.autofill_blobs.remove(&item_id);
+    }
+
+    /// Reverse the stored list of previous values of a live credential.
+    #[cfg(test)]
+    pub(crate) fn reverse_history_for_test(&mut self, cred_id: CredentialId) {
+        if let Some(history) = self.history.get_mut(&cred_id) {
+            history.reverse();
+        }
+    }
+
     /// Check that a credential of a deleted entry has value `secret` and one
     /// previous value `one`.
     #[cfg(test)]
@@ -993,6 +1016,173 @@ impl Vault {
         &self.passkey_signals
     }
 
+    /// Decrypted entries of this vault, live and trashed, for the sync diff.
+    ///
+    /// Every credential value and previous value is decrypted. A credential
+    /// with no value reads as empty.
+    pub(crate) fn sync_entries(&self) -> Result<SyncEntries<'_>, Error> {
+        let Self {
+            // Local to this Mac. Vault ids and keys are not synced.
+            id: _,
+            key: _,
+            name,
+            // Wrapped file key of this file. Each Mac has its own.
+            file_key: _,
+            // Decrypts the values below. Not mapped.
+            cipher,
+            // Sync fields of the vault file, written by the transaction.
+            generation: _,
+            replica_id: _,
+            folders,
+            passkey_signals,
+            items,
+            // Indexes by key, derived from `items`.
+            item_index: _,
+            item_credential_index: _,
+            secrets,
+            history,
+            deleted,
+            deleted_items,
+            // Caches of encrypted blobs, derived from the fields above.
+            metadata_blob: _,
+            item_blobs: _,
+            autofill_blobs: _,
+            cred_blobs: _,
+        } = self;
+
+        let mut entries = SyncEntries {
+            name: name.as_deref(),
+            folders,
+            passkey_signals,
+            items: Vec::new(),
+            credentials: Vec::new(),
+        };
+        for item in items.values() {
+            entries.items.push(SyncItemEntry {
+                overview: item,
+                trashed: None,
+            });
+            for cred in item.credentials.values() {
+                let history = history.get(&cred.id).map_or(&[][..], Vec::as_slice);
+                entries.credentials.push(Self::sync_credential_entry(
+                    cipher,
+                    item.id,
+                    cred,
+                    secrets.get(&cred.id),
+                    history,
+                    None,
+                )?);
+            }
+        }
+        for entry in deleted.values() {
+            entries
+                .credentials
+                .push(Self::sync_trashed_credential_entry(cipher, entry)?);
+        }
+        for entry in deleted_items.values() {
+            let DeletedItemEntry {
+                item,
+                info,
+                // Copy of the time in `info`.
+                deleted_at: _,
+            } = entry;
+            let DecryptedItem {
+                overview,
+                // Blobs of the decrypted overview.
+                metadata: _,
+                metadata_current: _,
+                autofill: _,
+                credentials,
+                deleted,
+            } = item;
+            let info = cipher.decrypt_deleted_item_info(overview.id, info)?;
+            entries.items.push(SyncItemEntry {
+                overview,
+                trashed: Some(DeletedInfo {
+                    deleted_at: info.expose_secret().deleted_at,
+                    role: info.expose_secret().role,
+                }),
+            });
+            for cred in overview.credentials.values() {
+                let blobs = credentials.get(&cred.id);
+                entries.credentials.push(Self::sync_credential_entry(
+                    cipher,
+                    overview.id,
+                    cred,
+                    blobs.map(|blobs| &blobs.value),
+                    blobs.map_or(&[][..], |blobs| &blobs.history),
+                    None,
+                )?);
+            }
+            for entry in deleted.values() {
+                entries
+                    .credentials
+                    .push(Self::sync_trashed_credential_entry(cipher, entry)?);
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Sync entry of a trashed credential.
+    fn sync_trashed_credential_entry<'a>(
+        cipher: &VaultCipher,
+        entry: &'a DeletedEntry,
+    ) -> Result<SyncCredentialEntry<'a>, Error> {
+        let DeletedEntry { blobs, overview } = entry;
+        let info =
+            cipher.decrypt_deleted_info(overview.item_id, overview.credential.id, &blobs.info)?;
+        Self::sync_credential_entry(
+            cipher,
+            overview.item_id,
+            &overview.credential,
+            Some(&blobs.credential.value),
+            &blobs.credential.history,
+            Some(DeletedInfo {
+                deleted_at: info.expose_secret().deleted_at,
+                role: info.expose_secret().role,
+            }),
+        )
+    }
+
+    /// Sync entry of a credential of item `item_id`, with its value and
+    /// previous values decrypted. No `value` reads as empty.
+    fn sync_credential_entry<'a>(
+        cipher: &VaultCipher,
+        item_id: ItemId,
+        cred: &'a VaultItemCredentialOverview,
+        value: Option<&EncryptedBlob<String>>,
+        history: &[HistoryEntry],
+        trashed: Option<DeletedInfo>,
+    ) -> Result<SyncCredentialEntry<'a>, Error> {
+        let value = match value {
+            Some(blob) => cipher.decrypt_cred_value(item_id, cred.id, blob)?,
+            None => SecretBox::new(Box::default()),
+        };
+        let history = history
+            .iter()
+            .map(|entry| {
+                let info = cipher.decrypt_history_info(item_id, cred.id, entry.id, &entry.info)?;
+                Ok(SyncPreviousValue {
+                    id: entry.id,
+                    replaced_at: info.expose_secret().replaced_at,
+                    value: cipher.decrypt_history_value(
+                        item_id,
+                        cred.id,
+                        entry.id,
+                        &entry.value,
+                    )?,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(SyncCredentialEntry {
+            item: item_id,
+            overview: cred,
+            trashed,
+            value,
+            history,
+        })
+    }
+
     /// Change the site reports stored in this vault.
     pub fn update_passkey_signals<R>(&mut self, change: impl FnOnce(&mut SignalStore) -> R) -> R {
         self.metadata_blob = None;
@@ -1127,7 +1317,8 @@ impl Vault {
     }
 
     /// Replace an item's autofill data. Rejects a role slot that points at a
-    /// credential outside the item, and one credential in both slots.
+    /// credential outside the item, one credential in both slots, and two
+    /// websites with one URL.
     pub fn set_item_autofill(
         &mut self,
         item_key: &str,
@@ -1142,6 +1333,17 @@ impl Vault {
             return Err(Error::InvalidAutofill(
                 "one credential cannot be both the username and the password".to_string(),
             ));
+        }
+        let mut urls = BTreeSet::new();
+        if let Some(website) = autofill
+            .websites
+            .iter()
+            .find(|website| !urls.insert(website.url.as_str()))
+        {
+            return Err(Error::InvalidAutofill(format!(
+                "two websites have the URL {}",
+                website.url
+            )));
         }
         for slot in [autofill.username, autofill.password, autofill.totp]
             .into_iter()
@@ -2402,6 +2604,45 @@ impl DecryptedItem {
             deleted,
         })
     }
+}
+
+/// Decrypted entries of a vault, live and trashed, from
+/// [`Vault::sync_entries`].
+pub(crate) struct SyncEntries<'a> {
+    pub(crate) name: Option<&'a str>,
+    pub(crate) folders: &'a BTreeMap<FolderId, VaultFolder>,
+    /// Site reports as stored. Reports held in memory are not included.
+    pub(crate) passkey_signals: &'a SignalStore,
+    /// Live and trashed items.
+    pub(crate) items: Vec<SyncItemEntry<'a>>,
+    /// Live and trashed credentials of live and trashed items.
+    pub(crate) credentials: Vec<SyncCredentialEntry<'a>>,
+}
+
+pub(crate) struct SyncItemEntry<'a> {
+    /// Its `credentials` holds only the credentials that are not trashed.
+    pub(crate) overview: &'a VaultItemOverview,
+    /// `None` for a live item.
+    pub(crate) trashed: Option<DeletedInfo>,
+}
+
+pub(crate) struct SyncCredentialEntry<'a> {
+    pub(crate) item: ItemId,
+    pub(crate) overview: &'a VaultItemCredentialOverview,
+    /// `None` for a credential that is not trashed. A credential of a trashed
+    /// item is not trashed unless it was trashed itself.
+    pub(crate) trashed: Option<DeletedInfo>,
+    /// Empty if the credential has no value.
+    pub(crate) value: SecretBox<String>,
+    /// In stored order, oldest first.
+    pub(crate) history: Vec<SyncPreviousValue>,
+}
+
+/// Decrypted previous value of a credential.
+pub(crate) struct SyncPreviousValue {
+    pub(crate) id: Uuid,
+    pub(crate) replaced_at: i64,
+    pub(crate) value: SecretBox<String>,
 }
 
 /// Changes for [`Vault::update_item_credential`]. `None` fields are left
