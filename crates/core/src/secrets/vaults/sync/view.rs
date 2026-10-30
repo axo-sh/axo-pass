@@ -2,9 +2,11 @@
 //!
 //! Each register shows one value by its policy. References to missing entries
 //! are resolved, and equal-value collapse runs on the resolved values. Lists
-//! are in the order the vault shows them.
+//! are in the order the vault shows them. A missing register shows a default,
+//! and a credential that names a missing item, or no item, is shown in a
+//! recovered item. Shown keys are made valid and unique in [`keys`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use uuid::Uuid;
 
@@ -19,6 +21,16 @@ use crate::secrets::vaults::autofill::item::MatchKind;
 use crate::secrets::vaults::model::display_order;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::SignalStore;
+
+pub mod keys;
+
+use keys::StoredKey;
+pub use keys::{KeyGroup, KeyTaken};
+
+/// Title of an item whose title register holds no value.
+pub const RECOVERED_ITEM_TITLE: &str = "Recovered item";
+/// Title of a credential whose title register holds no value.
+pub const RECOVERED_CREDENTIAL_TITLE: &str = "Recovered field";
 
 /// Version of the view rules. Changes with any rule that can change the vault
 /// a view produces.
@@ -54,11 +66,16 @@ pub struct FolderView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ItemView {
     pub id: ItemId,
-    /// Empty if the register holds no value.
+    /// [`RECOVERED_ITEM_TITLE`] if the register holds no value.
     pub title: String,
     pub category: Option<String>,
-    /// Key register value. Empty if the register holds no value.
+    /// Shown key. Passes `validate_key`, and is unique among live items.
     pub key: String,
+    /// Stored key fails `validate_key` after normalizing.
+    pub key_notice: bool,
+    /// Key register value the view chose. `None` if the register holds no
+    /// value.
+    stored_key: Option<StoredKey>,
     /// `None` if the register names a missing folder.
     pub folder: Option<FolderId>,
     /// In list order.
@@ -93,13 +110,20 @@ pub struct WebsiteView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CredentialView {
     pub id: CredentialId,
-    /// `None` if the register holds no value.
-    pub item: Option<ItemId>,
-    /// Empty if the register holds no value.
+    /// Shown item. The credential id if the register holds no value. A
+    /// missing item is shown as a recovered item.
+    pub item: ItemId,
+    /// [`RECOVERED_CREDENTIAL_TITLE`] if the register holds no value.
     pub title: String,
     pub kind: FieldKind,
-    /// Key register value. Empty if the register holds no value.
+    /// Shown key. Passes `validate_key`, and is unique among the live
+    /// credentials of the item.
     pub key: String,
+    /// Stored key fails `validate_key` after normalizing.
+    pub key_notice: bool,
+    /// Key register value the view chose. `None` if the register holds no
+    /// value.
+    stored_key: Option<StoredKey>,
     /// `None` for the default section, and for a placement in a section the
     /// item lacks.
     pub section: Option<SectionId>,
@@ -200,16 +224,25 @@ impl VaultView {
             })
             .collect();
 
-        let item_views = items
+        // Items with a value, and the items the credentials name. A named item
+        // with no value is shown as a recovered item.
+        let item_ids: BTreeSet<ItemId> = items
             .iter()
             .filter(|(_, item)| !item.is_empty())
-            .map(|(id, item)| {
-                let view = ItemView::of(*id, item, folders, &credential_views, &mut conflicts);
-                (*id, view)
+            .map(|(id, _)| *id)
+            .chain(credential_views.values().map(|c| c.item))
+            .collect();
+        let recovered = SyncItem::default();
+        let item_views = item_ids
+            .into_iter()
+            .map(|id| {
+                let item = items.get(&id).unwrap_or(&recovered);
+                let view = ItemView::of(id, item, folders, &credential_views, &mut conflicts);
+                (id, view)
             })
             .collect();
 
-        Self {
+        let mut view = Self {
             name,
             folders: folder_views,
             items: item_views,
@@ -221,7 +254,9 @@ impl VaultView {
             removed: shown_by_key(removed),
             recovery: shown_by_key(recovery),
             conflicts,
-        }
+        };
+        view.assign_keys();
+        view
     }
 
     /// Ask registers with more than one resolved value.
@@ -291,7 +326,7 @@ impl ItemView {
             slot.filter(|c| {
                 credentials
                     .get(c)
-                    .is_some_and(|view| view.item == Some(id) && view.trashed.is_none())
+                    .is_some_and(|view| view.item == id && view.trashed.is_none())
             })
         };
         let username = asks.resolved(AskRegister::Username, username, resolve);
@@ -322,10 +357,8 @@ impl ItemView {
                 .and_then(|s| section_views.iter().position(|v| v.id == s))
                 .map_or(0, |index| index + 1)
         };
-        let mut item_credentials: Vec<&CredentialView> = credentials
-            .values()
-            .filter(|c| c.item == Some(id))
-            .collect();
+        let mut item_credentials: Vec<&CredentialView> =
+            credentials.values().filter(|c| c.item == id).collect();
         item_credentials.sort_by(|a, b| {
             (rank(a.section), list_order(a.position, &a.title, a.id))
                 .cmp(&(rank(b.section), list_order(b.position, &b.title, b.id)))
@@ -334,9 +367,13 @@ impl ItemView {
 
         Self {
             id,
-            title: asks.value(AskRegister::Title, title),
+            title: asks.value_or(AskRegister::Title, title, || {
+                RECOVERED_ITEM_TITLE.to_string()
+            }),
             category: asks.value(AskRegister::Category, category),
-            key: asks.value(AskRegister::Key, key),
+            key: String::new(),
+            key_notice: false,
+            stored_key: asks.stored_key(key),
             folder,
             sections: section_views,
             websites: website_views,
@@ -369,11 +406,12 @@ impl CredentialView {
         } = credential;
         let mut asks = Asks::new(Entity::Credential(id), conflicts);
 
-        let item = item.shown().copied();
+        let item = item.shown().copied().unwrap_or(id);
         let placement = placement.shown().cloned().unwrap_or_default();
         // A placement in a section the item lacks reads as the default section.
         let section = placement.section.filter(|s| {
-            item.and_then(|i| items.get(&i))
+            items
+                .get(&item)
                 .and_then(|i| i.sections.get(s))
                 .is_some_and(|r| r.shown().is_some())
         });
@@ -399,9 +437,13 @@ impl CredentialView {
         Self {
             id,
             item,
-            title: asks.value(AskRegister::Title, title),
+            title: asks.value_or(AskRegister::Title, title, || {
+                RECOVERED_CREDENTIAL_TITLE.to_string()
+            }),
             kind: asks.value(AskRegister::Kind, kind),
-            key: asks.value(AskRegister::Key, key),
+            key: String::new(),
+            key_notice: false,
+            stored_key: asks.stored_key(key),
             section,
             position: placement.position,
             value: asks.value(AskRegister::Value, value),
@@ -454,9 +496,27 @@ impl<'a> Asks<'a> {
         register: AskRegister,
         values: &MvRegister<T, Ask>,
     ) -> T {
+        self.value_or(register, values, T::default)
+    }
+
+    /// Value with the highest order key, or `default` if the register holds
+    /// no value. Records a conflict if the register holds more than one
+    /// value.
+    fn value_or<T: Clone + PartialEq>(
+        &mut self,
+        register: AskRegister,
+        values: &MvRegister<T, Ask>,
+        default: impl FnOnce() -> T,
+    ) -> T {
         self.resolved(register, values, T::clone)
-            .map(|(_, value)| value)
-            .unwrap_or_default()
+            .map_or_else(default, |(_, value)| value)
+    }
+
+    /// Key register value with the highest order key. Records a conflict if
+    /// the register holds more than one value.
+    fn stored_key(&mut self, values: &MvRegister<String, Ask>) -> Option<StoredKey> {
+        self.resolved(AskRegister::Key, values, String::clone)
+            .map(|(order, value)| StoredKey { order, value })
     }
 }
 

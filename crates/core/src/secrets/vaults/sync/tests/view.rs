@@ -9,17 +9,20 @@ use crate::secrets::vaults::sync::model::{
     FolderValue, HistoryValue, KeyId, Placement, PublicKey, RecoveryRecipient, Removal,
     ReplicaKeys, SecretText, SectionValue, SyncState, TrashValue, WebsiteValue,
 };
-use crate::secrets::vaults::sync::view::{AskRegister, Conflict, Entity, VaultView};
+use crate::secrets::vaults::sync::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
+use crate::secrets::vaults::sync::view::{
+    AskRegister, Conflict, Entity, RECOVERED_CREDENTIAL_TITLE, RECOVERED_ITEM_TITLE, VaultView,
+};
 
-type State = CausalState<SyncState>;
+pub(super) type State = CausalState<SyncState>;
 
 /// State written by one mint of replica 1.
-fn base(edit: impl FnOnce(&mut SyncState, &Mint)) -> State {
+pub(super) fn base(edit: impl FnOnce(&mut SyncState, &Mint)) -> State {
     edited(&State::default(), 1, edit)
 }
 
 /// `state` after one mint of replica `n` that applies `edit`.
-fn edited(state: &State, n: u128, edit: impl FnOnce(&mut SyncState, &Mint)) -> State {
+pub(super) fn edited(state: &State, n: u128, edit: impl FnOnce(&mut SyncState, &Mint)) -> State {
     let mut state = state.clone();
     let m = session(n).mint(&mut state, NOW);
     edit(&mut state.store, &m);
@@ -27,7 +30,7 @@ fn edited(state: &State, n: u128, edit: impl FnOnce(&mut SyncState, &Mint)) -> S
 }
 
 /// Join of `a` and `b`, in both orders.
-fn join(a: &State, b: &State) -> (State, State) {
+pub(super) fn join(a: &State, b: &State) -> (State, State) {
     let mut ab = a.clone();
     ab.join(b.clone());
     let mut ba = b.clone();
@@ -38,7 +41,7 @@ fn join(a: &State, b: &State) -> (State, State) {
 /// View of `base` edited concurrently by replica 2 with `a` and by replica 3
 /// with `b`. The view of the join is the same in both orders. Values of
 /// replica 3 have the higher order key.
-fn concurrent(
+pub(super) fn concurrent(
     base: &State,
     a: impl FnOnce(&mut SyncState, &Mint),
     b: impl FnOnce(&mut SyncState, &Mint),
@@ -62,7 +65,7 @@ fn add_credential(s: &mut SyncState, m: &Mint, credential: Uuid, item: Uuid, tit
     entry.key.write(m, title.to_lowercase());
 }
 
-fn trash(deleted_at: i64, role: Option<Role>) -> Option<TrashValue> {
+pub(super) fn trash(deleted_at: i64, role: Option<Role>) -> Option<TrashValue> {
     Some(TrashValue { deleted_at, role })
 }
 
@@ -427,7 +430,7 @@ fn concurrent_moves_leave_credential_in_item_with_higher_order_key() {
     };
     let (_, view) = concurrent(&start, mv(to_a), mv(to_b));
 
-    assert_eq!(view.credentials[&credential].item, Some(to_b));
+    assert_eq!(view.credentials[&credential].item, to_b);
     assert_eq!(view.items[&to_b].credentials, [credential]);
     assert_eq!(view.items[&to_b].username, Some(credential));
     assert!(view.items[&to_a].credentials.is_empty());
@@ -836,11 +839,12 @@ fn missing_registers_show_defaults() {
     });
     let view = VaultView::of(&state);
     let shown = &view.items[&item];
-    assert_eq!(shown.title, "");
-    assert_eq!(shown.key, "");
+    assert_eq!(shown.title, RECOVERED_ITEM_TITLE);
+    assert_eq!(shown.key, Suffix::key(ITEM_KEY_PREFIX, item, 4));
     assert_eq!(shown.credentials, [credential]);
     let shown = &view.credentials[&credential];
-    assert_eq!(shown.title, "");
+    assert_eq!(shown.title, RECOVERED_CREDENTIAL_TITLE);
+    assert_eq!(shown.key, Suffix::key(CREDENTIAL_KEY_PREFIX, credential, 4));
     assert_eq!(shown.kind, FieldKind::default());
     assert_eq!(shown.value, SecretText::default());
     assert_eq!(shown.section, None);
