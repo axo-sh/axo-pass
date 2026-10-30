@@ -2,6 +2,7 @@ use uuid::Uuid;
 
 use super::crdt::{ReplicaId, Session};
 
+mod apply;
 mod diff;
 mod keys;
 mod model;

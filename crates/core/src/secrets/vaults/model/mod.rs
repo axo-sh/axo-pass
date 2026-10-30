@@ -16,6 +16,7 @@ pub use overview::{
     VaultMetadata, VaultSectionMetadata, display_order,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
+pub(crate) use sync::{PreviousValue, SyncWriter};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;

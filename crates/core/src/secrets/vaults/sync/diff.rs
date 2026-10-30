@@ -231,7 +231,7 @@ impl CredentialWrite {
 
 impl TrashValue {
     /// Trash value of a vault entry, field by field.
-    fn of(info: &DeletedInfo) -> Self {
+    pub(super) fn of(info: &DeletedInfo) -> Self {
         let DeletedInfo { deleted_at, role } = info;
         Self {
             deleted_at: *deleted_at,
