@@ -218,7 +218,7 @@ fn every_row_of_mapping_table_round_trips() {
             .unwrap()
     });
     step(&|v| {
-        let ids: Vec<Uuid> = v.list_folders().iter().map(|f| f.id).rev().collect();
+        let ids = [folder_titled(v, "Second"), folder_titled(v, "First")];
         v.reorder_folders(&ids).unwrap();
     });
     step(&|v| v.delete_folder(folder_titled(v, "Second")).unwrap());
