@@ -70,28 +70,28 @@ pub struct PasskeyRef<'a> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct UnknownEntry {
-    rp_id: String,
-    credential_id: String,
-    at: i64,
+pub(crate) struct UnknownEntry {
+    pub(crate) rp_id: String,
+    pub(crate) credential_id: String,
+    pub(crate) at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct AcceptedEntry {
-    rp_id: String,
-    user_handle: String,
-    credential_ids: Vec<String>,
-    at: i64,
+pub(crate) struct AcceptedEntry {
+    pub(crate) rp_id: String,
+    pub(crate) user_handle: String,
+    pub(crate) credential_ids: Vec<String>,
+    pub(crate) at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct RenameEntry {
-    rp_id: String,
-    user_handle: String,
-    name: String,
-    at: i64,
+pub(crate) struct RenameEntry {
+    pub(crate) rp_id: String,
+    pub(crate) user_handle: String,
+    pub(crate) name: String,
+    pub(crate) at: i64,
 }
 
 /// What the user dismissed.
@@ -107,11 +107,40 @@ pub enum DismissKind {
 /// A dismissal applies to reports made at or before `at`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct DismissEntry {
-    rp_id: String,
-    credential_id: String,
-    kind: DismissKind,
-    at: i64,
+pub(crate) struct DismissEntry {
+    pub(crate) rp_id: String,
+    pub(crate) credential_id: String,
+    pub(crate) kind: DismissKind,
+    pub(crate) at: i64,
+}
+
+/// Entry of one report list, as the sync model stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SignalEntry {
+    Unknown(UnknownEntry),
+    Accepted(AcceptedEntry),
+    Rename(RenameEntry),
+    Dismissed(DismissEntry),
+}
+
+impl SignalEntry {
+    /// Map key of the entry in the sync model. Report list name, then the
+    /// fields that identify the report, joined by `:`. Two entries have one
+    /// key if `SignalStore::merge` treats them as the same report.
+    pub(crate) fn key(&self) -> String {
+        match self {
+            Self::Unknown(e) => format!("unknown:{}:{}", e.rp_id, e.credential_id),
+            Self::Accepted(e) => format!("accepted:{}:{}", e.rp_id, e.user_handle),
+            Self::Rename(e) => format!("renames:{}:{}", e.rp_id, e.user_handle),
+            Self::Dismissed(e) => {
+                let kind = match e.kind {
+                    DismissKind::Rejection => "rejection",
+                    DismissKind::Rename => "rename",
+                };
+                format!("dismissed:{kind}:{}:{}", e.rp_id, e.credential_id)
+            },
+        }
+    }
 }
 
 /// All recorded reports and dismissals.
