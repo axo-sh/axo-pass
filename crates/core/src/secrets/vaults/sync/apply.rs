@@ -489,12 +489,12 @@ impl Apply<'_, '_> {
     }
 
     /// One bulk key update, and the key notices of the entries whose key was
-    /// written or that were added.
+    /// written or that were added. The update runs even without key writes,
+    /// because it builds the key indexes again. Adding and trashing items
+    /// leaves index entries missing if live items share a key meanwhile.
     fn keys(&mut self) -> Result<(), Error> {
-        if !self.item_keys.is_empty() || !self.credential_keys.is_empty() {
-            self.writer
-                .set_keys(&self.item_keys, &self.credential_keys)?;
-        }
+        self.writer
+            .set_keys(&self.item_keys, &self.credential_keys)?;
         let written: BTreeSet<Entity> = self
             .item_keys
             .keys()

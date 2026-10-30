@@ -91,7 +91,7 @@ impl Mac {
 }
 
 /// Save and load a vault under its own key.
-fn reload(vault: &Vault) -> Vault {
+pub(super) fn reload(vault: &Vault) -> Vault {
     let cipher = vault.unlocked_key().cipher_for_test();
     Vault::from_encrypted_with_cipher(cipher, vault.to_encrypted(true).unwrap()).unwrap()
 }

@@ -4,8 +4,10 @@ use super::crdt::{ReplicaId, Session};
 
 mod apply;
 mod diff;
+mod generators;
 mod keys;
 mod model;
+mod round_trip;
 mod view;
 
 /// Time of every mint in the tests.
