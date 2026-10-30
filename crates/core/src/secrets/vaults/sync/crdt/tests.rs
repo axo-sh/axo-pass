@@ -3,6 +3,7 @@ use uuid::Uuid;
 use super::*;
 
 mod checks;
+mod failures;
 mod histories;
 mod properties;
 mod simulator;

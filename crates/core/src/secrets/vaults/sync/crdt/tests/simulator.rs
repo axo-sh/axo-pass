@@ -1,13 +1,17 @@
-//! Simulator of replicas that publish their states as files and join the
-//! files of their peers.
+//! Simulator of Macs that publish their states as files and join the files of
+//! their peers.
 //!
-//! Replicas play a random valid history from `histories.rs`. Each step other
-//! than a session end is one transaction. A join step is a delivery, which
-//! hands the replica any past file of the peer, so files arrive in any order,
-//! and some arrive twice or never. Every join goes through `try_join`. After
-//! each transaction the replica publishes by `CausalContext::should_publish`
-//! and deletes its older files by `OwnFile::should_delete`. A published file
-//! is a clone of the state.
+//! Each Mac holds one replica of a random valid history from `histories.rs`.
+//! Each step other than a session end is one transaction. A transaction joins
+//! the own files of the replica first, as step 1 of "Join" in the plan. A join
+//! step is a delivery, which hands the Mac any past file of the peer, so files
+//! arrive in any order, and some arrive twice or never. Every join goes
+//! through `try_join`. After each transaction the Mac publishes by
+//! `CausalContext::should_publish` and deletes its older files by
+//! `OwnFile::should_delete`. A published file is a clone of the state.
+//!
+//! The failures of `failures.rs` change replica ids, replace sync states,
+//! delete directories, and add torn and forged files.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,7 +24,7 @@ use super::*;
 
 /// Policy and order keys of one register, lowest key first.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Register {
+pub(super) struct Register {
     kind: PolicyKind,
     keys: Vec<OrderKey>,
 }
@@ -61,7 +65,7 @@ impl Register {
     }
 
     /// Every register value of `store`, by target and write id.
-    fn values(store: &Vault) -> BTreeSet<(Target, WriteId)> {
+    pub(super) fn values(store: &Vault) -> BTreeSet<(Target, WriteId)> {
         Self::all(store)
             .into_iter()
             .flat_map(|(target, register)| {
@@ -74,49 +78,114 @@ impl Register {
     }
 }
 
-/// Published files of one replica.
-#[derive(Default)]
-struct Files {
-    /// Every file the replica published, oldest first. The index of a file
-    /// is its content hash.
-    published: Vec<State>,
-    /// Files in the replica directory.
-    directory: Vec<OwnFile<usize>>,
-    /// Context of the last published file.
-    published_context: CausalContext,
-    /// Hash of the last published file.
-    last_published: Option<usize>,
+/// File in the synced folder. Its index in [`Sim::files`] is its content
+/// hash.
+pub(super) struct File {
+    /// Index of the Mac that wrote the file.
+    pub(super) mac: usize,
+    /// Directory of the file, the replica id it was published under.
+    pub(super) replica: ReplicaId,
+    /// State of the file. None for a torn file, which fails to decode.
+    pub(super) state: Option<State>,
+    /// Not in its directory. Its owner deleted it after a publish, or its
+    /// directory was deleted.
+    pub(super) removed: bool,
+    /// Removed with its directory. A lost file is not delivered. A file its
+    /// owner deleted is still delivered, as a stale copy.
+    pub(super) lost: bool,
+    /// Not downloaded on the Mac that wrote it.
+    pub(super) remote: bool,
 }
 
-/// Replicas of a history, with their files and a record of every edit.
-struct Sim {
-    run: Run,
-    files: Vec<Files>,
+/// Local sync state of a Mac, as saved after a transaction.
+#[derive(Clone)]
+pub(super) struct Backup {
+    pub(super) replica: ReplicaId,
+    pub(super) state: State,
+    pub(super) published_context: CausalContext,
+    pub(super) last_published: Option<usize>,
+    /// Number of files in the folder when the backup was saved.
+    pub(super) files: usize,
+}
+
+/// Publish record and backups of one Mac.
+pub(super) struct Mac {
+    /// Context of the last published file.
+    pub(super) published_context: CausalContext,
+    /// Hash of the last published file.
+    pub(super) last_published: Option<usize>,
+    /// Local sync state after each transaction, oldest first.
+    pub(super) backups: Vec<Backup>,
+    /// Replica ids whose directory holds a file of this Mac.
+    pub(super) directories: Vec<ReplicaId>,
+    /// Directory of the last publish was deleted, so the next transaction
+    /// must publish.
+    pub(super) republish: bool,
+}
+
+/// Macs of a history, with the synced folder and a record of every edit.
+pub(super) struct Sim {
+    /// Session, state, and clock of each Mac.
+    pub(super) run: Run,
+    pub(super) macs: Vec<Mac>,
+    pub(super) files: Vec<File>,
     /// Register values that edits added.
-    written: BTreeSet<(Target, WriteId)>,
-    /// Register values that edits replaced or removed on a replica that held
+    pub(super) written: BTreeSet<(Target, WriteId)>,
+    /// Register values that edits replaced or removed on a Mac that held
     /// them.
-    superseded: BTreeSet<(Target, WriteId)>,
+    pub(super) superseded: BTreeSet<(Target, WriteId)>,
     /// Context of the state before each mint, by write id of the mint.
     observed: BTreeMap<WriteId, CausalContext>,
     /// Write ids of repair mints.
     repairs: BTreeSet<WriteId>,
+    /// Write id of every mint.
+    minted: BTreeSet<WriteId>,
+    /// Checks that files failed in `try_join`, with the receiving Mac and
+    /// the file hash.
+    pub(super) errors: Vec<(usize, usize, JoinError)>,
+    /// Panic if a file fails a check. Set for valid runs.
+    pub(super) strict: bool,
+    /// Next replica id given to a Mac by a failure.
+    pub(super) next_replica_id: u128,
 }
 
 impl Sim {
-    /// Replicas 1 to `replicas`, with no published file.
-    fn new(replicas: usize) -> Self {
+    /// Macs 1 to `macs`, with no file in the folder.
+    pub(super) fn new(macs: usize) -> Self {
+        let run = Run::new(macs);
+        let macs = run
+            .replicas
+            .iter()
+            .map(|replica| Mac {
+                published_context: CausalContext::default(),
+                last_published: None,
+                backups: vec![Backup {
+                    replica: replica.session.replica,
+                    state: State::default(),
+                    published_context: CausalContext::default(),
+                    last_published: None,
+                    files: 0,
+                }],
+                directories: Vec::new(),
+                republish: false,
+            })
+            .collect();
         Self {
-            run: Run::new(replicas),
-            files: (0..replicas).map(|_| Files::default()).collect(),
+            run,
+            macs,
+            files: Vec::new(),
             written: BTreeSet::new(),
             superseded: BTreeSet::new(),
             observed: BTreeMap::new(),
             repairs: BTreeSet::new(),
+            minted: BTreeSet::new(),
+            errors: Vec::new(),
+            strict: true,
+            next_replica_id: 1_000,
         }
     }
 
-    fn play(history: &History) -> Self {
+    pub(super) fn play(history: &History) -> Self {
         let mut sim = Self::new(history.replicas);
         sim.apply_all(&history.steps);
         sim
@@ -128,12 +197,37 @@ impl Sim {
         }
     }
 
-    /// Apply `step` as one transaction of its replica. Returns whether the
-    /// replica published.
+    /// Current replica id of Mac `n`.
+    pub(super) fn replica(&self, n: usize) -> ReplicaId {
+        self.run.replicas[n].session.replica
+    }
+
+    /// Hashes of the files in the directory of `replica`.
+    pub(super) fn directory(&self, replica: ReplicaId) -> Vec<usize> {
+        (0..self.files.len())
+            .filter(|hash| {
+                let file = &self.files[*hash];
+                file.replica == replica && !file.removed
+            })
+            .collect()
+    }
+
+    /// Hashes of the files of Mac `from` that can be delivered.
+    pub(super) fn deliverable(&self, from: usize) -> Vec<usize> {
+        (0..self.files.len())
+            .filter(|hash| {
+                let file = &self.files[*hash];
+                file.mac == from && !file.lost
+            })
+            .collect()
+    }
+
+    /// Apply `step` as one transaction of its Mac. Returns whether the Mac
+    /// published.
     ///
     /// A join step delivers a past file of the peer, and does nothing if the
-    /// peer has published no file. A session end is not a transaction.
-    fn apply(&mut self, step: &Step) -> bool {
+    /// peer has no file. A session end is not a transaction.
+    pub(super) fn apply(&mut self, step: &Step) -> bool {
         match step {
             Step::End { .. } => {
                 self.run.apply(step);
@@ -143,86 +237,184 @@ impl Sim {
                 replica,
                 from,
                 version,
-            } => match self.files[*from].published.len() {
-                0 => false,
-                count => self.receive(*replica, *from, version.index(count)),
+            } => {
+                let files = self.deliverable(*from);
+                match files.len() {
+                    0 => false,
+                    count => self.receive(*replica, files[version.index(count)]),
+                }
             },
-            _ => self.edit(step),
+            _ => {
+                let n = step.replica();
+                let own = self.join_own_files(n);
+                self.edit(step);
+                self.publish(n, own)
+            },
         }
     }
 
-    /// Run an edit step, record the register values it added and removed,
-    /// and publish.
-    fn edit(&mut self, step: &Step) -> bool {
+    /// Transaction of Mac `n` with no edit and no delivery.
+    pub(super) fn transaction(&mut self, n: usize) -> bool {
+        let own = self.join_own_files(n);
+        self.run.replicas[n].record();
+        self.publish(n, own)
+    }
+
+    /// Transaction of Mac `n` that receives file `hash`.
+    pub(super) fn receive(&mut self, n: usize, hash: usize) -> bool {
+        let own = self.join_own_files(n);
+        self.join_file(n, hash);
+        self.run.replicas[n].record();
+        self.publish(n, own)
+    }
+
+    /// Join each own file of Mac `n` that is downloaded and decodes. Returns
+    /// the own files as the publish rules take them.
+    fn join_own_files(&mut self, n: usize) -> Vec<OwnFile<usize>> {
+        let mut own = Vec::new();
+        for hash in self.directory(self.replica(n)) {
+            let file = &self.files[hash];
+            let state = if file.remote {
+                OwnFileState::Remote
+            } else if file.state.is_some() && self.join_file(n, hash) {
+                OwnFileState::Joined
+            } else {
+                OwnFileState::NotJoined
+            };
+            own.push(OwnFile { hash, state });
+        }
+        own
+    }
+
+    /// Join file `hash` into Mac `n` through `try_join`. Returns whether the
+    /// file passed every check. A torn file fails to decode and is not joined.
+    ///
+    /// Panics on a failed check if the run is strict.
+    fn join_file(&mut self, n: usize, hash: usize) -> bool {
+        let Some(file) = self.files[hash].state.clone() else {
+            return false;
+        };
+        let replica = &mut self.run.replicas[n];
+        match replica.state.try_join(file, &mut replica.session) {
+            Ok(_) => true,
+            Err(err) => {
+                assert!(!self.strict, "valid file failed a check: {err:?}");
+                self.errors.push((n, hash, err));
+                false
+            },
+        }
+    }
+
+    /// Run an edit step and record the register values it added and removed.
+    ///
+    /// Panics if the mint reuses a write id.
+    fn edit(&mut self, step: &Step) {
         let n = step.replica();
         let state = &self.run.replicas[n].state;
         let context = state.context.clone();
         let before = Register::values(&state.store);
         let mint = self.run.apply(step).expect("edit step mints");
         let after = Register::values(&self.run.replicas[n].state.store);
+        assert!(
+            self.minted.insert(mint.write_id),
+            "write id {:?} was minted twice",
+            mint.write_id
+        );
         self.written.extend(after.difference(&before).copied());
         self.superseded.extend(before.difference(&after).copied());
         self.observed.insert(mint.write_id, context);
         if matches!(step, Step::Repair { .. }) {
             self.repairs.insert(mint.write_id);
         }
-        self.publish(n)
     }
 
-    /// Join file `hash` of replica `from` into replica `n` through
-    /// `try_join`, and publish.
+    /// Publish the state of Mac `n` if `should_publish` holds, then delete
+    /// each own file that `should_delete` selects, and save a backup. Returns
+    /// whether the Mac published.
     ///
-    /// Panics if `try_join` refuses or quarantines the file, since every file
-    /// of a valid run is valid.
-    fn receive(&mut self, n: usize, from: usize, hash: usize) -> bool {
-        let file = self.files[from].published[hash].clone();
-        let replica = &mut self.run.replicas[n];
-        let result = replica.state.try_join(file, &mut replica.session);
-        assert!(result.is_ok(), "valid file failed a check: {result:?}");
-        replica.record();
-        self.publish(n)
-    }
-
-    /// Publish the state of replica `n` if `should_publish` holds, then
-    /// delete each own file that `should_delete` selects. Returns whether the
-    /// replica published.
-    fn publish(&mut self, n: usize) -> bool {
+    /// Panics if a Mac does not publish after its directory was deleted, or
+    /// deletes an own file whose writes its state does not hold.
+    fn publish(&mut self, n: usize, own: Vec<OwnFile<usize>>) -> bool {
+        let replica = self.replica(n);
         let state = &self.run.replicas[n].state;
-        let files = &mut self.files[n];
-        let publish = state.context.should_publish(
-            &files.published_context,
-            files.last_published.as_ref(),
-            &files.directory,
-        );
+        let mac = &mut self.macs[n];
+        let publish =
+            state
+                .context
+                .should_publish(&mac.published_context, mac.last_published.as_ref(), &own);
+        assert!(publish || !mac.republish, "Mac {n} did not republish");
         if publish {
-            let hash = files.published.len();
-            files.published.push(state.clone());
-            // Local state holds every write of a file the replica published,
-            // so each own file is joined.
-            files.directory.push(OwnFile {
-                hash,
-                state: OwnFileState::Joined,
+            let hash = self.files.len();
+            self.files.push(File {
+                mac: n,
+                replica,
+                state: Some(state.clone()),
+                removed: false,
+                lost: false,
+                remote: false,
             });
-            files.directory.retain(|file| !file.should_delete(&hash));
-            files.published_context = state.context.clone();
-            files.last_published = Some(hash);
+            for file in own.iter().filter(|file| file.should_delete(&hash)) {
+                let deleted = &mut self.files[file.hash];
+                let covered = deleted
+                    .state
+                    .as_ref()
+                    .is_some_and(|joined| !joined.context.is_ahead_of(&state.context));
+                assert!(
+                    covered,
+                    "own file {} deleted before it was joined",
+                    file.hash
+                );
+                deleted.removed = true;
+            }
+            mac.published_context = state.context.clone();
+            mac.last_published = Some(hash);
+            mac.republish = false;
+            if !mac.directories.contains(&replica) {
+                mac.directories.push(replica);
+            }
         }
+        mac.backups.push(Backup {
+            replica,
+            state: state.clone(),
+            published_context: mac.published_context.clone(),
+            last_published: mac.last_published,
+            files: self.files.len(),
+        });
         publish
     }
 
-    /// Deliver the latest file of every replica to every other replica, in
-    /// rounds, until a round publishes nothing.
+    /// Latest file of each directory that holds a file that decodes.
+    fn latest_files(&self) -> Vec<usize> {
+        let mut latest = BTreeMap::new();
+        for (hash, file) in self.files.iter().enumerate() {
+            if !file.removed && file.state.is_some() {
+                latest.insert(file.replica, hash);
+            }
+        }
+        latest.into_values().collect()
+    }
+
+    /// Download every file, then run rounds until a round publishes nothing.
+    /// A round runs a transaction with no edit on every Mac, as at an unlock,
+    /// then delivers the latest file of every directory to every Mac of
+    /// another replica.
     ///
-    /// Panics if publishing has not stopped after one round per replica and
-    /// one more.
-    fn converge(&mut self) {
-        let replicas = self.files.len();
-        for _ in 0..=replicas {
+    /// Panics if publishing has not stopped after one round per Mac and two
+    /// more.
+    pub(super) fn converge(&mut self) {
+        for file in &mut self.files {
+            file.remote = false;
+        }
+        let rounds = self.macs.len() + 2;
+        for _ in 0..rounds {
             let mut published = false;
-            for n in 0..replicas {
-                for from in (0..replicas).filter(|from| *from != n) {
-                    if let Some(hash) = self.files[from].last_published {
-                        published |= self.receive(n, from, hash);
+            for n in 0..self.macs.len() {
+                published |= self.transaction(n);
+            }
+            for hash in self.latest_files() {
+                for n in 0..self.macs.len() {
+                    if self.files[hash].replica != self.replica(n) {
+                        published |= self.receive(n, hash);
                     }
                 }
             }
@@ -230,13 +422,13 @@ impl Sim {
                 return;
             }
         }
-        panic!("publishing did not stop after {} rounds", replicas + 1);
+        panic!("publishing did not stop after {rounds} rounds");
     }
 
-    /// Replica other than `n`, picked by `offset`.
-    fn peer(&self, n: usize, offset: Index) -> usize {
-        let replicas = self.files.len();
-        (n + 1 + offset.index(replicas - 1)) % replicas
+    /// Mac other than `n`, picked by `offset`.
+    pub(super) fn peer(&self, n: usize, offset: Index) -> usize {
+        let macs = self.macs.len();
+        (n + 1 + offset.index(macs - 1)) % macs
     }
 }
 
@@ -250,9 +442,9 @@ proptest! {
 
         // Every replica receives every file of every other replica.
         for n in 0..history.replicas {
-            for from in (0..history.replicas).filter(|from| *from != n) {
-                for hash in 0..sim.files[from].published.len() {
-                    sim.receive(n, from, hash);
+            for hash in 0..sim.files.len() {
+                if sim.files[hash].mac != n {
+                    sim.receive(n, hash);
                 }
             }
         }
@@ -267,7 +459,7 @@ proptest! {
         sim.converge();
 
         let mut all = State::default();
-        for file in sim.files.iter().flat_map(|files| &files.published) {
+        for file in sim.files.iter().filter_map(|file| file.state.as_ref()) {
             all.join(file.clone());
         }
         for replica in &sim.run.replicas {
@@ -311,7 +503,8 @@ proptest! {
         let write_id = local.session.last_write().expect("removal-only step mints");
         prop_assert!(published);
         prop_assert!(after.iter().all(|(_, id)| *id != write_id));
-        let file = sim.files[n].published.last().expect("replica published");
+        let hash = sim.macs[n].last_published.expect("replica published");
+        let file = sim.files[hash].state.as_ref().expect("published file decodes");
         prop_assert!(file.context.covers(write_id));
 
         sim.converge();
@@ -339,11 +532,10 @@ proptest! {
             // that only joined, and no other transaction published.
             let context = &sim.run.replicas[n].state.context;
             prop_assert_eq!(published, *context != before);
-            prop_assert_eq!(&sim.files[n].published_context, context);
+            prop_assert_eq!(&sim.macs[n].published_context, context);
             // Older own files are deleted after each publish.
-            let files = &sim.files[n];
-            let hashes: Vec<_> = files.directory.iter().map(|file| file.hash).collect();
-            prop_assert_eq!(hashes, Vec::from_iter(files.last_published));
+            let hashes = sim.directory(sim.replica(n));
+            prop_assert_eq!(hashes, Vec::from_iter(sim.macs[n].last_published));
         }
 
         // Converge panics if publishing does not stop.
@@ -352,14 +544,13 @@ proptest! {
         // Without edits, no delivery of any past file publishes.
         for (replica, offset, version) in deliveries {
             let n = replica.index(history.replicas);
-            let from = sim.peer(n, offset);
-            let count = sim.files[from].published.len();
-            if count > 0 {
-                prop_assert!(!sim.receive(n, from, version.index(count)));
+            let files = sim.deliverable(sim.peer(n, offset));
+            if !files.is_empty() {
+                prop_assert!(!sim.receive(n, files[version.index(files.len())]));
             }
         }
-        for (replica, files) in sim.run.replicas.iter().zip(&sim.files) {
-            prop_assert_eq!(&files.published_context, &replica.state.context);
+        for (replica, mac) in sim.run.replicas.iter().zip(&sim.macs) {
+            prop_assert_eq!(&mac.published_context, &replica.state.context);
         }
     }
 
@@ -386,7 +577,7 @@ proptest! {
         // of another replica that the write had observed. Repair values are
         // concurrent with the values of their register by definition, so
         // they are not checked.
-        let replica = sim.run.replicas[n].session.replica;
+        let replica = sim.replica(n);
         let slow_write = |id: WriteId| state.actors[&id.actor].replica == replica;
         for (target, register) in &registers {
             let top = register.keys.last().expect("register holds a value");
