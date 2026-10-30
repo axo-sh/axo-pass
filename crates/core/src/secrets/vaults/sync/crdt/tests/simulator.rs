@@ -383,21 +383,22 @@ impl Sim {
         publish
     }
 
-    /// Latest file of each directory that holds a file that decodes.
-    fn latest_files(&self) -> Vec<usize> {
-        let mut latest = BTreeMap::new();
-        for (hash, file) in self.files.iter().enumerate() {
-            if !file.removed && file.state.is_some() {
-                latest.insert(file.replica, hash);
-            }
-        }
-        latest.into_values().collect()
+    /// Every file in a directory that decodes. A directory can hold older
+    /// files that its latest file does not cover, such as own files that
+    /// were `Remote` at a publish.
+    fn present_files(&self) -> Vec<usize> {
+        (0..self.files.len())
+            .filter(|hash| {
+                let file = &self.files[*hash];
+                !file.removed && file.state.is_some()
+            })
+            .collect()
     }
 
     /// Download every file, then run rounds until a round publishes nothing.
     /// A round runs a transaction with no edit on every Mac, as at an unlock,
-    /// then delivers the latest file of every directory to every Mac of
-    /// another replica.
+    /// then delivers every file in every directory to every Mac of another
+    /// replica.
     ///
     /// Panics if publishing has not stopped after one round per Mac and two
     /// more.
@@ -411,7 +412,7 @@ impl Sim {
             for n in 0..self.macs.len() {
                 published |= self.transaction(n);
             }
-            for hash in self.latest_files() {
+            for hash in self.present_files() {
                 for n in 0..self.macs.len() {
                     if self.files[hash].replica != self.replica(n) {
                         published |= self.receive(n, hash);
@@ -451,7 +452,7 @@ proptest! {
     }
 
     #[test]
-    fn states_are_equal_once_every_replica_has_every_latest_file(
+    fn states_are_equal_once_every_replica_has_every_file(
         history in History::strategy(),
     ) {
         let mut sim = Sim::play(&history);

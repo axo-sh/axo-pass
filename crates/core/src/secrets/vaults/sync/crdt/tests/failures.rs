@@ -293,7 +293,7 @@ proptest! {
     }
 
     #[test]
-    fn states_are_equal_after_failures_once_every_replica_has_every_latest_file(
+    fn states_are_equal_after_failures_once_every_replica_has_every_file(
         scenario in Scenario::strategy(),
     ) {
         let mut sim = Sim::play_scenario(&scenario);
