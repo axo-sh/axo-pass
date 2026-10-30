@@ -16,6 +16,7 @@ anyhow.workspace = true
 async-trait = "0.1"
 base64 = "0.23.1"
 block2 = "0.6.2"
+ciborium = "0.2.2"
 clml = {version = "0.2.0", features = ["anstream"]}
 coset = "0.4"
 dirs = "7.0.0"

@@ -114,8 +114,12 @@ pub(crate) struct DismissEntry {
     pub(crate) at: i64,
 }
 
-/// Entry of one report list, as the sync model stores it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Entry of one report list, as the sync model stores it. The serde form is
+/// the form of the entry struct, with no tag. The fields of each struct
+/// differ, and each refuses unknown fields, so a form parses as one variant
+/// only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub(crate) enum SignalEntry {
     Unknown(UnknownEntry),
     Accepted(AcceptedEntry),

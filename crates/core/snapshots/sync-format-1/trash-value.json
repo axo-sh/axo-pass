@@ -1,0 +1,17 @@
+[
+  {
+    "deleted_at": 1700000006
+  },
+  {
+    "deleted_at": 1700000006,
+    "role": "username"
+  },
+  {
+    "deleted_at": 1700000006,
+    "role": "password"
+  },
+  {
+    "deleted_at": 1700000006,
+    "role": "totp"
+  }
+]

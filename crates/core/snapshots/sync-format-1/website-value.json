@@ -1,0 +1,17 @@
+[
+  {
+    "position": 0
+  },
+  {
+    "match": "host",
+    "position": 1
+  },
+  {
+    "match": "starts-with",
+    "position": 2
+  },
+  {
+    "match": "never",
+    "position": 3
+  }
+]

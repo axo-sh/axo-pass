@@ -1,0 +1,34 @@
+[
+  {
+    "rp_id": "example.com",
+    "credential_id": "AQID",
+    "at": 1700000001
+  },
+  {
+    "rp_id": "example.com",
+    "user_handle": "CQ",
+    "credential_ids": [
+      "AQID",
+      "BAUG"
+    ],
+    "at": 1700000002
+  },
+  {
+    "rp_id": "example.com",
+    "user_handle": "CQ",
+    "name": "ada",
+    "at": 1700000003
+  },
+  {
+    "rp_id": "example.com",
+    "credential_id": "AQID",
+    "kind": "rejection",
+    "at": 1700000004
+  },
+  {
+    "rp_id": "example.com",
+    "credential_id": "AQID",
+    "kind": "rename",
+    "at": 1700000004
+  }
+]

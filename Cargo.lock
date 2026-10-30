@@ -291,6 +291,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "block2",
+ "ciborium",
  "clml",
  "coset",
  "dirs",

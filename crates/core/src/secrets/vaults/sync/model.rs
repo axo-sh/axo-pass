@@ -25,8 +25,11 @@
 
 use std::fmt;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use uuid::Uuid;
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use super::crdt::{
     Ask, CausalContext, CausalStore, Merge, MvRegister, OrMap, Order, Own, ReplicaId, Rotation,
@@ -35,6 +38,12 @@ use super::crdt::{
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::SignalEntry;
+
+#[cfg(test)]
+mod schema_tests;
+
+/// Version of the serde forms of the value types, and of the state file body.
+pub const SYNC_FORMAT_VERSION: u32 = 1;
 
 pub type FolderId = Uuid;
 pub type ItemId = Uuid;
@@ -179,42 +188,57 @@ causal_store!(SyncCredential {
 });
 
 /// Folder title and position.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FolderValue {
     pub title: String,
     /// Order among folders. `None` until folders are reordered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
 }
 
 /// Item section title and position.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SectionValue {
     pub title: String,
     /// Order among the sections of the item. `None` until sections are
     /// reordered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
 }
 
-/// Website match kind and position. The URL is the map key.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Website match kind and position. The URL is the map key. The match kind
+/// has the field name and default of `Website`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WebsiteValue {
+    #[serde(
+        default,
+        skip_serializing_if = "MatchKind::is_default",
+        rename = "match"
+    )]
     pub match_kind: MatchKind,
     /// Order among the websites of the item.
     pub position: u32,
 }
 
 /// Credential section and position.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Placement {
     /// `None` for the default section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<SectionId>,
     /// Order among the credentials of the section. `None` until credentials
     /// are reordered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<u32>,
 }
 
 /// Previous value of a credential.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoryValue {
     pub value: SecretText,
     /// Unix seconds.
@@ -222,17 +246,20 @@ pub struct HistoryValue {
 }
 
 /// Trash details of an item or credential. Mapped field by field from
-/// `DeletedInfo`.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// `DeletedInfo`, with its serde form.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrashValue {
     /// Unix seconds.
     pub deleted_at: i64,
     /// Autofill role the credential had when trashed. Always `None` for an
     /// item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<Role>,
 }
 
-/// Secret string. Zeroized on drop. `Debug` shows no value.
+/// Secret string. Zeroized on drop. `Debug` shows no value. The serde form is
+/// a plain string.
 #[derive(Clone, Default, PartialEq)]
 pub struct SecretText(pub Zeroizing<String>);
 
@@ -248,8 +275,24 @@ impl fmt::Debug for SecretText {
     }
 }
 
+/// The only field is `Zeroizing`, which zeroizes the string on drop.
+impl ZeroizeOnDrop for SecretText {}
+
+impl Serialize for SecretText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
+}
+
 /// Secure Enclave public keys of one replica.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReplicaKeys {
     /// Vault encryption key.
     pub encryption: PublicKey,
@@ -258,25 +301,85 @@ pub struct ReplicaKeys {
 }
 
 /// Removal of a replica by a key rotation.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Removal {
     /// First key id the removed replica does not hold.
     pub key_id: KeyId,
 }
 
 /// Recovery kit recipient.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecoveryRecipient {
     /// Key id the kit was made for.
     pub key_id: KeyId,
     /// Fingerprint of that key, as printed in the kit.
+    #[serde(with = "ByteString")]
     pub key_fingerprint: [u8; 16],
 }
 
-/// Id of a sync key.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Id of a sync key. The serde form is the number.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct KeyId(pub u32);
 
 /// SEC1 bytes of a P-256 public key. Not parsed or checked here.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PublicKey(pub Vec<u8>);
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PublicKey(#[serde(with = "ByteString")] pub Vec<u8>);
+
+/// Serde form of bytes. A byte string in a binary format such as CBOR, and
+/// standard base64 in a readable format such as JSON.
+struct ByteString;
+
+impl ByteString {
+    fn serialize<S: Serializer>(
+        bytes: &impl AsRef<[u8]>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&BASE64.encode(bytes))
+        } else {
+            serializer.serialize_bytes(bytes.as_ref())
+        }
+    }
+
+    fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: TryFrom<Vec<u8>>,
+    {
+        let bytes = if deserializer.is_human_readable() {
+            deserializer.deserialize_str(ByteStringVisitor)?
+        } else {
+            deserializer.deserialize_bytes(ByteStringVisitor)?
+        };
+        let length = bytes.len();
+        T::try_from(bytes)
+            .map_err(|_| de::Error::invalid_length(length, &"bytes of the expected length"))
+    }
+}
+
+/// Visitor of [`ByteString`]. Takes a base64 string or a byte string.
+struct ByteStringVisitor;
+
+impl de::Visitor<'_> for ByteStringVisitor {
+    type Value = Vec<u8>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a byte string or a base64 string")
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        BASE64.decode(value).map_err(E::custom)
+    }
+
+    fn visit_bytes<E: de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
+        Ok(value.to_vec())
+    }
+
+    fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+        Ok(value)
+    }
+}
