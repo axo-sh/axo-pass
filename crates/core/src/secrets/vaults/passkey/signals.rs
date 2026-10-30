@@ -21,7 +21,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use serde::{Deserialize, Serialize};
 
-use crate::secrets::vaults::passkey::StoredPasskey;
+use crate::secrets::vaults::passkey::PasskeyCredential;
 
 /// Most entries kept in each report list. The oldest are dropped first.
 const MAX_ENTRIES: usize = 500;
@@ -377,7 +377,7 @@ impl SignalStore {
     }
 
     /// Whether the site no longer accepts a stored passkey.
-    pub fn rejects(&self, stored: &StoredPasskey) -> bool {
+    pub fn rejects(&self, stored: &PasskeyCredential) -> bool {
         let credential_id = B64URL.encode(stored.passkey.credential_id.as_slice());
         let user_handle = stored
             .passkey

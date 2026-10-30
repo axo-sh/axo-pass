@@ -196,7 +196,7 @@ pub(super) fn assert_passkey(
         for (vault_key, vh) in unlocked.iter_mut() {
             let signals = vh.passkey_signals().unwrap_or_default();
             let candidates = matching_passkeys(vh, &request);
-            let usable: Vec<&passkey::StoredPasskey> = candidates
+            let usable: Vec<&passkey::PasskeyCredential> = candidates
                 .iter()
                 .filter(|s| !skip_rejected || !signals.rejects(s))
                 .collect();
@@ -407,7 +407,7 @@ fn unlock_for_passkeys(
 fn matching_passkeys(
     vh: &mut VaultHandle,
     request: &passkey::AssertPasskeyRequest,
-) -> Vec<passkey::StoredPasskey> {
+) -> Vec<passkey::PasskeyCredential> {
     passkey::list(vh)
         .unwrap_or_default()
         .into_iter()

@@ -6,7 +6,7 @@
 //! `UserValidationMethod`.
 //!
 //! One passkey is one credential of kind [`FieldKind::Passkey`], whose value is
-//! a JSON [`StoredRecord`]: the private key, the credential id, the relying
+//! a JSON [`StoredPasskey`]: the private key, the credential id, the relying
 //! party, and the user handle. It is a secret like any other, so it is
 //! encrypted with the rest of the vault and travels in export bundles.
 //!
@@ -139,7 +139,7 @@ fn authenticator(
 
 /// A passkey with the vault coordinates it was read from.
 #[derive(Debug, Clone)]
-pub struct StoredPasskey {
+pub struct PasskeyCredential {
     pub vault_id: Uuid,
     pub item_id: Uuid,
     pub credential_id: Uuid,
@@ -148,7 +148,7 @@ pub struct StoredPasskey {
     pub passkey: Passkey,
 }
 
-impl StoredPasskey {
+impl PasskeyCredential {
     /// `<vault id>/<item id>/<credential id>` as short ids, the record
     /// identifier the AutoFill index stores for the passkey.
     pub fn record_id(&self) -> String {
@@ -164,7 +164,7 @@ impl StoredPasskey {
 /// List the passkeys in an unlocked vault, for the UI and for registering
 /// AutoFill identities. A record this build cannot read is logged and skipped
 /// rather than failing the listing.
-pub fn list(vw: &VaultHandle) -> Result<Vec<StoredPasskey>, Error> {
+pub fn list(vw: &VaultHandle) -> Result<Vec<PasskeyCredential>, Error> {
     let mut out = Vec::new();
     let vault_id = vw.vault_id()?;
     for item in vw.list_items()? {
@@ -176,7 +176,7 @@ pub fn list(vw: &VaultHandle) -> Result<Vec<StoredPasskey>, Error> {
                 continue;
             };
             match decode(secret.expose_secret()) {
-                Ok(passkey) => out.push(StoredPasskey {
+                Ok(passkey) => out.push(PasskeyCredential {
                     vault_id,
                     item_id: item.id,
                     credential_id: cred.id,
@@ -535,7 +535,7 @@ pub async fn assert_from_wire(
 fn record_use(
     files: &VaultWriter,
     vw: &VaultHandle,
-    stored: &StoredPasskey,
+    stored: &PasskeyCredential,
     now: i64,
     zone: &TimeZone,
 ) -> Result<bool, Error> {
@@ -556,7 +556,7 @@ fn record_use(
 /// How a passkey is written into a credential's value. Byte fields are base64
 /// so the record stays plain JSON.
 #[derive(Serialize, Deserialize)]
-struct StoredRecord {
+struct StoredPasskey {
     rp_id: String,
     /// base64url, no padding: the same encoding WebAuthn uses for credential
     /// ids on the wire.
@@ -600,7 +600,7 @@ pub struct PasskeySummary {
 /// Read the displayable fields of a stored passkey record. `None` when the
 /// value is not a passkey record.
 pub fn summary(value: &str) -> Option<PasskeySummary> {
-    let record: StoredRecord = serde_json::from_str(value).ok()?;
+    let record: StoredPasskey = serde_json::from_str(value).ok()?;
     Some(PasskeySummary {
         rp_id: record.rp_id,
         credential_id: record.credential_id,
@@ -631,7 +631,7 @@ fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
         .clone()
         .to_vec()
         .map_err(|e| Error::Passkey(format!("Failed to encode the COSE key: {e}")))?;
-    let record = StoredRecord {
+    let record = StoredPasskey {
         rp_id: passkey.rp_id.clone(),
         credential_id: encode_credential_id(passkey.credential_id.as_slice()),
         user_handle: passkey
@@ -654,7 +654,7 @@ fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
 }
 
 fn decode(value: &str) -> Result<Passkey, Error> {
-    let record: StoredRecord = serde_json::from_str(value)
+    let record: StoredPasskey = serde_json::from_str(value)
         .map_err(|e| Error::Passkey(format!("Failed to parse the passkey: {e}")))?;
     let key = B64
         .decode(&record.key)
@@ -949,7 +949,7 @@ pub fn rename_account(
         return Err(Error::Passkey("The new account name is empty".to_string()));
     }
     let record = read_record(vw, item_key, credential_key)?;
-    let mut stored: StoredRecord = serde_json::from_str(record.value.expose_secret())
+    let mut stored: StoredPasskey = serde_json::from_str(record.value.expose_secret())
         .map_err(|e| Error::Passkey(format!("Failed to parse the passkey: {e}")))?;
     stored.username = Some(name.to_string());
     stored.user_display_name = Some(name.to_string());
@@ -1615,7 +1615,7 @@ mod tests {
         files: VaultWriter,
         /// Vault as created.
         vault: VaultHandle,
-        stored: StoredPasskey,
+        stored: PasskeyCredential,
     }
 
     impl OnDisk {
@@ -1790,7 +1790,7 @@ mod tests {
     }
 
     /// `passkey_credential_id` that a move of `stored` records.
-    fn recorded_id(vw: &VaultHandle, stored: &StoredPasskey) -> String {
+    fn recorded_id(vw: &VaultHandle, stored: &PasskeyCredential) -> String {
         let id = webauthn_credential_id(vw, &stored.item_key, &stored.credential_key).unwrap();
         AuditEvent::new(
             audit::process_source(),
@@ -1890,7 +1890,7 @@ mod tests {
     }
 
     /// Passkey of `vw` whose account is `username`.
-    fn passkey_of(vw: &VaultHandle, username: &str) -> StoredPasskey {
+    fn passkey_of(vw: &VaultHandle, username: &str) -> PasskeyCredential {
         list(vw)
             .unwrap()
             .into_iter()
