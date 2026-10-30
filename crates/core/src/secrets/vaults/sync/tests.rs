@@ -7,6 +7,7 @@ mod diff;
 mod generators;
 mod keys;
 mod model;
+mod resolve;
 mod round_trip;
 mod view;
 

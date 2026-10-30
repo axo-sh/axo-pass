@@ -4,6 +4,7 @@ pub mod apply;
 pub mod crdt;
 pub mod diff;
 pub mod model;
+pub mod resolve;
 pub mod view;
 
 #[cfg(test)]

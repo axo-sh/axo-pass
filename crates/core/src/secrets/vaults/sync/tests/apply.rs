@@ -17,15 +17,15 @@ use crate::secrets::vaults::sync::model::TrashValue;
 use crate::secrets::vaults::sync::view::{Entity, VaultView};
 
 /// Vault, sync state, and session of one Mac.
-struct Mac {
-    vault: Vault,
-    state: State,
-    session: Session,
+pub(super) struct Mac {
+    pub(super) vault: Vault,
+    pub(super) state: State,
+    pub(super) session: Session,
 }
 
 impl Mac {
     /// Mac of replica 1 whose state is recorded from `vault`.
-    fn first(vault: Vault) -> Self {
+    pub(super) fn first(vault: Vault) -> Self {
         let mut mac = Self {
             vault,
             state: State::default(),
@@ -37,7 +37,7 @@ impl Mac {
     }
 
     /// Mac of replica `n` with an empty vault and state.
-    fn empty(n: u128) -> Self {
+    pub(super) fn empty(n: u128) -> Self {
         Self {
             vault: Vault::new_for_test(),
             state: State::default(),
@@ -46,24 +46,24 @@ impl Mac {
     }
 
     /// Mac of replica `n` with an empty vault, joined with `other`.
-    fn joined(other: &Mac, n: u128) -> Self {
+    pub(super) fn joined(other: &Mac, n: u128) -> Self {
         let mut mac = Self::empty(n);
         mac.join(other);
         mac
     }
 
-    fn find(&self) -> LocalEdits {
+    pub(super) fn find(&self) -> LocalEdits {
         LocalEdits::find(&self.state, &self.vault, self.session.replica).unwrap()
     }
 
-    fn assert_no_edits(&self, vault: &Vault) {
+    pub(super) fn assert_no_edits(&self, vault: &Vault) {
         let edits = LocalEdits::find(&self.state, vault, self.session.replica).unwrap();
         assert!(edits.is_empty(), "{:?}", edits.edits());
     }
 
     /// Apply a local change to the vault and record its edits, which must
     /// not be empty.
-    fn edit(&mut self, change: impl FnOnce(&mut Vault)) {
+    pub(super) fn edit(&mut self, change: impl FnOnce(&mut Vault)) {
         change(&mut self.vault);
         let edits = self.find();
         assert!(!edits.is_empty());
@@ -71,21 +71,21 @@ impl Mac {
     }
 
     /// Join the state of `other` and apply the view.
-    fn join(&mut self, other: &Mac) -> ApplyReport {
+    pub(super) fn join(&mut self, other: &Mac) -> ApplyReport {
         self.state.join(other.state.clone());
         self.apply()
     }
 
     /// Apply the view of the state, and check that the vault then has no
     /// edits, also after a save and reload.
-    fn apply(&mut self) -> ApplyReport {
+    pub(super) fn apply(&mut self) -> ApplyReport {
         let report = VaultView::of(&self.state).apply(&mut self.vault).unwrap();
         self.assert_no_edits(&self.vault);
         self.assert_no_edits(&reload(&self.vault));
         report
     }
 
-    fn view(&self) -> VaultView {
+    pub(super) fn view(&self) -> VaultView {
         VaultView::of(&self.state)
     }
 }
@@ -98,7 +98,7 @@ pub(super) fn reload(vault: &Vault) -> Vault {
 
 /// Join each Mac with the other, and check that both show the same view and
 /// that each vault holds it.
-fn sync(a: &mut Mac, b: &mut Mac) -> (ApplyReport, ApplyReport) {
+pub(super) fn sync(a: &mut Mac, b: &mut Mac) -> (ApplyReport, ApplyReport) {
     let report_a = a.join(b);
     let report_b = b.join(a);
     assert_eq!(a.view(), b.view());
@@ -107,7 +107,7 @@ fn sync(a: &mut Mac, b: &mut Mac) -> (ApplyReport, ApplyReport) {
     (report_a, report_b)
 }
 
-fn filled() -> Vault {
+pub(super) fn filled() -> Vault {
     let mut vault = Vault::new_for_test();
     vault.fill_for_test();
     vault
@@ -117,7 +117,7 @@ fn add_item(vault: &mut Vault, key: &str) -> Uuid {
     vault.add_or_update_item(key, "Item").unwrap().id
 }
 
-fn add_credential(vault: &mut Vault, item: &str, key: &str, value: &str) -> Uuid {
+pub(super) fn add_credential(vault: &mut Vault, item: &str, key: &str, value: &str) -> Uuid {
     vault
         .add_or_update_item_credential(
             item,

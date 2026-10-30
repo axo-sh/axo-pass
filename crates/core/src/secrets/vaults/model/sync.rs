@@ -753,6 +753,44 @@ impl SyncWriter<'_> {
         self.replace_history(place, id, |stored| *stored = history)
     }
 
+    /// Change the id of one previous value of a credential. Its value and
+    /// info blobs are encrypted again under the new id. Fails if the entry is
+    /// missing or the new id is taken.
+    pub(crate) fn set_history_id(
+        &mut self,
+        id: CredentialId,
+        entry: Uuid,
+        new_id: Uuid,
+    ) -> Result<(), Error> {
+        let place = self.place(id)?;
+        let item = place.item();
+        let current = self.history(place, id);
+        if current.iter().any(|e| e.id == new_id) {
+            return Err(Error::InvalidHistoryEntry(new_id.to_string()));
+        }
+        let stored = current
+            .iter()
+            .find(|e| e.id == entry)
+            .ok_or_else(|| Error::InvalidHistoryEntry(entry.to_string()))?;
+        let cipher = &self.vault.cipher;
+        let value = cipher.decrypt_history_value(item, id, entry, &stored.value)?;
+        let info = cipher.decrypt_history_info(item, id, entry, &stored.info)?;
+        let mut renamed = Some(HistoryEntry {
+            id: new_id,
+            value: cipher.encrypt_history_value(item, id, new_id, value.expose_secret())?,
+            info: cipher.encrypt_history_info(item, id, new_id, info.expose_secret())?,
+        });
+        self.replace_history(place, id, |stored| {
+            for e in stored.iter_mut() {
+                if e.id == entry
+                    && let Some(renamed) = renamed.take()
+                {
+                    *e = renamed;
+                }
+            }
+        })
+    }
+
     /// Remove one previous value of a credential.
     pub(crate) fn purge_history(&mut self, id: CredentialId, entry: Uuid) -> Result<(), Error> {
         let place = self.place(id)?;

@@ -31,7 +31,8 @@ use crate::secrets::vaults::passkey::signals::SignalEntry;
 /// [`LocalEdits::find`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalEdits {
-    edits: Vec<Edit>,
+    /// Requests in `resolve.rs` add to it.
+    pub(super) edits: Vec<Edit>,
 }
 
 /// Failure of [`LocalEdits::find`].
