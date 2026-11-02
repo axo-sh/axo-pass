@@ -32,6 +32,15 @@ pub enum Error {
     #[error("Failed to decrypt vault file key")]
     VaultFileKeyDecryptionError,
 
+    #[error("Failed to encrypt sync key {0}")]
+    SyncKeyEncryptionError(u32),
+
+    #[error("Failed to decrypt sync key {0}")]
+    SyncKeyDecryptionError(u32),
+
+    #[error("Two sync keys have key id {0}")]
+    DuplicateSyncKeyId(u32),
+
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,
 

@@ -21,6 +21,7 @@ clml = {version = "0.2.0", features = ["anstream"]}
 coset = "0.4"
 dirs = "7.0.0"
 glob = "0.3"
+hkdf = "0.12.4"
 indoc = "2.0.8"
 itertools = "0.15.0"
 jiff = "0.2.38"

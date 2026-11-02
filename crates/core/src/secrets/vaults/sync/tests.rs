@@ -9,6 +9,7 @@ mod keys;
 mod model;
 mod resolve;
 mod round_trip;
+mod sync_keys;
 mod view;
 
 /// Time of every mint in the tests.

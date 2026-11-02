@@ -26,7 +26,7 @@
 use std::fmt;
 
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -320,7 +320,7 @@ pub struct RecoveryRecipient {
 }
 
 /// Id of a sync key. The serde form is the number.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct KeyId(pub u32);
 
@@ -331,21 +331,21 @@ pub struct PublicKey(#[serde(with = "ByteString")] pub Vec<u8>);
 
 /// Serde form of bytes. A byte string in a binary format such as CBOR, and
 /// standard base64 in a readable format such as JSON.
-struct ByteString;
+pub(crate) struct ByteString;
 
 impl ByteString {
-    fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         bytes: &impl AsRef<[u8]>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            serializer.serialize_str(&BASE64.encode(bytes))
+            serializer.serialize_str(&B64.encode(bytes))
         } else {
             serializer.serialize_bytes(bytes.as_ref())
         }
     }
 
-    fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
         T: TryFrom<Vec<u8>>,
@@ -372,7 +372,7 @@ impl de::Visitor<'_> for ByteStringVisitor {
     }
 
     fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        BASE64.decode(value).map_err(E::custom)
+        B64.decode(value).map_err(E::custom)
     }
 
     fn visit_bytes<E: de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {

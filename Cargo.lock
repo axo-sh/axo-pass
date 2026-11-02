@@ -296,6 +296,7 @@ dependencies = [
  "coset",
  "dirs",
  "glob",
+ "hkdf",
  "indoc",
  "itertools 0.15.0",
  "jiff",

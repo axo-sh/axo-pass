@@ -3,6 +3,7 @@
 pub mod apply;
 pub mod crdt;
 pub mod diff;
+pub mod keys;
 pub mod model;
 pub mod resolve;
 pub mod view;
