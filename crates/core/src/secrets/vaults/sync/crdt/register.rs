@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
 use super::CausalStore;
 use super::context::CausalContext;
-use super::ids::WriteId;
+use super::ids::{ActorId, WriteId};
 
 /// Value of one write, with the data the view and the conflict UI need.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +95,15 @@ pub struct MvRegister<T, P: Policy> {
 }
 
 impl<T, P: Policy> MvRegister<T, P> {
+    /// Register holding `values`, as read from a stored state. Of two values
+    /// with one write id, the later one is kept.
+    pub fn from_values(values: impl IntoIterator<Item = (WriteId, Versioned<T>)>) -> Self {
+        Self {
+            values: values.into_iter().collect(),
+            policy: PhantomData,
+        }
+    }
+
     /// Replace every value with `value`, written by `mint`.
     pub fn write(&mut self, mint: &Mint, value: T) {
         self.values.clear();
@@ -186,6 +197,44 @@ impl<T: PartialEq, P: Policy> CausalStore for MvRegister<T, P> {
                 self.values.entry(id).or_insert(value);
             }
         }
+    }
+}
+
+/// Serde form: a list of `[actor_id, seq, counter, written_at, value]`, in
+/// write id order. The policy is not serialized.
+impl<T: Serialize, P: Policy> Serialize for MvRegister<T, P> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.values.iter().map(|(id, value)| {
+            (
+                id.actor,
+                id.seq,
+                value.counter,
+                value.written_at,
+                &value.value,
+            )
+        }))
+    }
+}
+
+/// Entries may come in any order. A write id listed twice fails.
+impl<'de, T: Deserialize<'de>, P: Policy> Deserialize<'de> for MvRegister<T, P> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries = Vec::<(ActorId, u64, u64, i64, T)>::deserialize(deserializer)?;
+        let mut values = BTreeMap::new();
+        for (actor, seq, counter, written_at, value) in entries {
+            let id = WriteId { actor, seq };
+            let versioned = Versioned {
+                counter,
+                written_at,
+                value,
+            };
+            if values.insert(id, versioned).is_some() {
+                return Err(de::Error::custom(format_args!(
+                    "register holds write {id:?} twice"
+                )));
+            }
+        }
+        Ok(Self::from_values(values))
     }
 }
 

@@ -1,13 +1,17 @@
 //! Ids of replicas, actors, and writes.
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Id of a replica.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Id of a replica. The serde form is the `Uuid`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ReplicaId(pub Uuid);
 
-/// Id of an actor, the writer of one session of one replica.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Id of an actor, the writer of one session of one replica. The serde form
+/// is the `Uuid`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ActorId(pub Uuid);
 
 /// Id of one write.

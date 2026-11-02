@@ -2,14 +2,18 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::CausalStore;
 use super::checks::{JoinError, JoinOutcome};
 use super::context::CausalContext;
 use super::ids::{ActorId, ReplicaId};
+use super::or_map::UniqueMap;
 use super::session::Session;
 
 /// Replica and start time of an actor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActorInfo {
     pub replica: ReplicaId,
     /// Writer's clock at the first write id of the actor. Display only.
@@ -18,9 +22,13 @@ pub struct ActorInfo {
 
 /// Full state of one replica: the store, its causal context, and the actors
 /// that wrote it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// The serde form is a map of the three fields. An actor listed twice fails.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CausalState<S: CausalStore> {
     pub context: CausalContext,
+    #[serde(deserialize_with = "UniqueMap::deserialize")]
     pub actors: BTreeMap<ActorId, ActorInfo>,
     pub store: S,
 }

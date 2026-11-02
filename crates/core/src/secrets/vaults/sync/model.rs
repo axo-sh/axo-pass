@@ -52,7 +52,8 @@ pub type CredentialId = Uuid;
 pub type HistoryId = Uuid;
 
 /// Synced registers of one vault.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncState {
     pub name: MvRegister<Option<String>, Ask>,
     /// Display name of each replica. Each replica writes only its own.
@@ -78,7 +79,8 @@ pub struct SyncState {
 }
 
 /// Synced registers of one item.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncItem {
     pub title: MvRegister<String, Ask>,
     pub category: MvRegister<Option<String>, Ask>,
@@ -97,7 +99,8 @@ pub struct SyncItem {
 }
 
 /// Synced registers of one credential.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncCredential {
     pub item: MvRegister<ItemId, Order>,
     pub title: MvRegister<String, Ask>,

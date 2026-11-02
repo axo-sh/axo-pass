@@ -1,0 +1,16 @@
+{
+  "context": {},
+  "actors": {},
+  "store": {
+    "name": [],
+    "replica_names": {},
+    "replica_keys": {},
+    "removed": {},
+    "left": {},
+    "recovery": {},
+    "folders": {},
+    "signals": {},
+    "items": {},
+    "credentials": {}
+  }
+}

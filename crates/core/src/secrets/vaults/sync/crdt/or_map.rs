@@ -1,6 +1,10 @@
 //! Observed-remove map.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::marker::PhantomData;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use super::CausalStore;
 use super::context::CausalContext;
@@ -101,5 +105,64 @@ impl<K, V: CausalStore> Default for OrMap<K, V> {
         Self {
             entries: BTreeMap::new(),
         }
+    }
+}
+
+/// Serde form: a map of key to entry.
+impl<K: Serialize, V: CausalStore + Serialize> Serialize for OrMap<K, V> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(&self.entries)
+    }
+}
+
+/// A key listed twice fails.
+impl<'de, K, V> Deserialize<'de> for OrMap<K, V>
+where
+    K: Ord + Deserialize<'de>,
+    V: CausalStore + Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries = UniqueMap::deserialize(deserializer)?;
+        Ok(Self { entries })
+    }
+}
+
+/// Serde form of a map that refuses a repeated key. A map deserialized as a
+/// `BTreeMap` takes the last value of a repeated key.
+pub(super) struct UniqueMap;
+
+impl UniqueMap {
+    pub(super) fn deserialize<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: Ord + Deserialize<'de>,
+        V: Deserialize<'de>,
+    {
+        deserializer.deserialize_map(UniqueMapVisitor(PhantomData))
+    }
+}
+
+/// Visitor of [`UniqueMap`].
+struct UniqueMapVisitor<K, V>(PhantomData<fn() -> (K, V)>);
+
+impl<'de, K, V> de::Visitor<'de> for UniqueMapVisitor<K, V>
+where
+    K: Ord + Deserialize<'de>,
+    V: Deserialize<'de>,
+{
+    type Value = BTreeMap<K, V>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a map with unique keys")
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+        let mut map = BTreeMap::new();
+        while let Some((key, value)) = access.next_entry()? {
+            if map.insert(key, value).is_some() {
+                return Err(de::Error::custom("map holds a key twice"));
+            }
+        }
+        Ok(map)
     }
 }

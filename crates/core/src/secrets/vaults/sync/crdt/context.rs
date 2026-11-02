@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use super::ids::{ActorId, WriteId};
+use super::or_map::UniqueMap;
 
 /// Highest sequence number seen per actor.
 ///
@@ -15,6 +18,12 @@ impl CausalContext {
     /// Highest sequence number seen of `actor`, or 0.
     pub fn get(&self, actor: ActorId) -> u64 {
         self.0.get(&actor).copied().unwrap_or(0)
+    }
+
+    /// Actors with an entry and their highest sequence numbers, in actor
+    /// order.
+    pub fn iter(&self) -> impl Iterator<Item = (ActorId, u64)> + '_ {
+        self.0.iter().map(|(actor, seq)| (*actor, *seq))
     }
 
     /// Whether write `id` was seen. Looks up the stored seq for
@@ -43,5 +52,22 @@ impl CausalContext {
         for (actor, seq) in other.0 {
             self.record(WriteId { actor, seq });
         }
+    }
+}
+
+/// Serde form: a map of actor id to sequence number.
+impl Serialize for CausalContext {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(&self.0)
+    }
+}
+
+/// An actor listed twice fails. An entry at 0 is dropped, as a context built
+/// by mints holds none.
+impl<'de> Deserialize<'de> for CausalContext {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut entries: BTreeMap<ActorId, u64> = UniqueMap::deserialize(deserializer)?;
+        entries.retain(|_, seq| *seq > 0);
+        Ok(Self(entries))
     }
 }
