@@ -791,22 +791,6 @@ impl SyncWriter<'_> {
         })
     }
 
-    /// Remove one previous value of a credential.
-    pub(crate) fn purge_history(&mut self, id: CredentialId, entry: Uuid) -> Result<(), Error> {
-        let place = self.place(id)?;
-        let mut found = false;
-        self.replace_history(place, id, |stored| {
-            let before = stored.len();
-            stored.retain(|e| e.id != entry);
-            found = stored.len() != before;
-        })?;
-        if found {
-            Ok(())
-        } else {
-            Err(Error::InvalidHistoryEntry(entry.to_string()))
-        }
-    }
-
     /// Remove a credential, trashed or not, with its value and history. A
     /// role slot that names it is cleared.
     pub(crate) fn purge_credential(&mut self, id: CredentialId) -> Result<(), Error> {

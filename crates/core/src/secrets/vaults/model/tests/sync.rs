@@ -322,7 +322,7 @@ fn each_mutation_changes_only_its_field_and_blobs() {
         ),
         (
             "history purge",
-            Box::new(move |w| w.purge_history(alpha, alpha_history).unwrap()),
+            Box::new(move |w| w.set_history(alpha, &[]).unwrap()),
             vec![format!("/items/{k}/credentials/{a}/history")],
         ),
         (
@@ -622,7 +622,7 @@ fn entries_are_added_and_purged_by_id() {
     assert_eq!(secret_of(&vault_added, "added", "field"), "other");
 
     let mut writer = vault.sync_writer();
-    writer.purge_history(ids.alpha, ids.alpha_history).unwrap();
+    writer.set_history(ids.alpha, &[]).unwrap();
     writer.purge_credential(ids.beta).unwrap();
     writer.purge_credential(ids.gamma).unwrap();
     writer.purge_section(ids.kept, ids.section).unwrap();
