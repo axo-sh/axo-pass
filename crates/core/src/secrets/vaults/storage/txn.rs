@@ -16,6 +16,10 @@
 //! written first, then the sync state, then the vault, and the staged file is
 //! then copied to the synced folder. A sync state under a key id the unlock
 //! did not unwrap is unlocked once more. A second miss saves the vault only.
+//! Before any join, the no-edit guard diffs the vault as loaded against the
+//! view of the sync state. If it finds edits, sync stops by drift, and the
+//! transaction saves locally and publishes nothing. A `v < s` vault from a
+//! period of stopped sync loads as it is and is not rebuilt.
 //! [`VaultWriter::rebuild`] and
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
@@ -51,6 +55,7 @@ use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::status::SyncStatus;
 use crate::secrets::vaults::sync::transport::SyncTransport;
 use crate::secrets::vaults::sync::txn::SyncTxn;
 
@@ -330,6 +335,10 @@ pub struct Committed<R> {
     /// Save count of the vault when the transaction ended. The saved copy is
     /// current while [`VaultLocks::is_current`] holds for this count.
     pub save_count: u64,
+    /// Sync status the transaction found. `None` for a vault that is not
+    /// synced or is being disabled, and for a rebuild or a restore over a
+    /// refused file.
+    pub sync_status: Option<SyncStatus>,
 }
 
 /// Outcome of one attempt of [`VaultWriter::write`].
@@ -431,8 +440,10 @@ impl VaultWriter {
         // A file of another replica id is refused, so it is kept as an
         // invalid file. A `v < s` file is retained as a version.
         let refused = matches!(case, SyncLoad::Mismatch(_));
+        // A `v < s` vault from a period of stopped sync loads as it is.
+        let loads = matches!(case, SyncLoad::Current | SyncLoad::StoppedOlderVault { .. });
         let mut sync = match (trusted, keyring, loaded_hash) {
-            (Some(trusted), Some(keyring), Some(hash)) if rebuild || case == SyncLoad::Current => {
+            (Some(trusted), Some(keyring), Some(hash)) if rebuild || loads => {
                 let sidecar = Sidecar::load(&self.root, id);
                 Some(SyncTxn::new(trusted, keyring, hash, sidecar))
             },
@@ -452,14 +463,22 @@ impl VaultWriter {
             other => other?,
         };
 
+        // The no-edit guard diffs the vault as loaded against the view of
+        // the state as loaded, before any join and before the change. A
+        // rebuilt vault replaces the loaded vault, so it is not diffed.
+        //
         // Join this replica's own state files, then the peer files, before
         // any write id is minted. A rebuilt vault takes the id, key, and file
         // key of the file it replaces, which verified, and holds the view of
-        // the joined state.
+        // the joined state. A stopped sync joins nothing.
         let mut session = None;
         if let Some(sync) = &mut sync {
+            if !rebuild {
+                sync.guard(&vault)?;
+            }
             let session = session.insert(locked.state.session(sync.replica(), sync.loaded()));
             let joined = match &self.transport {
+                Some(_) if sync.is_stopped() => false,
                 Some(transport) => {
                     let own = sync.join_own(&**transport, session);
                     sync.join_peers(&**transport, session) || own
@@ -484,17 +503,19 @@ impl VaultWriter {
         // Apply the change. An error leaves the files unchanged.
         let value = f(&mut vh)?;
 
+        let mut sync_status = SyncStatus::of_case(&case);
         let changed = match (&mut sync, session) {
             (Some(sync), Some(session)) => {
                 // A recorded edit can change the shown keys of a duplicate
                 // key group, such as a trash of the entry that holds the
                 // bare key. The view of the recorded state is applied, so
                 // the vault shows those keys and the next diff finds no
-                // edits.
+                // edits. A stopped sync records no edit.
                 let now = Timestamp::now().as_second() + self.clock_offset;
-                if sync
-                    .record(vh.get_unlocked_vault()?, session, now)?
-                    .is_some()
+                if !sync.is_stopped()
+                    && sync
+                        .record(vh.get_unlocked_vault()?, session, now)?
+                        .is_some()
                 {
                     sync.apply(vh.get_unlocked_vault_mut()?)?;
                 }
@@ -507,8 +528,10 @@ impl VaultWriter {
                     vault.set_sync(sync.generation() + 1, vault.replica_id());
                 }
                 // The staged file is written before the sync state that names
-                // it.
-                sync.stage(&self.root)?;
+                // it. A stopped sync publishes nothing.
+                if !sync.is_stopped() {
+                    sync.stage(&self.root)?;
+                }
 
                 // The sync state is saved before the vault, whenever it or
                 // `s` changes.
@@ -548,7 +571,9 @@ impl VaultWriter {
                 if let Some(transport) = &self.transport {
                     sync.publish(&**transport);
                 }
+                sync.settle_status();
                 sync.save_sidecar(&self.root);
+                sync_status = Some(sync.status());
                 changed
             },
             // Save only if the vault changed. A key change writes the same
@@ -570,6 +595,7 @@ impl VaultWriter {
             previous_key: target.key.clone(),
             changed,
             save_count,
+            sync_status,
         }))
     }
 
@@ -718,7 +744,7 @@ impl VaultWriter {
         let keyring = match case {
             // A retained version of a synced vault is older than its sync
             // state.
-            SyncLoad::OlderVault { state, .. } => {
+            SyncLoad::OlderVault { state, .. } | SyncLoad::StoppedOlderVault { state, .. } => {
                 vault.set_sync(state, vault.replica_id());
                 keyring.unwrap_or_default()
             },
@@ -827,6 +853,7 @@ impl VaultWriter {
             changed: true,
             save_count: entry.record_save(),
             vault: vh,
+            sync_status: None,
         })
     }
 

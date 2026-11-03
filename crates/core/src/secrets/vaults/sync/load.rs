@@ -2,8 +2,9 @@
 //!
 //! Every load path verifies the vault file, classifies it with
 //! [`SyncLoad::classify`], and builds the `Vault` only if
-//! [`SyncLoad::check`] passes. The check is read-only. It writes nothing and
-//! records no status.
+//! [`SyncLoad::check`] passes. The check is read-only and writes nothing. A
+//! missing or failed sync state is a stop found again at each load
+//! (`sync/status.rs`).
 
 use std::fmt;
 use std::path::Path;
@@ -29,6 +30,10 @@ pub enum SyncLoad {
     /// `v < s`. A crash between the sync state save and the vault save, or a
     /// restored vault.
     OlderVault { vault: u64, state: u64 },
+    /// `v < s` while sync is stopped by drift. The sync state holds none of
+    /// the edits saved while stopped, so the vault loads as it is, with the
+    /// "Older vault file" notice, and is not rebuilt.
+    StoppedOlderVault { vault: u64, state: u64 },
     /// `v > s`. A sync state restored from a backup.
     NewerVault { vault: u64, state: u64 },
     /// Sync state names another vault id or replica id than the vault.
@@ -55,7 +60,7 @@ pub enum Mismatch {
 }
 
 /// Reason a sync state is not trusted.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignatureFailure {
     /// Envelope fails to parse, so the signature cannot be checked.
     Envelope,
@@ -88,6 +93,13 @@ impl fmt::Display for SyncLoad {
                 write!(
                     f,
                     "vault generation {vault} is older than sync state generation {state}"
+                )
+            },
+            Self::StoppedOlderVault { vault, state } => {
+                write!(
+                    f,
+                    "vault generation {vault} is older than sync state generation {state}, and \
+                     sync is stopped by drift"
                 )
             },
             Self::NewerVault { vault, state } => {
@@ -129,8 +141,8 @@ impl SyncLoad {
     }
 
     /// [`Self::classify`], with the trusted sync state if the case compares
-    /// the vault with one: `Current`, `OlderVault`, `NewerVault`, and
-    /// `Mismatch`.
+    /// the vault with one: `Current`, `OlderVault`, `StoppedOlderVault`,
+    /// `NewerVault`, and `Mismatch`.
     pub(crate) fn classify_trusted(
         vault: &VerifiedVault,
         local: Result<LocalSyncState, LocalStateError>,
@@ -161,6 +173,9 @@ impl SyncLoad {
             let (vault, state) = (vault.generation, local.generation);
             match vault.cmp(&state) {
                 std::cmp::Ordering::Equal => Self::Current,
+                std::cmp::Ordering::Less if local.stopped_build.is_some() => {
+                    Self::StoppedOlderVault { vault, state }
+                },
                 std::cmp::Ordering::Less => Self::OlderVault { vault, state },
                 std::cmp::Ordering::Greater => Self::NewerVault { vault, state },
             }
@@ -235,6 +250,7 @@ impl SyncLoad {
         match self {
             Self::NotSynced
             | Self::Current
+            | Self::StoppedOlderVault { .. }
             | Self::StateMissing
             | Self::SignatureFailed(_)
             | Self::KeyMissing(_)
@@ -306,11 +322,12 @@ impl SyncLoad {
         Ok(case.with_keyring(keyring))
     }
 
-    /// This case with `keyring` if the case is `Current`, or else with an
-    /// empty keyring. Only a current sync state is trusted.
+    /// This case with `keyring` if the case is `Current` or
+    /// `StoppedOlderVault`, or else with an empty keyring. Only a sync state
+    /// the vault loads with as it is is trusted.
     pub(crate) fn with_keyring(self, keyring: Option<SyncKeyring>) -> (Self, SyncKeyring) {
         match self {
-            Self::Current => (self, keyring.unwrap_or_default()),
+            Self::Current | Self::StoppedOlderVault { .. } => (self, keyring.unwrap_or_default()),
             _ => (self, SyncKeyring::default()),
         }
     }

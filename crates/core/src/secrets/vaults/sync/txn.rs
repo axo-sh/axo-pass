@@ -10,6 +10,12 @@
 //!
 //! A transaction that publishes writes the staged file before the sync state,
 //! and copies it to the synced folder after the vault (`sync/publish.rs`).
+//!
+//! Before any join, the no-edit guard diffs the vault as loaded against the
+//! view of the state as loaded. If it finds edits, sync stops by drift. A
+//! stopped transaction joins nothing, records no edit, mints no write id, and
+//! publishes nothing. A save then reseals the unchanged body at the next
+//! generation (`sync/status.rs`).
 
 use std::path::Path;
 
@@ -28,6 +34,7 @@ use super::rebuild::Rebuild;
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
+use super::status::{BUILD_ID, FoundCauses, SyncStatus};
 use super::transport::{FileName, SyncTransport};
 use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
@@ -56,6 +63,8 @@ pub(crate) struct SyncTxn {
     staged: Option<Staged>,
     sidecar: Sidecar,
     sidecar_changed: bool,
+    /// Paused causes found by this transaction.
+    found: FoundCauses,
 }
 
 impl SyncTxn {
@@ -80,6 +89,7 @@ impl SyncTxn {
             staged: None,
             sidecar,
             sidecar_changed: false,
+            found: FoundCauses::default(),
         }
     }
 
@@ -132,6 +142,7 @@ impl SyncTxn {
             Ok(listed) => listed,
             Err(e) => {
                 log::warn!("Failed to list own state files of vault {vault_id}: {e}");
+                self.found.unreachable(e);
                 return false;
             },
         };
@@ -181,6 +192,7 @@ impl SyncTxn {
             sidecar: &mut self.sidecar,
             sidecar_changed: &mut self.sidecar_changed,
             session,
+            found: &mut self.found,
         }
     }
 
@@ -199,6 +211,40 @@ impl SyncTxn {
         VaultView::of(&self.state).apply(vault).map(|_| ())
     }
 
+    /// Whether sync is stopped by drift.
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.local.stopped_build.is_some()
+    }
+
+    /// No-edit guard: diff the vault as loaded, `vault`, against the view of
+    /// the state as loaded, before any join and before the requested change.
+    /// If the diff finds edits, sync stops with `stopped_build` set to this
+    /// build, and no edit is recorded. A sync that is already stopped stays
+    /// stopped.
+    pub(crate) fn guard(&mut self, vault: &Vault) -> Result<(), Error> {
+        if self.is_stopped() {
+            return Ok(());
+        }
+        let edits = self.find(vault)?;
+        if edits.is_empty() {
+            return Ok(());
+        }
+        let vault_id = self.vault_id();
+        let count = edits.edits().len();
+        log::error!("Vault {vault_id} differs from its sync state in {count} edits, sync stopped");
+        self.local.stopped_build = Some(BUILD_ID.to_string());
+        self.header_changed = true;
+        Ok(())
+    }
+
+    /// Local edits of `vault` against the view of the state.
+    fn find(&self, vault: &Vault) -> Result<LocalEdits, Error> {
+        LocalEdits::find(&self.state, vault, self.replica()).map_err(|e| match e {
+            DiffError::Vault(e) => e,
+            e => Error::SyncDiffError(e.to_string()),
+        })
+    }
+
     /// Record the local edits of `vault` against the view of the state, under
     /// one write id of `session` minted at `now`, in Unix seconds. Returns
     /// the write id, or `None` if the vault has no edits.
@@ -208,10 +254,7 @@ impl SyncTxn {
         session: &mut Session,
         now: i64,
     ) -> Result<Option<WriteId>, Error> {
-        let edits = LocalEdits::find(&self.state, vault, self.replica()).map_err(|e| match e {
-            DiffError::Vault(e) => e,
-            e => Error::SyncDiffError(e.to_string()),
-        })?;
+        let edits = self.find(vault)?;
         let write_id = edits.record(&mut self.state, session, now);
         if write_id.is_some() {
             self.changed = true;
@@ -326,6 +369,7 @@ impl SyncTxn {
         let own_files = self.own_files.take().unwrap_or_default();
         if let Err(e) = staged.copy(transport, vault_id, replica, &own_files) {
             log::warn!("Failed to publish the staged file of vault {vault_id}: {e}");
+            self.found.publish_failed = Some(e.to_string());
             return;
         }
         self.sidecar.last_publish = Some(staged.hash);
@@ -362,6 +406,26 @@ impl SyncTxn {
             self.local.reseal(generation, &self.keyring)?;
         }
         self.local.save(root, signer)
+    }
+
+    /// Record the paused causes this transaction found in the sidecar, in
+    /// place of those of the last transaction that synced. A cause that was
+    /// not found again clears. A stopped sync found no causes, so the
+    /// sidecar is unchanged.
+    pub(crate) fn settle_status(&mut self) {
+        if self.is_stopped() {
+            return;
+        }
+        let causes = self.found.causes();
+        if self.sidecar.paused != causes {
+            self.sidecar.paused = causes;
+            self.sidecar_changed = true;
+        }
+    }
+
+    /// Sync status after this transaction.
+    pub(crate) fn status(&self) -> SyncStatus {
+        SyncStatus::of_trusted(self.local.stopped_build.as_deref(), &self.sidecar.paused)
     }
 
     /// Save the sidecar under the app data directory `root` if it changed. A

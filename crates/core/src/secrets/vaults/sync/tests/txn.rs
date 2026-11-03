@@ -455,7 +455,7 @@ fn only_edit_that_is_purge_history_purge_or_signal_trim_mints_write_id_only_cont
 }
 
 /// Keyring of key ids 1 and 2.
-fn two_keys() -> SyncKeyring {
+pub(super) fn two_keys() -> SyncKeyring {
     SyncKeyring::new(vec![
         (KeyId(1), key()),
         (KeyId(2), SyncKey::from_bytes([3; 32])),
@@ -465,7 +465,7 @@ fn two_keys() -> SyncKeyring {
 
 /// Sync state of `fx` at [`GENERATION`] with the body `state` under key id
 /// 2, and with the keys of `sync_keys` in its keyring.
-fn under_key_2(fx: &Fixture, state: &State, sync_keys: &SyncKeyring) -> String {
+pub(super) fn under_key_2(fx: &Fixture, state: &State, sync_keys: &SyncKeyring) -> String {
     let padded = PaddedBody::of(state).unwrap();
     let mut local = LocalSyncState::new(fx.id(), REPLICA, KeyId(2));
     local.generation = GENERATION;
@@ -476,7 +476,7 @@ fn under_key_2(fx: &Fixture, state: &State, sync_keys: &SyncKeyring) -> String {
 
 /// Add an item in a transaction whose unlock calls `on_unlock` with the
 /// number of the unlock, from 0, after the keyring is read.
-fn add_item_counting(fx: &Fixture, on_unlock: impl Fn(usize) + Sync) -> Committed<()> {
+pub(super) fn add_item_counting(fx: &Fixture, on_unlock: impl Fn(usize) + Sync) -> Committed<()> {
     let unlocks = AtomicUsize::new(0);
     let key = || {
         on_unlock(unlocks.fetch_add(1, Ordering::SeqCst));

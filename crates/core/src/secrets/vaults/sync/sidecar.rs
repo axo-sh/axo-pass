@@ -1,7 +1,8 @@
 //! Status sidecar: an unsigned record of the state files of one vault.
 //!
 //! The sidecar holds the content hash of the last publish, the hashes of the
-//! state files joined, and the quarantined files. It is at
+//! state files joined, the quarantined files, and the causes of a paused
+//! sync. It is at
 //! `sync/{short_vault_id}.json` and is written under the vault locks. It is
 //! not a source of truth. A sidecar that fails to parse is read as empty,
 //! which causes an extra join and never a wrong result, since a join checks
@@ -16,6 +17,7 @@ use uuid::Uuid;
 
 use super::crdt::ReplicaId;
 use super::state_file::StateHash;
+use super::status::PausedCause;
 use crate::core::files::write_atomic;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -29,8 +31,11 @@ pub struct Sidecar {
     /// Content hashes of the state files joined, by replica. Only hashes of
     /// files still listed, and of replicas still listed, are kept.
     pub joined: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
-    /// Quarantined state files.
+    /// Quarantined state files. An entry is kept when its file is gone.
     pub quarantined: Vec<QuarantinedFile>,
+    /// Causes of a paused sync found by the last transaction that synced.
+    #[serde(default)]
+    pub paused: Vec<PausedCause>,
 }
 
 /// State file quarantined by path and content hash. A later file at the same

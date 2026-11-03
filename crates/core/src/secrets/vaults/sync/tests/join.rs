@@ -22,14 +22,14 @@ use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::transport::{FileName, SyncTransport};
 
 /// Replica of another Mac.
-const PEER: ReplicaId = ReplicaId(Uuid::from_u128(2));
+pub(super) const PEER: ReplicaId = ReplicaId(Uuid::from_u128(2));
 
 /// Replica of a third Mac.
 const OTHER_PEER: ReplicaId = ReplicaId(Uuid::from_u128(3));
 
 /// State of a new session of `replica`: the saved sync state of `fx` with
 /// item `item_key` added.
-fn peer_state(fx: &Fixture, replica: ReplicaId, item_key: &str) -> State {
+pub(super) fn peer_state(fx: &Fixture, replica: ReplicaId, item_key: &str) -> State {
     let mut state = saved(fx).1;
     let mut vault = saved_vault(fx);
     vault.add_or_update_item(item_key, "Joined").unwrap();

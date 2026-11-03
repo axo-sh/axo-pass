@@ -25,6 +25,7 @@ use crate::secrets::vaults::sync::load::{Mismatch, SignatureFailure, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys, SYNC_FORMAT_VERSION};
 use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
+use crate::secrets::vaults::sync::status::BUILD_ID;
 use crate::secrets::vaults::sync::transport::SyncTransport;
 use crate::secrets::vaults::{Error, VaultCatalog, VaultHandle};
 
@@ -289,6 +290,16 @@ fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
         state: GENERATION + 1,
     };
     cases.push(("v < s", fx, case));
+
+    let fx = Fixture::synced();
+    let mut local = state(fx.id(), REPLICA, GENERATION + 1);
+    local.stopped_build = Some(BUILD_ID.to_string());
+    fx.put(&local, &device);
+    let case = SyncLoad::StoppedOlderVault {
+        vault: GENERATION,
+        state: GENERATION + 1,
+    };
+    cases.push(("v < s while stopped by drift", fx, case));
 
     let fx = Fixture::synced();
     fx.put_state(GENERATION - 1);

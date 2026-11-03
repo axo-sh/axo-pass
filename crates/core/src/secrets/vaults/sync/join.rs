@@ -15,6 +15,7 @@ use super::keys::SyncKeyring;
 use super::model::SyncState;
 use super::sidecar::Sidecar;
 use super::state_file::{StateFile, StateFileError, StateHash, StateSource};
+use super::status::FoundCauses;
 use super::transport::{FileName, ReadResult, SyncTransport};
 
 /// Result of the join of one state file.
@@ -27,8 +28,10 @@ pub(crate) enum FileJoin {
     /// Listed and not local yet.
     Remote,
     /// Missing, unreadable, under a key the keyring lacks or holds under
-    /// another fingerprint, of a newer format, refused, or quarantined.
+    /// another fingerprint, of a newer format, or refused.
     NotJoined,
+    /// Quarantined now or by an earlier transaction.
+    Quarantined,
 }
 
 impl FileJoin {
@@ -43,13 +46,14 @@ impl From<FileJoin> for OwnFileState {
         match join {
             FileJoin::Joined { .. } => Self::Joined,
             FileJoin::Remote => Self::Remote,
-            FileJoin::NotJoined => Self::NotJoined,
+            FileJoin::NotJoined | FileJoin::Quarantined => Self::NotJoined,
         }
     }
 }
 
 /// Join of the state files of vault `vault_id` into `state`, as received by
 /// `session`. Joined and quarantined files are recorded in `sidecar`.
+/// Listing failures and quarantined files are recorded in `found`.
 pub(crate) struct StateJoin<'a> {
     pub vault_id: Uuid,
     pub state: &'a mut CausalState<SyncState>,
@@ -58,6 +62,7 @@ pub(crate) struct StateJoin<'a> {
     /// Set if the sidecar changed.
     pub sidecar_changed: &'a mut bool,
     pub session: &'a mut Session,
+    pub found: &'a mut FoundCauses,
 }
 
 impl StateJoin<'_> {
@@ -96,7 +101,8 @@ impl StateJoin<'_> {
             .sidecar
             .is_quarantined(replica, &file_name, content_hash)
         {
-            return FileJoin::NotJoined;
+            self.found.quarantined += 1;
+            return FileJoin::Quarantined;
         }
         let source = StateSource {
             vault_id,
@@ -107,7 +113,7 @@ impl StateJoin<'_> {
             Ok((_, state)) => state,
             Err(StateFileError::Quarantine(damage)) => {
                 self.quarantine(replica, file_name, content_hash, damage.to_string());
-                return FileJoin::NotJoined;
+                return FileJoin::Quarantined;
             },
             Err(e @ StateFileError::VersionSkew(_)) => {
                 log::warn!("State file {file_name} of vault {vault_id} is not joined: {e}");
@@ -126,16 +132,15 @@ impl StateJoin<'_> {
                     changed: outcome == JoinOutcome::Joined,
                 }
             },
-            Err(e) => {
-                match e.action() {
-                    JoinAction::Refuse => {
-                        log::warn!("State file {file_name} of vault {vault_id} is refused: {e}");
-                    },
-                    JoinAction::Quarantine => {
-                        self.quarantine(replica, file_name, content_hash, e.to_string());
-                    },
-                }
-                FileJoin::NotJoined
+            Err(e) => match e.action() {
+                JoinAction::Refuse => {
+                    log::warn!("State file {file_name} of vault {vault_id} is refused: {e}");
+                    FileJoin::NotJoined
+                },
+                JoinAction::Quarantine => {
+                    self.quarantine(replica, file_name, content_hash, e.to_string());
+                    FileJoin::Quarantined
+                },
             },
         }
     }
@@ -158,6 +163,7 @@ impl StateJoin<'_> {
             Ok(replicas) => replicas,
             Err(e) => {
                 log::warn!("Failed to list the replicas of vault {vault_id}: {e}");
+                self.found.unreachable(e);
                 return false;
             },
         };
@@ -170,6 +176,7 @@ impl StateJoin<'_> {
                     log::warn!(
                         "Failed to list state files of replica {replica} of vault {vault_id}: {e}"
                     );
+                    self.found.unreachable(e);
                     continue;
                 },
             };
@@ -188,5 +195,6 @@ impl StateJoin<'_> {
         log::warn!("State file {name} of vault {vault_id} is quarantined: {reason}");
         self.sidecar.quarantine(replica, name, hash, reason);
         *self.sidecar_changed = true;
+        self.found.quarantined += 1;
     }
 }

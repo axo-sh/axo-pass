@@ -40,6 +40,7 @@ use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
+use crate::secrets::vaults::sync::status::SyncStatus;
 use crate::secrets::vaults::sync::transport::{FileName, ReadResult, SyncTransport};
 use crate::secrets::vaults::sync::view::VaultView;
 use crate::secrets::vaults::{Error, VaultHandle};
@@ -422,8 +423,14 @@ impl Sim {
         let before = mac.state();
         let writes = mac.transport.writes();
 
-        mac.write(|vh| edit.map_or(Ok(()), |edit| edit.apply(vh)));
+        let committed = mac.write(|vh| edit.map_or(Ok(()), |edit| edit.apply(vh)));
 
+        // The guard finds no drift, so sync stays active.
+        assert_eq!(
+            committed.sync_status,
+            Some(SyncStatus::Active),
+            "Mac {n} sync is not active"
+        );
         let after = mac.state();
         let edits = LocalEdits::find(&after, &mac.saved_vault(), mac.replica).unwrap();
         assert!(
@@ -488,6 +495,11 @@ impl Sim {
             let committed = mac.write(|_| Ok(()));
 
             assert!(!committed.changed, "Mac {n} saved its vault");
+            assert_eq!(
+                committed.sync_status,
+                Some(SyncStatus::Active),
+                "Mac {n} sync is not active"
+            );
             assert!(mac.on_disk() == before, "Mac {n} changed a local file");
             assert_eq!(mac.transport.writes(), writes, "Mac {n} published");
         }
@@ -671,6 +683,34 @@ fn three_macs_with_partial_views_that_create_one_key_show_same_keys_and_mint_not
             .sum();
         assert_eq!(minted, 2, "Mac {n}");
     }
+}
+
+#[test]
+fn join_that_produces_duplicate_key_writes_nothing_publishes_nothing_and_is_not_drift() {
+    let mut sim = Sim::new(2, None);
+    sim.transaction(0, Some(&MAIL));
+    sim.transaction(1, Some(&MAIL));
+
+    // Each Mac joins the other's `mail`, and one of the two is shown with a
+    // suffix. The transaction checks that sync stays active.
+    for (n, from) in [(0, 1), (1, 0)] {
+        sim.deliver_latest(n, from);
+        sim.transaction(n, None);
+        let keys = mail_keys(&sim, n);
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], "mail");
+        assert!(keys[1].starts_with("mail-"));
+    }
+
+    // A transaction with no edit on each Mac writes and publishes nothing,
+    // and sync stays active.
+    sim.converge();
+    sim.check_quiet();
+    for mac in &sim.macs {
+        let local = LocalSyncState::load(&mac.root, mac.vault_id(), &TestSigner::device()).unwrap();
+        assert_eq!(local.stopped_build, None);
+    }
+    sim.check_converged();
 }
 
 #[test]
