@@ -34,27 +34,27 @@ use crate::secrets::vaults::{Error, VaultHandle};
 
 /// Synced vault at [`GENERATION`] with a valid sync state at the same
 /// generation, and own state files read through `transport`.
-fn synced(transport: &Arc<FakeTransport>) -> Fixture {
+pub(super) fn synced(transport: &Arc<FakeTransport>) -> Fixture {
     let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
     fx.put_state(GENERATION);
     fx
 }
 
 /// Sync state of `fx` as saved, and its body.
-fn saved(fx: &Fixture) -> (LocalSyncState, State) {
+pub(super) fn saved(fx: &Fixture) -> (LocalSyncState, State) {
     let local = LocalSyncState::load(&fx.root, fx.id(), &TestSigner::device()).unwrap();
     let state = local.open(&keyring()).unwrap();
     (local, state)
 }
 
 /// Vault file of `fx` as saved, verified.
-fn saved_vault(fx: &Fixture) -> Vault {
+pub(super) fn saved_vault(fx: &Fixture) -> Vault {
     let file = EncryptedVault::load(&fx.vault.path, &TestSigner::device()).unwrap();
     Vault::from_unlocked_key(&fx.vault.unlocked_key().unwrap(), file).unwrap()
 }
 
 /// Actors of `state` that `before` lacks.
-fn new_actors(before: &State, state: &State) -> Vec<ActorId> {
+pub(super) fn new_actors(before: &State, state: &State) -> Vec<ActorId> {
     state
         .actors
         .keys()
@@ -65,7 +65,7 @@ fn new_actors(before: &State, state: &State) -> Vec<ActorId> {
 
 /// Write ids that the context of `state` holds and the context of `before`
 /// does not.
-fn new_write_ids(before: &State, state: &State) -> Vec<WriteId> {
+pub(super) fn new_write_ids(before: &State, state: &State) -> Vec<WriteId> {
     state
         .context
         .iter()
@@ -77,7 +77,7 @@ fn new_write_ids(before: &State, state: &State) -> Vec<WriteId> {
 
 /// State of an earlier session of [`REPLICA`]: the saved sync state of `fx`
 /// with the entries of `vault` recorded by `session`.
-fn own_state(fx: &Fixture, vault: &Vault, session: &mut Session) -> State {
+pub(super) fn own_state(fx: &Fixture, vault: &Vault, session: &mut Session) -> State {
     let mut own = saved(fx).1;
     let edits = LocalEdits::find(&own, vault, REPLICA).unwrap();
     assert!(edits.record(&mut own, session, NOW).is_some());
@@ -85,13 +85,13 @@ fn own_state(fx: &Fixture, vault: &Vault, session: &mut Session) -> State {
 }
 
 /// State file of `state` written by [`REPLICA`] for vault `fx`.
-fn own_file(fx: &Fixture, state: &State) -> Vec<u8> {
+pub(super) fn own_file(fx: &Fixture, state: &State) -> Vec<u8> {
     let padded = PaddedBody::of(state).unwrap();
     StateFile::encode(&padded, fx.id(), REPLICA, KeyId(1), &key()).unwrap()
 }
 
 /// Vault with item `joined` only.
-fn joined_vault() -> Vault {
+pub(super) fn joined_vault() -> Vault {
     let mut vault = Vault::new_for_test();
     vault.add_or_update_item("joined", "Joined").unwrap();
     vault
@@ -106,7 +106,10 @@ fn transaction_with_no_requested_change_and_no_join_saves_nothing() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     fx.add_item().unwrap();
+    // The next transaction moves the staged context of the publish.
+    fx.write(|_| Ok(())).unwrap();
     let before = fx.on_disk();
+    let sidecar = fs::read_to_string(Sidecar::path(&fx.root, fx.id())).unwrap();
     let versions = fx.catalog.files().list_versions(fx.id()).unwrap();
 
     let committed = fx.write(|_| Ok(())).unwrap();
@@ -114,7 +117,10 @@ fn transaction_with_no_requested_change_and_no_join_saves_nothing() {
     assert!(!committed.changed);
     assert_eq!(fx.on_disk(), before);
     assert_eq!(fx.catalog.files().list_versions(fx.id()).unwrap(), versions);
-    assert!(!Sidecar::path(&fx.root, fx.id()).exists());
+    assert_eq!(
+        fs::read_to_string(Sidecar::path(&fx.root, fx.id())).unwrap(),
+        sidecar
+    );
 }
 
 #[test]
@@ -262,6 +268,11 @@ fn own_file_is_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_onl
     let hash = transport.put_state(fx.id(), REPLICA, &own_file(&fx, &own));
     fx.write(|_| Ok(())).unwrap();
     assert_eq!(transport.reads(), 1);
+    // The publish deletes the joined own file. The next transaction moves
+    // the staged context.
+    let published = Sidecar::load(&fx.root, fx.id()).last_publish.unwrap();
+    fx.write(|_| Ok(())).unwrap();
+    assert_eq!(transport.reads(), 1);
 
     let before = fx.on_disk();
     fx.write(|_| Ok(())).unwrap();
@@ -274,7 +285,9 @@ fn own_file_is_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_onl
     assert_eq!(transport.reads(), 2);
     assert!(!committed.changed);
     assert_eq!(fx.on_disk(), before);
-    assert!(Sidecar::load(&fx.root, fx.id()).is_joined(REPLICA, hash));
+    assert!(Sidecar::load(&fx.root, fx.id()).is_joined(REPLICA, published));
+    let name = StateFile::name(fx.id(), hash);
+    assert!(!transport.names(fx.id(), REPLICA).contains(&name));
 }
 
 #[test]
@@ -355,7 +368,7 @@ fn sync_state_file_replaced_while_app_runs_starts_new_actor_at_next_write_id() {
 
 /// Item with a credential that has one previous value and a passkey site
 /// report, saved in a transaction.
-fn add_entries(fx: &Fixture) {
+pub(super) fn add_entries(fx: &Fixture) {
     fx.write(|vh| {
         vh.add_item("item", "Item")?;
         for value in ["one", "two"] {
@@ -367,7 +380,7 @@ fn add_entries(fx: &Fixture) {
     .unwrap();
 }
 
-fn report() -> Report {
+pub(super) fn report() -> Report {
     Report::Unknown {
         rp_id: "example.com".to_string(),
         credential_id: vec![1, 2, 3],
@@ -375,14 +388,11 @@ fn report() -> Report {
 }
 
 /// Change that only removes entries.
-type Removal<'a> = &'a dyn Fn(&mut VaultHandle) -> Result<(), Error>;
+pub(super) type Removal = Box<dyn Fn(&mut VaultHandle) -> Result<(), Error>>;
 
-#[test]
-fn only_edit_that_is_purge_history_purge_or_signal_trim_mints_write_id_only_context_holds() {
-    let transport = Arc::new(FakeTransport::default());
-    let fx = synced(&transport);
-    add_entries(&fx);
-
+/// Changes that only remove entries of [`add_entries`], in the order they
+/// run. The purge needs the item in the trash first.
+pub(super) fn removals() -> [(&'static str, Removal); 3] {
     let history_purge = |vh: &mut VaultHandle| {
         let history = vh.list_history("item", "field")?;
         vh.purge_history("item", "field", history[0].id)
@@ -396,12 +406,20 @@ fn only_edit_that_is_purge_history_purge_or_signal_trim_mints_write_id_only_cont
         let id = vh.list_deleted_items()?[0].item.id;
         vh.purge_item(id)
     };
-    let removals: [(&str, Removal); 3] = [
-        ("history purge", &history_purge),
-        ("signal trim", &signal_trim),
-        ("purge", &purge),
-    ];
-    for (name, removal) in removals {
+    [
+        ("history purge", Box::new(history_purge)),
+        ("signal trim", Box::new(signal_trim)),
+        ("purge", Box::new(purge)),
+    ]
+}
+
+#[test]
+fn only_edit_that_is_purge_history_purge_or_signal_trim_mints_write_id_only_context_holds() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    add_entries(&fx);
+
+    for (name, removal) in removals() {
         // An item is purged from the trash.
         if name == "purge" {
             fx.write(|vh| vh.delete_item("item")).unwrap();

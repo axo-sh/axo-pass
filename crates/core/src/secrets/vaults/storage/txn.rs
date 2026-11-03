@@ -12,9 +12,10 @@
 //! files, runs the change, and records its local edits in the sync state
 //! (`sync/txn.rs`). A synced vault at `v < s`, or of another replica id than
 //! its sync state, is rebuilt from the sync state before the change. `s`
-//! advances if and only if the vault file changes. The sync state is saved
-//! first, then the vault. A sync state under a key id the unlock did not
-//! unwrap is unlocked once more. A second miss saves the vault only.
+//! advances if and only if the vault file changes. The staged file is
+//! written first, then the sync state, then the vault, and the staged file is
+//! then copied to the synced folder. A sync state under a key id the unlock
+//! did not unwrap is unlocked once more. A second miss saves the vault only.
 //! [`VaultWriter::rebuild`] and
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
@@ -480,6 +481,9 @@ impl VaultWriter {
                     session,
                     Timestamp::now().as_second(),
                 )?;
+                // The staged file is written before the sync state that names
+                // it.
+                sync.stage(&self.root)?;
 
                 // The sync state is saved before the vault, whenever it or
                 // `s` changes.
@@ -494,7 +498,7 @@ impl VaultWriter {
                         saved = Some(sync.save(&self.root, &*self.signer, true)?);
                         Ok(())
                     })
-                } else if sync.changed() {
+                } else if sync.needs_save() {
                     sync.save(&self.root, &*self.signer, false).map(|hash| {
                         saved = Some(hash);
                         false
@@ -503,13 +507,22 @@ impl VaultWriter {
                     Ok(false)
                 };
                 // A sync state that failed to save ends the actor, so no
-                // write id it minted is minted again.
+                // write id it minted is minted again. The staged file this
+                // transaction wrote holds that write id, so it is deleted.
                 match saved {
                     Some(hash) => locked.state.record_saved_state(hash),
-                    None if result.is_err() => locked.state.end_actor(),
+                    None if result.is_err() => {
+                        sync.discard_staged(&self.root);
+                        locked.state.end_actor();
+                    },
                     None => {},
                 }
                 let changed = result?;
+                // No signed save follows the vault save. A failed copy does
+                // not fail the save.
+                if let Some(transport) = &self.transport {
+                    sync.publish(&**transport);
+                }
                 sync.save_sidecar(&self.root);
                 changed
             },

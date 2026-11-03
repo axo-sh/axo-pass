@@ -33,6 +33,8 @@ struct FakeFolder {
     failing_writes: bool,
     /// Count of reads of local files.
     reads: usize,
+    /// Count of successful writes.
+    writes: usize,
 }
 
 impl FakeTransport {
@@ -76,6 +78,11 @@ impl FakeTransport {
     /// Count of reads that returned a local file.
     pub(super) fn reads(&self) -> usize {
         self.folder().reads
+    }
+
+    /// Count of writes that succeeded.
+    pub(super) fn writes(&self) -> usize {
+        self.folder().writes
     }
 
     /// File names in the directory of `replica`.
@@ -162,6 +169,7 @@ impl SyncTransport for FakeTransport {
         Self::check_writable(&folder)?;
         let key = (vault_id, replica, name.file_name(vault_id));
         folder.files.insert(key, FakeFile::Local(data.to_vec()));
+        folder.writes += 1;
         Ok(())
     }
 
