@@ -438,14 +438,18 @@ impl VaultWriter {
             other => other?,
         };
 
-        // Join this replica's own state files before any write id is minted.
-        // A rebuilt vault takes the id, key, and file key of the file it
-        // replaces, which verified, and holds the view of the joined state.
+        // Join this replica's own state files, then the peer files, before
+        // any write id is minted. A rebuilt vault takes the id, key, and file
+        // key of the file it replaces, which verified, and holds the view of
+        // the joined state.
         let mut session = None;
         if let Some(sync) = &mut sync {
             let session = session.insert(locked.state.session(sync.replica(), sync.loaded()));
             let joined = match &self.transport {
-                Some(transport) => sync.join_own(&**transport, session),
+                Some(transport) => {
+                    let own = sync.join_own(&**transport, session);
+                    sync.join_peers(&**transport, session) || own
+                },
                 None => false,
             };
             if rebuild {

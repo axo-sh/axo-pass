@@ -27,7 +27,7 @@ pub struct Sidecar {
     /// Content hash of this replica's last successful publish.
     pub last_publish: Option<StateHash>,
     /// Content hashes of the state files joined, by replica. Only hashes of
-    /// files still listed are kept.
+    /// files still listed, and of replicas still listed, are kept.
     pub joined: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
     /// Quarantined state files.
     pub quarantined: Vec<QuarantinedFile>,
@@ -109,6 +109,15 @@ impl Sidecar {
             self.joined.remove(&replica);
         }
         dropped
+    }
+
+    /// Keep only the joined hashes of `own` and of the replicas in `listed`.
+    /// Returns whether a replica was dropped.
+    pub fn retain_replicas(&mut self, own: ReplicaId, listed: &[ReplicaId]) -> bool {
+        let before = self.joined.len();
+        self.joined
+            .retain(|replica, _| *replica == own || listed.contains(replica));
+        self.joined.len() != before
     }
 
     /// Whether the file `name` of `replica` with content hash `hash` is

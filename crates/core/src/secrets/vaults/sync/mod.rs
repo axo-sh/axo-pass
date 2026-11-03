@@ -3,6 +3,7 @@
 pub mod apply;
 pub mod crdt;
 pub mod diff;
+pub mod join;
 pub mod keys;
 pub mod load;
 pub mod local_state;

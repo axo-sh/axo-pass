@@ -20,7 +20,7 @@ use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::{Report, SignalStore};
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
-use crate::secrets::vaults::sync::crdt::{ActorId, CausalStore, Session, WriteId};
+use crate::secrets::vaults::sync::crdt::{ActorId, CausalStore, ReplicaId, Session, WriteId};
 use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::keys::{SyncKey, SyncKeyring, TestKeyWrapper};
 use crate::secrets::vaults::sync::load::SyncLoad;
@@ -86,8 +86,13 @@ pub(super) fn own_state(fx: &Fixture, vault: &Vault, session: &mut Session) -> S
 
 /// State file of `state` written by [`REPLICA`] for vault `fx`.
 pub(super) fn own_file(fx: &Fixture, state: &State) -> Vec<u8> {
+    state_file(fx, REPLICA, state)
+}
+
+/// State file of `state` written by `replica` for vault `fx`.
+pub(super) fn state_file(fx: &Fixture, replica: ReplicaId, state: &State) -> Vec<u8> {
     let padded = PaddedBody::of(state).unwrap();
-    StateFile::encode(&padded, fx.id(), REPLICA, KeyId(1), &key()).unwrap()
+    StateFile::encode(&padded, fx.id(), replica, KeyId(1), &key()).unwrap()
 }
 
 /// Vault with item `joined` only.

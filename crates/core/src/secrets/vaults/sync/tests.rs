@@ -5,6 +5,7 @@ use super::crdt::{ReplicaId, Session};
 mod apply;
 mod diff;
 mod generators;
+mod join;
 mod keys;
 mod load;
 mod local_state;

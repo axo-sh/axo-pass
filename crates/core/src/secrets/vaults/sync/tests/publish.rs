@@ -30,17 +30,17 @@ fn staged_bytes(fx: &Fixture) -> Option<Vec<u8>> {
 }
 
 /// Hash of the last publish recorded in the sidecar of `fx`.
-fn last_publish(fx: &Fixture) -> Option<StateHash> {
+pub(super) fn last_publish(fx: &Fixture) -> Option<StateHash> {
     Sidecar::load(&fx.root, fx.id()).last_publish
 }
 
 /// Own state files of `fx` in the synced folder.
-fn published(transport: &FakeTransport, fx: &Fixture) -> Vec<StateHash> {
+pub(super) fn published(transport: &FakeTransport, fx: &Fixture) -> Vec<StateHash> {
     transport.list_states(fx.id(), REPLICA).unwrap()
 }
 
 /// State of the own state file `hash` of `fx` in the synced folder.
-fn decode(transport: &FakeTransport, fx: &Fixture, hash: StateHash) -> State {
+pub(super) fn decode(transport: &FakeTransport, fx: &Fixture, hash: StateHash) -> State {
     let ReadResult::Local(bytes) = transport
         .read(fx.id(), REPLICA, FileName::State(hash))
         .unwrap()

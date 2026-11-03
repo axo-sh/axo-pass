@@ -1,8 +1,9 @@
 //! Sync state in the write transaction of a synced vault.
 //!
 //! A transaction on a vault with a trusted sync state joins this replica's
-//! own state files first, before any write id is minted. If the join changed
-//! the state, the view is applied to the vault without a diff. The requested
+//! own state files first, then the local state files of the other replicas,
+//! before any write id is minted (`sync/join.rs`). If the join changed the
+//! state, the view is applied to the vault without a diff. The requested
 //! change then runs, and its local edits are recorded under one write id of
 //! the session. `s` advances if and only if the vault file changes. The sync
 //! state is saved if it or `s` changed, always before the vault.
@@ -15,10 +16,9 @@ use std::path::Path;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::crdt::{
-    CausalState, JoinAction, JoinOutcome, OwnFile, OwnFileState, ReplicaId, Session, WriteId,
-};
+use super::crdt::{CausalState, OwnFile, ReplicaId, Session, WriteId};
 use super::diff::{DiffError, LocalEdits};
+use super::join::StateJoin;
 use super::keys::SyncKeyring;
 use super::load::TrustedState;
 use super::local_state::LocalSyncState;
@@ -26,9 +26,9 @@ use super::model::SyncState;
 use super::publish::Staged;
 use super::rebuild::Rebuild;
 use super::sidecar::Sidecar;
+use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
-use super::state_file::{StateFile, StateFileError, StateHash, StateSource};
-use super::transport::{FileName, ReadResult, SyncTransport};
+use super::transport::{FileName, SyncTransport};
 use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::signing::VaultSigner;
@@ -135,95 +135,53 @@ impl SyncTxn {
                 return false;
             },
         };
+        let mut join = self.join(session);
         let mut changed = false;
         let mut own_files = Vec::with_capacity(listed.len());
         for hash in &listed {
-            let state = if self.sidecar.is_joined(replica, *hash) {
-                OwnFileState::Joined
-            } else {
-                let (state, joined) = self.join_file(transport, replica, *hash, session);
-                changed |= joined;
-                state
-            };
-            own_files.push(OwnFile { hash: *hash, state });
+            let file = join.file(transport, replica, *hash);
+            changed |= file.changed();
+            own_files.push(OwnFile {
+                hash: *hash,
+                state: file.into(),
+            });
         }
-        self.sidecar_changed |= self.sidecar.retain_joined(replica, &listed);
+        join.retain(replica, &listed);
         self.own_files = Some(own_files);
         self.changed |= changed;
         changed
     }
 
-    /// Join the state file with hash `hash` of `replica`. Returns the state of
-    /// the file for the publish rules, and whether the state changed.
-    fn join_file(
+    /// Join the state files of every other replica that `transport` lists,
+    /// as received by `session`, after the own files. Returns whether the
+    /// state changed. Peer files are never deleted by this replica.
+    ///
+    /// A file is left, refused, or quarantined as [`Self::join_own`] states.
+    /// A file under another fingerprint for its key id is ignored, and a
+    /// file of a newer format is left. Both are read again in each later
+    /// transaction. A folder or a replica directory that cannot be listed
+    /// stops no other directory.
+    pub(crate) fn join_peers(
         &mut self,
         transport: &dyn SyncTransport,
-        replica: ReplicaId,
-        hash: StateHash,
         session: &mut Session,
-    ) -> (OwnFileState, bool) {
-        let not_joined = (OwnFileState::NotJoined, false);
-        let vault_id = self.vault_id();
-        let name = FileName::State(hash);
-        let file_name = name.file_name(vault_id);
-        let bytes = match transport.read(vault_id, replica, name) {
-            Ok(ReadResult::Local(bytes)) => bytes,
-            Ok(ReadResult::Remote) => return (OwnFileState::Remote, false),
-            Ok(ReadResult::Missing) => return not_joined,
-            Err(e) => {
-                log::warn!("Failed to read state file {file_name} of vault {vault_id}: {e}");
-                return not_joined;
-            },
-        };
-        let content_hash = StateHash::of(&bytes);
-        if self
-            .sidecar
-            .is_quarantined(replica, &file_name, content_hash)
-        {
-            return not_joined;
-        }
-        let source = StateSource {
-            vault_id,
-            replica_id: replica,
-            hash,
-        };
-        let state = match StateFile::decode(&bytes, &source, &self.keyring) {
-            Ok((_, state)) => state,
-            Err(StateFileError::Quarantine(damage)) => {
-                self.quarantine(replica, file_name, content_hash, damage.to_string());
-                return not_joined;
-            },
-            Err(e) => {
-                log::info!("State file {file_name} of vault {vault_id} is not joined: {e}");
-                return not_joined;
-            },
-        };
-        match self.state.try_join(state, session) {
-            Ok(outcome) => {
-                self.sidecar.record_joined(replica, hash);
-                self.sidecar_changed = true;
-                (OwnFileState::Joined, outcome == JoinOutcome::Joined)
-            },
-            Err(e) => {
-                match e.action() {
-                    JoinAction::Refuse => {
-                        log::warn!("State file {file_name} of vault {vault_id} is refused: {e}");
-                    },
-                    JoinAction::Quarantine => {
-                        self.quarantine(replica, file_name, content_hash, e.to_string());
-                    },
-                }
-                not_joined
-            },
-        }
+    ) -> bool {
+        let own = self.replica();
+        let changed = self.join(session).peers(transport, own);
+        self.changed |= changed;
+        changed
     }
 
-    /// Quarantine the file `name` of `replica` with content hash `hash`.
-    fn quarantine(&mut self, replica: ReplicaId, name: String, hash: StateHash, reason: String) {
-        let vault_id = self.vault_id();
-        log::warn!("State file {name} of vault {vault_id} is quarantined: {reason}");
-        self.sidecar.quarantine(replica, name, hash, reason);
-        self.sidecar_changed = true;
+    /// Join of state files into the state, as received by `session`.
+    fn join<'a>(&'a mut self, session: &'a mut Session) -> StateJoin<'a> {
+        StateJoin {
+            vault_id: self.local.vault_id,
+            state: &mut self.state,
+            keyring: &self.keyring,
+            sidecar: &mut self.sidecar,
+            sidecar_changed: &mut self.sidecar_changed,
+            session,
+        }
     }
 
     /// Vault with key `key` and file key `file_key`, holding the view of the

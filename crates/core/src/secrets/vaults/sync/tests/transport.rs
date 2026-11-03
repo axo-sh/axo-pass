@@ -31,6 +31,10 @@ struct FakeFolder {
     files: BTreeMap<(Uuid, ReplicaId, String), FakeFile>,
     unavailable: bool,
     failing_writes: bool,
+    /// Whether listing the replica directories fails.
+    unlistable_replicas: bool,
+    /// Replica directories whose listing fails.
+    unlistable: Vec<ReplicaId>,
     /// Count of reads of local files.
     reads: usize,
     /// Count of successful writes.
@@ -75,6 +79,20 @@ impl FakeTransport {
         self.folder().failing_writes = failing;
     }
 
+    /// Make the listing of the replica directories fail.
+    pub(super) fn set_unlistable_replicas(&self, unlistable: bool) {
+        self.folder().unlistable_replicas = unlistable;
+    }
+
+    /// Make the listing of the directory of `replica` fail.
+    pub(super) fn set_unlistable(&self, replica: ReplicaId, unlistable: bool) {
+        let mut folder = self.folder();
+        folder.unlistable.retain(|r| *r != replica);
+        if unlistable {
+            folder.unlistable.push(replica);
+        }
+    }
+
     /// Count of reads that returned a local file.
     pub(super) fn reads(&self) -> usize {
         self.folder().reads
@@ -117,6 +135,9 @@ impl SyncTransport for FakeTransport {
     fn list_replicas(&self, vault_id: Uuid) -> Result<Vec<ReplicaId>, Error> {
         let folder = self.folder();
         Self::check_available(&folder)?;
+        if folder.unlistable_replicas {
+            return Err(Error::SyncTransportError("listing failed".to_string()));
+        }
         let mut replicas: Vec<ReplicaId> = folder
             .files
             .keys()
@@ -130,6 +151,9 @@ impl SyncTransport for FakeTransport {
     fn list_states(&self, vault_id: Uuid, replica: ReplicaId) -> Result<Vec<StateHash>, Error> {
         let folder = self.folder();
         Self::check_available(&folder)?;
+        if folder.unlistable.contains(&replica) {
+            return Err(Error::SyncTransportError("listing failed".to_string()));
+        }
         Ok(folder
             .files
             .keys()
