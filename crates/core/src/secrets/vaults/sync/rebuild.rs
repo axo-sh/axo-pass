@@ -58,11 +58,23 @@ impl Rebuild {
         key: String,
         file_key: &UnlockedKey,
     ) -> Result<Vault, Error> {
+        let mut vault = Self::empty(local, key, file_key)?;
+        view.apply(&mut vault)?;
+        Ok(vault)
+    }
+
+    /// Empty vault with key `key` and file key `file_key`, at the generation
+    /// and the replica id of `local`, for the view to be applied to. Fails if
+    /// the file key is for another vault id than `local`.
+    pub(crate) fn empty(
+        local: &LocalSyncState,
+        key: String,
+        file_key: &UnlockedKey,
+    ) -> Result<Vault, Error> {
         if file_key.vault_id() != local.vault_id {
             return Err(Error::VaultFileKeyChanged);
         }
         let mut vault = Vault::with_unlocked_key(key, file_key);
-        view.apply(&mut vault)?;
         vault.set_sync(local.generation, Some(local.replica_id.0));
         Ok(vault)
     }

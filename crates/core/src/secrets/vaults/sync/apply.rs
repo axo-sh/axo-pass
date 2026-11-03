@@ -51,38 +51,28 @@ impl VaultView {
     /// added with their ids. Fails if a vault mutation fails. The vault may
     /// then hold part of the view.
     pub fn apply(&self, vault: &mut Vault) -> Result<ApplyReport, Error> {
-        let stored = Stored::of(vault)?;
-        let mut report = ApplyReport::default();
+        Apply::new(self, vault)?.run()
+    }
 
-        if vault.name != self.name {
-            vault.name = self.name.clone();
-            report.changed.insert(Entity::Vault);
-        }
-        if signals_by_key(vault.passkey_signals()) != signals_by_key(&self.signals) {
-            vault.update_passkey_signals(|signals| *signals = self.signals.clone());
-            report.changed.insert(Entity::Vault);
-        }
-
-        let mut apply = Apply {
-            view: self,
-            stored,
-            writer: vault.sync_writer(),
-            report,
-            item_keys: BTreeMap::new(),
-            credential_keys: BTreeMap::new(),
-            added: BTreeSet::new(),
-        };
-        apply.folders()?;
-        apply.items()?;
-        apply.credentials()?;
-        apply.credential_trash()?;
-        apply.item_trash()?;
-        apply.purge_items()?;
-        apply.slots()?;
-        apply.keys()?;
-        Ok(apply.report)
+    /// [`Self::apply`], failing as a vault mutation fails at the first item
+    /// for which `fault` holds, after the folders and the items before it
+    /// are written.
+    #[cfg(test)]
+    pub(crate) fn apply_with_fault(
+        &self,
+        vault: &mut Vault,
+        fault: ApplyFault,
+    ) -> Result<ApplyReport, Error> {
+        let mut apply = Apply::new(self, vault)?;
+        apply.fault = Some(fault);
+        apply.run()
     }
 }
+
+/// Item view whose apply fails, for tests of a view that a build cannot
+/// apply.
+#[cfg(test)]
+pub(crate) type ApplyFault = fn(&ItemView) -> bool;
 
 /// Signal entries by report key.
 fn signals_by_key(store: &SignalStore) -> BTreeMap<String, SignalEntry> {
@@ -180,6 +170,50 @@ struct Apply<'a, 'v> {
     credential_keys: BTreeMap<CredentialId, String>,
     /// Entries the vault lacked.
     added: BTreeSet<Entity>,
+    #[cfg(test)]
+    fault: Option<ApplyFault>,
+}
+
+impl<'a, 'v> Apply<'a, 'v> {
+    /// Apply step of `view` into `vault`, with the vault name and the signals
+    /// written.
+    fn new(view: &'a VaultView, vault: &'v mut Vault) -> Result<Self, Error> {
+        let stored = Stored::of(vault)?;
+        let mut report = ApplyReport::default();
+
+        if vault.name != view.name {
+            vault.name = view.name.clone();
+            report.changed.insert(Entity::Vault);
+        }
+        if signals_by_key(vault.passkey_signals()) != signals_by_key(&view.signals) {
+            vault.update_passkey_signals(|signals| *signals = view.signals.clone());
+            report.changed.insert(Entity::Vault);
+        }
+
+        Ok(Self {
+            view,
+            stored,
+            writer: vault.sync_writer(),
+            report,
+            item_keys: BTreeMap::new(),
+            credential_keys: BTreeMap::new(),
+            added: BTreeSet::new(),
+            #[cfg(test)]
+            fault: None,
+        })
+    }
+
+    fn run(mut self) -> Result<ApplyReport, Error> {
+        self.folders()?;
+        self.items()?;
+        self.credentials()?;
+        self.credential_trash()?;
+        self.item_trash()?;
+        self.purge_items()?;
+        self.slots()?;
+        self.keys()?;
+        Ok(self.report)
+    }
 }
 
 impl Apply<'_, '_> {
@@ -247,6 +281,10 @@ impl Apply<'_, '_> {
 
     fn item(&mut self, shown: &ItemView) -> Result<(), Error> {
         let id = shown.id;
+        #[cfg(test)]
+        if self.fault.is_some_and(|fault| fault(shown)) {
+            return Err(Error::InvalidItemKey(id.to_string()));
+        }
         let entity = Entity::Item(id);
         let stored = &self.stored.items[&id].overview;
         let mut changed = false;

@@ -53,7 +53,8 @@ impl From<FileJoin> for OwnFileState {
 
 /// Join of the state files of vault `vault_id` into `state`, as received by
 /// `session`. Joined and quarantined files are recorded in `sidecar`.
-/// Listing failures and quarantined files are recorded in `found`.
+/// Listing failures, quarantined files, and files of a newer format are
+/// recorded in `found`.
 pub(crate) struct StateJoin<'a> {
     pub vault_id: Uuid,
     pub state: &'a mut CausalState<SyncState>,
@@ -117,6 +118,7 @@ impl StateJoin<'_> {
             },
             Err(e @ StateFileError::VersionSkew(_)) => {
                 log::warn!("State file {file_name} of vault {vault_id} is not joined: {e}");
+                self.found.version_skew += 1;
                 return FileJoin::NotJoined;
             },
             Err(e) => {

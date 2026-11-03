@@ -4,6 +4,7 @@ use super::crdt::{ReplicaId, Session};
 
 mod apply;
 mod diff;
+mod failures;
 mod generators;
 mod guard;
 mod join;

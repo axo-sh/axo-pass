@@ -43,7 +43,7 @@ pub(super) fn peer_state(fx: &Fixture, replica: ReplicaId, item_key: &str) -> St
 }
 
 /// State file `bytes` with the header `format_version` set to `version`.
-fn with_format_version(bytes: &[u8], version: u32) -> Vec<u8> {
+pub(super) fn with_format_version(bytes: &[u8], version: u32) -> Vec<u8> {
     let from = b"\"format_version\":1";
     let to = format!("\"format_version\":{version}");
     let at = bytes

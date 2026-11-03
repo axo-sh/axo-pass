@@ -21,14 +21,27 @@
 //! add the vault differences as concurrent values after the own files and
 //! before the peer files (`sync/repair.rs`). A vault at `v > s` is saved at
 //! `v + 1`.
+//!
+//! An apply or diff failure pauses sync and never fails the save. If the view
+//! of the joined state fails to apply, the join is discarded, and the
+//! requested change runs on the vault as it was before the join and is
+//! recorded against the state as loaded. If the view fails to apply after a
+//! recorded edit, the edit is kept and the vault is saved as the change left
+//! it. If a diff fails, or the view fails to apply in a repair, the
+//! transaction saves the vault only, at the next generation, so the next
+//! transaction runs the `v > s` repair. A discarded join is not recorded as
+//! joined, so the next transaction reads its files again.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use jiff::Timestamp;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::crdt::{CausalState, OwnFile, ReplicaId, Session, WriteId};
+#[cfg(test)]
+use super::apply::ApplyFault;
+use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
 use super::join::StateJoin;
 use super::keys::SyncKeyring;
@@ -72,8 +85,22 @@ pub(crate) struct SyncTxn {
     staged: Option<Staged>,
     sidecar: Sidecar,
     sidecar_changed: bool,
+    /// Joined hashes of the sidecar as loaded, restored if the join is
+    /// discarded.
+    loaded_joined: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
+    /// `stopped_build` and `override_build` as loaded, restored if a repair
+    /// is discarded.
+    loaded_stop: (Option<String>, Option<String>),
+    /// Whether the transaction runs a repair.
+    repairing: bool,
+    /// Whether the transaction saves the vault only, after a diff failure or
+    /// a failed apply in a repair. It joins and records nothing more, stages
+    /// nothing, and saves no sync state.
+    vault_only: bool,
     /// Paused causes found by this transaction.
     found: FoundCauses,
+    #[cfg(test)]
+    apply_fault: Option<ApplyFault>,
 }
 
 impl SyncTxn {
@@ -86,6 +113,8 @@ impl SyncTxn {
         sidecar: Sidecar,
     ) -> Self {
         let TrustedState { local, state } = trusted;
+        let loaded_joined = sidecar.joined.clone();
+        let loaded_stop = (local.stopped_build.clone(), local.override_build.clone());
         Self {
             local,
             state,
@@ -99,8 +128,21 @@ impl SyncTxn {
             staged: None,
             sidecar,
             sidecar_changed: false,
+            loaded_joined,
+            loaded_stop,
+            repairing: false,
+            vault_only: false,
             found: FoundCauses::default(),
+            #[cfg(test)]
+            apply_fault: None,
         }
+    }
+
+    /// Make the apply fail at the first item for which `fault` holds, as on
+    /// a build whose view cannot be applied.
+    #[cfg(test)]
+    pub(crate) fn set_apply_fault(&mut self, fault: Option<ApplyFault>) {
+        self.apply_fault = fault;
     }
 
     pub(crate) fn vault_id(&self) -> Uuid {
@@ -138,7 +180,7 @@ impl SyncTxn {
     /// unchanged. A vault newer than the sync state is saved at the next
     /// generation, so `v == s` afterwards.
     pub(crate) fn forces_vault_save(&self) -> bool {
-        self.newer_vault.is_some()
+        self.newer_vault.is_some() && !self.vault_only
     }
 
     pub(crate) fn keyring(&self) -> &SyncKeyring {
@@ -147,8 +189,20 @@ impl SyncTxn {
 
     /// Whether the sync state needs a save with no change to `s`: a join or a
     /// mint changed the state, or the publish fields of the header changed.
+    /// A transaction that saves the vault only saves no sync state.
     pub(crate) fn needs_save(&self) -> bool {
-        self.changed || self.header_changed
+        !self.vault_only && (self.changed || self.header_changed)
+    }
+
+    /// Whether the transaction saves the vault only, with no sync state.
+    pub(crate) fn is_vault_only(&self) -> bool {
+        self.vault_only
+    }
+
+    /// Whether the transaction joins, records, and stages: sync is not
+    /// stopped, and no failure made the transaction save the vault only.
+    pub(crate) fn syncs(&self) -> bool {
+        !self.is_stopped() && !self.vault_only
     }
 
     /// Join each own state file listed by `transport` that the sidecar does
@@ -227,17 +281,140 @@ impl SyncTxn {
 
     /// Vault with key `key` and file key `file_key`, holding the view of the
     /// state, at the generation and the replica id of the sync state.
+    ///
+    /// If the view of the joined state fails to apply, the join is discarded
+    /// and the vault holds the view of the state as loaded. Fails if that
+    /// view fails to apply too, since no vault older than the sync state is
+    /// saved over it.
     pub(crate) fn rebuilt_vault(
-        &self,
+        &mut self,
         key: String,
         file_key: &UnlockedKey,
     ) -> Result<Vault, Error> {
-        Rebuild::build(&VaultView::of(&self.state), &self.local, key, file_key)
+        let mut vault = Rebuild::empty(&self.local, key.clone(), file_key)?;
+        match self.apply_view(&mut vault) {
+            Ok(()) => Ok(vault),
+            Err(e) if self.changed => {
+                self.apply_failed(e);
+                self.discard_join()?;
+                let mut vault = Rebuild::empty(&self.local, key, file_key)?;
+                self.apply_view(&mut vault)?;
+                Ok(vault)
+            },
+            Err(e) => Err(e),
+        }
     }
 
     /// Apply the view of the state to `vault`, without a diff.
-    pub(crate) fn apply(&self, vault: &mut Vault) -> Result<(), Error> {
-        VaultView::of(&self.state).apply(vault).map(|_| ())
+    fn apply_view(&self, vault: &mut Vault) -> Result<(), Error> {
+        let view = VaultView::of(&self.state);
+        #[cfg(test)]
+        if let Some(fault) = self.apply_fault {
+            return view.apply_with_fault(vault, fault).map(|_| ());
+        }
+        view.apply(vault).map(|_| ())
+    }
+
+    /// Apply the view of the state to `vault`. If the apply fails, `vault`
+    /// is put back as it was before the apply, the failure is recorded as a
+    /// paused cause, and `false` is returned.
+    fn try_apply(&mut self, vault: &mut Vault) -> Result<bool, Error> {
+        let before = vault.duplicate()?;
+        match self.apply_view(vault) {
+            Ok(()) => Ok(true),
+            Err(e) => {
+                *vault = before;
+                self.apply_failed(e);
+                Ok(false)
+            },
+        }
+    }
+
+    /// Apply the view of the joined state to `vault`, before the requested
+    /// change. If the apply fails, the join is discarded, and `vault` is as
+    /// it was before the join. In a repair, the repair is discarded too, and
+    /// the transaction saves the vault only.
+    pub(crate) fn apply_joined(&mut self, vault: &mut Vault) -> Result<(), Error> {
+        if self.try_apply(vault)? {
+            return Ok(());
+        }
+        if self.repairing {
+            self.fall_back()
+        } else {
+            self.discard_join()
+        }
+    }
+
+    /// Apply the view of the state to `vault` after a recorded edit. If the
+    /// apply fails, the edit is kept, and `vault` is saved as the requested
+    /// change left it.
+    pub(crate) fn apply_recorded(&mut self, vault: &mut Vault) -> Result<(), Error> {
+        self.try_apply(vault).map(|_| ())
+    }
+
+    /// Apply the view of the state to `vault`, a restored version. If the
+    /// apply fails, the join and the recorded differences are discarded, and
+    /// the transaction saves the vault only.
+    pub(crate) fn apply_restored(&mut self, vault: &mut Vault) -> Result<(), Error> {
+        if self.try_apply(vault)? {
+            return Ok(());
+        }
+        self.fall_back()
+    }
+
+    fn apply_failed(&mut self, e: Error) {
+        let vault_id = self.vault_id();
+        log::error!("Failed to apply the sync state of vault {vault_id}, sync paused: {e}");
+        self.found.apply_failed(e);
+    }
+
+    /// Discard the joins of this transaction. The state is the state as
+    /// loaded, and the files joined are not recorded as joined, so the next
+    /// transaction reads them again. An own file joined by this transaction
+    /// is not joined for the delete rule. Quarantined files stay
+    /// quarantined.
+    fn discard_join(&mut self) -> Result<(), Error> {
+        if self.changed {
+            self.state = self
+                .local
+                .open(&self.keyring)
+                .map_err(|e| Error::SyncStateEncodeError(e.to_string()))?;
+            self.changed = false;
+            self.padded = None;
+        }
+        if self.sidecar.joined != self.loaded_joined {
+            self.sidecar.joined = self.loaded_joined.clone();
+            self.sidecar_changed = true;
+        }
+        let replica = self.replica();
+        for file in self.own_files.iter_mut().flatten() {
+            if file.state == OwnFileState::Joined && !self.sidecar.is_joined(replica, file.hash) {
+                file.state = OwnFileState::NotJoined;
+            }
+        }
+        Ok(())
+    }
+
+    /// Discard the joins, the repair, and the edits of this transaction, and
+    /// save the vault only. The header is as loaded, so a sync stopped by
+    /// drift stays stopped. The vault is saved at the next generation if it
+    /// changed, so the next transaction runs the `v > s` repair.
+    fn fall_back(&mut self) -> Result<(), Error> {
+        self.discard_join()?;
+        let (stopped_build, override_build) = self.loaded_stop.clone();
+        self.local.stopped_build = stopped_build;
+        self.local.override_build = override_build;
+        self.header_changed = false;
+        self.vault_only = true;
+        Ok(())
+    }
+
+    /// Record that a diff failed with `e`, and save the vault only.
+    fn diff_failed(&mut self, e: Error) -> Result<(), Error> {
+        let vault_id = self.vault_id();
+        log::error!("Failed to diff vault {vault_id} against its sync state, sync paused: {e}");
+        self.found.diff_failed(e);
+        self.fall_back()
     }
 
     /// Whether sync is stopped by drift.
@@ -249,12 +426,15 @@ impl SyncTxn {
     /// the state as loaded, before any join and before the requested change.
     /// If the diff finds edits, sync stops with `stopped_build` set to this
     /// build, and no edit is recorded. A sync that is already stopped stays
-    /// stopped.
+    /// stopped. If the diff fails, the transaction saves the vault only.
     pub(crate) fn guard(&mut self, vault: &Vault) -> Result<(), Error> {
         if self.is_stopped() {
             return Ok(());
         }
-        let edits = self.find(vault)?;
+        let edits = match self.find(vault) {
+            Ok(edits) => edits,
+            Err(e) => return self.diff_failed(e),
+        };
         if edits.is_empty() {
             return Ok(());
         }
@@ -292,6 +472,7 @@ impl SyncTxn {
     pub(crate) fn start_repair(&mut self, repair: Repair) {
         let vault_id = self.vault_id();
         log::warn!("Vault {vault_id} runs the sync repair {repair:?}");
+        self.repairing = true;
         repair.start(&mut self.local);
         if repair != Repair::NewerVault {
             self.header_changed = true;
@@ -305,13 +486,20 @@ impl SyncTxn {
     /// Add each difference of `vault` against the view of the state as a
     /// repair value, under one write id of `session` minted at `now`, in Unix
     /// seconds. Returns the write id, or `None` if the repair adds nothing.
+    /// If the diff fails, the transaction saves the vault only.
     pub(crate) fn record_repair(
         &mut self,
         vault: &Vault,
         session: &mut Session,
         now: i64,
     ) -> Result<Option<WriteId>, Error> {
-        let edits = LocalEdits::find_repair(&self.state, vault, self.replica())?;
+        let edits = match LocalEdits::find_repair(&self.state, vault, self.replica()) {
+            Ok(edits) => edits,
+            Err(e) => {
+                self.diff_failed(e.into())?;
+                return Ok(None);
+            },
+        };
         let count = edits.len();
         let write_id = edits.record_repair(&mut self.state, session, now);
         if write_id.is_some() {
@@ -326,7 +514,8 @@ impl SyncTxn {
     /// one write id of `session` minted at `now`, in Unix seconds. Returns
     /// the write id, or `None` if the vault has no edits. For a `restore`,
     /// an item or credential the vault lacks is moved to the trash, not
-    /// removed.
+    /// removed. If the diff fails, nothing is recorded, and the transaction
+    /// saves the vault only.
     pub(crate) fn record(
         &mut self,
         vault: &Vault,
@@ -336,9 +525,17 @@ impl SyncTxn {
     ) -> Result<Option<WriteId>, Error> {
         let edits = if restore {
             let trashed_at = Timestamp::now().as_second();
-            LocalEdits::find_restore(&self.state, vault, self.replica(), trashed_at)?
+            LocalEdits::find_restore(&self.state, vault, self.replica(), trashed_at)
+                .map_err(Error::from)
         } else {
-            self.find(vault)?
+            self.find(vault)
+        };
+        let edits = match edits {
+            Ok(edits) => edits,
+            Err(e) => {
+                self.diff_failed(e)?;
+                return Ok(None);
+            },
         };
         let write_id = edits.record(&mut self.state, session, now);
         if write_id.is_some() {

@@ -546,6 +546,13 @@ impl Vault {
         Self::decrypt(cipher, enc_vault)
     }
 
+    /// Copy of this vault, encrypted and decrypted again under its own file
+    /// key. Secrets stay encrypted, as in any decrypted vault. A copy of a
+    /// vault as loaded saves to the same file contents.
+    pub(crate) fn duplicate(&self) -> Result<Self, Error> {
+        Self::decrypt(self.cipher.duplicate(), self.to_encrypted(true)?)
+    }
+
     /// Decrypt `enc_vault` under `cipher`. Callers outside this module pass
     /// a [`VerifiedVault`] or the parts of a bundle vault.
     fn decrypt(cipher: VaultCipher, enc_vault: EncryptedVault) -> Result<Self, Error> {

@@ -21,7 +21,8 @@
 //! transaction saves locally and publishes nothing. A `v < s` vault from a
 //! period of stopped sync loads as it is and is not rebuilt. A `v > s` vault,
 //! and a sync stopped by drift on another build or after the user override,
-//! run a repair in place of the guard (`sync/repair.rs`).
+//! run a repair in place of the guard (`sync/repair.rs`). An apply or diff
+//! failure pauses sync and never fails the save (`sync/txn.rs`).
 //! [`VaultWriter::rebuild`] and
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
@@ -50,6 +51,8 @@ use crate::secrets::vaults::model::{UnlockedKey, Vault};
 use crate::secrets::vaults::storage::handle::{
     VaultHandle, check_vault_auth_still_valid, get_vault_encryption_key_on,
 };
+#[cfg(test)]
+use crate::secrets::vaults::sync::apply::ApplyFault;
 use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 #[cfg(test)]
@@ -89,6 +92,10 @@ pub struct VaultWriter {
     transport: Option<Arc<dyn SyncTransport>>,
     /// Seconds added to the clock of mints. Zero outside the tests.
     clock_offset: i64,
+    /// Item views whose apply fails, as on a build whose view cannot apply
+    /// them.
+    #[cfg(test)]
+    apply_fault: Option<ApplyFault>,
 }
 
 impl Default for VaultWriter {
@@ -106,6 +113,8 @@ impl VaultWriter {
             signer: Arc::new(KeychainSigner),
             transport: None,
             clock_offset: 0,
+            #[cfg(test)]
+            apply_fault: None,
         }
     }
 
@@ -126,6 +135,18 @@ impl VaultWriter {
             signer: Arc::new(signer),
             transport: None,
             clock_offset: 0,
+            apply_fault: None,
+        }
+    }
+
+    /// This writer with the apply of the sync state view failing at the
+    /// first item for which `fault` holds, as a build whose view cannot
+    /// apply it. `None` stands for a later build with a fixed view.
+    #[cfg(test)]
+    pub(crate) fn with_apply_fault(self, fault: Option<ApplyFault>) -> Self {
+        Self {
+            apply_fault: fault,
+            ..self
         }
     }
 
@@ -474,6 +495,8 @@ impl VaultWriter {
                 if let SyncLoad::NewerVault { vault, .. } = case {
                     sync.set_newer_vault(vault);
                 }
+                #[cfg(test)]
+                sync.set_apply_fault(self.apply_fault);
                 Some(sync)
             },
             _ => {
@@ -513,6 +536,11 @@ impl VaultWriter {
         // vault. A rebuilt vault takes the id, key, and file key of the file
         // it replaces, which verified, and holds the view of the joined
         // state. A stopped sync joins nothing.
+        //
+        // If the view of the joined state fails to apply, the join is
+        // discarded, and the change runs on the vault as it was before the
+        // join. A diff that fails, and an apply that fails in a repair, make
+        // the transaction save the vault only, with no further join.
         let mut session = None;
         let now = Timestamp::now().as_second() + self.clock_offset;
         if let Some(sync) = &mut sync {
@@ -527,21 +555,21 @@ impl VaultWriter {
                 None => {},
             }
             let session = session.insert(locked.state.session(sync.replica(), sync.loaded()));
-            let transport = self.transport.as_deref().filter(|_| !sync.is_stopped());
+            let transport = self.transport.as_deref();
             let mut changed = false;
-            if let Some(transport) = transport {
+            if let Some(transport) = transport.filter(|_| sync.syncs()) {
                 changed |= sync.join_own(transport, session);
             }
-            if repair.is_some() {
+            if repair.is_some() && sync.syncs() {
                 changed |= sync.record_repair(&vault, session, now)?.is_some();
             }
-            if let Some(transport) = transport {
+            if let Some(transport) = transport.filter(|_| sync.syncs()) {
                 changed |= sync.join_peers(transport, session);
             }
             if rebuild {
                 vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
-            } else if changed {
-                sync.apply(&mut vault)?;
+            } else if changed && sync.syncs() {
+                sync.apply_joined(&mut vault)?;
             }
         }
 
@@ -565,18 +593,20 @@ impl VaultWriter {
                 // the vault shows those keys and the next diff finds no
                 // edits. A stopped sync records no edit. After a repair, the
                 // change is recorded under a second write id, minted after
-                // the peer join.
+                // the peer join. If that view fails to apply, the edit is
+                // kept and the vault is saved as the change left it.
                 let restore = request == SyncRequest::Restore;
-                if !sync.is_stopped()
+                if sync.syncs()
                     && sync
                         .record(vh.get_unlocked_vault()?, session, now, restore)?
                         .is_some()
                 {
-                    sync.apply(vh.get_unlocked_vault_mut()?)?;
+                    sync.apply_recorded(vh.get_unlocked_vault_mut()?)?;
                 }
                 // `s` advances if and only if the vault file changes. A key
                 // change writes the same path. A rebuild always changes the
-                // vault file. A vault at `v > s` is always saved, at `v + 1`.
+                // vault file. A vault at `v > s` is always saved, at `v + 1`,
+                // unless the transaction saves the vault only.
                 let vault_changed =
                     vault_file::is_changed(&contents, &vh)? || sync.forces_vault_save();
                 if vault_changed {
@@ -585,12 +615,15 @@ impl VaultWriter {
                 }
                 // The staged file is written before the sync state that names
                 // it. A stopped sync publishes nothing.
-                if !sync.is_stopped() {
+                if sync.syncs() {
                     sync.stage(&self.root)?;
                 }
 
                 // The sync state is saved before the vault, whenever it or
-                // `s` changes.
+                // `s` changes. A transaction that saves the vault only leaves
+                // the sync state as loaded, so the next load of a changed
+                // vault is `v > s`. It ends the actor, since a write id it
+                // minted is not saved.
                 let mut saved = None;
                 let result = if vault_changed {
                     vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
@@ -599,7 +632,9 @@ impl VaultWriter {
                         } else {
                             self.retain(id, old);
                         }
-                        saved = Some(sync.save(&self.root, &*self.signer, true)?);
+                        if !sync.is_vault_only() {
+                            saved = Some(sync.save(&self.root, &*self.signer, true)?);
+                        }
                         Ok(())
                     })
                 } else if sync.needs_save() {
@@ -619,6 +654,7 @@ impl VaultWriter {
                         sync.discard_staged(&self.root);
                         locked.state.end_actor();
                     },
+                    None if sync.is_vault_only() => locked.state.end_actor(),
                     None => {},
                 }
                 let changed = result?;
@@ -889,7 +925,10 @@ impl VaultWriter {
     /// trash. If the sync state changes, the vault shows its view, the sync
     /// state is saved at the next generation before the vault, and the staged
     /// file is published. Otherwise the vault takes the sync state generation
-    /// and the sync state is left as it is.
+    /// and the sync state is left as it is. If the diff or the apply fails,
+    /// the join and the differences are discarded, and the version is saved
+    /// at the next generation without the sync state, so the next
+    /// transaction runs the `v > s` repair.
     fn restore_refused_synced(
         &self,
         entry: &VaultLock,
@@ -899,6 +938,8 @@ impl VaultWriter {
         mut sync: SyncTxn,
         previous_key: String,
     ) -> Result<Committed<()>, Error> {
+        #[cfg(test)]
+        sync.set_apply_fault(self.apply_fault);
         let session = locked.state.session(sync.replica(), sync.loaded());
         let now = Timestamp::now().as_second() + self.clock_offset;
         if let Some(transport) = &self.transport {
@@ -906,9 +947,16 @@ impl VaultWriter {
             sync.join_peers(&**transport, session);
         }
         sync.record(&vault, session, now, true)?;
+        if sync.needs_save() {
+            sync.apply_restored(&mut vault)?;
+        }
+        // A diff or apply failure saves the version only, at the next
+        // generation, so the next transaction runs the `v > s` repair.
         let generation = if sync.needs_save() {
-            sync.apply(&mut vault)?;
             sync.stage(&self.root)?;
+            sync.next_generation()
+        } else if sync.is_vault_only() {
+            locked.state.end_actor();
             sync.next_generation()
         } else {
             sync.generation()

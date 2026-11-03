@@ -42,6 +42,15 @@ pub enum PausedCause {
     PublishFailed { error: String },
     /// Listed state files are quarantined.
     Quarantined { files: usize },
+    /// Listed state files are of a newer format and are not joined until
+    /// this build is updated.
+    VersionSkew { files: usize },
+    /// The view of the sync state failed to apply to the vault. Each later
+    /// transaction joins the files again.
+    ApplyFailed { error: String },
+    /// The vault failed to diff against the view, so its edits were not
+    /// recorded. The vault was saved without the sync state.
+    DiffFailed { error: String },
     /// The sync state is under a key id the unlock did not unwrap, after a
     /// second unlock. Found again at each load, and not recorded in the
     /// sidecar.
@@ -71,12 +80,26 @@ pub(crate) struct FoundCauses {
     pub(crate) publish_failed: Option<String>,
     /// Number of listed state files found quarantined.
     pub(crate) quarantined: usize,
+    /// Number of listed state files of a newer format.
+    pub(crate) version_skew: usize,
+    pub(crate) apply_failed: Option<String>,
+    pub(crate) diff_failed: Option<String>,
 }
 
 impl FoundCauses {
     /// Record that a listing failed with `error`.
     pub(crate) fn unreachable(&mut self, error: impl ToString) {
         self.unreachable.get_or_insert_with(|| error.to_string());
+    }
+
+    /// Record that the view failed to apply with `error`.
+    pub(crate) fn apply_failed(&mut self, error: impl ToString) {
+        self.apply_failed.get_or_insert_with(|| error.to_string());
+    }
+
+    /// Record that the diff failed with `error`.
+    pub(crate) fn diff_failed(&mut self, error: impl ToString) {
+        self.diff_failed.get_or_insert_with(|| error.to_string());
     }
 
     /// Causes in the order of [`PausedCause`].
@@ -95,6 +118,21 @@ impl FoundCauses {
         if self.quarantined > 0 {
             causes.push(PausedCause::Quarantined {
                 files: self.quarantined,
+            });
+        }
+        if self.version_skew > 0 {
+            causes.push(PausedCause::VersionSkew {
+                files: self.version_skew,
+            });
+        }
+        if let Some(error) = &self.apply_failed {
+            causes.push(PausedCause::ApplyFailed {
+                error: error.clone(),
+            });
+        }
+        if let Some(error) = &self.diff_failed {
+            causes.push(PausedCause::DiffFailed {
+                error: error.clone(),
             });
         }
         causes
