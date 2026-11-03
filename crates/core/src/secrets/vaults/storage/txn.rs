@@ -78,6 +78,8 @@ pub struct VaultWriter {
     /// Synced folder of this replica's own state files. `None` until
     /// milestone 7 builds the transports.
     transport: Option<Arc<dyn SyncTransport>>,
+    /// Seconds added to the clock of mints. Zero outside the tests.
+    clock_offset: i64,
 }
 
 impl Default for VaultWriter {
@@ -94,6 +96,7 @@ impl VaultWriter {
             locks: VaultLocks::global(),
             signer: Arc::new(KeychainSigner),
             transport: None,
+            clock_offset: 0,
         }
     }
 
@@ -113,6 +116,7 @@ impl VaultWriter {
             locks: VaultLocks::default(),
             signer: Arc::new(signer),
             transport: None,
+            clock_offset: 0,
         }
     }
 
@@ -121,6 +125,16 @@ impl VaultWriter {
     pub fn with_transport(self, transport: Arc<dyn SyncTransport>) -> Self {
         Self {
             transport: Some(transport),
+            ..self
+        }
+    }
+
+    /// This writer with `seconds` added to the clock of mints, as a Mac
+    /// whose clock is off. Vault times keep the system clock.
+    #[cfg(test)]
+    pub fn with_clock_offset(self, seconds: i64) -> Self {
+        Self {
+            clock_offset: seconds,
             ..self
         }
     }
@@ -472,6 +486,18 @@ impl VaultWriter {
 
         let changed = match (&mut sync, session) {
             (Some(sync), Some(session)) => {
+                // A recorded edit can change the shown keys of a duplicate
+                // key group, such as a trash of the entry that holds the
+                // bare key. The view of the recorded state is applied, so
+                // the vault shows those keys and the next diff finds no
+                // edits.
+                let now = Timestamp::now().as_second() + self.clock_offset;
+                if sync
+                    .record(vh.get_unlocked_vault()?, session, now)?
+                    .is_some()
+                {
+                    sync.apply(vh.get_unlocked_vault_mut()?)?;
+                }
                 // `s` advances if and only if the vault file changes. A key
                 // change writes the same path. A rebuild always changes the
                 // vault file.
@@ -480,11 +506,6 @@ impl VaultWriter {
                     let vault = vh.get_unlocked_vault_mut()?;
                     vault.set_sync(sync.generation() + 1, vault.replica_id());
                 }
-                sync.record(
-                    vh.get_unlocked_vault()?,
-                    session,
-                    Timestamp::now().as_second(),
-                )?;
                 // The staged file is written before the sync state that names
                 // it.
                 sync.stage(&self.root)?;

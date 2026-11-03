@@ -15,6 +15,7 @@ mod rebuild;
 mod resolve;
 mod round_trip;
 mod sidecar;
+mod simulator;
 mod state_file;
 mod sync_keys;
 mod transport;

@@ -62,6 +62,14 @@ impl FakeTransport {
         hash
     }
 
+    /// Remove the file `name` from the directory of `replica`, as another Mac
+    /// deletes it.
+    pub(super) fn remove(&self, vault_id: Uuid, replica: ReplicaId, name: &str) {
+        self.folder()
+            .files
+            .remove(&(vault_id, replica, name.to_string()));
+    }
+
     /// Mark the file `name` of `replica` as not local yet.
     pub(super) fn put_remote(&self, vault_id: Uuid, replica: ReplicaId, name: &str) {
         self.folder()
