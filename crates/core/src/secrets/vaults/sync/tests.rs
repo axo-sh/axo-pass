@@ -9,6 +9,7 @@ mod keys;
 mod load;
 mod local_state;
 mod model;
+mod rebuild;
 mod resolve;
 mod round_trip;
 mod state_file;

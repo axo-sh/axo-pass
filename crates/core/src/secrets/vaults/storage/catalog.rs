@@ -4,6 +4,8 @@ use std::process::Command;
 use std::sync::Arc;
 use std::{fs, io};
 
+use jiff::Zoned;
+use jiff::civil::Date;
 use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
@@ -19,9 +21,9 @@ use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key,
-    get_vault_encryption_key_on, normalized_key,
+    get_vault_encryption_key_on, normalized_key, validate_key,
 };
-use crate::secrets::vaults::storage::txn::{RetainedVersion, VaultWriter};
+use crate::secrets::vaults::storage::txn::{Committed, RetainedVersion, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
 /// This struct tracks vault files on disk: the vaults directory, the external
@@ -537,6 +539,55 @@ impl VaultCatalog {
         let vh = self.load(key)?;
         let id = vh.peek_vault_id()?;
         Ok((id, self.files.erase_versions(id, &vh.path)?))
+    }
+
+    /// Rebuild vault `id` from its local sync state, for a vault file that is
+    /// refused or missing, at `path` or else at its file in the vaults
+    /// directory. See [`VaultWriter::rebuild`]. The vault key is the key in
+    /// the file header at `path`, if it is valid and no other file claims it.
+    /// Otherwise it is the normalized vault name of the sync state, or
+    /// `vault`. If another file claims that key, `-{yyyymmdd}-{n}` with
+    /// today's local date and the first free `n` from 1 is appended.
+    pub fn rebuild(
+        &self,
+        id: Uuid,
+        path: Option<&Path>,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<()>, Error> {
+        let path = path.map_or_else(
+            || VaultHandle::file_path(&self.vaults_dir, id),
+            Path::to_path_buf,
+        );
+        let header_key = VaultHeader::peek(&path).ok().map(|header| header.key);
+        let today = Zoned::now().date();
+        self.files.rebuild(id, &path, unlock, |name| {
+            Ok(self.rebuild_key(header_key, name, &path, today))
+        })
+    }
+
+    /// Key of a vault rebuilt at `path`, as [`Self::rebuild`] states.
+    fn rebuild_key(
+        &self,
+        header_key: Option<String>,
+        name: Option<&str>,
+        path: &Path,
+        today: Date,
+    ) -> String {
+        let claimed = self.claimed_keys(Some(path));
+        if let Some(key) = header_key.filter(|key| validate_key(key) && !claimed.contains(key)) {
+            return key;
+        }
+        let base = name
+            .and_then(normalized_key)
+            .unwrap_or_else(|| "vault".to_string());
+        if !claimed.contains(&base) {
+            return base;
+        }
+        let date = today.strftime("%Y%m%d");
+        (1u64..)
+            .map(|n| format!("{base}-{date}-{n}"))
+            .find(|key| !claimed.contains(key))
+            .expect("some index is free")
     }
 
     /// Move a file to the Trash with the macOS 15+ `trash` command, instead of

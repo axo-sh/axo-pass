@@ -12,6 +12,7 @@ use super::versions::{DAY_MS, HOUR_MS, kept_versions};
 use super::*;
 use crate::secrets::vaults::format::encrypted_vault::{VAULT_FORMAT, VaultFileKey};
 use crate::secrets::vaults::format::short_id::ShortId;
+use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::fields::FieldKind;
 
 /// A vault written to a temp directory, with its retained versions and lock
@@ -767,6 +768,147 @@ fn restoring_a_version_with_another_file_key_fails() {
             .restore_version(&fx.target(), fx.unlock(), "1-0.json"),
         Err(Error::VaultVersionKeyChanged(_))
     ));
+}
+
+/// Replace the vault file at `path` with a copy signed by another key, which
+/// is refused. Returns the refused contents.
+fn refuse(path: &Path) -> String {
+    let contents = fs::read_to_string(path).unwrap();
+    let forged = EncryptedVault::sign_vault_json(raw(&contents), &TestSigner::random()).unwrap();
+    fs::write(path, &forged).unwrap();
+    forged
+}
+
+#[test]
+fn restore_over_refused_file_copies_it_to_invalid_file_with_bytes_unchanged() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    fx.add(&fx.target(), "alpha", "two");
+    let versions = fx.versions();
+    let refused = refuse(&fx.vault.path);
+    assert!(matches!(
+        fx.files
+            .write::<_, Error>(&fx.target(), fx.unlock(), |_| Ok(())),
+        Err(Error::VaultSignatureInvalid)
+    ));
+
+    let committed = fx
+        .files
+        .restore_refused(&fx.target(), fx.unlock(), &versions[0].name)
+        .unwrap();
+
+    assert!(committed.changed);
+    assert_eq!(fx.value(&fx.vault.path, "alpha").as_deref(), Some("one"));
+    let invalid = fx.files.list_invalid(fx.id());
+    assert_eq!(invalid.len(), 1);
+    assert!(invalid[0].ends_with(".invalid.json"), "{}", invalid[0]);
+    let kept = fs::read_to_string(fx.files.versions(fx.id()).file(&invalid[0])).unwrap();
+    assert_eq!(kept, refused);
+    // The invalid file is not listed or restored as a version.
+    assert_eq!(fx.versions(), versions);
+    assert!(matches!(
+        fx.files
+            .restore_version(&fx.target(), fx.unlock(), &invalid[0]),
+        Err(Error::VaultVersionNotFound(_))
+    ));
+}
+
+#[test]
+fn restore_over_refused_file_refuses_file_that_verifies() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    let versions = fx.versions();
+    let before = fs::read_to_string(&fx.vault.path).unwrap();
+
+    let result = fx
+        .files
+        .restore_refused(&fx.target(), fx.unlock(), &versions[0].name);
+
+    assert!(matches!(result, Err(Error::VaultNotRefused(_))));
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), before);
+    assert!(fx.files.list_invalid(fx.id()).is_empty());
+}
+
+#[test]
+fn failed_unlock_or_forged_version_writes_no_invalid_file() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    fx.add(&fx.target(), "alpha", "two");
+    let versions = fx.versions();
+    let forged_name = &versions[0].name;
+    let path = fx.files.versions(fx.id()).file(forged_name);
+    let version = fs::read_to_string(&path).unwrap();
+    let forged = EncryptedVault::sign_vault_json(raw(&version), &TestSigner::random()).unwrap();
+    fs::write(&path, forged).unwrap();
+    let refused = refuse(&fx.vault.path);
+    let id = fx.id();
+    let wrong_key =
+        || UnlockedKey::for_test(VaultFileKey::new(vec![9u8; 32]), VaultCipher::new(id));
+
+    let forged = fx
+        .files
+        .restore_refused(&fx.target(), fx.unlock(), forged_name);
+    let missing = fx
+        .files
+        .restore_refused(&fx.target(), fx.unlock(), "1-0.json");
+    let wrong = fx
+        .files
+        .restore_refused(&fx.target(), Unlock::Test(&wrong_key), &versions[1].name);
+
+    assert!(matches!(forged, Err(Error::VaultSignatureInvalid)));
+    assert!(matches!(missing, Err(Error::VaultVersionNotFound(_))));
+    assert!(matches!(wrong, Err(Error::VaultVersionKeyChanged(_))));
+    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), refused);
+    assert!(fx.files.list_invalid(fx.id()).is_empty());
+}
+
+#[test]
+fn invalid_files_are_kept_up_to_newest_20_and_not_pruned_by_time() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = VaultWriter::isolated(tmp.path());
+    let dir = files.versions(Uuid::new_v4());
+    let now = now_ms();
+    let old = now - 40 * DAY_MS;
+    for i in 0..22 {
+        dir.add_invalid(old + i, format!("refused {i}").as_bytes())
+            .unwrap();
+    }
+
+    let kept = |dir: &VersionsDir| -> Vec<String> {
+        dir.list_invalid()
+            .unwrap()
+            .iter()
+            .map(|file| fs::read_to_string(dir.file(&file.name)).unwrap())
+            .collect()
+    };
+    let newest: Vec<String> = (2..22).rev().map(|i| format!("refused {i}")).collect();
+    assert_eq!(kept(&dir), newest);
+    assert!(dir.list().unwrap().is_empty());
+
+    dir.add(now, "new").unwrap();
+    dir.prune(now).unwrap();
+    files.prune_all();
+
+    assert_eq!(kept(&dir), newest);
+    assert_eq!(dir.list().unwrap(), vec![version(now, 0)]);
+}
+
+#[test]
+fn erasing_versions_also_deletes_invalid_files() {
+    let fx = Fixture::new();
+    fx.add(&fx.target(), "alpha", "one");
+    let versions = fx.versions();
+    refuse(&fx.vault.path);
+    fx.files
+        .restore_refused(&fx.target(), fx.unlock(), &versions[0].name)
+        .unwrap();
+    assert_eq!(fx.files.list_invalid(fx.id()).len(), 1);
+
+    let erased = fx.files.erase_versions(fx.id(), &fx.vault.path).unwrap();
+
+    assert_eq!(erased, 1);
+    assert!(fx.versions().is_empty());
+    assert!(fx.files.list_invalid(fx.id()).is_empty());
 }
 
 #[test]

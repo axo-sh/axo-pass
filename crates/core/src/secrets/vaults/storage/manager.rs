@@ -192,11 +192,62 @@ impl VaultsManager {
     ) -> Result<(String, Option<String>, Uuid), Error> {
         let (store, target) = Self::locate(manager, vault_key)?;
         let committed = store.files().restore_version(&target, Unlock::App, name)?;
+        Ok(Self::install_restored(manager, committed))
+    }
+
+    /// Replace a refused vault file of a shared manager with its retained
+    /// version `name`, as [`super::txn::VaultWriter::restore_refused`] does,
+    /// and keep the restored copy. Returns the key, name, and id of the
+    /// restored vault.
+    pub fn restore_refused(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        name: &str,
+    ) -> Result<(String, Option<String>, Uuid), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().restore_refused(&target, Unlock::App, name)?;
+        Ok(Self::install_restored(manager, committed))
+    }
+
+    /// Keep the copy a restore saved. Returns its key, name, and id.
+    fn install_restored(
+        manager: &Mutex<Self>,
+        committed: Committed<()>,
+    ) -> (String, Option<String>, Uuid) {
         let key = committed.vault.key.clone();
         let vault_name = committed.vault.vault_name().map(str::to_string);
         let vault_id = committed.vault_id;
         VaultsManager::lock(manager).install(committed);
-        Ok((key, vault_name, vault_id))
+        (key, vault_name, vault_id)
+    }
+
+    /// Rebuild vault `id` of a shared manager from its local sync state, as
+    /// [`VaultCatalog::rebuild`] does, and keep the rebuilt copy. The rebuild
+    /// replaces the file of a listed vault with that id, or else writes its
+    /// file in the vaults directory. The vault is no longer listed as
+    /// missing. Returns the key of the rebuilt vault.
+    pub fn rebuild_vault(manager: &Mutex<Self>, id: Uuid) -> Result<String, Error> {
+        let (store, listed) = {
+            let m = VaultsManager::lock(manager);
+            let listed = m
+                .vaults
+                .iter()
+                .find(|(_, vh)| vh.peek_vault_id().is_ok_and(|listed| listed == id))
+                .map(|(key, vh)| (key.clone(), vh.path.clone()));
+            (m.store.clone(), listed)
+        };
+        let path = listed.as_ref().map(|(_, path)| path.as_path());
+        let committed = store.rebuild(id, path, Unlock::App)?;
+        let key = committed.vault.key.clone();
+        let mut m = VaultsManager::lock(manager);
+        if let Some((listed_key, _)) = listed
+            && listed_key != key
+        {
+            m.vaults.remove(&listed_key);
+        }
+        m.missing.retain(|missing| missing.id != id);
+        m.install(committed);
+        Ok(key)
     }
 
     /// Store and target of a vault of a shared manager, loading the vault if

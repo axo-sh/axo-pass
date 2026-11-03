@@ -14,6 +14,12 @@ pub(super) const DAY_MS: u64 = 24 * HOUR_MS;
 const RECENT_VERSIONS: usize = 100;
 /// Days for which retention keeps the last version of each day.
 const RETAINED_DAYS: u64 = 30;
+/// Invalid files kept per vault.
+const INVALID_FILES: usize = 20;
+/// File name suffix of a retained version.
+const VERSION_SUFFIX: &str = ".json";
+/// File name suffix of an invalid file.
+const INVALID_SUFFIX: &str = ".invalid.json";
 
 /// A retained version of a vault: the vault file as it was before a save.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,8 +34,18 @@ pub struct RetainedVersion {
 }
 
 impl RetainedVersion {
+    /// Version named `{unix_ms}-{n}.json`. An invalid file is not a version.
     pub(super) fn parse(name: &str) -> Option<Self> {
-        let stem = name.strip_suffix(".json")?;
+        Self::parse_with_suffix(name, VERSION_SUFFIX)
+    }
+
+    /// Invalid file named `{unix_ms}-{n}.invalid.json`.
+    fn parse_invalid(name: &str) -> Option<Self> {
+        Self::parse_with_suffix(name, INVALID_SUFFIX)
+    }
+
+    fn parse_with_suffix(name: &str, suffix: &str) -> Option<Self> {
+        let stem = name.strip_suffix(suffix)?;
         let (ms, seq) = stem.split_once('-')?;
         Some(Self {
             name: name.to_string(),
@@ -66,12 +82,32 @@ impl VersionsDir {
     /// created again if [`super::VaultWriter::prune_all`] removed it in the
     /// meantime.
     pub(super) fn add(&self, now: u64, contents: &str) -> io::Result<PathBuf> {
+        self.add_file(now, VERSION_SUFFIX, contents.as_bytes())
+    }
+
+    /// Write `contents`, the bytes of a refused vault file, as a new invalid
+    /// file, and delete all but the newest 20 invalid files. Invalid files are
+    /// never listed as versions.
+    pub(super) fn add_invalid(&self, now: u64, contents: &[u8]) -> io::Result<PathBuf> {
+        let path = self.add_file(now, INVALID_SUFFIX, contents)?;
+        for expired in self.list_invalid()?.iter().skip(INVALID_FILES) {
+            match fs::remove_file(self.file(&expired.name)) {
+                Ok(()) => {},
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(path)
+    }
+
+    /// Write `contents` as a new file `{now}-{n}{suffix}`.
+    fn add_file(&self, now: u64, suffix: &str, contents: &[u8]) -> io::Result<PathBuf> {
         fs::create_dir_all(&self.path)?;
         let mut recreated = false;
         let mut n = 0u64;
         loop {
-            let path = self.file(&format!("{now}-{n}.json"));
-            match write_new_synced(&path, contents.as_bytes()) {
+            let path = self.file(&format!("{now}-{n}{suffix}"));
+            match write_new_synced(&path, contents) {
                 Ok(()) => return Ok(path),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => n += 1,
                 Err(e) if e.kind() == io::ErrorKind::NotFound && !recreated => {
@@ -86,6 +122,19 @@ impl VersionsDir {
     /// Versions, newest first. A missing directory has none. Files with other
     /// names are ignored.
     pub(super) fn list(&self) -> io::Result<Vec<RetainedVersion>> {
+        self.list_parsed(RetainedVersion::parse)
+    }
+
+    /// Invalid files, newest first, in the form of a version.
+    pub(super) fn list_invalid(&self) -> io::Result<Vec<RetainedVersion>> {
+        self.list_parsed(RetainedVersion::parse_invalid)
+    }
+
+    /// Files whose names `parse` reads, newest first.
+    fn list_parsed(
+        &self,
+        parse: fn(&str) -> Option<RetainedVersion>,
+    ) -> io::Result<Vec<RetainedVersion>> {
         let entries = match fs::read_dir(&self.path) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -94,7 +143,7 @@ impl VersionsDir {
         let mut versions = Vec::new();
         for entry in entries {
             let name = entry?.file_name();
-            if let Some(version) = name.to_str().and_then(RetainedVersion::parse) {
+            if let Some(version) = name.to_str().and_then(parse) {
                 versions.push(version);
             }
         }

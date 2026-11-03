@@ -92,6 +92,9 @@ pub enum Error {
     #[error("Retained version {0} has a different vault file key and cannot be restored")]
     VaultVersionKeyChanged(String),
 
+    #[error("Vault file {0} verifies, so it is not replaced as a refused file")]
+    VaultNotRefused(String),
+
     #[error("Passkey operation failed: {0}")]
     Passkey(String),
 

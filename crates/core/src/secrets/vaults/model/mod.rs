@@ -61,6 +61,30 @@ impl UnlockedKey {
         })
     }
 
+    /// New random file key of vault `vault_id`, wrapped with the vault
+    /// encryption key.
+    pub(crate) fn generate(
+        user_encryption_key: &ManagedKey,
+        vault_id: Uuid,
+    ) -> Result<Self, Error> {
+        let raw = Zeroizing::new(Aes256Gcm::generate_key(OsRng));
+        let file_key = VaultFileKey::new(
+            user_encryption_key
+                .encrypt(&raw)
+                .ok_or(Error::VaultFileKeyEncryptionError)?
+                .into_bytes(),
+        );
+        Ok(Self {
+            file_key,
+            cipher: VaultCipher::new_with_bytes(&raw, vault_id),
+        })
+    }
+
+    /// Vault id the file key encrypts for.
+    pub(crate) fn vault_id(&self) -> Uuid {
+        self.cipher.vault_id()
+    }
+
     /// Key of a vault file whose wrapped key is ignored, for tests.
     #[cfg(test)]
     pub(crate) fn for_test(file_key: VaultFileKey, cipher: VaultCipher) -> Self {
@@ -173,6 +197,18 @@ impl Vault {
             autofill_blobs: BTreeMap::new(),
             cred_blobs: BTreeMap::new(),
         }
+    }
+
+    /// New empty vault with key `key` and the file key `file_key`, whose
+    /// vault id it takes. Not synced.
+    pub(crate) fn with_unlocked_key(key: String, file_key: &UnlockedKey) -> Self {
+        Self::empty(
+            file_key.vault_id(),
+            key,
+            None,
+            file_key.file_key.clone(),
+            file_key.cipher.duplicate(),
+        )
     }
 
     /// An empty vault with key `personal`, a random file key, and no keychain

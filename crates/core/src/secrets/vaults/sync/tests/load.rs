@@ -28,13 +28,13 @@ use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
 use crate::secrets::vaults::{Error, VaultCatalog, VaultHandle};
 
 /// Replica id of the synced vaults.
-const REPLICA: ReplicaId = WRITER;
+pub(super) const REPLICA: ReplicaId = WRITER;
 
 /// Generation of the vault files.
-const GENERATION: u64 = 7;
+pub(super) const GENERATION: u64 = 7;
 
 /// SEC1 bytes of the test device key.
-fn device_key() -> Vec<u8> {
+pub(super) fn device_key() -> Vec<u8> {
     let key = TestSigner::device().verifying_key().unwrap();
     key.to_encoded_point(false).as_bytes().to_vec()
 }
@@ -48,7 +48,7 @@ fn other_key() -> Vec<u8> {
 /// State whose `replica_keys` entry of `replica` holds each signing key of
 /// `signing`. Each value is written by its own actor, so the values are
 /// concurrent.
-fn body(replica: ReplicaId, signing: &[Vec<u8>]) -> State {
+pub(super) fn body(replica: ReplicaId, signing: &[Vec<u8>]) -> State {
     let mut state = State::default();
     for signing in signing {
         let mut session = Session::new(replica);
@@ -85,12 +85,17 @@ fn sealed(
 }
 
 /// [`sealed`] with the body `body`, sealed with [`keyring`].
-fn state_of(vault_id: Uuid, replica: ReplicaId, generation: u64, body: &State) -> LocalSyncState {
+pub(super) fn state_of(
+    vault_id: Uuid,
+    replica: ReplicaId,
+    generation: u64,
+    body: &State,
+) -> LocalSyncState {
     sealed(vault_id, replica, generation, body, &keyring())
 }
 
 /// [`state_of`] with the device key as the own key.
-fn state(vault_id: Uuid, replica: ReplicaId, generation: u64) -> LocalSyncState {
+pub(super) fn state(vault_id: Uuid, replica: ReplicaId, generation: u64) -> LocalSyncState {
     state_of(
         vault_id,
         replica,
@@ -110,19 +115,19 @@ fn fingerprints(keyring: &SyncKeyring) -> Vec<(KeyId, KeyFingerprint)> {
 
 /// Vault `personal` written to a temp directory, with the sync files under
 /// the app data directory `root`. The catalog unlocks it with its file key.
-struct Fixture {
+pub(super) struct Fixture {
     _dir: TempDir,
-    root: PathBuf,
-    vaults_dir: PathBuf,
-    catalog: VaultCatalog,
+    pub(super) root: PathBuf,
+    pub(super) vaults_dir: PathBuf,
+    pub(super) catalog: VaultCatalog,
     /// The vault as created, still unlocked.
-    vault: VaultHandle,
+    pub(super) vault: VaultHandle,
 }
 
 impl Fixture {
     /// Vault saved with `generation`, and with replica id `replica` if set.
     /// No sync state is written.
-    fn new(generation: u64, replica: Option<ReplicaId>) -> Self {
+    pub(super) fn new(generation: u64, replica: Option<ReplicaId>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("data");
         let vaults_dir = dir.path().join("vaults");
@@ -148,32 +153,32 @@ impl Fixture {
     }
 
     /// Vault synced as [`REPLICA`] at [`GENERATION`], with no sync state.
-    fn synced() -> Self {
+    pub(super) fn synced() -> Self {
         Self::new(GENERATION, Some(REPLICA))
     }
 
-    fn id(&self) -> Uuid {
+    pub(super) fn id(&self) -> Uuid {
         self.vault.vault_id().unwrap()
     }
 
-    fn state_path(&self) -> PathBuf {
+    pub(super) fn state_path(&self) -> PathBuf {
         LocalSyncState::path(&self.root, self.id())
     }
 
     /// Write `contents` as the sync state file of this vault.
-    fn put_text(&self, contents: &str) {
+    pub(super) fn put_text(&self, contents: &str) {
         let path = self.state_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
     }
 
     /// Write `local`, signed by `signer`, as the sync state of this vault.
-    fn put(&self, local: &LocalSyncState, signer: &TestSigner) {
+    pub(super) fn put(&self, local: &LocalSyncState, signer: &TestSigner) {
         self.put_text(&local.to_file_contents(signer).unwrap());
     }
 
     /// Write a valid sync state of this vault as [`REPLICA`] at `generation`.
-    fn put_state(&self, generation: u64) {
+    pub(super) fn put_state(&self, generation: u64) {
         self.put(
             &state(self.id(), REPLICA, generation),
             &TestSigner::device(),
@@ -181,7 +186,7 @@ impl Fixture {
     }
 
     /// Vault file and sync state file as they are on disk now.
-    fn on_disk(&self) -> (String, Option<String>) {
+    pub(super) fn on_disk(&self) -> (String, Option<String>) {
         (
             fs::read_to_string(&self.vault.path).unwrap(),
             fs::read_to_string(self.state_path()).ok(),
@@ -190,7 +195,7 @@ impl Fixture {
 
     /// Case at the unlock, which loads the sync state and unwraps its keyring
     /// together.
-    fn read_case(&self) -> SyncLoad {
+    pub(super) fn read_case(&self) -> SyncLoad {
         let signer = TestSigner::device();
         let vault = EncryptedVault::load(&self.vault.path, &signer).unwrap();
         SyncLoad::load(&self.root, &vault, &signer, &TestKeyWrapper)
@@ -200,7 +205,7 @@ impl Fixture {
 
     /// Case at a transaction, which unwraps the keyring before the locks and
     /// loads the sync state again under them.
-    fn write_case(&self) -> SyncLoad {
+    pub(super) fn write_case(&self) -> SyncLoad {
         let signer = TestSigner::device();
         let vault = EncryptedVault::load(&self.vault.path, &signer).unwrap();
         let keyring = SyncLoad::keyring(&self.root, &vault, &signer, &TestKeyWrapper);
@@ -209,7 +214,7 @@ impl Fixture {
     }
 
     /// Unlock the vault through the catalog, a read path.
-    fn read(&self) -> Result<VaultHandle, Error> {
+    pub(super) fn read(&self) -> Result<VaultHandle, Error> {
         let mut vh = self.catalog.load("personal")?;
         self.catalog.unlock(&mut vh, AuthContext::OneTime)?;
         Ok(vh)
@@ -217,7 +222,7 @@ impl Fixture {
 
     /// Run `f` in a transaction on the vault, a write path. The keyring is
     /// read from the sync state.
-    fn write(
+    pub(super) fn write(
         &self,
         f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
     ) -> Result<Committed<()>, Error> {
@@ -228,7 +233,7 @@ impl Fixture {
     }
 
     /// Add an item in a transaction.
-    fn add_item(&self) -> Result<Committed<()>, Error> {
+    pub(super) fn add_item(&self) -> Result<Committed<()>, Error> {
         self.write(|vh| vh.add_item("item", "Item").map(|_| ()))
     }
 
@@ -360,9 +365,16 @@ fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
         assert_eq!(read, served, "{name}: unlock");
         assert_eq!(fx.on_disk(), before, "{name}: unlock writes nothing");
 
+        // A transaction rebuilds a `v < s` vault and a vault of another
+        // replica id from the sync state (6a.6).
+        let rebuilt = matches!(
+            expected,
+            SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(Mismatch::ReplicaId(_))
+        );
+        let written = if rebuilt { Ok(()) } else { served.clone() };
         let write = fx.add_item().map(|_| ()).map_err(|e| e.to_string());
-        assert_eq!(write, served, "{name}: transaction");
-        if served.is_err() {
+        assert_eq!(write, written, "{name}: transaction");
+        if written.is_err() {
             assert_eq!(
                 fx.on_disk(),
                 before,

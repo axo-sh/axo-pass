@@ -11,7 +11,7 @@ use std::path::Path;
 use p256::ecdsa::VerifyingKey;
 use uuid::Uuid;
 
-use super::crdt::ReplicaId;
+use super::crdt::{CausalState, ReplicaId};
 use super::keys::{SyncKeyWrapper, SyncKeyring};
 use super::local_state::{LocalStateError, LocalSyncState};
 use super::model::{KeyId, SyncState};
@@ -72,6 +72,13 @@ pub enum SignatureFailure {
     OwnKey,
 }
 
+/// Local sync state whose signature, keyring, body, and own key check all
+/// pass, with its decrypted body.
+pub(crate) struct TrustedState {
+    pub(crate) local: LocalSyncState,
+    pub(crate) state: CausalState<SyncState>,
+}
+
 impl fmt::Display for SyncLoad {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -118,40 +125,73 @@ impl SyncLoad {
         keyring: Option<&SyncKeyring>,
         signer: &dyn VaultSigner,
     ) -> Result<Self, Error> {
+        Ok(Self::classify_trusted(vault, local, keyring, signer)?.0)
+    }
+
+    /// [`Self::classify`], with the trusted sync state if the case compares
+    /// the vault with one: `Current`, `OlderVault`, `NewerVault`, and
+    /// `Mismatch`.
+    pub(crate) fn classify_trusted(
+        vault: &VerifiedVault,
+        local: Result<LocalSyncState, LocalStateError>,
+        keyring: Option<&SyncKeyring>,
+        signer: &dyn VaultSigner,
+    ) -> Result<(Self, Option<TrustedState>), Error> {
         let Some(replica_id) = vault.replica_id else {
             // Any sync state file of a vault that is not synced is left from
             // a disable, whether or not it verifies.
-            return Ok(match local {
-                Err(LocalStateError::Missing) => Self::NotSynced,
-                _ => Self::DisableInProgress,
-            });
+            return Ok((
+                match local {
+                    Err(LocalStateError::Missing) => Self::NotSynced,
+                    _ => Self::DisableInProgress,
+                },
+                None,
+            ));
         };
+        let trusted = match Self::trust(local, keyring, signer)? {
+            Ok(trusted) => trusted,
+            Err(case) => return Ok((case, None)),
+        };
+        let local = &trusted.local;
+        let case = if local.vault_id != vault.id {
+            Self::Mismatch(Mismatch::VaultId(local.vault_id))
+        } else if local.replica_id.0 != replica_id {
+            Self::Mismatch(Mismatch::ReplicaId(local.replica_id))
+        } else {
+            let (vault, state) = (vault.generation, local.generation);
+            match vault.cmp(&state) {
+                std::cmp::Ordering::Equal => Self::Current,
+                std::cmp::Ordering::Less => Self::OlderVault { vault, state },
+                std::cmp::Ordering::Greater => Self::NewerVault { vault, state },
+            }
+        };
+        Ok((case, Some(trusted)))
+    }
+
+    /// Trusted state of `local`, the result of loading a local sync state
+    /// under the key of `signer`, with its body decrypted with `keyring`.
+    /// `keyring` is `None` if it failed to unwrap. Otherwise the case of a
+    /// synced vault whose sync state is not trusted.
+    pub(crate) fn trust(
+        local: Result<LocalSyncState, LocalStateError>,
+        keyring: Option<&SyncKeyring>,
+        signer: &dyn VaultSigner,
+    ) -> Result<Result<TrustedState, Self>, Error> {
         let local = match local {
             Ok(local) => local,
-            Err(e) => return Self::of_error(e),
+            Err(e) => return Self::of_error(e).map(Err),
         };
         let Some(keyring) = keyring else {
-            return Ok(Self::SignatureFailed(SignatureFailure::Keyring));
+            return Ok(Err(Self::SignatureFailed(SignatureFailure::Keyring)));
         };
         let state = match local.open(keyring) {
             Ok(state) => state,
-            Err(e) => return Self::of_error(e),
+            Err(e) => return Self::of_error(e).map(Err),
         };
         if !Self::holds_own_key(&state.store, local.replica_id, signer)? {
-            return Ok(Self::SignatureFailed(SignatureFailure::OwnKey));
+            return Ok(Err(Self::SignatureFailed(SignatureFailure::OwnKey)));
         }
-        if local.vault_id != vault.id {
-            return Ok(Self::Mismatch(Mismatch::VaultId(local.vault_id)));
-        }
-        if local.replica_id.0 != replica_id {
-            return Ok(Self::Mismatch(Mismatch::ReplicaId(local.replica_id)));
-        }
-        let (vault, state) = (vault.generation, local.generation);
-        Ok(match vault.cmp(&state) {
-            std::cmp::Ordering::Equal => Self::Current,
-            std::cmp::Ordering::Less => Self::OlderVault { vault, state },
-            std::cmp::Ordering::Greater => Self::NewerVault { vault, state },
-        })
+        Ok(Ok(TrustedState { local, state }))
     }
 
     /// Case of a synced vault whose sync state fails to load or to open.
@@ -219,7 +259,20 @@ impl SyncLoad {
         if vault.replica_id.is_none() {
             return Some(SyncKeyring::default());
         }
-        Self::unwrap_keyring(&LocalSyncState::load(root, vault.id, signer), wrapper)
+        Self::keyring_of(root, vault.id, signer, wrapper)
+    }
+
+    /// Keyring of the local sync state of vault `vault_id` under the app data
+    /// directory `root`, unwrapped by `wrapper`, for a vault with no vault
+    /// file that verifies. Empty if the sync state fails to load. `None` if
+    /// the keyring fails to unwrap.
+    pub(crate) fn keyring_of(
+        root: &Path,
+        vault_id: Uuid,
+        signer: &dyn VaultSigner,
+        wrapper: &impl SyncKeyWrapper,
+    ) -> Option<SyncKeyring> {
+        Self::unwrap_keyring(&LocalSyncState::load(root, vault_id, signer), wrapper)
     }
 
     /// Keyring of `local` unwrapped by `wrapper`. Empty if `local` failed to

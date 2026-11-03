@@ -72,15 +72,16 @@ pub(super) fn write_new(vh: &VaultHandle, contents: &str) -> Result<(), Error> {
 /// Commit of a save of vault `vh` to `path`, signed by `signer`. The raw vault
 /// bytes are compared to `old_contents`, not the file envelope since
 /// signatures may differ. If the raw vault bytes are equal, this is a no-op.
-/// Otherwise `retain` is called with `old_contents` before the file is
-/// replaced. The path of `vh` is expected to be `path`, because save does not
-/// move vault files. Returns a bool indicating whether anything was written.
+/// Otherwise `before_write` is called with `old_contents` before the file is
+/// replaced, and an error from it leaves the file unchanged. The path of `vh`
+/// is expected to be `path`, because save does not move vault files. Returns a
+/// bool indicating whether anything was written.
 pub(super) fn commit(
     path: &Path,
     old_contents: &str,
     vh: &VaultHandle,
     signer: &dyn VaultSigner,
-    retain: impl FnOnce(&str),
+    before_write: impl FnOnce(&str) -> Result<(), Error>,
 ) -> Result<bool, Error> {
     debug_assert_eq!(vh.path, path);
     let vault_json = vh.vault_json()?;
@@ -88,7 +89,35 @@ pub(super) fn commit(
         return Ok(false);
     }
     let contents = EncryptedVault::sign_vault_json(vault_json, signer)?;
-    retain(old_contents);
+    before_write(old_contents)?;
     write_atomic(path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
     Ok(true)
+}
+
+/// Bytes of the file at `path`, or `None` if no file exists there.
+pub(super) fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::VaultReadError(e)),
+    }
+}
+
+/// Fail with `VaultNotRefused` if `bytes`, the contents of the file at
+/// `path`, are a vault file of vault `id` that verifies under `signer`. A
+/// file that verifies is replaced only by a transaction.
+pub(super) fn check_refused(
+    path: &Path,
+    bytes: &[u8],
+    id: Uuid,
+    signer: &dyn VaultSigner,
+) -> Result<(), Error> {
+    let verifies = std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|contents| EncryptedVault::parse(contents, signer).ok())
+        .is_some_and(|vault| vault.id == id);
+    if verifies {
+        return Err(Error::VaultNotRefused(path.display().to_string()));
+    }
+    Ok(())
 }

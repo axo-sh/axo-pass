@@ -8,6 +8,12 @@
 //! locks are held. Signing with `device-signing-key` never prompts, so it may
 //! run under the locks.
 //!
+//! A synced vault at `v < s`, or of another replica id than its sync state, is
+//! rebuilt from the sync state before the change. The sync state is saved
+//! first, then the vault. [`VaultWriter::rebuild`] and
+//! [`VaultWriter::restore_refused`] replace a refused or missing vault file
+//! without loading it. A replaced refused file is kept as an invalid file.
+//!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file.
 
@@ -20,6 +26,7 @@ use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
 use crate::core::dirs::app_data_dir;
+use crate::core::files::write_atomic;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -33,8 +40,9 @@ use crate::secrets::vaults::storage::handle::{
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
-use crate::secrets::vaults::sync::load::SyncLoad;
+use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::rebuild::Rebuild;
 
 mod locks;
 mod vault_file;
@@ -198,6 +206,34 @@ impl Unlock<'_> {
         }
     }
 
+    /// New file key of vault `id` and the sync keyring of its local sync
+    /// state under the app data directory `root`, for a rebuild with no vault
+    /// file that verifies. The keyring is `None` if it fails to unwrap. A
+    /// vault unlocked in memory holds no vault encryption key to wrap a new
+    /// file key, so `Unlocked` fails with `VaultLocked`.
+    fn new_keys(
+        &self,
+        root: &Path,
+        id: Uuid,
+        signer: &dyn VaultSigner,
+    ) -> Result<(UnlockedKey, Option<SyncKeyring>), Error> {
+        match self {
+            Unlock::App => {
+                check_vault_auth_still_valid()?;
+                let managed_key = get_vault_encryption_key_on(AuthContext::SharedThreadLocal)?;
+                let file_key = UnlockedKey::generate(&managed_key, id)?;
+                let keyring = SyncLoad::keyring_of(root, id, signer, &managed_key);
+                Ok((file_key, keyring))
+            },
+            Unlock::Unlocked(_) => Err(Error::VaultLocked),
+            #[cfg(test)]
+            Unlock::Test(key) => {
+                let keyring = SyncLoad::keyring_of(root, id, signer, &TestKeyWrapper);
+                Ok((key(), keyring))
+            },
+        }
+    }
+
     /// Unwrap the file key and the sync keyring with one vault encryption
     /// key read on `context`.
     fn unwrap_keys(
@@ -324,13 +360,31 @@ impl VaultWriter {
         }
 
         // Classify the file against the local sync state under the locks. A
-        // case that needs a repair writes nothing.
+        // `v < s` vault and a vault of another replica id are rebuilt from the
+        // sync state. Any other case that needs a repair writes nothing.
         let local = LocalSyncState::load(&self.root, id, &*self.signer);
-        let case = SyncLoad::classify(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
-        case.check()?;
-        let (_, keyring) = case.with_keyring(keyring);
+        let (case, trusted) =
+            SyncLoad::classify_trusted(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
+        let rebuild = match (&case, trusted, &keyring) {
+            (
+                SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(Mismatch::ReplicaId(_)),
+                Some(trusted),
+                Some(keyring),
+            ) => Some(Rebuild::new(trusted, keyring)?),
+            _ => None,
+        };
+        // A file of another replica id is refused, so it is kept as an
+        // invalid file. A `v < s` file is retained as a version.
+        let refused = matches!(case, SyncLoad::Mismatch(_));
+        let keyring = match rebuild {
+            Some(_) => keyring.unwrap_or_default(),
+            None => {
+                case.check()?;
+                case.with_keyring(keyring).1
+            },
+        };
 
-        let vault = match Vault::from_unlocked_key(&file_key, enc_vault) {
+        let mut vault = match Vault::from_unlocked_key(&file_key, enc_vault) {
             // Another writer rewrapped the file key. Release the locks and
             // unwrap again.
             Err(Error::VaultFileKeyChanged) => {
@@ -339,6 +393,11 @@ impl VaultWriter {
             },
             other => other?,
         };
+        // A rebuilt vault takes the id, key, and file key of the file it
+        // replaces, which verified.
+        if let Some(rebuild) = &rebuild {
+            vault = rebuild.vault(vault.key().to_string(), &vault.unlocked_key())?;
+        }
 
         // The key comes from the vault. It differs from the caller's key if
         // another writer changed the key since the caller found the vault.
@@ -348,8 +407,18 @@ impl VaultWriter {
         let value = f(&mut vh)?;
 
         // Save only if the vault changed. A key change writes the same path.
+        // A rebuild always changes the generation, and saves the sync state
+        // before the vault.
         let changed = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
-            self.retain(id, old)
+            if refused {
+                self.keep_invalid(id, old.as_bytes())?;
+            } else {
+                self.retain(id, old);
+            }
+            match &rebuild {
+                Some(rebuild) => rebuild.save_state(&self.root, &*self.signer),
+                None => Ok(()),
+            }
         })?;
         let save_count = if changed {
             vault_lock.record_save()
@@ -459,6 +528,189 @@ impl VaultWriter {
             })?;
             vh.restore_vault(vault)
         })
+    }
+
+    /// Replace a refused vault file, one that fails to load, with its retained
+    /// version `name`, without loading the refused file. The vault id is read
+    /// from the refused file header without verifying it, and only picks the
+    /// versions directory. The version is verified and its file key unwrapped
+    /// before the locks. A version whose signature fails is not restored. The
+    /// refused file is kept as an invalid file. A synced version older than a
+    /// trusted sync state of its replica id takes the sync state generation,
+    /// as [`Self::restore_version`] does. Any other case that needs a repair
+    /// writes nothing. Fails with `VaultNotRefused` if the file verifies.
+    pub fn restore_refused(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        name: &str,
+    ) -> Result<Committed<()>, Error> {
+        let not_found = |e| match e {
+            Error::VaultNotFound(_) => Error::VaultVersionNotFound(name.to_string()),
+            e => e,
+        };
+        if RetainedVersion::parse(name).is_none() {
+            return Err(Error::VaultVersionNotFound(name.to_string()));
+        }
+        let id = VaultHeader::peek(&target.path)?.id;
+        let version_path = self.versions(id).file(name);
+        let UnlockedKeys {
+            id: version_id,
+            file_key,
+            keyring,
+        } = unlock
+            .keys(&self.root, &version_path, &*self.signer)
+            .map_err(not_found)?;
+        if version_id != id {
+            return Err(Error::VaultVersionNotFound(name.to_string()));
+        }
+
+        let entry = self.locks.entry(id, &target.path);
+        let mut locked = self.lock_entry(&entry, id)?;
+        let refused = self.refused_file(&locked, id, &target.path)?;
+
+        let contents = EncryptedVault::read_file(&version_path).map_err(not_found)?;
+        let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
+        let local = LocalSyncState::load(&self.root, id, &*self.signer);
+        let case = SyncLoad::classify(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
+        let mut vault = Vault::from_unlocked_key(&file_key, enc_vault).map_err(|e| match e {
+            Error::VaultFileKeyChanged => Error::VaultVersionKeyChanged(name.to_string()),
+            e => e,
+        })?;
+        let keyring = match case {
+            // A retained version of a synced vault is older than its sync
+            // state.
+            SyncLoad::OlderVault { state, .. } => {
+                vault.set_sync(state, vault.replica_id());
+                keyring.unwrap_or_default()
+            },
+            case => {
+                case.check()?;
+                case.with_keyring(keyring).1
+            },
+        };
+        let vh = VaultHandle::unlocked_with_keyring(target.path.clone(), vault, keyring);
+        let previous_key = target.key.clone();
+        self.replace_refused(&entry, &mut locked, refused, vh, previous_key, || Ok(()))
+    }
+
+    /// Rebuild vault `id` at `path` from its trusted local sync state, for a
+    /// vault file that is refused or missing. The rebuild takes a new file
+    /// key, and the vault key that `choose_key` returns for the vault name of
+    /// the view. A file at `path` is kept as an invalid file. The sync state
+    /// is saved first, at the next generation, then the vault. Fails with
+    /// `VaultNotRefused` if `path` holds a file of vault `id` that verifies,
+    /// and with `SyncRepairNeeded` if the sync state is not trusted, belongs
+    /// to another vault, or is `leaving`.
+    pub fn rebuild(
+        &self,
+        id: Uuid,
+        path: &Path,
+        unlock: Unlock<'_>,
+        choose_key: impl FnOnce(Option<&str>) -> Result<String, Error>,
+    ) -> Result<Committed<()>, Error> {
+        let (file_key, keyring) = unlock.new_keys(&self.root, id, &*self.signer)?;
+
+        let entry = self.locks.entry(id, path);
+        let mut locked = self.lock_entry(&entry, id)?;
+        let refused = self.refused_file(&locked, id, path)?;
+
+        let local = LocalSyncState::load(&self.root, id, &*self.signer);
+        let trusted = SyncLoad::trust(local, keyring.as_ref(), &*self.signer)?.map_err(|case| {
+            Error::SyncRepairNeeded(format!("sync state cannot rebuild the vault: {case}"))
+        })?;
+        if trusted.local.vault_id != id {
+            let case = SyncLoad::Mismatch(Mismatch::VaultId(trusted.local.vault_id));
+            return Err(Error::SyncRepairNeeded(case.to_string()));
+        }
+        if trusted.local.leaving {
+            return Err(Error::SyncRepairNeeded(
+                SyncLoad::DisableInProgress.to_string(),
+            ));
+        }
+        // A trusted sync state was opened with the keyring.
+        let keyring = keyring.unwrap_or_default();
+        let rebuild = Rebuild::new(trusted, &keyring)?;
+        let vault = rebuild.vault(choose_key(rebuild.name())?, &file_key)?;
+        let vh = VaultHandle::unlocked_with_keyring(path.to_path_buf(), vault, keyring);
+        let previous_key = vh.key.clone();
+        self.replace_refused(&entry, &mut locked, refused, vh, previous_key, || {
+            rebuild.save_state(&self.root, &*self.signer)
+        })
+    }
+
+    /// Bytes of the refused file of vault `id` at `path`, read under the
+    /// locks `locked`, or `None` if no file exists there. Fails if the vault
+    /// locks track another file that holds the vault, or if the file at
+    /// `path` is a file of the vault that verifies.
+    fn refused_file(
+        &self,
+        locked: &Locked<'_>,
+        id: Uuid,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        vault_file::check_create_path(locked.state.path(), id, path)?;
+        let refused = vault_file::read_bytes(path)?;
+        if let Some(bytes) = &refused {
+            vault_file::check_refused(path, bytes, id, &*self.signer)?;
+        }
+        Ok(refused)
+    }
+
+    /// Write `vh` at its path in place of the refused file `refused`, or as a
+    /// new file if `refused` is `None`. The refused bytes are kept as an
+    /// invalid file first, then `before_write` runs, then the vault is
+    /// written. An error from either leaves the file unchanged.
+    /// `previous_key` is the key the caller knew the vault by.
+    fn replace_refused(
+        &self,
+        entry: &VaultLock,
+        locked: &mut Locked<'_>,
+        refused: Option<Vec<u8>>,
+        vh: VaultHandle,
+        previous_key: String,
+        before_write: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<Committed<()>, Error> {
+        let id = vh.vault_id()?;
+        let contents = vh.file_contents(&*self.signer)?;
+        if let Some(bytes) = &refused {
+            self.keep_invalid(id, bytes)?;
+        }
+        before_write()?;
+        if let Some(dir) = vh.path.parent() {
+            fs::create_dir_all(dir).map_err(Error::VaultDirCreateError)?;
+        }
+        write_atomic(&vh.path, contents.as_bytes()).map_err(Error::VaultWriteError)?;
+        locked.state.set_path(vh.path.clone());
+        Ok(Committed {
+            value: (),
+            vault_id: id,
+            previous_key,
+            changed: true,
+            save_count: entry.record_save(),
+            vault: vh,
+        })
+    }
+
+    /// Keep `contents`, a refused vault file of vault `id`, as an invalid
+    /// file. A failure fails the save, so a refused file is never replaced
+    /// without a copy.
+    fn keep_invalid(&self, id: Uuid, contents: &[u8]) -> Result<(), Error> {
+        self.versions(id)
+            .add_invalid(now_ms(), contents)
+            .map(|_| ())
+            .map_err(Error::VaultWriteError)
+    }
+
+    /// Names of the invalid files of vault `id`, newest first.
+    #[cfg(test)]
+    pub(crate) fn list_invalid(&self, id: Uuid) -> Vec<String> {
+        self.versions(id)
+            .list_invalid()
+            .unwrap()
+            .into_iter()
+            .map(|file| file.name)
+            .collect()
     }
 
     /// Delete every retained version of vault `id`, found at `path`. The vault
