@@ -69,6 +69,11 @@ pub(super) fn write_new(vh: &VaultHandle, contents: &str) -> Result<(), Error> {
     })
 }
 
+/// Whether the raw vault bytes of `vh` differ from those of `old_contents`.
+pub(super) fn is_changed(old_contents: &str, vh: &VaultHandle) -> Result<bool, Error> {
+    Ok(vh.vault_json()? != EncryptedVault::raw_vault_json(old_contents)?)
+}
+
 /// Commit of a save of vault `vh` to `path`, signed by `signer`. The raw vault
 /// bytes are compared to `old_contents`, not the file envelope since
 /// signatures may differ. If the raw vault bytes are equal, this is a no-op.

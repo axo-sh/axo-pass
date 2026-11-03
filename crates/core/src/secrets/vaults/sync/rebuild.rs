@@ -4,7 +4,8 @@
 //! is saved with the next generation, `s + 1`. The sync state is saved first
 //! with that generation and its body sealed again, then the vault. A crash
 //! between the two saves leaves `v < s`, which the next transaction rebuilds
-//! again.
+//! again. [`Rebuild`] is the rebuild on request. A write transaction
+//! rebuilds through [`super::txn::SyncTxn`].
 
 use std::path::Path;
 
@@ -29,11 +30,7 @@ impl Rebuild {
     /// generation with the key of `keyring` that opened it.
     pub(crate) fn new(trusted: TrustedState, keyring: &SyncKeyring) -> Result<Self, Error> {
         let TrustedState { mut local, state } = trusted;
-        let padded = local
-            .open_padded(keyring)
-            .map_err(|e| Error::SyncStateEncodeError(e.to_string()))?;
-        local.generation += 1;
-        local.seal(&padded, keyring)?;
+        local.reseal(local.generation + 1, keyring)?;
         Ok(Self {
             local,
             view: VaultView::of(&state),
@@ -49,18 +46,30 @@ impl Rebuild {
     /// next generation and the replica id of the sync state. Fails if the
     /// file key is for another vault id than the sync state.
     pub(crate) fn vault(&self, key: String, file_key: &UnlockedKey) -> Result<Vault, Error> {
-        if file_key.vault_id() != self.local.vault_id {
+        Self::build(&self.view, &self.local, key, file_key)
+    }
+
+    /// Vault with key `key` and file key `file_key`, holding `view`, at the
+    /// generation and the replica id of `local`. Fails if the file key is for
+    /// another vault id than `local`.
+    pub(crate) fn build(
+        view: &VaultView,
+        local: &LocalSyncState,
+        key: String,
+        file_key: &UnlockedKey,
+    ) -> Result<Vault, Error> {
+        if file_key.vault_id() != local.vault_id {
             return Err(Error::VaultFileKeyChanged);
         }
         let mut vault = Vault::with_unlocked_key(key, file_key);
-        self.view.apply(&mut vault)?;
-        vault.set_sync(self.local.generation, Some(self.local.replica_id.0));
+        view.apply(&mut vault)?;
+        vault.set_sync(local.generation, Some(local.replica_id.0));
         Ok(vault)
     }
 
     /// Save the sync state, signed by `signer`, under the app data directory
     /// `root`. Runs before the vault is saved.
     pub(crate) fn save_state(&self, root: &Path, signer: &dyn VaultSigner) -> Result<(), Error> {
-        self.local.save(root, signer)
+        self.local.save(root, signer).map(|_| ())
     }
 }

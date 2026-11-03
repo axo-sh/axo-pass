@@ -9,7 +9,10 @@ pub mod local_state;
 pub mod model;
 pub mod rebuild;
 pub mod resolve;
+pub mod sidecar;
 pub mod state_file;
+pub mod transport;
+pub mod txn;
 pub mod view;
 
 #[cfg(test)]

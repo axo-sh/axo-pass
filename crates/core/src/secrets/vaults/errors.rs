@@ -56,6 +56,12 @@ pub enum Error {
     #[error("Vault needs a sync repair: {0}")]
     SyncRepairNeeded(String),
 
+    #[error("Failed to compare vault with its sync state: {0}")]
+    SyncDiffError(String),
+
+    #[error("Synced folder failed: {0}")]
+    SyncTransportError(String),
+
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,
 

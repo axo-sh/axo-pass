@@ -193,14 +193,14 @@ impl VaultHandle {
         }
     }
 
-    fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
+    pub(crate) fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
         match &self.state {
             VaultState::Unlocked { vault, .. } => Ok(vault),
             VaultState::Locked { .. } => Err(Error::VaultLocked),
         }
     }
 
-    fn get_unlocked_vault_mut(&mut self) -> Result<&mut Vault, Error> {
+    pub(crate) fn get_unlocked_vault_mut(&mut self) -> Result<&mut Vault, Error> {
         match &mut self.state {
             VaultState::Unlocked { vault, .. } => Ok(vault),
             VaultState::Locked { .. } => Err(Error::VaultLocked),

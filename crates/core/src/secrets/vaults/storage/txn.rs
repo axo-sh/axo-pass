@@ -8,9 +8,14 @@
 //! locks are held. Signing with `device-signing-key` never prompts, so it may
 //! run under the locks.
 //!
-//! A synced vault at `v < s`, or of another replica id than its sync state, is
-//! rebuilt from the sync state before the change. The sync state is saved
-//! first, then the vault. [`VaultWriter::rebuild`] and
+//! A write to a vault with a trusted sync state joins this replica's own state
+//! files, runs the change, and records its local edits in the sync state
+//! (`sync/txn.rs`). A synced vault at `v < s`, or of another replica id than
+//! its sync state, is rebuilt from the sync state before the change. `s`
+//! advances if and only if the vault file changes. The sync state is saved
+//! first, then the vault. A sync state under a key id the unlock did not
+//! unwrap is unlocked once more. A second miss saves the vault only.
+//! [`VaultWriter::rebuild`] and
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
 //!
@@ -22,6 +27,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use crate::core::auth::AuthContext;
@@ -43,6 +49,9 @@ use crate::secrets::vaults::sync::keys::TestKeyWrapper;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
+use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::transport::SyncTransport;
+use crate::secrets::vaults::sync::txn::SyncTxn;
 
 mod locks;
 mod vault_file;
@@ -65,6 +74,9 @@ pub struct VaultWriter {
     root: PathBuf,
     locks: VaultLocks,
     signer: Arc<dyn VaultSigner>,
+    /// Synced folder of this replica's own state files. `None` until
+    /// milestone 7 builds the transports.
+    transport: Option<Arc<dyn SyncTransport>>,
 }
 
 impl Default for VaultWriter {
@@ -80,6 +92,7 @@ impl VaultWriter {
             root: app_data_dir(),
             locks: VaultLocks::global(),
             signer: Arc::new(KeychainSigner),
+            transport: None,
         }
     }
 
@@ -98,6 +111,16 @@ impl VaultWriter {
             root: root.into(),
             locks: VaultLocks::default(),
             signer: Arc::new(signer),
+            transport: None,
+        }
+    }
+
+    /// This writer with the synced folder `transport`.
+    #[cfg(test)]
+    pub fn with_transport(self, transport: Arc<dyn SyncTransport>) -> Self {
+        Self {
+            transport: Some(transport),
+            ..self
         }
     }
 
@@ -159,7 +182,7 @@ pub enum Unlock<'a> {
     /// keychain call runs.
     Unlocked(&'a VaultHandle),
     /// Call a function for the file key, for tests. The keyring is unwrapped
-    /// with [`TestKeyWrapper`].
+    /// with [`TestKeyWrapper`] before the function is called.
     #[cfg(test)]
     Test(&'a (dyn Fn() -> UnlockedKey + Sync)),
 }
@@ -197,10 +220,11 @@ impl Unlock<'_> {
             #[cfg(test)]
             Unlock::Test(key) => {
                 let enc_vault = EncryptedVault::load(path, signer)?;
+                let keyring = SyncLoad::keyring(root, &enc_vault, signer, &TestKeyWrapper);
                 Ok(UnlockedKeys {
                     id: enc_vault.id,
                     file_key: key(),
-                    keyring: SyncLoad::keyring(root, &enc_vault, signer, &TestKeyWrapper),
+                    keyring,
                 })
             },
         }
@@ -298,6 +322,9 @@ enum Attempt<R, F> {
     Done(Committed<R>),
     /// The wrapped file key changed. Holds the unused transaction function.
     Retry(F),
+    /// The sync state is under a key id the unlock did not unwrap. Holds the
+    /// unused transaction function.
+    KeyMissing(F),
 }
 
 impl VaultWriter {
@@ -309,6 +336,10 @@ impl VaultWriter {
     /// unwrapped again. `f` runs once, under the locks. If `f` fails, nothing
     /// is written. If the vault did not change, nothing is written and no
     /// version is retained.
+    ///
+    /// If the sync state is under a key id the unlock did not unwrap, the
+    /// locks are released and the keys are unwrapped once more. A second
+    /// miss saves the vault and leaves the sync state unchanged.
     pub fn write<R, E>(
         &self,
         target: &Target,
@@ -318,21 +349,28 @@ impl VaultWriter {
     where
         E: From<Error>,
     {
+        let mut retry_key_missing = true;
         for _ in 0..MAX_ATTEMPTS {
-            match self.attempt(target, &unlock, f)? {
+            match self.attempt(target, &unlock, retry_key_missing, f)? {
                 Attempt::Done(committed) => return Ok(committed),
                 Attempt::Retry(unused) => f = unused,
+                Attempt::KeyMissing(unused) => {
+                    retry_key_missing = false;
+                    f = unused;
+                },
             }
         }
         Err(Error::VaultFileKeyChanged.into())
     }
 
-    /// One attempt of [`Self::write`]. `f` is returned in `Retry` if it did not
-    /// run.
+    /// One attempt of [`Self::write`]. `f` is returned in `Retry` or
+    /// `KeyMissing` if it did not run. `KeyMissing` is returned only if
+    /// `retry_key_missing` is set.
     fn attempt<R, E, F>(
         &self,
         target: &Target,
         unlock: &Unlock<'_>,
+        retry_key_missing: bool,
         f: F,
     ) -> Result<Attempt<R, F>, E>
     where
@@ -362,25 +400,30 @@ impl VaultWriter {
         // Classify the file against the local sync state under the locks. A
         // `v < s` vault and a vault of another replica id are rebuilt from the
         // sync state. Any other case that needs a repair writes nothing.
-        let local = LocalSyncState::load(&self.root, id, &*self.signer);
+        let loaded = LocalSyncState::load_hashed(&self.root, id, &*self.signer);
+        let loaded_hash = loaded.as_ref().ok().map(|(_, hash)| *hash);
+        let local = loaded.map(|(local, _)| local);
         let (case, trusted) =
             SyncLoad::classify_trusted(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
-        let rebuild = match (&case, trusted, &keyring) {
-            (
-                SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(Mismatch::ReplicaId(_)),
-                Some(trusted),
-                Some(keyring),
-            ) => Some(Rebuild::new(trusted, keyring)?),
-            _ => None,
-        };
+        if retry_key_missing && matches!(case, SyncLoad::KeyMissing(_)) {
+            log::info!("Vault {id} sync state is under a key the unlock lacks, unlocking again");
+            return Ok(Attempt::KeyMissing(f));
+        }
+        let rebuild = matches!(
+            case,
+            SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(Mismatch::ReplicaId(_))
+        );
         // A file of another replica id is refused, so it is kept as an
         // invalid file. A `v < s` file is retained as a version.
         let refused = matches!(case, SyncLoad::Mismatch(_));
-        let keyring = match rebuild {
-            Some(_) => keyring.unwrap_or_default(),
-            None => {
+        let mut sync = match (trusted, keyring, loaded_hash) {
+            (Some(trusted), Some(keyring), Some(hash)) if rebuild || case == SyncLoad::Current => {
+                let sidecar = Sidecar::load(&self.root, id);
+                Some(SyncTxn::new(trusted, keyring, hash, sidecar))
+            },
+            _ => {
                 case.check()?;
-                case.with_keyring(keyring).1
+                None
             },
         };
 
@@ -393,33 +436,90 @@ impl VaultWriter {
             },
             other => other?,
         };
+
+        // Join this replica's own state files before any write id is minted.
         // A rebuilt vault takes the id, key, and file key of the file it
-        // replaces, which verified.
-        if let Some(rebuild) = &rebuild {
-            vault = rebuild.vault(vault.key().to_string(), &vault.unlocked_key())?;
+        // replaces, which verified, and holds the view of the joined state.
+        let mut session = None;
+        if let Some(sync) = &mut sync {
+            let session = session.insert(locked.state.session(sync.replica(), sync.loaded()));
+            let joined = match &self.transport {
+                Some(transport) => sync.join_own(&**transport, session),
+                None => false,
+            };
+            if rebuild {
+                vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
+            } else if joined {
+                sync.apply(&mut vault)?;
+            }
         }
 
         // The key comes from the vault. It differs from the caller's key if
         // another writer changed the key since the caller found the vault.
+        let keyring = sync
+            .as_ref()
+            .map(|sync| sync.keyring().clone())
+            .unwrap_or_default();
         let mut vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, keyring);
 
-        // Apply the change. An error leaves the file unchanged.
+        // Apply the change. An error leaves the files unchanged.
         let value = f(&mut vh)?;
 
-        // Save only if the vault changed. A key change writes the same path.
-        // A rebuild always changes the generation, and saves the sync state
-        // before the vault.
-        let changed = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
-            if refused {
-                self.keep_invalid(id, old.as_bytes())?;
-            } else {
+        let changed = match (&mut sync, session) {
+            (Some(sync), Some(session)) => {
+                // `s` advances if and only if the vault file changes. A key
+                // change writes the same path. A rebuild always changes the
+                // vault file.
+                let vault_changed = vault_file::is_changed(&contents, &vh)?;
+                if vault_changed {
+                    let vault = vh.get_unlocked_vault_mut()?;
+                    vault.set_sync(sync.generation() + 1, vault.replica_id());
+                }
+                sync.record(
+                    vh.get_unlocked_vault()?,
+                    session,
+                    Timestamp::now().as_second(),
+                )?;
+
+                // The sync state is saved before the vault, whenever it or
+                // `s` changes.
+                let mut saved = None;
+                let result = if vault_changed {
+                    vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
+                        if refused {
+                            self.keep_invalid(id, old.as_bytes())?;
+                        } else {
+                            self.retain(id, old);
+                        }
+                        saved = Some(sync.save(&self.root, &*self.signer, true)?);
+                        Ok(())
+                    })
+                } else if sync.changed() {
+                    sync.save(&self.root, &*self.signer, false).map(|hash| {
+                        saved = Some(hash);
+                        false
+                    })
+                } else {
+                    Ok(false)
+                };
+                // A sync state that failed to save ends the actor, so no
+                // write id it minted is minted again.
+                match saved {
+                    Some(hash) => locked.state.record_saved_state(hash),
+                    None if result.is_err() => locked.state.end_actor(),
+                    None => {},
+                }
+                let changed = result?;
+                sync.save_sidecar(&self.root);
+                changed
+            },
+            // Save only if the vault changed. A key change writes the same
+            // path.
+            _ => vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
                 self.retain(id, old);
-            }
-            match &rebuild {
-                Some(rebuild) => rebuild.save_state(&self.root, &*self.signer),
-                None => Ok(()),
-            }
-        })?;
+                Ok(())
+            })?,
+        };
         let save_count = if changed {
             vault_lock.record_save()
         } else {

@@ -103,16 +103,18 @@ fn set_mode(dir: &Path, mode: u32) {
 fn each_row_of_generation_table_takes_stated_action() {
     let device = TestSigner::device();
 
-    // v == s: the vault loads. A transaction keeps the generation and leaves
-    // the sync state unchanged until 6b.1.
+    // v == s: the vault loads. A transaction records the change and saves
+    // both with the next generation, the sync state first.
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
-    let state_before = fs::read_to_string(fx.state_path()).unwrap();
+    let (_, before) = saved_state(&fx.root, fx.id());
     fx.read().unwrap();
     fx.add_item().unwrap();
     let file = EncryptedVault::load(&fx.vault.path, &device).unwrap();
-    assert_eq!(file.generation, GENERATION);
-    assert_eq!(fs::read_to_string(fx.state_path()).unwrap(), state_before);
+    assert_eq!(file.generation, GENERATION + 1);
+    let (local, state) = saved_state(&fx.root, fx.id());
+    assert_eq!(local.generation, GENERATION + 1);
+    assert_ne!(state, before);
     assert_eq!(fx.read_case(), SyncLoad::Current);
 
     // v < s: a read is refused. A transaction rebuilds the vault from the

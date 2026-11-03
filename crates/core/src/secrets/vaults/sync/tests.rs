@@ -12,8 +12,11 @@ mod model;
 mod rebuild;
 mod resolve;
 mod round_trip;
+mod sidecar;
 mod state_file;
 mod sync_keys;
+mod transport;
+mod txn;
 mod view;
 
 /// Time of every mint in the tests.

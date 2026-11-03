@@ -225,6 +225,18 @@ impl LocalSyncState {
         Ok(())
     }
 
+    /// Set the generation to `generation` and seal the body again, unchanged,
+    /// with a fresh nonce. The body is decrypted under the AAD of the old
+    /// generation first. Both the decryption and the encryption use the key
+    /// of `keyring` with this state's key id.
+    pub fn reseal(&mut self, generation: u64, keyring: &SyncKeyring) -> Result<(), Error> {
+        let padded = self
+            .open_padded(keyring)
+            .map_err(|e| Error::SyncStateEncodeError(e.to_string()))?;
+        self.generation = generation;
+        self.seal(&padded, keyring)
+    }
+
     /// Staged file of the padded body `padded`: the state file of this
     /// replica under the key of `keyring` with this state's key id.
     pub fn staged_file(&self, padded: &[u8], keyring: &SyncKeyring) -> Result<Vec<u8>, Error> {
@@ -330,6 +342,15 @@ impl LocalSyncState {
         vault_id: Uuid,
         signer: &dyn VaultSigner,
     ) -> Result<Self, LocalStateError> {
+        Self::load_hashed(root, vault_id, signer).map(|(state, _)| state)
+    }
+
+    /// [`Self::load`], with the SHA-256 of the file bytes.
+    pub fn load_hashed(
+        root: &Path,
+        vault_id: Uuid,
+        signer: &dyn VaultSigner,
+    ) -> Result<(Self, StateHash), LocalStateError> {
         let contents = fs::read_to_string(Self::path(root, vault_id)).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 LocalStateError::Missing
@@ -337,15 +358,18 @@ impl LocalSyncState {
                 LocalStateError::Read(e)
             }
         })?;
-        Self::parse(&contents, signer)
+        let hash = StateHash::of(contents.as_bytes());
+        Ok((Self::parse(&contents, signer)?, hash))
     }
 
     /// Write this state, signed by `signer`, to its file under the app data
-    /// directory `root`, replacing the file in one rename.
-    pub fn save(&self, root: &Path, signer: &dyn VaultSigner) -> Result<(), Error> {
+    /// directory `root`, replacing the file in one rename. Returns the
+    /// SHA-256 of the file bytes.
+    pub fn save(&self, root: &Path, signer: &dyn VaultSigner) -> Result<StateHash, Error> {
         let contents = self.to_file_contents(signer)?;
         let path = Self::path(root, self.vault_id);
         fs::create_dir_all(root.join(SYNC_DIR)).map_err(Error::SyncStateWriteError)?;
-        write_atomic(&path, contents.as_bytes()).map_err(Error::SyncStateWriteError)
+        write_atomic(&path, contents.as_bytes()).map_err(Error::SyncStateWriteError)?;
+        Ok(StateHash::of(contents.as_bytes()))
     }
 }

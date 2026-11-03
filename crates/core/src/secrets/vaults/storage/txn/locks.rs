@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 use super::vault_file;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::sync::crdt::{ReplicaId, Session};
+use crate::secrets::vaults::sync::state_file::StateHash;
 
 /// Locks shared by the app and the broker, which run in one process.
 static GLOBAL_LOCKS: LazyLock<VaultLocks> = LazyLock::new(VaultLocks::default);
@@ -17,7 +19,8 @@ static GLOBAL_LOCKS: LazyLock<VaultLocks> = LazyLock::new(VaultLocks::default);
 /// In-process lock entries of vaults, by vault id.
 ///
 /// Each entry holds the per-vault mutex, the current path of the vault file,
-/// a save counter, and a flag set if the vault was deleted. The mutex
+/// a save counter, a flag set if the vault was deleted, and the sync session
+/// with the hash of the sync state it saved last. The mutex
 /// serializes writers in this process. The cross-process lock file is taken
 /// under it by [`VaultWriter`](super::VaultWriter).
 ///
@@ -53,6 +56,7 @@ impl VaultLocks {
                     state: Mutex::new(VaultLockState {
                         path: path.to_path_buf(),
                         removed: false,
+                        sync: None,
                     }),
                     saves: AtomicU64::new(0),
                 })
@@ -146,9 +150,55 @@ pub(super) struct VaultLockState {
     /// Set if the vault was deleted. A writer that waited for the mutex
     /// fails.
     removed: bool,
+    /// Session that mints the write ids of this vault, if the vault is
+    /// synced.
+    sync: Option<SyncSession>,
+}
+
+/// Session of a synced vault, and the content hash of the sync state this
+/// process saved last.
+#[derive(Debug)]
+struct SyncSession {
+    session: Session,
+    /// `None` until the session saves a sync state.
+    saved: Option<StateHash>,
 }
 
 impl VaultLockState {
+    /// Session that mints write ids of `replica` into the sync state loaded
+    /// from a file with hash `loaded`. The session continues only if this
+    /// process saved that file last, for the same replica. Otherwise a new
+    /// session starts, so the next mint starts a new actor.
+    pub(super) fn session(&mut self, replica: ReplicaId, loaded: StateHash) -> &mut Session {
+        let continues = self
+            .sync
+            .as_ref()
+            .is_some_and(|sync| sync.session.replica == replica && sync.saved == Some(loaded));
+        if !continues {
+            self.sync = Some(SyncSession {
+                session: Session::new(replica),
+                saved: None,
+            });
+        }
+        let sync = self.sync.as_mut().expect("session is set");
+        &mut sync.session
+    }
+
+    /// Record `hash` as the content hash of the sync state this process saved
+    /// last.
+    pub(super) fn record_saved_state(&mut self, hash: StateHash) {
+        if let Some(sync) = &mut self.sync {
+            sync.saved = Some(hash);
+        }
+    }
+
+    /// End the actor of the session, so the next mint starts a new actor.
+    pub(super) fn end_actor(&mut self) {
+        if let Some(sync) = &mut self.sync {
+            sync.session.end();
+        }
+    }
+
     /// Current path of the vault file.
     pub(super) fn path(&self) -> &Path {
         &self.path

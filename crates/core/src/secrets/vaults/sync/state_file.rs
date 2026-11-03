@@ -69,7 +69,7 @@ impl StateHeader {
 
 /// SHA-256 of the bytes of a state file. The serde form and the text form are
 /// 64 lowercase hex characters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StateHash(pub [u8; 32]);
 
 impl StateHash {

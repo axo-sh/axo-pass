@@ -25,6 +25,7 @@ use crate::secrets::vaults::sync::load::{Mismatch, SignatureFailure, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys, SYNC_FORMAT_VERSION};
 use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
+use crate::secrets::vaults::sync::transport::SyncTransport;
 use crate::secrets::vaults::{Error, VaultCatalog, VaultHandle};
 
 /// Replica id of the synced vaults.
@@ -128,10 +129,30 @@ impl Fixture {
     /// Vault saved with `generation`, and with replica id `replica` if set.
     /// No sync state is written.
     pub(super) fn new(generation: u64, replica: Option<ReplicaId>) -> Self {
+        Self::build(generation, replica, None)
+    }
+
+    /// [`Self::new`], with own state files read through `transport`.
+    pub(super) fn with_transport(
+        generation: u64,
+        replica: Option<ReplicaId>,
+        transport: Arc<dyn SyncTransport>,
+    ) -> Self {
+        Self::build(generation, replica, Some(transport))
+    }
+
+    fn build(
+        generation: u64,
+        replica: Option<ReplicaId>,
+        transport: Option<Arc<dyn SyncTransport>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("data");
         let vaults_dir = dir.path().join("vaults");
-        let files = VaultWriter::isolated(&root);
+        let mut files = VaultWriter::isolated(&root);
+        if let Some(transport) = transport {
+            files = files.with_transport(transport);
+        }
         let mut vault = Vault::new_for_test();
         vault.set_sync(generation, replica.map(|replica| replica.0));
         let vh = VaultHandle::new_in(&vaults_dir, vault);
@@ -534,14 +555,16 @@ fn keyring_wrapped_and_unwrapped_through_test_unlock_gives_same_keys() {
 fn renaming_vault_key_leaves_sync_state_in_place_and_next_transaction_finds_it() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
-    let state_before = fs::read_to_string(fx.state_path()).unwrap();
 
     let renamed = fx
         .write(|vh| vh.set_vault_key("renamed".to_string()))
         .unwrap();
 
     assert_eq!(renamed.vault.key, "renamed");
-    assert_eq!(fs::read_to_string(fx.state_path()).unwrap(), state_before);
+    // The sync state stays at its path, and the rename advances it to the
+    // next generation (D15).
+    let local = LocalSyncState::load(&fx.root, fx.id(), &TestSigner::device()).unwrap();
+    assert_eq!(local.generation, GENERATION + 1);
     let key = || fx.vault.unlocked_key().unwrap();
     let next = fx
         .catalog
@@ -625,21 +648,19 @@ fn sync_state_with_no_vault_file_is_listed_as_missing_vault() {
 }
 
 #[test]
-fn restore_keeps_current_generation_and_replica_id() {
+fn restore_takes_next_generation_of_sync_state_and_keeps_replica_id() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     fx.add_item().unwrap();
-    fx.write(|vh| vh.set_sync_for_test(GENERATION + 1, Some(REPLICA.0)))
-        .unwrap();
-    fx.put_state(GENERATION + 1);
     let versions = fx.catalog.files().list_versions(fx.id()).unwrap();
-    assert_eq!(versions.len(), 2);
+    assert_eq!(versions.len(), 1);
 
     // The oldest version is the vault as created, at the older generation.
-    fx.restore(&versions[1].name).unwrap();
+    fx.restore(&versions[0].name).unwrap();
 
+    // The restore is a save at `v == s`, so it advances `s`.
     let file = EncryptedVault::load(&fx.vault.path, &TestSigner::device()).unwrap();
-    assert_eq!(file.generation, GENERATION + 1);
+    assert_eq!(file.generation, GENERATION + 2);
     assert_eq!(file.replica_id, Some(REPLICA.0));
     assert!(file.items.is_empty());
     assert_eq!(fx.read_case(), SyncLoad::Current);
