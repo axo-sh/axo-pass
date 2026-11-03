@@ -1,9 +1,16 @@
-//! State file body.
+//! State file body and state file format.
 
+use std::io::Write;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use ciborium::Value;
+use flate2::Compression;
+use flate2::write::DeflateEncoder;
 use indoc::indoc;
 use proptest::prelude::*;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::generators::Script;
@@ -11,16 +18,22 @@ use super::view::State;
 use super::{NOW, id, session};
 use crate::schema_snapshot::SchemaSnapshot;
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
+use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::{SignalEntry, UnknownEntry};
 use crate::secrets::vaults::sync::crdt::{
     ActorId, Ask, CausalContext, Mint, MvRegister, ReplicaId, Versioned, WriteId,
 };
+use crate::secrets::vaults::sync::keys::{KeyFingerprint, SyncKey, SyncKeyring};
 use crate::secrets::vaults::sync::model::{
     FolderValue, HistoryValue, KeyId, Placement, PublicKey, RecoveryRecipient, Removal,
     ReplicaKeys, SYNC_FORMAT_VERSION, SecretText, SectionValue, TrashValue, WebsiteValue,
 };
 use crate::secrets::vaults::sync::state_file::body::{BodyError, StateBody};
+use crate::secrets::vaults::sync::state_file::padded::{MAX_BODY_LEN, PaddedBody, PaddingError};
+use crate::secrets::vaults::sync::state_file::{
+    Damage, StateFile, StateFileError, StateHash, StateHeader, StateSource,
+};
 
 /// Name of the body schema in `snapshots/`.
 const SCHEMA: &str = "sync-body";
@@ -34,7 +47,7 @@ fn cbor<T: Serialize>(value: &T) -> Vec<u8> {
 
 /// State with every register of every kind written, a conflict, and three
 /// replicas. Replica 3 appears only in the per-replica maps.
-fn full_state() -> State {
+pub(super) fn full_state() -> State {
     let mut one = session(1);
     let mut two = session(2);
     let retired = ReplicaId(id(3));
@@ -539,4 +552,437 @@ fn state_body_change_without_format_bump_fails_snapshot() {
 
     assert!(error.contains("without a version bump"), "{error}");
     assert!(error.contains("full-body"), "{error}");
+}
+
+/// Vault of every state file test.
+pub(super) const VAULT: Uuid = Uuid::from_u128(0x100);
+
+/// Writer of every state file test.
+pub(super) const WRITER: ReplicaId = ReplicaId(Uuid::from_u128(1));
+
+/// Sync key of the tests, with key id 1.
+pub(super) fn key() -> SyncKey {
+    SyncKey::from_bytes([1; 32])
+}
+
+/// Keyring with [`key`] under key id 1.
+pub(super) fn keyring() -> SyncKeyring {
+    SyncKeyring::new(vec![(KeyId(1), key())]).unwrap()
+}
+
+/// State file of the padded body `padded`, by [`WRITER`] under [`key`].
+fn file_of(padded: &[u8]) -> Vec<u8> {
+    StateFile::encode(padded, VAULT, WRITER, KeyId(1), &key()).unwrap()
+}
+
+/// State file of `state`.
+fn file(state: &State) -> Vec<u8> {
+    file_of(&PaddedBody::of(state).unwrap())
+}
+
+/// Source of `bytes` in the directories of [`VAULT`] and [`WRITER`].
+fn source(bytes: &[u8]) -> StateSource {
+    StateSource {
+        vault_id: VAULT,
+        replica_id: WRITER,
+        hash: StateHash::of(bytes),
+    }
+}
+
+/// Decode `bytes` under its own hash with [`keyring`].
+fn decode(bytes: &[u8]) -> Result<(StateHeader, State), StateFileError> {
+    StateFile::decode(bytes, &source(bytes), &keyring())
+}
+
+/// Header JSON and ciphertext of the state file `bytes`.
+fn split(bytes: &[u8]) -> (serde_json::Value, Vec<u8>) {
+    let len = u32::from_be_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let header = serde_json::from_slice(&bytes[8..8 + len]).unwrap();
+    (header, bytes[8 + len..].to_vec())
+}
+
+/// State file of the header JSON `header` and `ciphertext`.
+fn join(header: &serde_json::Value, ciphertext: &[u8]) -> Vec<u8> {
+    let header = serde_json::to_vec(header).unwrap();
+    let len = (header.len() as u32).to_be_bytes();
+    [&b"APST"[..], &len, &header, ciphertext].concat()
+}
+
+/// The state file `bytes` with `edit` applied to its header JSON.
+fn with_header(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    let (mut header, ciphertext) = split(bytes);
+    edit(&mut header);
+    join(&header, &ciphertext)
+}
+
+#[test]
+fn state_file_round_trips_and_is_named_by_hash_of_its_bytes() {
+    let state = full_state();
+    let bytes = file(&state);
+
+    let (header, decoded) = decode(&bytes).unwrap();
+
+    assert_eq!(decoded, state);
+    assert_eq!(&bytes[..4], b"APST");
+    assert_eq!(header.format_version, SYNC_FORMAT_VERSION);
+    assert_eq!(header.vault_id, VAULT);
+    assert_eq!(header.replica_id, WRITER);
+    assert_eq!(header.key_id, KeyId(1));
+    assert_eq!(header.key_fingerprint, key().fingerprint());
+    let hex: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let expected = format!("{}.{hex}.apstate", ShortId::encode_uuid(VAULT));
+    assert_eq!(StateFile::name(VAULT, StateHash::of(&bytes)), expected);
+    assert_eq!(StateHash::of(&bytes).to_string(), hex);
+    assert_eq!(StateHash::parse(&hex), Some(StateHash::of(&bytes)));
+}
+
+#[test]
+fn header_is_json_with_ids_hyphenated_and_bytes_base64() {
+    let (header, _) = split(&file(&State::default()));
+    let fingerprint = B64.encode(key().fingerprint().0);
+    assert_eq!(header["format_version"], 1);
+    assert_eq!(header["vault_id"], VAULT.to_string());
+    assert_eq!(header["replica_id"], WRITER.0.to_string());
+    assert_eq!(header["key_id"], 1);
+    assert_eq!(header["key_fingerprint"], fingerprint);
+    assert_eq!(
+        B64.decode(header["nonce"].as_str().unwrap()).unwrap().len(),
+        12
+    );
+    assert_eq!(header.as_object().unwrap().len(), 6);
+}
+
+#[test]
+fn aad_is_canonical_string_of_header() {
+    let header = StateHeader {
+        format_version: 1,
+        vault_id: VAULT,
+        replica_id: WRITER,
+        key_id: KeyId(12),
+        key_fingerprint: KeyFingerprint([0xab; 16]),
+        nonce: [0; 12],
+    };
+    assert_eq!(
+        header.aad(),
+        "ap-state-body-v1:1:00000000-0000-0000-0000-000000000100:\
+         00000000-0000-0000-0000-000000000001:12:abababababababababababababababab"
+    );
+}
+
+#[test]
+fn changed_header_field_fails_aad_check() {
+    let bytes = file(&full_state());
+    let other_vault = Uuid::from_u128(0x200);
+    let other_replica = ReplicaId(Uuid::from_u128(2));
+    // Key 1 also under key id 2, so a changed key id reaches the AAD check.
+    let keyring = SyncKeyring::new(vec![(KeyId(1), key()), (KeyId(2), key())]).unwrap();
+
+    let cases: [(&str, Vec<u8>, StateSource); 3] = [
+        ("vault_id", other_vault, WRITER),
+        ("replica_id", VAULT, other_replica),
+        ("key_id", VAULT, WRITER),
+    ]
+    .map(|(field, vault_id, replica_id)| {
+        let changed = with_header(&bytes, |header| {
+            header[field] = match field {
+                "vault_id" => other_vault.to_string().into(),
+                "replica_id" => other_replica.0.to_string().into(),
+                _ => 2.into(),
+            };
+        });
+        let source = StateSource {
+            vault_id,
+            replica_id,
+            hash: StateHash::of(&changed),
+        };
+        (field, changed, source)
+    });
+    for (field, changed, source) in cases {
+        assert_eq!(
+            StateFile::decode(&changed, &source, &keyring),
+            Err(StateFileError::Quarantine(Damage::Decryption)),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn file_under_other_fingerprint_for_its_key_id_is_ignored_not_quarantined() {
+    let bytes = file(&full_state());
+    let other = SyncKeyring::new(vec![(KeyId(1), SyncKey::from_bytes([2; 32]))]).unwrap();
+
+    let error = StateFile::decode(&bytes, &source(&bytes), &other).unwrap_err();
+
+    assert_eq!(error, StateFileError::OtherKey(KeyId(1)));
+    assert!(!error.is_quarantine());
+}
+
+#[test]
+fn file_under_key_id_keyring_lacks_is_waiting_for_key_not_damaged() {
+    let bytes = file(&full_state());
+    let later = SyncKeyring::new(vec![(KeyId(2), key())]).unwrap();
+
+    for keyring in [SyncKeyring::default(), later] {
+        let error = StateFile::decode(&bytes, &source(&bytes), &keyring).unwrap_err();
+        assert_eq!(error, StateFileError::WaitingForKey(KeyId(1)));
+        assert!(!error.is_quarantine());
+    }
+}
+
+#[test]
+fn file_whose_vault_or_replica_does_not_match_names_it_is_read_under_fails() {
+    let bytes = file(&full_state());
+    let other_vault = Uuid::from_u128(0x200);
+    let other_replica = ReplicaId(Uuid::from_u128(2));
+
+    let in_other_vault = StateSource {
+        vault_id: other_vault,
+        ..source(&bytes)
+    };
+    let in_other_replica = StateSource {
+        replica_id: other_replica,
+        ..source(&bytes)
+    };
+
+    assert_eq!(
+        StateFile::decode(&bytes, &in_other_vault, &keyring()),
+        Err(StateFileError::Quarantine(Damage::WrongVault(VAULT)))
+    );
+    assert_eq!(
+        StateFile::decode(&bytes, &in_other_replica, &keyring()),
+        Err(StateFileError::Quarantine(Damage::WrongReplica(WRITER)))
+    );
+}
+
+#[test]
+fn file_whose_bytes_do_not_hash_to_its_name_fails() {
+    let bytes = file(&full_state());
+    let mut changed = bytes.clone();
+    *changed.last_mut().unwrap() ^= 1;
+
+    assert_eq!(
+        StateFile::decode(&changed, &source(&bytes), &keyring()),
+        Err(StateFileError::Quarantine(Damage::HashMismatch))
+    );
+}
+
+#[test]
+fn file_without_magic_or_with_header_length_past_end_fails() {
+    let bytes = file(&full_state());
+    let mut no_magic = bytes.clone();
+    no_magic[0] = b'X';
+    let mut long_header = bytes.clone();
+    let past_end = (bytes.len() as u32).to_be_bytes();
+    long_header[4..8].copy_from_slice(&past_end);
+    let short = bytes[..6].to_vec();
+
+    let cases = [
+        ("no magic", no_magic, Damage::NoMagic),
+        ("header length", long_header, Damage::HeaderLength),
+        ("short", short, Damage::HeaderLength),
+    ];
+    for (case, bytes, damage) in cases {
+        assert_eq!(
+            decode(&bytes),
+            Err(StateFileError::Quarantine(damage)),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn header_with_unknown_field_fails() {
+    let bytes = with_header(&file(&full_state()), |header| {
+        header["unknown_field"] = 1.into();
+    });
+
+    let error = decode(&bytes).unwrap_err();
+
+    assert!(
+        matches!(&error, StateFileError::Quarantine(Damage::Header(message)) if message.contains("unknown field")),
+        "{error}"
+    );
+}
+
+#[test]
+fn header_with_newer_format_version_is_version_skew() {
+    let newer = with_header(&file(&full_state()), |header| {
+        header["format_version"] = 2.into();
+        header["field_of_format_2"] = 1.into();
+    });
+    let older = with_header(&file(&full_state()), |header| {
+        header["format_version"] = 0.into();
+    });
+
+    assert!(matches!(
+        decode(&newer),
+        Err(StateFileError::VersionSkew(_))
+    ));
+    assert!(matches!(
+        decode(&older),
+        Err(StateFileError::Quarantine(Damage::Header(_)))
+    ));
+}
+
+#[test]
+fn body_with_unknown_field_in_file_is_version_skew() {
+    let body = with_unknown_field(|v| field(v, "store"));
+    let bytes = file_of(&PaddedBody::pad(&body).unwrap());
+
+    assert!(matches!(
+        decode(&bytes),
+        Err(StateFileError::VersionSkew(_))
+    ));
+}
+
+#[test]
+fn malformed_body_in_file_is_quarantined() {
+    let body = edited(|v| {
+        let Value::Map(fields) = v else {
+            panic!("not a map");
+        };
+        fields.retain(|(key, _)| key.as_text() != Some("context"));
+    });
+    let bytes = file_of(&PaddedBody::pad(&body).unwrap());
+
+    assert!(matches!(
+        decode(&bytes),
+        Err(StateFileError::Quarantine(Damage::Body(
+            BodyError::Malformed(_)
+        )))
+    ));
+}
+
+#[test]
+fn nonzero_padding_byte_fails() {
+    let mut padded = PaddedBody::of(&full_state()).unwrap();
+    *padded.last_mut().unwrap() = 1;
+
+    assert_eq!(
+        decode(&file_of(&padded)),
+        Err(StateFileError::Quarantine(Damage::Padding(
+            PaddingError::NonzeroPadding
+        )))
+    );
+}
+
+#[test]
+fn length_prefix_past_end_of_plaintext_fails() {
+    let mut padded = PaddedBody::of(&full_state()).unwrap();
+    let past_end = (padded.len() as u32 - 3).to_be_bytes();
+    padded[..4].copy_from_slice(&past_end);
+
+    for padded in [&padded[..], &padded[..3]] {
+        assert_eq!(
+            decode(&file_of(padded)),
+            Err(StateFileError::Quarantine(Damage::Padding(
+                PaddingError::LengthPrefix
+            )))
+        );
+    }
+}
+
+/// Padded body of the raw DEFLATE stream `compressed`, with no padding.
+fn padded_stream(compressed: &[u8]) -> Vec<u8> {
+    let len = (compressed.len() as u32).to_be_bytes();
+    [&len[..], compressed].concat()
+}
+
+/// Raw DEFLATE stream of `bytes`.
+fn deflate(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+#[test]
+fn body_that_inflates_past_64_mb_fails() {
+    let at_limit = deflate(&vec![0; MAX_BODY_LEN]);
+    let past_limit = deflate(&vec![0; MAX_BODY_LEN + 1]);
+
+    // A body of exactly the limit inflates, and fails only as CBOR.
+    assert!(matches!(
+        decode(&file_of(&padded_stream(&at_limit))),
+        Err(StateFileError::Quarantine(Damage::Body(_)))
+    ));
+    assert_eq!(
+        decode(&file_of(&padded_stream(&past_limit))),
+        Err(StateFileError::Quarantine(Damage::Padding(
+            PaddingError::TooLarge
+        )))
+    );
+    assert!(PaddedBody::pad(&vec![0; MAX_BODY_LEN + 1]).is_err());
+}
+
+#[test]
+fn truncated_stream_or_bytes_after_stream_fail() {
+    let body = StateBody::encode(&full_state()).unwrap();
+    let stream = deflate(&body);
+    let truncated = &stream[..stream.len() - 1];
+    let trailing = [&stream[..], &[0]].concat();
+
+    for (case, compressed) in [("truncated", truncated), ("trailing", &trailing[..])] {
+        assert!(
+            matches!(
+                decode(&file_of(&padded_stream(compressed))),
+                Err(StateFileError::Quarantine(Damage::Padding(
+                    PaddingError::Inflate(_)
+                )))
+            ),
+            "{case}"
+        );
+    }
+    let (_, state) = decode(&file_of(&padded_stream(&stream))).unwrap();
+    assert_eq!(state, full_state());
+}
+
+#[test]
+fn bodies_of_nearby_sizes_encrypt_to_same_file_size_within_bucket() {
+    let named = |name: &str| {
+        let mut one = session(1);
+        let mut state = State::default();
+        let m = one.mint(&mut state, NOW);
+        state.store.name.write(&m, Some(name.to_string()));
+        state
+    };
+
+    let short = file(&named("a"));
+    let long = file(&named(&"a".repeat(100)));
+
+    assert_ne!(
+        StateBody::encode(&named("a")).unwrap().len(),
+        StateBody::encode(&named(&"a".repeat(100))).unwrap().len()
+    );
+    assert_eq!(short.len(), long.len());
+    assert_eq!(PaddedBody::of(&State::default()).unwrap().len(), 64 * 1024);
+}
+
+#[test]
+fn buckets_start_at_64_kib_and_grow_by_at_most_19_percent() {
+    assert_eq!(PaddedBody::bucket(0), 65_536);
+    assert_eq!(PaddedBody::bucket(65_536), 65_536);
+    assert_eq!(PaddedBody::bucket(65_537), 77_936);
+    assert_eq!(PaddedBody::bucket(131_072), 131_072);
+
+    let mut bucket = PaddedBody::bucket(0);
+    while bucket < MAX_BODY_LEN {
+        let next = PaddedBody::bucket(bucket + 1);
+        assert!(next as f64 <= bucket as f64 * 1.19, "{bucket} to {next}");
+        bucket = next;
+    }
+}
+
+#[test]
+fn same_state_encodes_to_different_bytes_under_fresh_nonce_and_both_decode() {
+    let state = full_state();
+    let first = file(&state);
+    let second = file(&state);
+
+    assert_ne!(first, second);
+    assert_ne!(split(&first).0["nonce"], split(&second).0["nonce"]);
+    assert_eq!(decode(&first).unwrap().1, state);
+    assert_eq!(decode(&second).unwrap().1, state);
 }

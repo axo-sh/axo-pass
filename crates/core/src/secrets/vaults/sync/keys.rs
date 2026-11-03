@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use aes_gcm::aead::OsRng;
+use aes_gcm::aead::{Aead, AeadCore, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit};
 #[cfg(test)]
 use base64::Engine;
@@ -92,12 +92,60 @@ impl ZeroizeOnDrop for SyncKey {}
 #[serde(transparent)]
 pub struct KeyFingerprint(#[serde(with = "ByteString")] pub [u8; 16]);
 
+impl KeyFingerprint {
+    /// Fingerprint in lowercase hex, as state file AADs hold it.
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+}
+
 /// AES-256-GCM key for vault sync state.
 pub struct StateKey(Zeroizing<[u8; 32]>);
 
 impl StateKey {
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    fn cipher(&self) -> Aes256Gcm {
+        Aes256Gcm::new(self.as_bytes().into())
+    }
+
+    /// Fresh random nonce and the ciphertext of `plaintext` under `aad`.
+    /// Fails only for a plaintext above the AES-GCM limit.
+    pub(crate) fn encrypt(&self, aad: &[u8], plaintext: &[u8]) -> Option<([u8; 12], Vec<u8>)> {
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = self
+            .cipher()
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
+            .ok()?;
+        Some((nonce.into(), ciphertext))
+    }
+
+    /// Plaintext of `ciphertext` under `nonce` and `aad`. Fails if the tag
+    /// does not verify.
+    pub(crate) fn decrypt(
+        &self,
+        nonce: &[u8; 12],
+        aad: &[u8],
+        ciphertext: &[u8],
+    ) -> Option<Zeroizing<Vec<u8>>> {
+        self.cipher()
+            .decrypt(
+                nonce.into(),
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
+            .ok()
+            .map(Zeroizing::new)
     }
 }
 

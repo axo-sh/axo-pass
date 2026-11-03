@@ -41,6 +41,12 @@ pub enum Error {
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 
+    #[error("Failed to encode sync state: {0}")]
+    SyncStateEncodeError(String),
+
+    #[error("Failed to save sync state: {0}")]
+    SyncStateWriteError(#[source] std::io::Error),
+
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,
 
