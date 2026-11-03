@@ -69,7 +69,7 @@ fn assert_no_edits(state: &State, vault: &Vault, replica: ReplicaId) {
 
 /// Replace the vault file at `path` with a copy signed by another key, which
 /// is refused. Returns the refused contents.
-fn refuse(path: &Path) -> String {
+pub(super) fn refuse(path: &Path) -> String {
     let contents = fs::read_to_string(path).unwrap();
     let raw = EncryptedVault::raw_vault_json(&contents)
         .unwrap()

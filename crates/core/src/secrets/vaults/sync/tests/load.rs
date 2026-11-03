@@ -260,7 +260,7 @@ impl Fixture {
     }
 
     /// Restore the retained version `name` in a transaction.
-    fn restore(&self, name: &str) -> Result<Committed<()>, Error> {
+    pub(super) fn restore(&self, name: &str) -> Result<Committed<()>, Error> {
         let key = || self.vault.unlocked_key().unwrap();
         self.catalog
             .files()
@@ -398,10 +398,13 @@ fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
         assert_eq!(fx.on_disk(), before, "{name}: unlock writes nothing");
 
         // A transaction rebuilds a `v < s` vault and a vault of another
-        // replica id from the sync state (6a.6).
+        // replica id from the sync state (6a.6), and repairs a `v > s` vault
+        // (6c.3).
         let rebuilt = matches!(
             expected,
-            SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(Mismatch::ReplicaId(_))
+            SyncLoad::OlderVault { .. }
+                | SyncLoad::Mismatch(Mismatch::ReplicaId(_))
+                | SyncLoad::NewerVault { .. }
         );
         let written = if rebuilt { Ok(()) } else { served.clone() };
         let write = fx.add_item().map(|_| ()).map_err(|e| e.to_string());

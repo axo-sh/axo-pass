@@ -528,7 +528,9 @@ fn second_miss_of_sync_state_key_completes_as_local_save() {
     assert_eq!(fs::read_to_string(fx.state_path()).unwrap(), state_before);
     let vault = saved_vault(&fx);
     assert!(vault.get_item("item").is_ok());
-    assert_eq!(vault.generation(), GENERATION);
+    // The vault takes the next generation, so the next load with the key is
+    // `v > s` (6c.3).
+    assert_eq!(vault.generation(), GENERATION + 1);
     assert_eq!(fx.read_case(), SyncLoad::KeyMissing(KeyId(2)));
 }
 

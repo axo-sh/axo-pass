@@ -6,6 +6,10 @@
 //! stored positions with gaps or ties are not an edit. Folders, sections, and
 //! role slots are compared resolved against the entries the vault holds. An
 //! entry in the view that the vault lacks is removed.
+//!
+//! Repair writes of the `v > s` repair and the recovery merge add vault values
+//! to their registers and keep the values there, by the policy of each
+//! register. They add entries and remove none.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,14 +17,18 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::crdt::{Ask, CausalState, Mint, MvRegister, ReplicaId, Session, WriteId};
+use super::crdt::{
+    Ask, CausalState, CausalStore, Mint, MvRegister, Policy, PolicyKind, ReplicaId, Session,
+    WriteId,
+};
 use super::model::{
     CredentialId, FolderId, FolderValue, HistoryId, HistoryValue, ItemId, Placement, SecretText,
     SectionId, SectionValue, SyncCredential, SyncItem, SyncState, TrashValue, WebsiteValue,
 };
+use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
 use super::view::{VaultView, list_order};
 use crate::secrets::vaults::Error;
-use crate::secrets::vaults::autofill::item::Website;
+use crate::secrets::vaults::autofill::item::{Role, Website};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     DeletedInfo, SyncCredentialEntry, SyncEntries, SyncItemEntry, Vault,
@@ -43,6 +51,25 @@ pub enum DiffError {
     DuplicateWebsite { item: ItemId, url: String },
     #[error(transparent)]
     Vault(#[from] Error),
+}
+
+impl From<DiffError> for Error {
+    fn from(e: DiffError) -> Self {
+        match e {
+            DiffError::Vault(e) => e,
+            e => Error::SyncDiffError(e.to_string()),
+        }
+    }
+}
+
+/// How an edit writes a register.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteKind {
+    /// Replace every value, with [`MvRegister::write`].
+    Supersede,
+    /// Add a repair value and keep the others, with
+    /// [`MvRegister::write_repair`].
+    Repair,
 }
 
 /// One register write or entry remove.
@@ -103,9 +130,18 @@ impl LocalEdits {
         vault: &Vault,
         replica: ReplicaId,
     ) -> Result<Self, DiffError> {
-        let view = VaultView::of(state);
+        Self::find_in(state, &VaultView::of(state), vault, replica)
+    }
+
+    /// [`Self::find`] against `view`, the view of `state`.
+    fn find_in(
+        state: &CausalState<SyncState>,
+        view: &VaultView,
+        vault: &Vault,
+        replica: ReplicaId,
+    ) -> Result<Self, DiffError> {
         let entries = vault.sync_entries()?;
-        let mut diff = Diff::new(&state.store, &view, &entries, replica);
+        let mut diff = Diff::new(&state.store, view, &entries, replica);
         diff.name();
         diff.folders();
         diff.signals();
@@ -114,11 +150,97 @@ impl LocalEdits {
         Ok(Self { edits: diff.edits })
     }
 
+    /// Repair writes that add the values of `vault` that the view of `state`
+    /// does not show, by the policy rules of decision 5. Record them with
+    /// [`Self::record_repair`].
+    ///
+    /// Ask, Merge, and Own registers take the vault value. An Order register
+    /// takes it only if it holds no value. A Trash register takes a trash and
+    /// never a restore. An entry the vault holds and the view lacks is added,
+    /// and an entry the view holds and the vault lacks is kept. No value
+    /// equal to a value of its register is added, and no vault key that is a
+    /// shown form of a stored key of its register. A later last used time
+    /// replaces the time in the register of `replica`, as an ordinary edit
+    /// does. Mints nothing.
+    pub fn find_repair(
+        state: &CausalState<SyncState>,
+        vault: &Vault,
+        replica: ReplicaId,
+    ) -> Result<Self, DiffError> {
+        let mut edits = Self::find(state, vault, replica)?;
+        edits.edits.retain(|edit| edit.adds_repair(&state.store));
+        Ok(edits)
+    }
+
+    /// Edits that make the view of `state` show `vault`, a restored retained
+    /// version. An item or credential of the view that `vault` lacks is moved
+    /// to the trash at `now`, in Unix seconds, and is not removed. One that is
+    /// already trashed is kept as it is. A credential whose item `vault` does
+    /// not hold as a live item is kept with its item. Mints nothing.
+    pub fn find_restore(
+        state: &CausalState<SyncState>,
+        vault: &Vault,
+        replica: ReplicaId,
+        now: i64,
+    ) -> Result<Self, DiffError> {
+        let view = VaultView::of(state);
+        let mut edits = Self::find_in(state, &view, vault, replica)?;
+        let live_items: BTreeSet<ItemId> = vault
+            .sync_entries()?
+            .items
+            .iter()
+            .filter(|i| i.trashed.is_none())
+            .map(|i| i.overview.id)
+            .collect();
+        let trash = |role| {
+            Some(TrashValue {
+                deleted_at: now,
+                role,
+            })
+        };
+        edits.edits = edits
+            .edits
+            .into_iter()
+            .filter_map(|edit| match edit {
+                Edit::RemoveItem(id) => {
+                    let item = view.items.get(&id)?;
+                    item.trashed
+                        .is_none()
+                        .then(|| Edit::Item(id, ItemWrite::Trashed(trash(None))))
+                },
+                Edit::RemoveCredential(id) => {
+                    let credential = view.credentials.get(&id)?;
+                    let item = view.items.get(&credential.item);
+                    let role = item.and_then(|item| {
+                        [
+                            (item.username, Role::Username),
+                            (item.password, Role::Password),
+                            (item.totp, Role::Totp),
+                        ]
+                        .into_iter()
+                        .find(|(slot, _)| *slot == Some(id))
+                        .map(|(_, role)| role)
+                    });
+                    (credential.trashed.is_none() && live_items.contains(&credential.item))
+                        .then(|| Edit::Credential(id, CredentialWrite::Trashed(trash(role))))
+                },
+                edit => Some(edit),
+            })
+            .collect();
+        Ok(edits)
+    }
+
     /// Whether no register changes.
     pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
+    /// Number of register writes and entry removes.
+    pub fn len(&self) -> usize {
+        self.edits.len()
+    }
+
+    #[cfg(test)]
     pub(crate) fn edits(&self) -> &[Edit] {
         &self.edits
     }
@@ -133,38 +255,158 @@ impl LocalEdits {
         session: &mut Session,
         now: i64,
     ) -> Option<WriteId> {
+        self.record_as(state, session, now, WriteKind::Supersede)
+    }
+
+    /// Record the repair writes of [`Self::find_repair`] in `state` at `now`,
+    /// in Unix seconds.
+    ///
+    /// Mints one write id if the edits are not empty, and adds each value with
+    /// it as a repair value, below the values already in its register. A last
+    /// used time is written as [`Self::record`] writes it. Returns the write
+    /// id.
+    pub fn record_repair(
+        self,
+        state: &mut CausalState<SyncState>,
+        session: &mut Session,
+        now: i64,
+    ) -> Option<WriteId> {
+        self.record_as(state, session, now, WriteKind::Repair)
+    }
+
+    fn record_as(
+        self,
+        state: &mut CausalState<SyncState>,
+        session: &mut Session,
+        now: i64,
+        kind: WriteKind,
+    ) -> Option<WriteId> {
         if self.is_empty() {
             return None;
         }
         let mint = session.mint(state, now);
         for edit in self.edits {
-            edit.record(&mut state.store, &mint);
+            edit.record(&mut state.store, &mint, kind);
         }
         Some(mint.write_id)
     }
 }
 
+impl<T: PartialEq, P: Policy> MvRegister<T, P> {
+    /// Write `value` by `mint` as `kind` states.
+    fn put(&mut self, mint: &Mint, value: T, kind: WriteKind) {
+        match kind {
+            WriteKind::Supersede => self.write(mint, value),
+            WriteKind::Repair => self.write_repair(mint, value),
+        }
+    }
+
+    /// Whether a repair adds `value`. A register with no value takes any
+    /// value. An Order register with a value takes none. Any other register
+    /// takes a value it does not hold.
+    fn takes_repair(&self, value: &T) -> bool {
+        self.is_empty()
+            || (P::KIND != PolicyKind::Order && !self.values().any(|(_, v)| v.value == *value))
+    }
+}
+
+/// Checks of whether a repair adds a value to a register. A register is
+/// `None` if its entry is missing, and then takes any value.
+struct Takes;
+
+impl Takes {
+    /// Whether a repair adds `value` to `register`.
+    fn value<T: PartialEq, P: Policy>(register: Option<&MvRegister<T, P>>, value: &T) -> bool {
+        register.is_none_or(|r| r.takes_repair(value))
+    }
+
+    /// Whether a repair adds `trashed` to the Trash register `register`. A
+    /// register with a value takes a trash and never a restore.
+    fn trash<P: Policy>(
+        register: Option<&MvRegister<Option<TrashValue>, P>>,
+        trashed: &Option<TrashValue>,
+    ) -> bool {
+        register.is_none_or(|r| r.is_empty() || (trashed.is_some() && r.takes_repair(trashed)))
+    }
+
+    /// Whether a repair adds the vault key `key` of entry `id` to the key
+    /// register `register`. A key that the view can show for a stored key of
+    /// the register, such as a suffixed key, is not added. `prefix` is the
+    /// key prefix of an entry with no valid key.
+    fn key(
+        register: Option<&MvRegister<String, Ask>>,
+        key: &String,
+        prefix: &str,
+        id: Uuid,
+    ) -> bool {
+        register.is_none_or(|r| {
+            r.is_empty()
+                || (r.takes_repair(key)
+                    && !r
+                        .values()
+                        .any(|(_, v)| Suffix::is_shown_form(key, &v.value, prefix, id)))
+        })
+    }
+}
+
 impl Edit {
-    /// Write or remove in `store`. A map entry is created only to write into
-    /// it.
-    fn record(self, store: &mut SyncState, mint: &Mint) {
+    /// Whether a repair adds this write to `store`. Removes are never added.
+    fn adds_repair(&self, store: &SyncState) -> bool {
         match self {
-            Self::Name(name) => store.name.write(mint, name),
-            Self::Folder(id, value) => store.folders.entry(id).write(mint, value),
+            Self::Name(name) => Takes::value(Some(&store.name), name),
+            Self::Folder(id, value) => Takes::value(store.folders.get(id), value),
+            Self::Signal(key, entry) => Takes::value(store.signals.get(key), entry),
+            Self::Item(id, write) => write.adds_repair(*id, store.items.get(id)),
+            Self::Section(item, id, value) => {
+                let sections = store.items.get(item).map(|i| &i.sections);
+                Takes::value(sections.and_then(|s| s.get(id)), value)
+            },
+            Self::Website(item, url, value) => {
+                let websites = store.items.get(item).map(|i| &i.websites);
+                Takes::value(websites.and_then(|w| w.get(url)), value)
+            },
+            Self::Credential(id, write) => write.adds_repair(*id, store.credentials.get(id)),
+            Self::History(credential, id, value) => {
+                let history = store.credentials.get(credential).map(|c| &c.history);
+                Takes::value(history.and_then(|h| h.get(id)), value)
+            },
+            Self::LastUsed(credential, replica, at) => {
+                let last_used = store
+                    .credentials
+                    .get(credential)
+                    .map(|c| &c.last_used_day_at);
+                Takes::value(last_used.and_then(|l| l.get(replica)), at)
+            },
+            Self::RemoveFolder(_)
+            | Self::RemoveSignal(_)
+            | Self::RemoveItem(_)
+            | Self::RemoveSection(..)
+            | Self::RemoveWebsite(..)
+            | Self::RemoveCredential(_)
+            | Self::RemoveHistory(..) => false,
+        }
+    }
+
+    /// Write or remove in `store`, writing as `kind` states. A map entry is
+    /// created only to write into it.
+    fn record(self, store: &mut SyncState, mint: &Mint, kind: WriteKind) {
+        match self {
+            Self::Name(name) => store.name.put(mint, name, kind),
+            Self::Folder(id, value) => store.folders.entry(id).put(mint, value, kind),
             Self::RemoveFolder(id) => {
                 store.folders.remove(&id);
             },
-            Self::Signal(key, entry) => store.signals.entry(key).write(mint, entry),
+            Self::Signal(key, entry) => store.signals.entry(key).put(mint, entry, kind),
             Self::RemoveSignal(key) => {
                 store.signals.remove(&key);
             },
-            Self::Item(id, write) => write.record(store.items.entry(id), mint),
+            Self::Item(id, write) => write.record(store.items.entry(id), mint, kind),
             Self::RemoveItem(id) => {
                 store.items.remove(&id);
             },
             Self::Section(item, id, value) => {
                 let sections = &mut store.items.entry(item).sections;
-                sections.entry(id).write(mint, value);
+                sections.entry(id).put(mint, value, kind);
             },
             Self::RemoveSection(item, id) => {
                 if store.items.get(&item).is_some() {
@@ -173,26 +415,30 @@ impl Edit {
             },
             Self::Website(item, url, value) => {
                 let websites = &mut store.items.entry(item).websites;
-                websites.entry(url).write(mint, value);
+                websites.entry(url).put(mint, value, kind);
             },
             Self::RemoveWebsite(item, url) => {
                 if store.items.get(&item).is_some() {
                     store.items.entry(item).websites.remove(&url);
                 }
             },
-            Self::Credential(id, write) => write.record(store.credentials.entry(id), mint),
+            Self::Credential(id, write) => write.record(store.credentials.entry(id), mint, kind),
             Self::RemoveCredential(id) => {
                 store.credentials.remove(&id);
             },
             Self::History(credential, id, value) => {
                 let history = &mut store.credentials.entry(credential).history;
-                history.entry(id).write(mint, value);
+                history.entry(id).put(mint, value, kind);
             },
             Self::RemoveHistory(credential, id) => {
                 if store.credentials.get(&credential).is_some() {
                     store.credentials.entry(credential).history.remove(&id);
                 }
             },
+            // Only this replica writes its own register, and the view shows
+            // the value with the highest order key of each register. A
+            // repair value below it would never show, so a repair supersedes
+            // the earlier time too.
             Self::LastUsed(credential, replica, at) => {
                 let last_used = &mut store.credentials.entry(credential).last_used_day_at;
                 last_used.entry(replica).write(mint, at);
@@ -202,30 +448,60 @@ impl Edit {
 }
 
 impl ItemWrite {
-    fn record(self, item: &mut SyncItem, mint: &Mint) {
+    /// Whether a repair adds this write to the item `id`, `item` in the
+    /// store.
+    fn adds_repair(&self, id: ItemId, item: Option<&SyncItem>) -> bool {
         match self {
-            Self::Title(title) => item.title.write(mint, title),
-            Self::Category(category) => item.category.write(mint, category),
-            Self::Key(key) => item.key.write(mint, key),
-            Self::Folder(folder) => item.folder.write(mint, folder),
-            Self::Username(slot) => item.username.write(mint, slot),
-            Self::Password(slot) => item.password.write(mint, slot),
-            Self::Totp(slot) => item.totp.write(mint, slot),
-            Self::Trashed(trashed) => item.trashed.write(mint, trashed),
+            Self::Title(title) => Takes::value(item.map(|i| &i.title), title),
+            Self::Category(category) => Takes::value(item.map(|i| &i.category), category),
+            Self::Key(key) => Takes::key(item.map(|i| &i.key), key, ITEM_KEY_PREFIX, id),
+            Self::Folder(folder) => Takes::value(item.map(|i| &i.folder), folder),
+            Self::Username(slot) => Takes::value(item.map(|i| &i.username), slot),
+            Self::Password(slot) => Takes::value(item.map(|i| &i.password), slot),
+            Self::Totp(slot) => Takes::value(item.map(|i| &i.totp), slot),
+            Self::Trashed(trashed) => Takes::trash(item.map(|i| &i.trashed), trashed),
+        }
+    }
+
+    fn record(self, item: &mut SyncItem, mint: &Mint, kind: WriteKind) {
+        match self {
+            Self::Title(title) => item.title.put(mint, title, kind),
+            Self::Category(category) => item.category.put(mint, category, kind),
+            Self::Key(key) => item.key.put(mint, key, kind),
+            Self::Folder(folder) => item.folder.put(mint, folder, kind),
+            Self::Username(slot) => item.username.put(mint, slot, kind),
+            Self::Password(slot) => item.password.put(mint, slot, kind),
+            Self::Totp(slot) => item.totp.put(mint, slot, kind),
+            Self::Trashed(trashed) => item.trashed.put(mint, trashed, kind),
         }
     }
 }
 
 impl CredentialWrite {
-    fn record(self, credential: &mut SyncCredential, mint: &Mint) {
+    /// Whether a repair adds this write to the credential `id`,
+    /// `credential` in the store.
+    fn adds_repair(&self, id: CredentialId, credential: Option<&SyncCredential>) -> bool {
+        let c = credential;
         match self {
-            Self::Item(item) => credential.item.write(mint, item),
-            Self::Title(title) => credential.title.write(mint, title),
-            Self::Kind(kind) => credential.kind.write(mint, kind),
-            Self::Key(key) => credential.key.write(mint, key),
-            Self::Placement(placement) => credential.placement.write(mint, placement),
-            Self::Value(value) => credential.value.write(mint, value),
-            Self::Trashed(trashed) => credential.trashed.write(mint, trashed),
+            Self::Item(item) => Takes::value(c.map(|c| &c.item), item),
+            Self::Title(title) => Takes::value(c.map(|c| &c.title), title),
+            Self::Kind(kind) => Takes::value(c.map(|c| &c.kind), kind),
+            Self::Key(key) => Takes::key(c.map(|c| &c.key), key, CREDENTIAL_KEY_PREFIX, id),
+            Self::Placement(placement) => Takes::value(c.map(|c| &c.placement), placement),
+            Self::Value(value) => Takes::value(c.map(|c| &c.value), value),
+            Self::Trashed(trashed) => Takes::trash(c.map(|c| &c.trashed), trashed),
+        }
+    }
+
+    fn record(self, credential: &mut SyncCredential, mint: &Mint, kind: WriteKind) {
+        match self {
+            Self::Item(item) => credential.item.put(mint, item, kind),
+            Self::Title(title) => credential.title.put(mint, title, kind),
+            Self::Kind(value) => credential.kind.put(mint, value, kind),
+            Self::Key(key) => credential.key.put(mint, key, kind),
+            Self::Placement(placement) => credential.placement.put(mint, placement, kind),
+            Self::Value(value) => credential.value.put(mint, value, kind),
+            Self::Trashed(trashed) => credential.trashed.put(mint, trashed, kind),
         }
     }
 }

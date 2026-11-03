@@ -13,6 +13,7 @@ mod local_state;
 mod model;
 mod publish;
 mod rebuild;
+mod repair;
 mod resolve;
 mod round_trip;
 mod sidecar;

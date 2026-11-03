@@ -7,6 +7,10 @@
 //! mints no write id, and publishes nothing. A stop for drift is
 //! `stopped_build` in the signed header of the sync state. A stop for a
 //! failed signature or a missing sync state is found again at each load.
+//!
+//! A stop for drift ends with the recovery merge (`sync/repair.rs`), which
+//! runs in the next transaction on another build, or on this build after the
+//! user override.
 
 use serde::{Deserialize, Serialize};
 
@@ -47,9 +51,13 @@ pub enum PausedCause {
 /// Cause of a stopped sync.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopCause {
-    /// The no-edit guard found edits on build `build`.
+    /// The no-edit guard found edits on build `build`. Another build runs
+    /// the recovery merge in its next transaction.
     Drift {
         build: String,
+        /// Whether the user override is offered. It is not offered again on
+        /// the build that recorded the last override.
+        override_offered: bool,
     },
     SignatureFailed(SignatureFailure),
     StateMissing,
@@ -113,11 +121,17 @@ impl SyncStatus {
     }
 
     /// Status of a vault with a trusted sync state, stopped by drift on
-    /// `stopped_build` if set, or else paused by `paused` if not empty.
-    pub(crate) fn of_trusted(stopped_build: Option<&str>, paused: &[PausedCause]) -> Self {
+    /// `stopped_build` if set, or else paused by `paused` if not empty. The
+    /// override is offered unless `override_build` is this build.
+    pub(crate) fn of_trusted(
+        stopped_build: Option<&str>,
+        override_build: Option<&str>,
+        paused: &[PausedCause],
+    ) -> Self {
         match stopped_build {
             Some(build) => Self::Stopped(StopCause::Drift {
                 build: build.to_string(),
+                override_offered: override_build != Some(BUILD_ID),
             }),
             None if paused.is_empty() => Self::Active,
             None => Self::Paused(paused.to_vec()),

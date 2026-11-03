@@ -16,14 +16,20 @@
 //! stopped transaction joins nothing, records no edit, mints no write id, and
 //! publishes nothing. A save then reseals the unchanged body at the next
 //! generation (`sync/status.rs`).
+//!
+//! The `v > s` repair and the recovery merge run in place of the guard. They
+//! add the vault differences as concurrent values after the own files and
+//! before the peer files (`sync/repair.rs`). A vault at `v > s` is saved at
+//! `v + 1`.
 
 use std::path::Path;
 
+use jiff::Timestamp;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::crdt::{CausalState, OwnFile, ReplicaId, Session, WriteId};
-use super::diff::{DiffError, LocalEdits};
+use super::diff::LocalEdits;
 use super::join::StateJoin;
 use super::keys::SyncKeyring;
 use super::load::TrustedState;
@@ -31,6 +37,7 @@ use super::local_state::LocalSyncState;
 use super::model::SyncState;
 use super::publish::Staged;
 use super::rebuild::Rebuild;
+use super::repair::Repair;
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
@@ -49,6 +56,8 @@ pub(crate) struct SyncTxn {
     keyring: SyncKeyring,
     /// SHA-256 of the sync state file as loaded.
     loaded: StateHash,
+    /// Generation `v` of a vault newer than the sync state.
+    newer_vault: Option<u64>,
     /// Whether a join or a mint changed the state since it was loaded.
     changed: bool,
     /// Whether the publish fields of the header changed since it was loaded.
@@ -82,6 +91,7 @@ impl SyncTxn {
             state,
             keyring,
             loaded,
+            newer_vault: None,
             changed: false,
             header_changed: false,
             padded: None,
@@ -110,6 +120,25 @@ impl SyncTxn {
     /// Generation `s` of the sync state.
     pub(crate) fn generation(&self) -> u64 {
         self.local.generation
+    }
+
+    /// Mark the vault as newer than the sync state, at generation `vault`.
+    pub(crate) fn set_newer_vault(&mut self, vault: u64) {
+        self.newer_vault = Some(vault);
+    }
+
+    /// Generation of the next save of the vault and the sync state: one past
+    /// `s`, or one past `v` for a vault newer than the sync state, so an
+    /// older copy of the vault loads as `v < s`.
+    pub(crate) fn next_generation(&self) -> u64 {
+        self.local.generation.max(self.newer_vault.unwrap_or(0)) + 1
+    }
+
+    /// Whether the vault is saved even if the transaction leaves it
+    /// unchanged. A vault newer than the sync state is saved at the next
+    /// generation, so `v == s` afterwards.
+    pub(crate) fn forces_vault_save(&self) -> bool {
+        self.newer_vault.is_some()
     }
 
     pub(crate) fn keyring(&self) -> &SyncKeyring {
@@ -230,7 +259,7 @@ impl SyncTxn {
             return Ok(());
         }
         let vault_id = self.vault_id();
-        let count = edits.edits().len();
+        let count = edits.len();
         log::error!("Vault {vault_id} differs from its sync state in {count} edits, sync stopped");
         self.local.stopped_build = Some(BUILD_ID.to_string());
         self.header_changed = true;
@@ -239,28 +268,88 @@ impl SyncTxn {
 
     /// Local edits of `vault` against the view of the state.
     fn find(&self, vault: &Vault) -> Result<LocalEdits, Error> {
-        LocalEdits::find(&self.state, vault, self.replica()).map_err(|e| match e {
-            DiffError::Vault(e) => e,
-            e => Error::SyncDiffError(e.to_string()),
-        })
+        Ok(LocalEdits::find(&self.state, vault, self.replica())?)
     }
 
-    /// Record the local edits of `vault` against the view of the state, under
-    /// one write id of `session` minted at `now`, in Unix seconds. Returns
-    /// the write id, or `None` if the vault has no edits.
-    pub(crate) fn record(
+    /// Repair of this transaction, with the user override if `confirmed`.
+    /// `None` if the transaction runs the guard.
+    pub(crate) fn repair(&self, confirmed: bool) -> Option<Repair> {
+        Repair::of(&self.local, self.newer_vault.is_some(), confirmed)
+    }
+
+    /// Whether the user override is offered.
+    pub(crate) fn override_offered(&self) -> bool {
+        Repair::override_offered(&self.local)
+    }
+
+    /// Start `repair`, in place of the guard. A recovery merge resumes sync
+    /// and is saved in the header.
+    ///
+    /// A sync state restored from a backup can be older than the sidecar,
+    /// which then records files as joined that the state lacks. A repair of a
+    /// vault at `v > s` drops the joined hashes, so every listed file is read
+    /// again.
+    pub(crate) fn start_repair(&mut self, repair: Repair) {
+        let vault_id = self.vault_id();
+        log::warn!("Vault {vault_id} runs the sync repair {repair:?}");
+        repair.start(&mut self.local);
+        if repair != Repair::NewerVault {
+            self.header_changed = true;
+        }
+        if self.newer_vault.is_some() && !self.sidecar.joined.is_empty() {
+            self.sidecar.joined.clear();
+            self.sidecar_changed = true;
+        }
+    }
+
+    /// Add each difference of `vault` against the view of the state as a
+    /// repair value, under one write id of `session` minted at `now`, in Unix
+    /// seconds. Returns the write id, or `None` if the repair adds nothing.
+    pub(crate) fn record_repair(
         &mut self,
         vault: &Vault,
         session: &mut Session,
         now: i64,
     ) -> Result<Option<WriteId>, Error> {
-        let edits = self.find(vault)?;
-        let write_id = edits.record(&mut self.state, session, now);
+        let edits = LocalEdits::find_repair(&self.state, vault, self.replica())?;
+        let count = edits.len();
+        let write_id = edits.record_repair(&mut self.state, session, now);
         if write_id.is_some() {
-            self.changed = true;
-            self.padded = None;
+            let vault_id = self.vault_id();
+            log::warn!("Vault {vault_id} sync repair added {count} differences as conflicts");
+            self.mark_changed();
         }
         Ok(write_id)
+    }
+
+    /// Record the local edits of `vault` against the view of the state, under
+    /// one write id of `session` minted at `now`, in Unix seconds. Returns
+    /// the write id, or `None` if the vault has no edits. For a `restore`,
+    /// an item or credential the vault lacks is moved to the trash, not
+    /// removed.
+    pub(crate) fn record(
+        &mut self,
+        vault: &Vault,
+        session: &mut Session,
+        now: i64,
+        restore: bool,
+    ) -> Result<Option<WriteId>, Error> {
+        let edits = if restore {
+            let trashed_at = Timestamp::now().as_second();
+            LocalEdits::find_restore(&self.state, vault, self.replica(), trashed_at)?
+        } else {
+            self.find(vault)?
+        };
+        let write_id = edits.record(&mut self.state, session, now);
+        if write_id.is_some() {
+            self.mark_changed();
+        }
+        Ok(write_id)
+    }
+
+    fn mark_changed(&mut self) {
+        self.changed = true;
+        self.padded = None;
     }
 
     /// Padded body of the state. A state that did not change keeps the
@@ -388,16 +477,20 @@ impl SyncTxn {
     }
 
     /// Save the sync state, signed by `signer`, under the app data directory
-    /// `root`, at the next generation if `advance` is set. A state that did
-    /// not change keeps its body, sealed again at a new generation. Returns
-    /// the SHA-256 of the file bytes.
+    /// `root`, at [`Self::next_generation`] if `advance` is set. A state that
+    /// did not change keeps its body, sealed again at a new generation.
+    /// Returns the SHA-256 of the file bytes.
     pub(crate) fn save(
         &mut self,
         root: &Path,
         signer: &dyn VaultSigner,
         advance: bool,
     ) -> Result<StateHash, Error> {
-        let generation = self.local.generation + u64::from(advance);
+        let generation = if advance {
+            self.next_generation()
+        } else {
+            self.local.generation
+        };
         if self.changed {
             let padded = self.padded()?;
             self.local.generation = generation;
@@ -425,7 +518,11 @@ impl SyncTxn {
 
     /// Sync status after this transaction.
     pub(crate) fn status(&self) -> SyncStatus {
-        SyncStatus::of_trusted(self.local.stopped_build.as_deref(), &self.sidecar.paused)
+        SyncStatus::of_trusted(
+            self.local.stopped_build.as_deref(),
+            self.local.override_build.as_deref(),
+            &self.sidecar.paused,
+        )
     }
 
     /// Save the sidecar under the app data directory `root` if it changed. A

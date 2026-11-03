@@ -17,17 +17,19 @@ use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::{BUILD_ID, StopCause, SyncStatus};
 use crate::secrets::vaults::{Error, VaultHandle};
 
-/// Status of a sync stopped by drift on this build.
-fn stopped() -> Option<SyncStatus> {
+/// Status of a sync stopped by drift on this build, with the override
+/// offered.
+pub(super) fn stopped() -> Option<SyncStatus> {
     Some(SyncStatus::Stopped(StopCause::Drift {
         build: BUILD_ID.to_string(),
+        override_offered: true,
     }))
 }
 
 /// Set the title of item `key` in the vault file of `fx` outside a
 /// transaction, at the same generation, as a normalization that is not
 /// stable would.
-fn drift(fx: &Fixture, key: &str) {
+pub(super) fn drift(fx: &Fixture, key: &str) {
     let mut vault = saved_vault(fx);
     vault.add_or_update_item(key, "Drifted").unwrap();
     let vh = VaultHandle::unlocked(fx.vault.path.clone(), vault);
@@ -37,7 +39,7 @@ fn drift(fx: &Fixture, key: &str) {
 
 /// Synced vault with item `item` published, and the staged context of the
 /// publish moved.
-fn published_vault(transport: &Arc<FakeTransport>) -> Fixture {
+pub(super) fn published_vault(transport: &Arc<FakeTransport>) -> Fixture {
     let fx = synced(transport);
     fx.add_item().unwrap();
     let committed = fx.write(|_| Ok(())).unwrap();
@@ -46,7 +48,7 @@ fn published_vault(transport: &Arc<FakeTransport>) -> Fixture {
 }
 
 /// Add item `key` in a transaction.
-fn add(fx: &Fixture, key: &str) -> Result<Committed<()>, Error> {
+pub(super) fn add(fx: &Fixture, key: &str) -> Result<Committed<()>, Error> {
     fx.write(|vh| vh.add_item(key, "Added").map(|_| ()))
 }
 

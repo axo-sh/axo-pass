@@ -267,6 +267,32 @@ impl Suffix {
         format!("{base}-{}", &suffix[..length])
     }
 
+    /// Whether `key` is a key the view can show for entry `id` with the
+    /// stored key `stored`. The view shows the normalized stored key, or the
+    /// normalized stored key or `prefix` with a suffix of `id`. `prefix` is
+    /// the key prefix of an entry with no valid key.
+    pub fn is_shown_form(key: &str, stored: &str, prefix: &str, id: Uuid) -> bool {
+        let base = normalized_key(stored);
+        if base.as_deref() == Some(key) {
+            return true;
+        }
+        let full = Self::base32(id.as_bytes());
+        let suffixed = |base: &str| {
+            let Some(suffix) = key.strip_prefix(base).and_then(|k| k.strip_prefix('-')) else {
+                return false;
+            };
+            let counter = suffix
+                .strip_prefix(full.as_str())
+                .and_then(|n| n.strip_prefix('-'));
+            SUFFIX_LENGTHS
+                .iter()
+                .any(|length| suffix == &full[..*length])
+                || suffix == full
+                || counter.is_some_and(|n| n.parse::<u64>().is_ok())
+        };
+        base.as_deref().is_some_and(suffixed) || suffixed(prefix)
+    }
+
     /// First suffixed key of `id` that is not in `taken`, with a suffix of 4,
     /// 6, or 8 characters.
     ///

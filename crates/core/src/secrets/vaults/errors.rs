@@ -59,6 +59,9 @@ pub enum Error {
     #[error("Failed to compare vault with its sync state: {0}")]
     SyncDiffError(String),
 
+    #[error("Sync override is not offered for this vault")]
+    SyncOverrideNotOffered,
+
     #[error("Synced folder failed: {0}")]
     SyncTransportError(String),
 
