@@ -173,6 +173,25 @@ impl LocalSyncState {
         root.join(SYNC_DIR).join(format!("{vault_id}.state.json"))
     }
 
+    /// Vault ids and paths of the local sync state files under the app data
+    /// directory `root`, ordered by path. Only names of the form of
+    /// [`Self::path`] are listed. The files are not read.
+    pub fn list(root: &Path) -> Vec<(Uuid, PathBuf)> {
+        let mut found: Vec<(Uuid, PathBuf)> = fs::read_dir(root.join(SYNC_DIR))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let short_id = name.to_str()?.strip_suffix(".state.json")?;
+                let vault_id = ShortId::decode(short_id).ok()?.uuid();
+                (ShortId::encode_uuid(vault_id) == short_id).then(|| (vault_id, entry.path()))
+            })
+            .collect();
+        found.sort_by(|(_, a), (_, b)| a.cmp(b));
+        found
+    }
+
     /// Staged file of vault `vault_id` under the app data directory `root`.
     pub fn staged_path(root: &Path, vault_id: Uuid) -> PathBuf {
         let vault_id = ShortId::encode_uuid(vault_id);

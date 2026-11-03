@@ -22,6 +22,7 @@ use crate::secrets::vaults::storage::handle::{
     get_vault_encryption_key_on, normalized_key,
 };
 use crate::secrets::vaults::storage::txn::{RetainedVersion, VaultWriter};
+use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
 /// This struct tracks vault files on disk: the vaults directory, the external
 /// vaults, and the retained versions and lock files. Operations read the
@@ -45,6 +46,17 @@ pub struct VaultScanResult {
     pub duplicates: Vec<DuplicateVaults>,
     /// Vault keys claimed by more than one file, ordered by key.
     pub duplicate_keys: Vec<DuplicateVaultKeys>,
+    /// Local sync states with no vault file, ordered by path.
+    pub missing: Vec<MissingVault>,
+}
+
+/// Local sync state whose vault id no vault file holds. A sync state that
+/// verifies and is `leaving` is a disable in progress, not a missing vault.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingVault {
+    pub id: Uuid,
+    /// Path of the sync state file.
+    pub path: PathBuf,
 }
 
 /// Vault files that hold one vault id, or ids whose short forms differ only in
@@ -69,7 +81,9 @@ pub struct DuplicateVaultKeys {
 /// Unlocks a loaded vault, and wraps the file keys of imported vaults.
 /// Implemented as a trait so it can be swapped out in tests.
 pub trait Unlocker: Send + Sync {
-    fn unlock(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<(), Error>;
+    /// Unlock `vw` on `context`, with the sync files under the app data
+    /// directory `root`.
+    fn unlock(&self, vw: &mut VaultHandle, root: &Path, context: AuthContext) -> Result<(), Error>;
 
     /// Wrapper of the raw file keys of imported vaults, read on `context`.
     fn file_key_wrapper(&self, context: AuthContext) -> Result<FileKeyWrapper, Error>;
@@ -79,8 +93,8 @@ pub trait Unlocker: Send + Sync {
 struct KeychainUnlocker;
 
 impl Unlocker for KeychainUnlocker {
-    fn unlock(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<(), Error> {
-        vw.unlock_on(context)
+    fn unlock(&self, vw: &mut VaultHandle, root: &Path, context: AuthContext) -> Result<(), Error> {
+        vw.unlock_on(root, context)
     }
 
     /// Wrap each raw file key with the vault encryption key, read once.
@@ -165,9 +179,9 @@ impl VaultCatalog {
     }
 
     /// Scan the vault files. Every vault by key, locked, the vault ids held by
-    /// more than one file, and the vault keys claimed by more than one file.
-    /// The key of each vault is read from its file. Files that fail to load
-    /// are skipped.
+    /// more than one file, the vault keys claimed by more than one file, and
+    /// the local sync states with no vault file. The key of each vault is
+    /// read from its file. Files that fail to load are skipped.
     ///
     /// Every header is read before any path is tracked in the vault locks.
     /// Files that share a vault id or a vault key are not listed and not
@@ -177,6 +191,7 @@ impl VaultCatalog {
         let found = self.read_all();
         let duplicates = Self::duplicate_ids(&found);
         let duplicate_keys = Self::duplicate_keys(&found);
+        let missing = self.missing_vaults(&Self::folded_ids(&found));
         for duplicate in &duplicates {
             log::error!(
                 "Skipping vault {}, vault id in use by multiple files: {:?}",
@@ -211,7 +226,24 @@ impl VaultCatalog {
             vaults,
             duplicates,
             duplicate_keys,
+            missing,
         }
+    }
+
+    /// Local sync states whose vault id is not in `held`, the folded short
+    /// ids of the vault files. Each is read and verified. One that verifies
+    /// and is `leaving` is skipped. One that fails to load is listed.
+    fn missing_vaults(&self, held: &BTreeSet<String>) -> Vec<MissingVault> {
+        let root = self.files.root();
+        LocalSyncState::list(root)
+            .into_iter()
+            .filter(|(id, _)| !held.contains(&ShortId::folded(*id)))
+            .filter(|(id, _)| {
+                LocalSyncState::load(root, *id, self.signer().as_ref())
+                    .map_or(true, |state| !state.leaving)
+            })
+            .map(|(id, path)| MissingVault { id, path })
+            .collect()
     }
 
     /// Every vault file in the vaults directory and every external vault
@@ -401,7 +433,7 @@ impl VaultCatalog {
 
     /// Unlock `vw` on `context`. This can prompt.
     pub fn unlock(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<(), Error> {
-        self.unlocker.unlock(vw, context)
+        self.unlocker.unlock(vw, self.files.root(), context)
     }
 
     /// Create and write a new vault with key `key`, normalized. A key that
@@ -1160,7 +1192,12 @@ mod tests {
     struct NoKeychain;
 
     impl Unlocker for NoKeychain {
-        fn unlock(&self, _vw: &mut VaultHandle, _context: AuthContext) -> Result<(), Error> {
+        fn unlock(
+            &self,
+            _vw: &mut VaultHandle,
+            _root: &Path,
+            _context: AuthContext,
+        ) -> Result<(), Error> {
             panic!("unlock was called");
         }
 

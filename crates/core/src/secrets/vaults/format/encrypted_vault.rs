@@ -169,11 +169,11 @@ pub struct EncryptedVault {
     pub key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Save counter for sync. Absent if 0. Not read yet.
+    /// Save counter for sync. Absent if 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub generation: u64,
     /// Sync replica id of this copy of the vault. Absent if the vault is not
-    /// synced. Not read yet.
+    /// synced.
     #[serde_as(as = "Option<ShortId>")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replica_id: Option<Uuid>,

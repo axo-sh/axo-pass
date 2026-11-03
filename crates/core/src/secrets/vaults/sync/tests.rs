@@ -6,6 +6,7 @@ mod apply;
 mod diff;
 mod generators;
 mod keys;
+mod load;
 mod local_state;
 mod model;
 mod resolve;

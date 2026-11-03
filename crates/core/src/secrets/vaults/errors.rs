@@ -47,6 +47,15 @@ pub enum Error {
     #[error("Failed to save sync state: {0}")]
     SyncStateWriteError(#[source] std::io::Error),
 
+    #[error("Failed to read sync state: {0}")]
+    SyncStateReadError(#[source] std::io::Error),
+
+    #[error("Sync state is from a newer version of the app: {0}")]
+    SyncStateVersionSkew(String),
+
+    #[error("Vault needs a sync repair: {0}")]
+    SyncRepairNeeded(String),
+
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,
 

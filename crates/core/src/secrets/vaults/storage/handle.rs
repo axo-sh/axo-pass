@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
+use crate::core::dirs::app_data_dir;
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
@@ -30,6 +31,8 @@ use crate::secrets::vaults::model::{
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
 use crate::secrets::vaults::storage::txn::VaultLocks;
+use crate::secrets::vaults::sync::keys::SyncKeyring;
+use crate::secrets::vaults::sync::load::SyncLoad;
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -50,8 +53,16 @@ pub enum ExportProgress {
 const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
 enum VaultState {
-    Locked { name: Option<String> },
-    Unlocked { vault: Box<Vault> },
+    Locked {
+        name: Option<String>,
+    },
+    /// Unlocked vault, and the sync keyring unwrapped with the vault
+    /// encryption key that unwraps its file key. The keyring is empty unless
+    /// the vault matches a trusted sync state.
+    Unlocked {
+        vault: Box<Vault>,
+        keyring: SyncKeyring,
+    },
 }
 
 // in-memory representation of a vault
@@ -76,13 +87,21 @@ impl VaultHandle {
         Self::unlocked(path, vault)
     }
 
-    /// Unlocked vault at `path`, named by the key stored in `vault`.
+    /// Unlocked vault at `path`, named by the key stored in `vault`, with an
+    /// empty keyring.
     pub(crate) fn unlocked(path: PathBuf, vault: Vault) -> Self {
+        Self::unlocked_with_keyring(path, vault, SyncKeyring::default())
+    }
+
+    /// Unlocked vault at `path`, named by the key stored in `vault`, with the
+    /// sync keyring `keyring`.
+    pub(crate) fn unlocked_with_keyring(path: PathBuf, vault: Vault, keyring: SyncKeyring) -> Self {
         Self {
             key: vault.key().to_string(),
             path,
             state: VaultState::Unlocked {
                 vault: Box::new(vault),
+                keyring,
             },
         }
     }
@@ -127,32 +146,47 @@ impl VaultHandle {
         }
     }
 
+    /// Unlock with the sync files under the app data directory.
     pub fn unlock(&mut self) -> Result<(), Error> {
-        self.unlock_on(AuthContext::SharedThreadLocal)
+        self.unlock_on(&app_data_dir(), AuthContext::SharedThreadLocal)
     }
 
     /// Unlock on a specific [`AuthContext`]. The app broker passes
     /// [`AuthContext::Foreign`] so the app that owns the context draws the
     /// prompt for a lapsed authentication.
     /// The file is verified under `device-signing-key` before it is unwrapped.
-    pub fn unlock_on(&mut self, auth_context: AuthContext) -> Result<(), Error> {
+    /// It is then classified against its local sync state under the app data
+    /// directory `root`, and a case that needs a repair fails the unlock. The
+    /// sync keyring is unwrapped with the same vault encryption key as the
+    /// file key.
+    pub fn unlock_on(&mut self, root: &Path, auth_context: AuthContext) -> Result<(), Error> {
         // note: does not check if the LAContext is still valid
         let encrypted_vault = EncryptedVault::load(&self.path, &KeychainSigner)?;
         let managed_key = get_vault_encryption_key_on(auth_context)?;
+        let (case, keyring) =
+            SyncLoad::load(root, &encrypted_vault, &KeychainSigner, &managed_key)?;
+        case.check()?;
         let vault = Vault::from_encrypted(managed_key, encrypted_vault)
             .inspect_err(|e| log::debug!("failed to build vault: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
+        self.set_unlocked(vault, keyring);
+        Ok(())
+    }
+
+    /// Set the unlocked vault and its sync keyring. The key of the handle is
+    /// unchanged.
+    pub(crate) fn set_unlocked(&mut self, vault: Vault, keyring: SyncKeyring) {
         self.state = VaultState::Unlocked {
             vault: Box::new(vault),
+            keyring,
         };
-        Ok(())
     }
 
     /// Drop the decrypted vault from memory, keeping only the name shown in the
     /// vault list. Reading items again requires `unlock`, and so a fresh
     /// authentication.
     pub fn lock(&mut self) {
-        if let VaultState::Unlocked { vault } = &self.state {
+        if let VaultState::Unlocked { vault, .. } = &self.state {
             self.state = VaultState::Locked {
                 name: vault.name.clone(),
             };
@@ -161,14 +195,35 @@ impl VaultHandle {
 
     fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
         match &self.state {
-            VaultState::Unlocked { vault } => Ok(vault),
+            VaultState::Unlocked { vault, .. } => Ok(vault),
             VaultState::Locked { .. } => Err(Error::VaultLocked),
         }
     }
 
     fn get_unlocked_vault_mut(&mut self) -> Result<&mut Vault, Error> {
         match &mut self.state {
-            VaultState::Unlocked { vault } => Ok(vault),
+            VaultState::Unlocked { vault, .. } => Ok(vault),
+            VaultState::Locked { .. } => Err(Error::VaultLocked),
+        }
+    }
+
+    /// Set the sync generation and the replica id of the unlocked vault, for
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn set_sync_for_test(
+        &mut self,
+        generation: u64,
+        replica_id: Option<Uuid>,
+    ) -> Result<(), Error> {
+        self.get_unlocked_vault_mut()?
+            .set_sync(generation, replica_id);
+        Ok(())
+    }
+
+    /// Sync keyring of the unlocked vault.
+    pub(crate) fn keyring(&self) -> Result<&SyncKeyring, Error> {
+        match &self.state {
+            VaultState::Unlocked { keyring, .. } => Ok(keyring),
             VaultState::Locked { .. } => Err(Error::VaultLocked),
         }
     }
@@ -191,14 +246,26 @@ impl VaultHandle {
         Ok(self.get_unlocked_vault()?.unlocked_key())
     }
 
-    /// Replace the unlocked vault, as when a retained version is restored. The
+    /// Replace the unlocked vault with the retained version `vault`. The
     /// current key is kept, so a version saved before a key change does not
-    /// restore its old key.
-    pub(crate) fn replace_vault(&mut self, mut vault: Vault) {
+    /// restore its old key. The current sync generation and keyring are kept,
+    /// so the save writes the generation of the sync state. A version with
+    /// another replica id fails with `SyncRepairNeeded`.
+    pub(crate) fn restore_vault(&mut self, mut vault: Vault) -> Result<(), Error> {
+        let current = self.get_unlocked_vault()?;
+        if vault.replica_id() != current.replica_id() {
+            let replica = |id: Option<Uuid>| id.map_or("none".to_string(), |id| id.to_string());
+            return Err(Error::SyncRepairNeeded(format!(
+                "retained version belongs to replica {}, the vault to replica {}",
+                replica(vault.replica_id()),
+                replica(current.replica_id())
+            )));
+        }
+        vault.set_sync(current.generation(), current.replica_id());
         vault.set_key(self.key.clone());
-        self.state = VaultState::Unlocked {
-            vault: Box::new(vault),
-        };
+        let keyring = self.keyring()?.clone();
+        self.set_unlocked(vault, keyring);
+        Ok(())
     }
 
     /// Change the vault key stored in the vault. The file name is unchanged.

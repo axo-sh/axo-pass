@@ -7,7 +7,7 @@ use crate::core::auth::AuthContext;
 use crate::secrets::vaults::bundle::{ImportSelection, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::{
-    DuplicateVaultKeys, DuplicateVaults, VaultCatalog, VaultScanResult,
+    DuplicateVaultKeys, DuplicateVaults, MissingVault, VaultCatalog, VaultScanResult,
 };
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
@@ -24,6 +24,8 @@ pub struct VaultsManager {
     duplicates: Vec<DuplicateVaults>,
     /// Vault keys claimed by more than one file when the manager was created.
     duplicate_keys: Vec<DuplicateVaultKeys>,
+    /// Local sync states with no vault file when the manager was created.
+    missing: Vec<MissingVault>,
 }
 
 impl VaultsManager {
@@ -42,12 +44,14 @@ impl VaultsManager {
             vaults,
             duplicates,
             duplicate_keys,
+            missing,
         } = store.scan();
         Self {
             store,
             vaults,
             duplicates,
             duplicate_keys,
+            missing,
         }
     }
 
@@ -65,6 +69,11 @@ impl VaultsManager {
     /// the manager.
     pub fn duplicate_keys(&self) -> &[DuplicateVaultKeys] {
         &self.duplicate_keys
+    }
+
+    /// Local sync states with no vault file.
+    pub fn missing(&self) -> &[MissingVault] {
+        &self.missing
     }
 
     pub fn iter_vault_keys(&self) -> impl Iterator<Item = String> + '_ {

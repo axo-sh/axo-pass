@@ -1003,6 +1003,24 @@ impl Vault {
         self.key = key;
     }
 
+    /// Sync generation `v` the vault was saved with. 0 if the vault is not
+    /// synced.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Replica id of this copy of the vault. `None` if the vault is not
+    /// synced.
+    pub(crate) fn replica_id(&self) -> Option<Uuid> {
+        self.replica_id
+    }
+
+    /// Set the sync generation and the replica id written to the vault file.
+    pub(crate) fn set_sync(&mut self, generation: u64, replica_id: Option<Uuid>) {
+        self.generation = generation;
+        self.replica_id = replica_id;
+    }
+
     pub fn list_folders(&self) -> Vec<&VaultFolder> {
         self.folders.values().collect()
     }

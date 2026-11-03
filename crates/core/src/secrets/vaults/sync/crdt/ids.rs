@@ -8,6 +8,13 @@ use uuid::Uuid;
 #[serde(transparent)]
 pub struct ReplicaId(pub Uuid);
 
+impl ReplicaId {
+    /// New random replica id. The one source of new replica ids.
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
 /// Id of an actor, the writer of one session of one replica. The serde form
 /// is the `Uuid`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

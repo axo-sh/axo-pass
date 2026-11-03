@@ -30,6 +30,11 @@ use crate::secrets::vaults::model::{UnlockedKey, Vault};
 use crate::secrets::vaults::storage::handle::{
     VaultHandle, check_vault_auth_still_valid, get_vault_encryption_key_on,
 };
+use crate::secrets::vaults::sync::keys::SyncKeyring;
+#[cfg(test)]
+use crate::secrets::vaults::sync::keys::TestKeyWrapper;
+use crate::secrets::vaults::sync::load::SyncLoad;
+use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
 mod locks;
 mod vault_file;
@@ -88,6 +93,12 @@ impl VaultWriter {
         }
     }
 
+    /// App data directory of the retained versions, lock files, and sync
+    /// files.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn locks(&self) -> &VaultLocks {
         &self.locks
     }
@@ -131,45 +142,81 @@ impl VaultWriter {
     }
 }
 
-/// How a transaction gets the vault file key.
+/// How a transaction gets the vault file key and the sync keyring.
 pub enum Unlock<'a> {
     /// The shared context the app authenticated. Fails if its authentication
     /// lapsed, instead of prompting.
     App,
-    /// Use the file key of a vault already unlocked in memory. No keychain
-    /// call runs.
+    /// Use the file key and keyring of a vault already unlocked in memory. No
+    /// keychain call runs.
     Unlocked(&'a VaultHandle),
-    /// Call a function for the key, for tests.
+    /// Call a function for the file key, for tests. The keyring is unwrapped
+    /// with [`TestKeyWrapper`].
     #[cfg(test)]
     Test(&'a (dyn Fn() -> UnlockedKey + Sync)),
 }
 
+/// Keys a transaction unlocks with.
+struct UnlockedKeys {
+    id: Uuid,
+    file_key: UnlockedKey,
+    /// Keyring of the local sync state as read before the locks. Empty if
+    /// the vault is not synced or the sync state fails to load. `None` if the
+    /// keyring fails to unwrap.
+    keyring: Option<SyncKeyring>,
+}
+
 impl Unlock<'_> {
-    /// Vault id and unwrapped file key of the vault at `path`. A file that is
-    /// unwrapped is verified under the key of `signer` first.
-    fn key(&self, path: &Path, signer: &dyn VaultSigner) -> Result<(Uuid, UnlockedKey), Error> {
+    /// Vault id, unwrapped file key, and sync keyring of the vault at `path`,
+    /// with the sync files under the app data directory `root`. A file that
+    /// is unwrapped is verified under the key of `signer` first.
+    fn keys(
+        &self,
+        root: &Path,
+        path: &Path,
+        signer: &dyn VaultSigner,
+    ) -> Result<UnlockedKeys, Error> {
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                Self::unwrap_key(path, signer, AuthContext::SharedThreadLocal)
+                Self::unwrap_keys(root, path, signer, AuthContext::SharedThreadLocal)
             },
-            Unlock::Unlocked(vh) => Ok((vh.vault_id()?, vh.unlocked_key()?)),
+            Unlock::Unlocked(vh) => Ok(UnlockedKeys {
+                id: vh.vault_id()?,
+                file_key: vh.unlocked_key()?,
+                keyring: Some(vh.keyring()?.clone()),
+            }),
             #[cfg(test)]
-            Unlock::Test(key) => Ok((VaultHeader::peek(path)?.id, key())),
+            Unlock::Test(key) => {
+                let enc_vault = EncryptedVault::load(path, signer)?;
+                Ok(UnlockedKeys {
+                    id: enc_vault.id,
+                    file_key: key(),
+                    keyring: SyncLoad::keyring(root, &enc_vault, signer, &TestKeyWrapper),
+                })
+            },
         }
     }
 
-    fn unwrap_key(
+    /// Unwrap the file key and the sync keyring with one vault encryption
+    /// key read on `context`.
+    fn unwrap_keys(
+        root: &Path,
         path: &Path,
         signer: &dyn VaultSigner,
         context: AuthContext,
-    ) -> Result<(Uuid, UnlockedKey), Error> {
+    ) -> Result<UnlockedKeys, Error> {
         let enc_vault = EncryptedVault::load(path, signer)?;
         let managed_key = get_vault_encryption_key_on(context)?;
-        let key = UnlockedKey::unwrap(&managed_key, &enc_vault)
+        let file_key = UnlockedKey::unwrap(&managed_key, &enc_vault)
             .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
-        Ok((enc_vault.id, key))
+        let keyring = SyncLoad::keyring(root, &enc_vault, signer, &managed_key);
+        Ok(UnlockedKeys {
+            id: enc_vault.id,
+            file_key,
+            keyring,
+        })
     }
 }
 
@@ -256,8 +303,12 @@ impl VaultWriter {
         E: From<Error>,
         F: FnOnce(&mut VaultHandle) -> Result<R, E>,
     {
-        // Unwrap the file key first. This may prompt.
-        let (id, file_key) = unlock.key(&target.path, &*self.signer)?;
+        // Unwrap the file key and the sync keyring first. This may prompt.
+        let UnlockedKeys {
+            id,
+            file_key,
+            keyring,
+        } = unlock.keys(&self.root, &target.path, &*self.signer)?;
 
         // Take the per-vault mutex and the cross-process lock.
         let vault_lock = self.locks.entry(id, &target.path);
@@ -271,6 +322,14 @@ impl VaultWriter {
         if enc_vault.id != id {
             return Err(Error::VaultNotFound(path.display().to_string()).into());
         }
+
+        // Classify the file against the local sync state under the locks. A
+        // case that needs a repair writes nothing.
+        let local = LocalSyncState::load(&self.root, id, &*self.signer);
+        let case = SyncLoad::classify(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
+        case.check()?;
+        let (_, keyring) = case.with_keyring(keyring);
+
         let vault = match Vault::from_unlocked_key(&file_key, enc_vault) {
             // Another writer rewrapped the file key. Release the locks and
             // unwrap again.
@@ -283,7 +342,7 @@ impl VaultWriter {
 
         // The key comes from the vault. It differs from the caller's key if
         // another writer changed the key since the caller found the vault.
-        let mut vh = VaultHandle::unlocked(path.clone(), vault);
+        let mut vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, keyring);
 
         // Apply the change. An error leaves the file unchanged.
         let value = f(&mut vh)?;
@@ -368,7 +427,9 @@ impl VaultWriter {
 
     /// Replace the vault with its retained version `name`. The version is
     /// verified first, and a version whose signature fails is not restored.
-    /// The replaced file is retained in turn. The vault key is kept.
+    /// The replaced file is retained in turn. The vault key, the sync
+    /// generation, and the replica id are kept. A version with another
+    /// replica id is not restored.
     pub fn restore_version(
         &self,
         target: &Target,
@@ -396,8 +457,7 @@ impl VaultWriter {
                     e
                 }
             })?;
-            vh.replace_vault(vault);
-            Ok(())
+            vh.restore_vault(vault)
         })
     }
 
