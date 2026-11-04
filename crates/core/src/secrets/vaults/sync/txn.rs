@@ -8,6 +8,10 @@
 //! the session. `s` advances if and only if the vault file changes. The sync
 //! state is saved if it or `s` changed, always before the vault.
 //!
+//! After the joins and the apply of the joined state, each peer of
+//! `replica_keys` with no pin is pinned at first use (`sync/pins.rs`). A
+//! stopped transaction pins nothing.
+//!
 //! A transaction that publishes writes the staged file before the sync state,
 //! and copies it to the synced folder after the vault (`sync/publish.rs`).
 //!
@@ -48,6 +52,7 @@ use super::keys::SyncKeyring;
 use super::load::TrustedState;
 use super::local_state::LocalSyncState;
 use super::model::SyncState;
+use super::pins::Pins;
 use super::publish::Staged;
 use super::rebuild::Rebuild;
 use super::repair::Repair;
@@ -73,7 +78,8 @@ pub(crate) struct SyncTxn {
     newer_vault: Option<u64>,
     /// Whether a join or a mint changed the state since it was loaded.
     changed: bool,
-    /// Whether the publish fields of the header changed since it was loaded.
+    /// Whether the publish fields, the stop fields, or the pins of the
+    /// header changed since it was loaded.
     header_changed: bool,
     /// Padded body of the changed state, shared by the staged file and the
     /// sync state.
@@ -198,10 +204,16 @@ impl SyncTxn {
     }
 
     /// Whether the sync state needs a save with no change to `s`: a join or a
-    /// mint changed the state, or the publish fields of the header changed.
+    /// mint changed the state, or the header changed.
     /// A transaction that saves the vault only saves no sync state.
     pub(crate) fn needs_save(&self) -> bool {
         !self.vault_only && (self.changed || self.header_changed)
+    }
+
+    /// Whether a join or a mint changed the state, and the transaction saves
+    /// the sync state.
+    pub(crate) fn state_changed(&self) -> bool {
+        !self.vault_only && self.changed
     }
 
     /// Whether the transaction saves the vault only, with no sync state.
@@ -274,6 +286,17 @@ impl SyncTxn {
         let changed = self.join(session).peers(transport, own);
         self.changed |= changed;
         changed
+    }
+
+    /// Pin with `first_use` each peer of the `replica_keys` of the state that
+    /// has no pin, after the joins and the apply of the joined state. A
+    /// discarded join pins nothing it held. A pin changes the header only, so
+    /// a save of the pins alone keeps `s` and the body ciphertext. A
+    /// transaction that does not sync pins nothing.
+    pub(crate) fn pin_first_use(&mut self) {
+        if self.syncs() && Pins::pin_first_use(&mut self.local, &self.state) {
+            self.header_changed = true;
+        }
     }
 
     /// Join of state files into the state, as received by `session`.

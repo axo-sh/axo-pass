@@ -9,6 +9,7 @@ pub mod load;
 pub mod local_state;
 pub mod meta;
 pub mod model;
+pub mod pins;
 pub mod publish;
 pub mod rebuild;
 pub mod repair;

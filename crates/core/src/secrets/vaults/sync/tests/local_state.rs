@@ -41,6 +41,7 @@ fn local() -> (LocalSyncState, Zeroizing<Vec<u8>>) {
             source: PinSource::Pairing,
             encryption: PublicKey(vec![4, 1]),
             signing: PublicKey(vec![4, 2]),
+            revoked: false,
         },
     );
     local.seal(&padded, &keyring()).unwrap();
@@ -48,17 +49,17 @@ fn local() -> (LocalSyncState, Zeroizing<Vec<u8>>) {
 }
 
 /// File contents of [`local`], signed by the test device key.
-fn contents() -> String {
+pub(super) fn contents() -> String {
     local().0.to_file_contents(&TestSigner::device()).unwrap()
 }
 
 /// Parse `contents` under the test device key.
-fn parse(contents: &str) -> Result<LocalSyncState, LocalStateError> {
+pub(super) fn parse(contents: &str) -> Result<LocalSyncState, LocalStateError> {
     LocalSyncState::parse(contents, &TestSigner::device())
 }
 
 /// Raw state JSON of the file contents `contents`.
-fn raw_state(contents: &str) -> String {
+pub(super) fn raw_state(contents: &str) -> String {
     #[derive(Deserialize)]
     struct Envelope<'a> {
         #[serde(borrow)]
@@ -70,14 +71,14 @@ fn raw_state(contents: &str) -> String {
 
 /// File contents holding the raw state JSON `state_json`, signed by the test
 /// device key.
-fn signed(state_json: &str) -> String {
+pub(super) fn signed(state_json: &str) -> String {
     let message = [&b"ap-local-state-v1:"[..], state_json.as_bytes()].concat();
     let signature = B64.encode(TestSigner::device().sign(&message).unwrap());
     format!("{{\"signature\": \"{signature}\", \"state\": {state_json}}}")
 }
 
 /// `contents` with the first `from` replaced by `to`.
-fn replaced(contents: &str, from: &str, to: &str) -> String {
+pub(super) fn replaced(contents: &str, from: &str, to: &str) -> String {
     let changed = contents.replacen(from, to, 1);
     assert_ne!(changed, contents, "{from} is not in the file");
     changed

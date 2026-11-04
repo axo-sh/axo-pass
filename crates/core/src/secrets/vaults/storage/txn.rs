@@ -654,6 +654,9 @@ impl VaultWriter {
             } else if changed && sync.syncs() {
                 sync.apply_joined(&mut vault)?;
             }
+            // Peers are pinned after the joins and the apply, so a discarded
+            // join pins nothing it held. A stopped sync pins nothing.
+            sync.pin_first_use();
         }
 
         // The key comes from the vault. It differs from the caller's key if
@@ -1007,8 +1010,10 @@ impl VaultWriter {
     /// an edit, and an item or credential the version lacks is moved to the
     /// trash. If the sync state changes, the vault shows its view, the sync
     /// state is saved at the next generation before the vault, and the staged
-    /// file is published. Otherwise the vault takes the sync state generation
-    /// and the sync state is left as it is. If the diff or the apply fails,
+    /// file is published. Otherwise the vault takes the sync state generation,
+    /// and the sync state is saved at that generation only if a peer was
+    /// pinned. Peers are pinned at first use after the joins and the apply.
+    /// If the diff or the apply fails,
     /// the join and the differences are discarded, and the version is saved
     /// at the next generation without the sync state, so the next
     /// transaction runs the `v > s` repair.
@@ -1031,12 +1036,14 @@ impl VaultWriter {
             sync.join_peers(&**transport, session);
         }
         sync.record(&vault, session, now, true)?;
-        if sync.needs_save() {
+        if sync.state_changed() {
             sync.apply_restored(&mut vault)?;
         }
+        sync.pin_first_use();
         // A diff or apply failure saves the version only, at the next
-        // generation, so the next transaction runs the `v > s` repair.
-        let generation = if sync.needs_save() {
+        // generation, so the next transaction runs the `v > s` repair. A
+        // change of the pins alone saves the sync state header at `s`.
+        let generation = if sync.state_changed() {
             sync.stage(&self.root)?;
             sync.next_generation()
         } else if sync.is_vault_only() {
@@ -1051,7 +1058,8 @@ impl VaultWriter {
         let mut saved = None;
         let result = self.replace_refused(entry, locked, refused, vh, previous_key, || {
             if sync.needs_save() {
-                saved = Some(sync.save(&self.root, &*self.signer, true)?);
+                let advance = sync.state_changed();
+                saved = Some(sync.save(&self.root, &*self.signer, advance)?);
             }
             Ok(())
         });

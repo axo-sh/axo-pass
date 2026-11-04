@@ -103,6 +103,10 @@ pub struct PinnedKeys {
     pub encryption: PublicKey,
     /// Device signing key.
     pub signing: PublicKey,
+    /// Whether the signing key is revoked. Set only by a key rotation. A
+    /// local state without the field reads as not revoked.
+    #[serde(default)]
+    pub revoked: bool,
 }
 
 /// How a peer's keys were first learned.
