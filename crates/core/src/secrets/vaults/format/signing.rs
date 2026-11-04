@@ -5,7 +5,7 @@
 //! signature with the `p256` crate and makes no keychain call.
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
@@ -19,8 +19,41 @@ use crate::secrets::vaults::errors::Error;
 /// Keychain label of the per-Mac signing key.
 pub const DEVICE_SIGNING_KEY_LABEL: &str = "device-signing-key";
 
-/// Public key of `device-signing-key`, read once per process.
-static DEVICE_VERIFYING_KEY: OnceLock<VerifyingKey> = OnceLock::new();
+/// Public key of `device-signing-key`, read once per process and cleared when
+/// the key is created.
+static DEVICE_VERIFYING_KEY: VerifyingKeyCache = VerifyingKeyCache::new();
+
+/// Cached public key. A cleared cache reads the key again.
+pub(crate) struct VerifyingKeyCache(RwLock<Option<VerifyingKey>>);
+
+impl VerifyingKeyCache {
+    pub(crate) const fn new() -> Self {
+        Self(RwLock::new(None))
+    }
+
+    /// Cached key, or the key from `load`, which is then cached. An error from
+    /// `load` caches nothing.
+    pub(crate) fn get_or_load(
+        &self,
+        load: impl FnOnce() -> Result<VerifyingKey, Error>,
+    ) -> Result<VerifyingKey, Error> {
+        if let Some(key) = *self.0.read().unwrap_or_else(|e| e.into_inner()) {
+            return Ok(key);
+        }
+        let mut cached = self.0.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(key) = *cached {
+            return Ok(key);
+        }
+        let key = load()?;
+        *cached = Some(key);
+        Ok(key)
+    }
+
+    /// Drop the cached key.
+    pub(crate) fn clear(&self) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
 
 /// Signs vault files.
 pub trait VaultSigner: Send + Sync {
@@ -62,13 +95,16 @@ impl KeychainSigner {
         })
     }
 
-    /// Create `device-signing-key`. The caller checks that it is missing, as
-    /// `ensure_device_keys` does.
+    /// Create `device-signing-key` and clear the cached public key, so the
+    /// next verification in this process reads the new key. The caller checks
+    /// that the key is missing, as `ensure_device_keys` and the re-sign do.
     pub(crate) fn create_key() -> Result<(), Error> {
         log::debug!("Creating the device signing key");
-        ManagedKey::create_device_key(DEVICE_SIGNING_KEY_LABEL)
+        let created = ManagedKey::create_device_key(DEVICE_SIGNING_KEY_LABEL)
             .map(|_| ())
-            .map_err(Error::KeyCreationFailed)
+            .map_err(Error::KeyCreationFailed);
+        DEVICE_VERIFYING_KEY.clear();
+        created
     }
 
     /// Read `device-signing-key`. The key never prompts.
@@ -99,12 +135,10 @@ impl VaultSigner for KeychainSigner {
     }
 
     fn verifying_key(&self) -> Result<VerifyingKey, Error> {
-        if let Some(key) = DEVICE_VERIFYING_KEY.get() {
-            return Ok(*key);
-        }
-        let key = Self::find_key()?.ok_or(Error::SigningKeyNotFound)?;
-        let key = Self::verifying_key_of(&key)?;
-        Ok(*DEVICE_VERIFYING_KEY.get_or_init(|| key))
+        DEVICE_VERIFYING_KEY.get_or_load(|| {
+            let key = Self::find_key()?.ok_or(Error::SigningKeyNotFound)?;
+            Self::verifying_key_of(&key)
+        })
     }
 }
 
@@ -123,7 +157,13 @@ impl TestSigner {
 
     /// Signer with one fixed key, used as the device key of every test writer.
     pub fn device() -> Self {
-        let key = p256::ecdsa::SigningKey::from_bytes(&[7u8; 32].into())
+        Self::seeded(7)
+    }
+
+    /// Signer with the fixed key of every byte `seed`. Two signers of one
+    /// seed hold the same key.
+    pub fn seeded(seed: u8) -> Self {
+        let key = p256::ecdsa::SigningKey::from_bytes(&[seed; 32].into())
             .expect("fixed test key is a valid scalar");
         Self(key)
     }
@@ -201,6 +241,44 @@ mod tests {
             verify(&key, MESSAGE, &[0u8; 64]),
             Err(Error::VaultSignatureInvalid)
         ));
+    }
+
+    #[test]
+    fn cleared_cache_verifies_with_new_key() {
+        let cache = VerifyingKeyCache::new();
+        let old = TestSigner::seeded(1);
+        let new = TestSigner::seeded(2);
+        let load = |signer: &TestSigner| signer.verifying_key();
+
+        assert_eq!(
+            cache.get_or_load(|| load(&old)).unwrap(),
+            load(&old).unwrap()
+        );
+        assert_eq!(
+            cache.get_or_load(|| load(&new)).unwrap(),
+            load(&old).unwrap(),
+            "the cached key is kept until cleared"
+        );
+        cache.clear();
+        let key = cache.get_or_load(|| load(&new)).unwrap();
+
+        assert_eq!(key, load(&new).unwrap());
+        let signature = new.sign(MESSAGE).unwrap();
+        verify(&key, MESSAGE, &signature).unwrap();
+    }
+
+    #[test]
+    fn failed_load_caches_nothing() {
+        let cache = VerifyingKeyCache::new();
+        let signer = TestSigner::seeded(3);
+
+        assert!(matches!(
+            cache.get_or_load(|| Err(Error::SigningKeyNotFound)),
+            Err(Error::SigningKeyNotFound)
+        ));
+        let key = cache.get_or_load(|| signer.verifying_key()).unwrap();
+
+        assert_eq!(key, signer.verifying_key().unwrap());
     }
 
     /// Needs a binary signed with the app's keychain access group.

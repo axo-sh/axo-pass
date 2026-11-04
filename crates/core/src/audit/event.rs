@@ -380,6 +380,10 @@ pub enum Action {
     VaultVersionRestored,
     #[serde(rename = "vault.versions_erased")]
     VaultVersionsErased,
+    #[serde(rename = "vault.unreadable_moved")]
+    VaultUnreadableMoved,
+    #[serde(rename = "vault.resigned")]
+    VaultResigned,
 
     #[serde(rename = "item.listed")]
     ItemListed,
@@ -482,6 +486,8 @@ impl Action {
             Action::VaultImported => "vault.imported",
             Action::VaultVersionRestored => "vault.version_restored",
             Action::VaultVersionsErased => "vault.versions_erased",
+            Action::VaultUnreadableMoved => "vault.unreadable_moved",
+            Action::VaultResigned => "vault.resigned",
             Action::ItemListed => "item.listed",
             Action::ItemCreated => "item.created",
             Action::ItemUpdated => "item.updated",
@@ -516,7 +522,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 62] = [
+    pub const ALL: [Action; 64] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -550,6 +556,8 @@ impl Action {
         Action::VaultImported,
         Action::VaultVersionRestored,
         Action::VaultVersionsErased,
+        Action::VaultUnreadableMoved,
+        Action::VaultResigned,
         Action::ItemListed,
         Action::ItemCreated,
         Action::ItemUpdated,
@@ -632,6 +640,12 @@ impl Action {
                 "Replaced a vault with a version retained from before an earlier save."
             },
             Action::VaultVersionsErased => "Deleted every retained version of a vault.",
+            Action::VaultUnreadableMoved => {
+                "Moved the vault files that this Mac's keys cannot read to the unreadable folder, before new keys were created."
+            },
+            Action::VaultResigned => {
+                "Signed every vault file and retained version again with a new device signing key, after the old key was lost."
+            },
             Action::ItemListed => {
                 "Listed the items in a vault, or the logins for a site. No values are read."
             },
@@ -713,7 +727,9 @@ impl Action {
             | Action::VaultExported
             | Action::VaultImported
             | Action::VaultVersionRestored
-            | Action::VaultVersionsErased => Category::Vault,
+            | Action::VaultVersionsErased
+            | Action::VaultUnreadableMoved
+            | Action::VaultResigned => Category::Vault,
             Action::ItemListed
             | Action::ItemCreated
             | Action::ItemUpdated
@@ -781,6 +797,8 @@ impl Action {
             | Action::VaultImported
             | Action::VaultVersionRestored
             | Action::VaultVersionsErased
+            | Action::VaultUnreadableMoved
+            | Action::VaultResigned
             | Action::ItemCreated
             | Action::ItemUpdated
             | Action::ItemDeleted

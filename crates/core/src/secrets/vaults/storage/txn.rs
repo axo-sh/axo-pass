@@ -51,6 +51,7 @@ use crate::secrets::vaults::model::{UnlockedKey, Vault};
 use crate::secrets::vaults::storage::handle::{
     VaultHandle, check_vault_auth_still_valid, get_vault_encryption_key_on,
 };
+use crate::secrets::vaults::storage::resign::Resigned;
 #[cfg(test)]
 use crate::secrets::vaults::sync::apply::ApplyFault;
 use crate::secrets::vaults::sync::diff::LocalEdits;
@@ -1101,6 +1102,13 @@ impl VaultWriter {
             .map_err(Error::VaultWriteError)
     }
 
+    /// Keep `contents` as an invalid file of vault `id`, as a restore over a
+    /// refused file does.
+    #[cfg(test)]
+    pub(crate) fn add_invalid_for_test(&self, id: Uuid, contents: &[u8]) {
+        self.keep_invalid(id, contents).unwrap();
+    }
+
     /// Names of the invalid files of vault `id`, newest first.
     #[cfg(test)]
     pub(crate) fn list_invalid(&self, id: Uuid) -> Vec<String> {
@@ -1119,6 +1127,71 @@ impl VaultWriter {
         let entry = self.locks.entry(id, path);
         let _locked = self.lock_entry(&entry, id)?;
         self.versions(id).erase()
+    }
+
+    /// Sign again, with the signer of this writer, each vault file of
+    /// `vault_files` and every retained version of vault `id`, under the vault
+    /// locks. `path` is the path of a new lock entry. Each file must hold vault
+    /// `id` ([`EncryptedVault::sign_again`]). Only the envelope signature
+    /// changes. Invalid files are not listed, so they are not signed again.
+    /// A file that fails is skipped and logged, and the other files are still
+    /// signed.
+    pub(super) fn resign(&self, id: Uuid, path: &Path, vault_files: &[PathBuf]) -> Resigned {
+        let mut resigned = Resigned::default();
+        let entry = self.locks.entry(id, path);
+        let _locked = match self.lock_entry(&entry, id) {
+            Ok(locked) => locked,
+            Err(e) => {
+                log::error!("Failed to lock vault {id} to sign it again: {e}");
+                resigned.skipped.extend(vault_files.iter().cloned());
+                return resigned;
+            },
+        };
+        let versions = self.versions(id);
+        let version_files = match versions.list() {
+            Ok(list) => list.iter().map(|v| versions.file(&v.name)).collect(),
+            Err(e) => {
+                log::error!("Failed to list {}: {e}", versions.path.display());
+                resigned.skipped.push(versions.path.clone());
+                Vec::new()
+            },
+        };
+        for file in vault_files.iter().chain(&version_files) {
+            match self.resign_file(id, file) {
+                Ok(()) => resigned.signed += 1,
+                Err(e) => {
+                    log::error!("Failed to sign {} again: {e}", file.display());
+                    resigned.skipped.push(file.clone());
+                },
+            }
+        }
+        resigned
+    }
+
+    /// Sign the file at `path` of vault `id` again and replace it.
+    fn resign_file(&self, id: Uuid, path: &Path) -> Result<(), Error> {
+        let contents = EncryptedVault::read_file(path)?;
+        let signed = EncryptedVault::sign_again(&contents, id, &*self.signer)?;
+        write_atomic(path, signed.as_bytes()).map_err(Error::VaultWriteError)
+    }
+
+    /// Vault ids of the retained version directories, ordered by id. A
+    /// directory whose name is not a short id is skipped.
+    pub(super) fn version_ids(&self) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = fs::read_dir(self.root.join(VERSIONS_DIR))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let short_id = name.to_str()?;
+                let id = ShortId::decode(short_id).ok()?.uuid();
+                (ShortId::encode_uuid(id) == short_id).then_some(id)
+            })
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// Prune the retained versions of every vault, including vaults deleted

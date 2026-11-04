@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use anyhow::anyhow;
+use jiff::Zoned;
 
 use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
 use crate::core::provenance::Provenance;
@@ -14,7 +15,11 @@ use crate::secrets::vaults::storage::handle::{
     VAULT_ENCRYPTION_KEY_LABEL, probe_vault_encryption_key,
 };
 use crate::secrets::vaults::storage::txn::VERSIONS_DIR;
+use crate::secrets::vaults::storage::unreadable::Unreadable;
 use crate::secrets::vaults::sync::local_state::SYNC_DIR;
+
+/// Name of the vaults directory under the app data directory.
+pub(super) const VAULTS_DIR: &str = "vaults";
 
 #[cfg(test)]
 mod tests;
@@ -71,6 +76,10 @@ pub(super) trait DeviceKeys: Send + Sync {
     /// Create each key that is missing, on `context`. Only
     /// [`ensure_device_keys`] calls this.
     fn create_keys(&self, context: AuthContext) -> Result<(), Error>;
+
+    /// Create `device-signing-key`, which is missing. Only the confirmed
+    /// re-sign calls this.
+    fn create_signing_key(&self) -> Result<(), Error>;
 }
 
 /// The keys in the keychain.
@@ -137,11 +146,17 @@ impl DeviceKeys for KeychainKeys {
         }
         Ok(())
     }
+
+    fn create_signing_key(&self) -> Result<(), Error> {
+        KeychainSigner::create_key()
+    }
 }
 
 /// Where vault files of this Mac are found.
 #[derive(Clone, Debug)]
 pub(super) struct VaultFiles {
+    /// App data directory.
+    root: PathBuf,
     vaults: PathBuf,
     versions: PathBuf,
     sync: PathBuf,
@@ -154,6 +169,7 @@ impl VaultFiles {
     /// directory `root`, and the listed `external` vaults.
     pub fn new(vaults: PathBuf, root: &Path, external: Vec<PathBuf>) -> Self {
         Self {
+            root: root.to_path_buf(),
             vaults,
             versions: root.join(VERSIONS_DIR),
             sync: root.join(SYNC_DIR),
@@ -161,14 +177,30 @@ impl VaultFiles {
         }
     }
 
+    /// App data directory.
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Directories of the vault files of this Mac, with the name of each
+    /// under `unreadable/{date}/`. External vaults are not included.
+    pub(super) fn dirs(&self) -> [(&'static str, &Path); 3] {
+        [
+            (VAULTS_DIR, &self.vaults),
+            (VERSIONS_DIR, &self.versions),
+            (SYNC_DIR, &self.sync),
+        ]
+    }
+
     /// Whether `vaults/`, `versions/`, or `sync/` holds a file, or a listed
     /// external vault file exists. A path that cannot be read counts as
     /// present, so no key is created for it.
     pub fn present(&self) -> bool {
         self.external.iter().any(|path| Self::exists(path))
-            || [&self.vaults, &self.versions, &self.sync]
+            || self
+                .dirs()
                 .into_iter()
-                .any(|dir| Self::holds_file(dir))
+                .any(|(_, dir)| Self::holds_file(dir))
     }
 
     /// Whether `path` exists. Only a not found error counts as absent.
@@ -216,6 +248,8 @@ pub enum KeyState {
     /// `device-signing-key` is missing.
     SigningKeyLost,
     /// Vault files are present and `vault-encryption-key` is missing.
+    /// `Unreadable::synced_vaults` lists the synced vaults by their
+    /// unverified sync states.
     NewHardware,
     /// A probe failed with a keychain error other than item not found.
     KeychainError(String),
@@ -243,23 +277,43 @@ impl KeyState {
     }
 }
 
+/// What [`ensure_device_keys`] does on new hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OnNewHardware {
+    /// Fail with `Error::NewHardware`, as an import does.
+    Fail,
+    /// Move the vault files to `unreadable/`, then create the missing keys,
+    /// as creating a vault, pairing, and the recovery kit do.
+    MoveFiles,
+}
+
 /// Create the missing keys on `context` if no vault file exists. This is the
 /// only policy that creates keys. Creating the first vault and an import call
 /// this.
 ///
-/// With vault files and both keys present, nothing is created. With vault
-/// files and a missing key, no key is created. `NewHardware` fails with
-/// `Error::NewHardware` and `SigningKeyLost` with `SigningKeyNotFound`. A
-/// keychain error fails with it.
+/// With vault files and both keys present, nothing is created. `NewHardware`
+/// fails with `Error::NewHardware` if `on_new_hardware` is `Fail`. If it is
+/// `MoveFiles`, every file under `vaults/`, `versions/`, and `sync/` moves to
+/// `unreadable/` first ([`Unreadable::move_all`]), and the missing keys are
+/// then created. A failed move creates no key. `SigningKeyLost` fails with
+/// `SigningKeyNotFound`, and the re-sign creates that key. A keychain error
+/// fails with it.
 pub(super) fn ensure_device_keys(
     keys: &dyn DeviceKeys,
     files: &VaultFiles,
     context: AuthContext,
+    on_new_hardware: OnNewHardware,
 ) -> Result<(), Error> {
     match KeyState::probe(keys, files) {
         KeyState::NoVaultFiles => keys.create_keys(context),
         KeyState::Normal => Ok(()),
-        KeyState::NewHardware => Err(Error::NewHardware),
+        KeyState::NewHardware => match on_new_hardware {
+            OnNewHardware::Fail => Err(Error::NewHardware),
+            OnNewHardware::MoveFiles => {
+                Unreadable::move_all(files, Zoned::now().date())?;
+                keys.create_keys(context)
+            },
+        },
         KeyState::SigningKeyLost => Err(Error::SigningKeyNotFound),
         KeyState::KeychainError(message) => Err(KeyProbe::failure(&message)),
     }

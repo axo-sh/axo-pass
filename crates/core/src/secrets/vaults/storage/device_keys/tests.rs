@@ -233,7 +233,7 @@ fn listed_external_vault_that_does_not_exist_is_not_a_vault_file() {
     let keys = TestKeys::neither();
 
     assert_eq!(classify(&keys, &files), KeyState::NoVaultFiles);
-    ensure_device_keys(&keys, &files, AuthContext::OneTime).unwrap();
+    ensure_device_keys(&keys, &files, AuthContext::OneTime, OnNewHardware::Fail).unwrap();
 
     assert_eq!(keys.created(), 2);
 }
@@ -344,7 +344,12 @@ fn keychain_error_creates_no_key_and_moves_no_file() {
             let catalog = mac.catalog(&keys);
             let before = mac.snapshot();
 
-            let ensured = ensure_device_keys(&*keys, &mac.files(), AuthContext::OneTime);
+            let ensured = ensure_device_keys(
+                &*keys,
+                &mac.files(),
+                AuthContext::OneTime,
+                OnNewHardware::MoveFiles,
+            );
             let created = catalog.create(None, "work");
             let imported = import_one(&catalog);
 
@@ -410,7 +415,13 @@ fn only_the_missing_key_is_created_if_no_vault_files_exist() {
     let mac = Mac::new();
     let keys = TestKeys::new(KeyProbe::Present, KeyProbe::Missing);
 
-    ensure_device_keys(&keys, &mac.files(), AuthContext::OneTime).unwrap();
+    ensure_device_keys(
+        &keys,
+        &mac.files(),
+        AuthContext::OneTime,
+        OnNewHardware::Fail,
+    )
+    .unwrap();
 
     assert_eq!(keys.created(), 1);
     assert_eq!(keys.probe_signing_key(), KeyProbe::Present);
@@ -427,23 +438,6 @@ fn vault_created_and_imported_with_vault_files_and_both_keys_creates_no_key() {
     import_one(&catalog).unwrap();
 
     assert_eq!(keys.created(), 0);
-}
-
-#[test]
-fn creating_vault_on_new_hardware_fails_with_new_hardware_and_creates_no_key() {
-    let mac = Mac::with_vault();
-    let keys = Arc::new(TestKeys::neither());
-    let before = mac.snapshot();
-
-    let result = mac.catalog(&keys).create(None, "work");
-
-    assert!(
-        matches!(result, Err(Error::NewHardware)),
-        "{:?}",
-        result.err()
-    );
-    assert_eq!(keys.created(), 0);
-    assert_eq!(mac.snapshot(), before);
 }
 
 #[test]
@@ -472,7 +466,12 @@ fn build_that_sees_neither_key_is_new_hardware_and_changes_nothing() {
     let before = mac.snapshot();
 
     assert_eq!(classify(&keys, &mac.files()), KeyState::NewHardware);
-    let result = ensure_device_keys(&keys, &mac.files(), AuthContext::OneTime);
+    let result = ensure_device_keys(
+        &keys,
+        &mac.files(),
+        AuthContext::OneTime,
+        OnNewHardware::Fail,
+    );
 
     assert!(matches!(result, Err(Error::NewHardware)));
     assert_eq!(keys.created(), 0);
@@ -488,7 +487,12 @@ fn build_that_sees_only_encryption_key_is_signing_key_lost_and_changes_nothing()
     let before = mac.snapshot();
 
     assert_eq!(classify(&keys, &mac.files()), KeyState::SigningKeyLost);
-    let result = ensure_device_keys(&keys, &mac.files(), AuthContext::OneTime);
+    let result = ensure_device_keys(
+        &keys,
+        &mac.files(),
+        AuthContext::OneTime,
+        OnNewHardware::Fail,
+    );
 
     assert!(matches!(result, Err(Error::SigningKeyNotFound)));
     assert_eq!(keys.created(), 0);

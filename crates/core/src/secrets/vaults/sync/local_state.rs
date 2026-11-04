@@ -192,6 +192,21 @@ impl LocalSyncState {
         found
     }
 
+    /// Vault id and replica id of the local sync state file `contents`,
+    /// without checking its signature. Other fields are ignored. `None` if the
+    /// file does not parse. The ids are not verified, so they only pick a
+    /// vault directory.
+    pub fn peek(contents: &str) -> Option<(Uuid, ReplicaId)> {
+        #[derive(Deserialize)]
+        struct Ids {
+            vault_id: Uuid,
+            replica_id: ReplicaId,
+        }
+        let envelope: LocalStateEnvelope = serde_json::from_str(contents).ok()?;
+        let ids: Ids = serde_json::from_str(envelope.state.get()).ok()?;
+        Some((ids.vault_id, ids.replica_id))
+    }
+
     /// Staged file of vault `vault_id` under the app data directory `root`.
     pub fn staged_path(root: &Path, vault_id: Uuid) -> PathBuf {
         let vault_id = ShortId::encode_uuid(vault_id);

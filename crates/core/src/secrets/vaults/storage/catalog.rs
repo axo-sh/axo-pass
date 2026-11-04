@@ -20,15 +20,17 @@ use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::device_keys::{
-    DeviceKeys, KeyState, KeychainKeys, VaultFiles, ensure_device_keys,
+    DeviceKeys, KeyState, KeychainKeys, OnNewHardware, VaultFiles, ensure_device_keys,
 };
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key_on, normalized_key,
     validate_key,
 };
+use crate::secrets::vaults::storage::resign::{Resign, Resigned};
 #[cfg(test)]
 use crate::secrets::vaults::storage::test_keys::TestKeys;
 use crate::secrets::vaults::storage::txn::{Committed, RetainedVersion, Unlock, VaultWriter};
+use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
 /// This struct tracks vault files on disk: the vaults directory, the external
@@ -225,10 +227,33 @@ impl VaultCatalog {
         KeyState::probe(self.keys.as_ref(), &self.vault_files())
     }
 
-    /// Create the missing keys on `context` if no vault file exists. See
-    /// [`ensure_device_keys`].
-    fn ensure_keys(&self, context: AuthContext) -> Result<(), Error> {
-        ensure_device_keys(self.keys.as_ref(), &self.vault_files(), context)
+    /// Create the missing keys on `context` if no vault file exists, and on
+    /// new hardware as `on_new_hardware` states. See [`ensure_device_keys`].
+    fn ensure_keys(
+        &self,
+        context: AuthContext,
+        on_new_hardware: OnNewHardware,
+    ) -> Result<(), Error> {
+        ensure_device_keys(
+            self.keys.as_ref(),
+            &self.vault_files(),
+            context,
+            on_new_hardware,
+        )
+    }
+
+    /// Synced vaults of the local sync states, read without verifying them,
+    /// for the pairing and recovery kit offer on new hardware.
+    pub fn unverified_synced_vaults(&self) -> Vec<SyncedVault> {
+        Unreadable::synced_vaults(self.files.root())
+    }
+
+    /// Confirmed re-sign after signing key loss. Creates
+    /// `device-signing-key` and signs every vault file and retained version
+    /// again. Fails with `ResignNotOffered` unless the key state is
+    /// `SigningKeyLost`. See [`Resign::confirm`].
+    pub fn resign(&self) -> Result<Resigned, Error> {
+        Resign::confirm(self.keys.as_ref(), self)
     }
 
     /// Every vault by key, locked. Same as the vaults of [`Self::scan`].
@@ -310,7 +335,7 @@ impl VaultCatalog {
     /// already read, such as an external vault path that points into the
     /// vaults directory, is skipped. Files that fail to load are logged and
     /// skipped.
-    fn read_all(&self) -> Vec<(Uuid, VaultHandle)> {
+    pub(super) fn read_all(&self) -> Vec<(Uuid, VaultHandle)> {
         let mut paths: Vec<PathBuf> = fs::read_dir(&self.vaults_dir)
             .into_iter()
             .flatten()
@@ -496,11 +521,12 @@ impl VaultCatalog {
 
     /// Create and write a new vault with key `key`, normalized. A key that
     /// another vault file claims is refused before the keychain is read.
-    /// Creates both Secure Enclave keys first if no vault file exists
-    /// ([`Self::ensure_keys`]). Returns the vault unlocked.
+    /// Creates both Secure Enclave keys first if no vault file exists. On new
+    /// hardware it first moves the vault files to `unreadable/`, then creates
+    /// the missing keys ([`Self::ensure_keys`]). Returns the vault unlocked.
     pub fn create(&self, name: Option<String>, key: &str) -> Result<VaultHandle, Error> {
         let key = self.unclaimed_key(key, None)?;
-        self.ensure_keys(AuthContext::SharedThreadLocal)?;
+        self.ensure_keys(AuthContext::SharedThreadLocal, OnNewHardware::MoveFiles)?;
         let vault = self
             .unlocker
             .new_vault(name, key, AuthContext::SharedThreadLocal)?;
@@ -547,7 +573,8 @@ impl VaultCatalog {
     /// imported vaults (locked).
     ///
     /// Creates both Secure Enclave keys first if no vault file exists. With a
-    /// vault file present it creates none.
+    /// vault file present it creates none, and on new hardware it fails with
+    /// `NewHardware` and moves no file.
     ///
     /// The id and key checks read the headers of all vault files before the
     /// keychain is read. A vault imported with an id is rejected if an existing
@@ -586,7 +613,7 @@ impl VaultCatalog {
             targets.insert(*id, ImportSelection::new(key, selected.action));
         }
         bundle.import_with(&targets, &self.vaults_dir, &self.files, || {
-            self.ensure_keys(context.clone())?;
+            self.ensure_keys(context.clone(), OnNewHardware::Fail)?;
             self.unlocker.file_key_wrapper(context)
         })
     }

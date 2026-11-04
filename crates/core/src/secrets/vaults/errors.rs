@@ -122,6 +122,12 @@ pub enum Error {
     #[error("This Mac has vault files but not the vault encryption key that reads them")]
     NewHardware,
 
+    #[error("Failed to move vault files that this Mac cannot read: {0}")]
+    UnreadableMoveFailed(#[source] std::io::Error),
+
+    #[error("Vault files are signed again only if the device signing key is lost")]
+    ResignNotOffered,
+
     #[error("Failed to sign vault: {0}")]
     VaultSigningFailed(String),
 

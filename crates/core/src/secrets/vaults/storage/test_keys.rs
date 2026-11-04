@@ -79,4 +79,11 @@ impl DeviceKeys for TestKeys {
         }
         Ok(())
     }
+
+    fn create_signing_key(&self) -> Result<(), Error> {
+        let mut state = self.state();
+        state.signing = KeyProbe::Present;
+        state.created += 1;
+        Ok(())
+    }
 }

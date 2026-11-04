@@ -289,6 +289,26 @@ impl EncryptedVault {
         VaultEnvelope::sign(vault_json, signer)
     }
 
+    /// Contents of the vault file `vault_data` of vault `id`, signed again by
+    /// `signer`, for the confirmed re-sign after signing key loss. The old
+    /// signature is not checked. The raw vault bytes are unchanged. They must
+    /// parse as a vault of id `id` with a valid key, or the file is refused
+    /// with the error of the parse, or `VaultNotFound` for another id.
+    pub(crate) fn sign_again(
+        vault_data: &str,
+        id: Uuid,
+        signer: &dyn VaultSigner,
+    ) -> Result<String, Error> {
+        let vault_json = Self::raw_vault_json(vault_data)?;
+        let vault: Self =
+            serde_json::from_str(vault_json).map_err(Error::VaultDeserializationError)?;
+        Self::check_key(&vault.key)?;
+        if vault.id != id {
+            return Err(Error::VaultNotFound(ShortId::encode_uuid(id)));
+        }
+        Self::sign_vault_json(vault_json.to_string(), signer)
+    }
+
     /// Contents of a vault file of format [`VAULT_FORMAT`] for this vault,
     /// signed by `signer`. Saves sign through [`Self::sign_vault_json`], so
     /// they can compare the raw vault bytes first.
