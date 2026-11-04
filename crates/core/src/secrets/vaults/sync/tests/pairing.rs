@@ -1033,6 +1033,7 @@ impl UnlockedMac {
 #[test]
 fn one_request_with_one_code_adds_new_mac_to_every_picked_vault_with_one_prompt() {
     let transport = Arc::new(FakeTransport::default());
+    transport.set_now(written_at());
     let unlocked = UnlockedMac::new(&transport, 3);
     let (software, keys) = new_mac_keys();
     let new_mac = NewMac::with_public_keys(keys.clone());
@@ -1042,7 +1043,7 @@ fn one_request_with_one_code_adds_new_mac_to_every_picked_vault_with_one_prompt(
     assert_eq!(replica_ids.len(), 3, "one replica id per vault");
 
     // The unlocked Mac sees one request and matches the typed code.
-    let now = Timestamp::now();
+    let now = written_at() + SignedDuration::from_mins(5);
     assert_eq!(
         PairingPrompt::pending(&*transport, &BTreeSet::new(), now).unwrap(),
         1
