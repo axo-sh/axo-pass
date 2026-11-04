@@ -1,34 +1,79 @@
 //! Fake transport that holds the synced folder in memory, and its tests.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::{fmt, fs};
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
+use super::load::{Fixture, GENERATION};
 use super::state_file::{VAULT, WRITER};
+use super::txn::saved;
 use crate::secrets::vaults::Error;
+use crate::secrets::vaults::storage::txn::AppTransports;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
+use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
-use crate::secrets::vaults::sync::transport::{FileName, ReadResult, SyncTransport};
+use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
+use crate::secrets::vaults::sync::transport::{
+    FileName, PairingEntry, ReadResult, RequestId, SyncTransport, SyncTransports, TransportRoot,
+    WatchHandle,
+};
 
 /// File of the fake synced folder.
 #[derive(Clone, Debug)]
 enum FakeFile {
     Local(Vec<u8>),
-    /// File that exists and is not local yet.
-    Remote,
+    /// File that exists and is not local yet, with the bytes it holds once
+    /// a download completes, if any.
+    Remote(Option<Vec<u8>>),
+}
+
+/// Pairing request of the fake synced folder.
+#[derive(Clone, Debug)]
+struct FakePairing {
+    bytes: Vec<u8>,
+    modified: Timestamp,
+    /// Size listed for the request, the byte count unless set.
+    size: u64,
+}
+
+/// Watch callback of the fake synced folder, fired by a test.
+struct FakeWatch {
+    id: u64,
+    /// Vault of the watch, or `None` for the pairing directory.
+    vault_id: Option<Uuid>,
+    notify: Arc<Mutex<Box<dyn Fn() + Send>>>,
+}
+
+impl fmt::Debug for FakeWatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FakeWatch")
+            .field("id", &self.id)
+            .field("vault_id", &self.vault_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Synced folder in memory. Files are held by vault id, replica, and file
 /// name. The folder can be made unavailable, and writes can be made to fail.
 #[derive(Debug, Default)]
 pub(super) struct FakeTransport {
-    inner: Mutex<FakeFolder>,
+    inner: Arc<Mutex<FakeFolder>>,
 }
 
 #[derive(Debug, Default)]
 struct FakeFolder {
     files: BTreeMap<(Uuid, ReplicaId, String), FakeFile>,
+    /// `meta.json` of each vault directory.
+    meta: BTreeMap<Uuid, Vec<u8>>,
+    pairings: BTreeMap<RequestId, FakePairing>,
+    /// Modification time of the pairing requests written next.
+    now: Timestamp,
     unavailable: bool,
     failing_writes: bool,
     /// Whether listing the replica directories fails.
@@ -37,8 +82,14 @@ struct FakeFolder {
     unlistable: Vec<ReplicaId>,
     /// Count of reads of local files.
     reads: usize,
+    /// Count of reads of local pairing requests.
+    pairing_reads: usize,
     /// Count of successful writes.
     writes: usize,
+    /// Vaults of the `request_download` calls, in call order.
+    downloads: Vec<Uuid>,
+    watches: Vec<FakeWatch>,
+    next_watch: u64,
 }
 
 impl FakeTransport {
@@ -72,9 +123,98 @@ impl FakeTransport {
 
     /// Mark the file `name` of `replica` as not local yet.
     pub(super) fn put_remote(&self, vault_id: Uuid, replica: ReplicaId, name: &str) {
+        self.folder().files.insert(
+            (vault_id, replica, name.to_string()),
+            FakeFile::Remote(None),
+        );
+    }
+
+    /// Put the file `name` of `replica` as not local yet, holding `bytes`
+    /// once [`Self::complete_downloads`] runs.
+    pub(super) fn put_remote_with(
+        &self,
+        vault_id: Uuid,
+        replica: ReplicaId,
+        name: &str,
+        bytes: &[u8],
+    ) {
+        self.folder().files.insert(
+            (vault_id, replica, name.to_string()),
+            FakeFile::Remote(Some(bytes.to_vec())),
+        );
+    }
+
+    /// Make local each file under vault `vault_id` put with
+    /// [`Self::put_remote_with`], as a finished download. Returns the number
+    /// of files made local.
+    pub(super) fn complete_downloads(&self, vault_id: Uuid) -> usize {
+        let mut folder = self.folder();
+        let mut completed = 0;
+        for ((v, _, _), file) in folder.files.iter_mut() {
+            if *v != vault_id {
+                continue;
+            }
+            if let FakeFile::Remote(Some(bytes)) = file {
+                *file = FakeFile::Local(std::mem::take(bytes));
+                completed += 1;
+            }
+        }
+        completed
+    }
+
+    /// Vaults of the `request_download` calls, in call order.
+    pub(super) fn download_requests(&self) -> Vec<Uuid> {
+        self.folder().downloads.clone()
+    }
+
+    /// Put `bytes` as `meta.json` of the directory of vault `vault_id`.
+    pub(super) fn put_meta(&self, vault_id: Uuid, bytes: &[u8]) {
+        self.folder().meta.insert(vault_id, bytes.to_vec());
+    }
+
+    /// `meta.json` of the directory of vault `vault_id`, if any.
+    pub(super) fn meta(&self, vault_id: Uuid) -> Option<Vec<u8>> {
+        self.folder().meta.get(&vault_id).cloned()
+    }
+
+    /// Put the pairing request `bytes` at `request`, modified at the time of
+    /// [`Self::set_now`].
+    pub(super) fn put_pairing(&self, request: RequestId, bytes: &[u8]) {
+        let mut folder = self.folder();
+        let pairing = FakePairing {
+            bytes: bytes.to_vec(),
+            modified: folder.now,
+            size: bytes.len() as u64,
+        };
+        folder.pairings.insert(request, pairing);
+    }
+
+    /// Bytes of the pairing request `request`, if any.
+    pub(super) fn pairing(&self, request: RequestId) -> Option<Vec<u8>> {
         self.folder()
-            .files
-            .insert((vault_id, replica, name.to_string()), FakeFile::Remote);
+            .pairings
+            .get(&request)
+            .map(|pairing| pairing.bytes.clone())
+    }
+
+    /// Set the modification time of the pairing requests written next.
+    pub(super) fn set_now(&self, now: Timestamp) {
+        self.folder().now = now;
+    }
+
+    /// Set the modification time listed for the pairing request `request`.
+    pub(super) fn set_pairing_modified(&self, request: RequestId, modified: Timestamp) {
+        if let Some(pairing) = self.folder().pairings.get_mut(&request) {
+            pairing.modified = modified;
+        }
+    }
+
+    /// Set the size listed for the pairing request `request`, whatever its
+    /// bytes.
+    pub(super) fn set_pairing_size(&self, request: RequestId, size: u64) {
+        if let Some(pairing) = self.folder().pairings.get_mut(&request) {
+            pairing.size = size;
+        }
     }
 
     /// Make every call fail, as a folder that is missing or unreachable.
@@ -106,6 +246,11 @@ impl FakeTransport {
         self.folder().reads
     }
 
+    /// Count of reads that returned a local pairing request.
+    pub(super) fn pairing_reads(&self) -> usize {
+        self.folder().pairing_reads
+    }
+
     /// Count of writes that succeeded.
     pub(super) fn writes(&self) -> usize {
         self.folder().writes
@@ -119,6 +264,55 @@ impl FakeTransport {
             .filter(|(v, r, _)| *v == vault_id && *r == replica)
             .map(|(_, _, name)| name.clone())
             .collect()
+    }
+
+    /// Call each watch of vault `vault_id`, as a change under the vault.
+    /// Returns the number of watches called.
+    pub(super) fn fire_watch(&self, vault_id: Uuid) -> usize {
+        self.fire(Some(vault_id))
+    }
+
+    /// Call each watch of the pairing directory. Returns the number of
+    /// watches called.
+    pub(super) fn fire_pairing_watch(&self) -> usize {
+        self.fire(None)
+    }
+
+    /// Number of watches that have not ended.
+    pub(super) fn watch_count(&self) -> usize {
+        self.folder().watches.len()
+    }
+
+    /// Call each watch of `vault_id`, with the folder unlocked, so a
+    /// callback can call the transport.
+    fn fire(&self, vault_id: Option<Uuid>) -> usize {
+        let notifies: Vec<_> = self
+            .folder()
+            .watches
+            .iter()
+            .filter(|watch| watch.vault_id == vault_id)
+            .map(|watch| watch.notify.clone())
+            .collect();
+        for notify in &notifies {
+            (notify.lock().unwrap())();
+        }
+        notifies.len()
+    }
+
+    /// Add a watch of `vault_id` that ends when its handle drops.
+    fn add_watch(&self, vault_id: Option<Uuid>, notify: Box<dyn Fn() + Send>) -> WatchHandle {
+        let mut folder = self.folder();
+        folder.next_watch += 1;
+        let id = folder.next_watch;
+        folder.watches.push(FakeWatch {
+            id,
+            vault_id,
+            notify: Arc::new(Mutex::new(notify)),
+        });
+        let inner = self.inner.clone();
+        WatchHandle::new(move || {
+            inner.lock().unwrap().watches.retain(|watch| watch.id != id);
+        })
     }
 
     fn check_available(folder: &FakeFolder) -> Result<(), Error> {
@@ -156,6 +350,20 @@ impl SyncTransport for FakeTransport {
         Ok(replicas)
     }
 
+    fn list_vaults(&self) -> Result<Vec<Uuid>, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        let mut vaults: Vec<Uuid> = folder
+            .files
+            .keys()
+            .map(|(vault_id, _, _)| *vault_id)
+            .chain(folder.meta.keys().copied())
+            .collect();
+        vaults.sort();
+        vaults.dedup();
+        Ok(vaults)
+    }
+
     fn list_states(&self, vault_id: Uuid, replica: ReplicaId) -> Result<Vec<StateHash>, Error> {
         let folder = self.folder();
         Self::check_available(&folder)?;
@@ -181,13 +389,30 @@ impl SyncTransport for FakeTransport {
         let key = (vault_id, replica, name.file_name(vault_id));
         let result = match folder.files.get(&key) {
             None => ReadResult::Missing,
-            Some(FakeFile::Remote) => ReadResult::Remote,
+            Some(FakeFile::Remote(_)) => ReadResult::Remote,
             Some(FakeFile::Local(bytes)) => ReadResult::Local(bytes.clone()),
         };
         if matches!(result, ReadResult::Local(_)) {
             folder.reads += 1;
         }
         Ok(result)
+    }
+
+    fn read_meta(&self, vault_id: Uuid) -> Result<ReadResult, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        Ok(match folder.meta.get(&vault_id) {
+            None => ReadResult::Missing,
+            Some(bytes) => ReadResult::Local(bytes.clone()),
+        })
+    }
+
+    fn write_meta(&self, vault_id: Uuid, data: &[u8]) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        folder.meta.insert(vault_id, data.to_vec());
+        folder.writes += 1;
+        Ok(())
     }
 
     fn write_own(
@@ -212,6 +437,77 @@ impl SyncTransport for FakeTransport {
             .files
             .remove(&(vault_id, replica, name.file_name(vault_id)));
         Ok(())
+    }
+
+    fn delete_replica(&self, vault_id: Uuid, replica: ReplicaId) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        folder
+            .files
+            .retain(|(v, r, _), _| !(*v == vault_id && *r == replica));
+        Ok(())
+    }
+
+    fn request_download(&self, vault_id: Uuid) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_available(&folder)?;
+        folder.downloads.push(vault_id);
+        Ok(())
+    }
+
+    fn watch(&self, vault_id: Uuid, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
+        Some(self.add_watch(Some(vault_id), notify))
+    }
+
+    fn list_pairings(&self) -> Result<Vec<PairingEntry>, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        Ok(folder
+            .pairings
+            .iter()
+            .map(|(id, pairing)| PairingEntry {
+                id: *id,
+                modified: pairing.modified,
+                size: pairing.size,
+            })
+            .collect())
+    }
+
+    fn read_pairing(&self, request: RequestId) -> Result<ReadResult, Error> {
+        let mut folder = self.folder();
+        Self::check_available(&folder)?;
+        let result = match folder.pairings.get(&request) {
+            None => ReadResult::Missing,
+            Some(pairing) => ReadResult::Local(pairing.bytes.clone()),
+        };
+        if matches!(result, ReadResult::Local(_)) {
+            folder.pairing_reads += 1;
+        }
+        Ok(result)
+    }
+
+    fn write_pairing(&self, request: RequestId, data: &[u8]) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        let pairing = FakePairing {
+            bytes: data.to_vec(),
+            modified: folder.now,
+            size: data.len() as u64,
+        };
+        folder.pairings.insert(request, pairing);
+        folder.writes += 1;
+        Ok(())
+    }
+
+    fn delete_pairing(&self, request: RequestId) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        folder.pairings.remove(&request);
+        Ok(())
+    }
+
+    fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
+        Some(self.add_watch(None, notify))
     }
 }
 
@@ -299,4 +595,256 @@ fn fake_writes_and_deletes_own_files_and_fails_while_unavailable() {
 
     transport.delete_own(VAULT, WRITER, name).unwrap();
     assert!(transport.names(VAULT, WRITER).is_empty());
+}
+
+/// Request id `n`.
+fn request(n: u128) -> RequestId {
+    RequestId(Uuid::from_u128(n))
+}
+
+#[test]
+fn request_id_parse_file_name_refuses_uppercase_uuid_name_without_json_and_non_uuid() {
+    let id = Uuid::from_u128(0xabcdef);
+    let name = format!("{}.json", id.hyphenated());
+    assert_eq!(request(0xabcdef).file_name(), name);
+    assert_eq!(RequestId::parse_file_name(&name), Some(request(0xabcdef)));
+
+    for refused in [
+        format!("{}.json", id.hyphenated().to_string().to_uppercase()),
+        id.hyphenated().to_string(),
+        format!("{}.JSON", id.hyphenated()),
+        format!("{}.json", id.simple()),
+        format!("{}.json", id.braced()),
+        format!("{}.json", id.urn()),
+        format!("{} 2.json", id.hyphenated()),
+        format!("{}.json.tmp", id.hyphenated()),
+        "not-a-uuid.json".to_string(),
+        ".json".to_string(),
+    ] {
+        assert_eq!(RequestId::parse_file_name(&refused), None, "{refused}");
+    }
+}
+
+#[test]
+fn fake_lists_vaults_and_reads_and_writes_meta() {
+    let transport = FakeTransport::default();
+    let other = Uuid::from_u128(0x200);
+    assert_eq!(transport.read_meta(VAULT).unwrap(), ReadResult::Missing);
+
+    transport.write_meta(VAULT, b"meta").unwrap();
+    transport.put_state(other, WRITER, b"state");
+
+    assert_eq!(transport.list_vaults().unwrap(), vec![VAULT, other]);
+    assert_eq!(
+        transport.read_meta(VAULT).unwrap(),
+        ReadResult::Local(b"meta".to_vec())
+    );
+    assert_eq!(transport.meta(VAULT), Some(b"meta".to_vec()));
+    // `meta.json` is not a file of a replica directory.
+    assert!(transport.list_replicas(VAULT).unwrap().is_empty());
+
+    transport.set_failing_writes(true);
+    assert!(transport.write_meta(VAULT, b"other").is_err());
+    transport.set_unavailable(true);
+    assert!(transport.list_vaults().is_err());
+    assert!(transport.read_meta(VAULT).is_err());
+}
+
+#[test]
+fn fake_deletes_replica_directory_and_leaves_others() {
+    let transport = FakeTransport::default();
+    let peer = ReplicaId(Uuid::from_u128(2));
+    transport.put_state(VAULT, WRITER, b"own");
+    transport
+        .write_own(VAULT, WRITER, FileName::Key, b"{}")
+        .unwrap();
+    transport.put_state(VAULT, peer, b"peer");
+
+    transport.set_failing_writes(true);
+    assert!(transport.delete_replica(VAULT, WRITER).is_err());
+    transport.set_failing_writes(false);
+    transport.delete_replica(VAULT, WRITER).unwrap();
+
+    assert_eq!(transport.list_replicas(VAULT).unwrap(), vec![peer]);
+    assert!(transport.names(VAULT, WRITER).is_empty());
+    assert_eq!(transport.names(VAULT, peer).len(), 1);
+}
+
+#[test]
+fn fake_records_download_requests_and_makes_remote_files_local() {
+    let transport = FakeTransport::default();
+    let hash = StateHash::of(b"state");
+    let name = StateFile::name(VAULT, hash);
+    transport.put_remote_with(VAULT, WRITER, &name, b"state");
+    let pending = StateFile::name(VAULT, StateHash::of(b"pending"));
+    transport.put_remote(VAULT, WRITER, &pending);
+
+    transport.request_download(VAULT).unwrap();
+    assert_eq!(transport.download_requests(), vec![VAULT]);
+    // A request does not wait, so the file is still remote.
+    assert_eq!(
+        transport
+            .read(VAULT, WRITER, FileName::State(hash))
+            .unwrap(),
+        ReadResult::Remote
+    );
+
+    assert_eq!(transport.complete_downloads(VAULT), 1);
+    assert_eq!(
+        transport
+            .read(VAULT, WRITER, FileName::State(hash))
+            .unwrap(),
+        ReadResult::Local(b"state".to_vec())
+    );
+    assert_eq!(
+        transport
+            .read(VAULT, WRITER, FileName::State(StateHash::of(b"pending")))
+            .unwrap(),
+        ReadResult::Remote
+    );
+
+    transport.set_unavailable(true);
+    assert!(transport.request_download(VAULT).is_err());
+    assert_eq!(transport.download_requests(), vec![VAULT]);
+}
+
+#[test]
+fn fake_lists_pairing_requests_with_set_times_and_sizes() {
+    let transport = FakeTransport::default();
+    let written = Timestamp::from_second(1_000).unwrap();
+    transport.set_now(written);
+    transport.write_pairing(request(1), b"first").unwrap();
+    transport.put_pairing(request(2), b"second");
+    let older = Timestamp::from_second(10).unwrap();
+    transport.set_pairing_modified(request(2), older);
+    transport.set_pairing_size(request(2), 20_000);
+
+    assert_eq!(
+        transport.list_pairings().unwrap(),
+        vec![
+            PairingEntry {
+                id: request(1),
+                modified: written,
+                size: 5,
+            },
+            PairingEntry {
+                id: request(2),
+                modified: older,
+                size: 20_000,
+            },
+        ]
+    );
+    assert_eq!(transport.pairing_reads(), 0);
+    assert_eq!(
+        transport.read_pairing(request(1)).unwrap(),
+        ReadResult::Local(b"first".to_vec())
+    );
+    assert_eq!(
+        transport.read_pairing(request(3)).unwrap(),
+        ReadResult::Missing
+    );
+    assert_eq!(transport.pairing_reads(), 1);
+
+    transport.delete_pairing(request(1)).unwrap();
+    assert_eq!(transport.pairing(request(1)), None);
+    assert_eq!(transport.list_pairings().unwrap().len(), 1);
+}
+
+#[test]
+fn fake_watch_is_called_when_fired_and_ends_when_handle_drops() {
+    let transport = FakeTransport::default();
+    let vault_calls = Arc::new(AtomicUsize::new(0));
+    let pairing_calls = Arc::new(AtomicUsize::new(0));
+    let counter = |calls: &Arc<AtomicUsize>| -> Box<dyn Fn() + Send> {
+        let calls = calls.clone();
+        Box::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    let vault_watch = transport.watch(VAULT, counter(&vault_calls)).unwrap();
+    let pairing_watch = transport.watch_pairings(counter(&pairing_calls)).unwrap();
+    assert_eq!(transport.watch_count(), 2);
+
+    assert_eq!(transport.fire_watch(VAULT), 1);
+    assert_eq!(transport.fire_watch(Uuid::from_u128(0x200)), 0);
+    assert_eq!(transport.fire_pairing_watch(), 1);
+    assert_eq!(vault_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(pairing_calls.load(Ordering::SeqCst), 1);
+
+    drop(vault_watch);
+    assert_eq!(transport.fire_watch(VAULT), 0);
+    assert_eq!(vault_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(transport.watch_count(), 1);
+    drop(pairing_watch);
+    assert_eq!(transport.watch_count(), 0);
+}
+
+#[test]
+fn app_transports_give_no_transport_for_no_root_and_resolve_no_root_yet() {
+    let transports = AppTransports::default();
+    assert!(transports.resolve(None).unwrap().is_none());
+    for root in [
+        TransportRoot::ICloud,
+        TransportRoot::Folder {
+            path: PathBuf::from("/tmp/Vaults"),
+        },
+    ] {
+        assert!(matches!(
+            transports.resolve(Some(&root)),
+            Err(Error::SyncTransportError(_))
+        ));
+    }
+}
+
+#[test]
+fn writer_with_app_transports_and_sidecar_with_no_root_writes_staged_file_and_copies_nothing() {
+    let fx = Fixture::synced();
+    fx.put_state(GENERATION);
+
+    let committed = fx.add_item().unwrap();
+
+    assert!(committed.changed);
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    let (local, _) = saved(&fx);
+    let staged = fs::read(LocalSyncState::staged_path(&fx.root, fx.id())).unwrap();
+    assert_eq!(local.staged_hash, Some(StateHash::of(&staged)));
+    assert!(local.staged_context.is_some());
+    let sidecar = Sidecar::load(&fx.root, fx.id());
+    assert_eq!(sidecar.last_publish, None);
+    assert_eq!(sidecar.transport, None);
+    assert!(sidecar.paused.is_empty());
+}
+
+#[test]
+fn root_that_fails_to_resolve_pauses_sync_with_unreachable_and_save_succeeds() {
+    for root in [
+        TransportRoot::ICloud,
+        TransportRoot::Folder {
+            path: PathBuf::from("/tmp/Vaults"),
+        },
+    ] {
+        let fx = Fixture::synced();
+        fx.put_state(GENERATION);
+        let sidecar = Sidecar {
+            transport: Some(root.clone()),
+            ..Sidecar::default()
+        };
+        sidecar.save(&fx.root, fx.id()).unwrap();
+
+        let committed = fx.add_item().unwrap();
+
+        assert!(committed.changed);
+        let Some(SyncStatus::Paused(causes)) = committed.sync_status else {
+            panic!("sync is paused");
+        };
+        assert!(matches!(&causes[..], [PausedCause::Unreachable { .. }]));
+        // The edit is recorded and staged, and the root is kept.
+        let (local, _) = saved(&fx);
+        assert_eq!(local.generation, GENERATION + 1);
+        assert!(local.staged_hash.is_some());
+        let sidecar = Sidecar::load(&fx.root, fx.id());
+        assert_eq!(sidecar.paused, causes);
+        assert_eq!(sidecar.transport, Some(root));
+        assert_eq!(sidecar.last_publish, None);
+    }
 }

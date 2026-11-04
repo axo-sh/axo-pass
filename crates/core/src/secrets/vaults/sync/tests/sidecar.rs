@@ -1,6 +1,7 @@
 //! Status sidecar.
 
 use std::fs;
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
@@ -9,6 +10,7 @@ use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::StateHash;
+use crate::secrets::vaults::sync::transport::TransportRoot;
 
 /// Sidecar with a publish, joined files of two replicas, and a quarantined
 /// file.
@@ -83,4 +85,65 @@ fn joined_hashes_are_kept_only_while_listed() {
     assert!(sidecar.is_joined(WRITER, newer));
     assert!(sidecar.retain_joined(WRITER, &[]));
     assert!(!sidecar.joined.contains_key(&WRITER));
+}
+
+#[test]
+fn sidecar_with_root_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    for (root, json) in [
+        (TransportRoot::ICloud, r#"{"kind":"ICloud"}"#),
+        (
+            TransportRoot::Folder {
+                path: PathBuf::from("/Users/me/Dropbox/Vaults"),
+            },
+            r#"{"kind":"Folder","path":"/Users/me/Dropbox/Vaults"}"#,
+        ),
+    ] {
+        let sidecar = Sidecar {
+            transport: Some(root),
+            ..filled()
+        };
+        sidecar.save(dir.path(), VAULT).unwrap();
+
+        assert_eq!(Sidecar::load(dir.path(), VAULT), sidecar);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(Sidecar::path(dir.path(), VAULT)).unwrap()).unwrap();
+        assert_eq!(
+            saved["transport"],
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+    }
+
+    // A root of an unknown kind, or with an unknown field, fails the
+    // sidecar.
+    let path = Sidecar::path(dir.path(), VAULT);
+    for root in [
+        r#"{"kind":"Dropbox"}"#,
+        r#"{"kind":"ICloud","path":"/"}"#,
+        r#"{"kind":"Folder"}"#,
+    ] {
+        let mut saved = serde_json::to_value(filled()).unwrap();
+        saved["transport"] = serde_json::from_str(root).unwrap();
+        fs::write(&path, saved.to_string()).unwrap();
+        assert_eq!(
+            Sidecar::load(dir.path(), VAULT),
+            Sidecar::default(),
+            "{root}"
+        );
+    }
+}
+
+#[test]
+fn sidecar_with_no_transport_field_parses_with_no_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut saved = serde_json::to_value(filled()).unwrap();
+    // A 6c sidecar has no `transport` field.
+    saved.as_object_mut().unwrap().remove("transport").unwrap();
+    let path = Sidecar::path(dir.path(), VAULT);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, saved.to_string()).unwrap();
+
+    let loaded = Sidecar::load(dir.path(), VAULT);
+    assert_eq!(loaded, filled());
+    assert_eq!(loaded.transport, None);
 }

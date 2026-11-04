@@ -55,7 +55,7 @@ use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
 use super::status::{BUILD_ID, FoundCauses, SyncStatus};
-use super::transport::{FileName, SyncTransport};
+use super::transport::{FileName, SyncTransport, TransportRoot};
 use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::signing::VaultSigner;
@@ -185,6 +185,16 @@ impl SyncTxn {
 
     pub(crate) fn keyring(&self) -> &SyncKeyring {
         &self.keyring
+    }
+
+    /// Root of the transport in the sidecar as loaded.
+    pub(crate) fn transport_root(&self) -> Option<&TransportRoot> {
+        self.sidecar.transport.as_ref()
+    }
+
+    /// Record that the transport cannot be reached, with `error`.
+    pub(crate) fn unreachable(&mut self, error: impl ToString) {
+        self.found.unreachable(error);
     }
 
     /// Whether the sync state needs a save with no change to `s`: a join or a

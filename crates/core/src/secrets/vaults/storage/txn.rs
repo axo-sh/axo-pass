@@ -14,7 +14,10 @@
 //! its sync state, is rebuilt from the sync state before the change. `s`
 //! advances if and only if the vault file changes. The staged file is
 //! written first, then the sync state, then the vault, and the staged file is
-//! then copied to the synced folder. A sync state under a key id the unlock
+//! then copied to the synced folder. The transport of the synced folder is
+//! resolved from the root in the sidecar of the vault. A sidecar with no root
+//! gives no transport, and a root that fails to resolve pauses sync with
+//! `Unreachable`. A sync state under a key id the unlock
 //! did not unwrap is unlocked once more. A second miss saves the vault only.
 //! Before any join, the no-edit guard diffs the vault as loaded against the
 //! view of the sync state. If it finds edits, sync stops by drift, and the
@@ -30,10 +33,11 @@
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -64,7 +68,9 @@ use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::SyncStatus;
-use crate::secrets::vaults::sync::transport::SyncTransport;
+#[cfg(test)]
+use crate::secrets::vaults::sync::transport::FixedTransport;
+use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
 use crate::secrets::vaults::sync::txn::SyncTxn;
 
 mod locks;
@@ -91,9 +97,9 @@ pub struct VaultWriter {
     root: PathBuf,
     locks: VaultLocks,
     signer: Arc<dyn VaultSigner>,
-    /// Synced folder of this replica's own state files. `None` until
-    /// milestone 7 builds the transports.
-    transport: Option<Arc<dyn SyncTransport>>,
+    /// Transports of the synced vaults, resolved from the root in the
+    /// sidecar of each vault.
+    transports: Arc<dyn SyncTransports>,
     /// Seconds added to the clock of mints. Zero outside the tests.
     clock_offset: i64,
     /// Item views whose apply fails, as on a build whose view cannot apply
@@ -109,13 +115,14 @@ impl Default for VaultWriter {
 }
 
 impl VaultWriter {
-    /// The app data directory, the global locks, and the keychain signer.
+    /// The app data directory, the global locks, the keychain signer, and
+    /// the app transports.
     pub fn app() -> Self {
         Self {
             root: app_data_dir(),
             locks: VaultLocks::global(),
             signer: Arc::new(KeychainSigner),
-            transport: None,
+            transports: Arc::new(AppTransports::default()),
             clock_offset: 0,
             #[cfg(test)]
             apply_fault: None,
@@ -123,7 +130,7 @@ impl VaultWriter {
     }
 
     /// Writer under `root` with its own locks, separate from the global locks.
-    /// It signs with the test device key.
+    /// It signs with the test device key and holds the app transports.
     #[cfg(test)]
     pub fn isolated(root: impl Into<PathBuf>) -> Self {
         Self::isolated_with_signer(root, TestSigner::device())
@@ -137,7 +144,7 @@ impl VaultWriter {
             root: root.into(),
             locks: VaultLocks::default(),
             signer: Arc::new(signer),
-            transport: None,
+            transports: Arc::new(AppTransports::default()),
             clock_offset: 0,
             apply_fault: None,
         }
@@ -154,11 +161,12 @@ impl VaultWriter {
         }
     }
 
-    /// This writer with the synced folder `transport`.
+    /// This writer with the synced folder `transport` for every synced vault,
+    /// whatever the root in its sidecar.
     #[cfg(test)]
     pub fn with_transport(self, transport: Arc<dyn SyncTransport>) -> Self {
         Self {
-            transport: Some(transport),
+            transports: Arc::new(FixedTransport(transport)),
             ..self
         }
     }
@@ -219,6 +227,57 @@ impl VaultWriter {
     /// Take the locks of vault `id` through `entry`.
     fn lock_entry<'a>(&self, entry: &'a VaultLock, id: Uuid) -> Result<Locked<'a>, Error> {
         entry.lock(id, || self.lock_file(id))
+    }
+
+    /// Transport of the root in the sidecar of `sync`. `None` if the sidecar
+    /// has no root. A root that fails to resolve pauses sync with
+    /// `Unreachable` and gives no transport, so the transaction saves
+    /// locally.
+    fn transport(&self, sync: &mut SyncTxn) -> Option<Arc<dyn SyncTransport>> {
+        match self.transports.resolve(sync.transport_root()) {
+            Ok(transport) => transport,
+            Err(e) => {
+                let id = sync.vault_id();
+                log::warn!("Failed to resolve the transport of vault {id}: {e}");
+                sync.unreachable(e);
+                None
+            },
+        }
+    }
+}
+
+/// Transports of the app, one for each root, built at the first resolve of
+/// the root and kept for the process. No root resolves until the folder
+/// and iCloud transports are built.
+#[derive(Debug, Default)]
+pub struct AppTransports {
+    built: Mutex<HashMap<TransportRoot, Arc<dyn SyncTransport>>>,
+}
+
+impl AppTransports {
+    /// New transport of `root`.
+    fn build(root: &TransportRoot) -> Result<Arc<dyn SyncTransport>, Error> {
+        Err(Error::SyncTransportError(format!(
+            "no transport is built for {root}"
+        )))
+    }
+}
+
+impl SyncTransports for AppTransports {
+    fn resolve(
+        &self,
+        root: Option<&TransportRoot>,
+    ) -> Result<Option<Arc<dyn SyncTransport>>, Error> {
+        let Some(root) = root else {
+            return Ok(None);
+        };
+        let mut built = self.built.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(transport) = built.get(root) {
+            return Ok(Some(transport.clone()));
+        }
+        let transport = Self::build(root)?;
+        built.insert(root.clone(), transport.clone());
+        Ok(Some(transport))
     }
 }
 
@@ -546,7 +605,11 @@ impl VaultWriter {
         // discarded, and the change runs on the vault as it was before the
         // join. A diff that fails, and an apply that fails in a repair, make
         // the transaction save the vault only, with no further join.
+        //
+        // The transport is resolved from the root in the sidecar only if
+        // the transaction syncs.
         let mut session = None;
+        let mut transport = None;
         let now = Timestamp::now().as_second() + self.clock_offset;
         if let Some(sync) = &mut sync {
             let repair = if rebuild {
@@ -560,7 +623,10 @@ impl VaultWriter {
                 None => {},
             }
             let session = session.insert(locked.state.session(sync.replica(), sync.loaded()));
-            let transport = self.transport.as_deref();
+            if sync.syncs() {
+                transport = self.transport(sync);
+            }
+            let transport = transport.as_deref();
             let mut changed = false;
             if let Some(transport) = transport.filter(|_| sync.syncs()) {
                 changed |= sync.join_own(transport, session);
@@ -665,7 +731,7 @@ impl VaultWriter {
                 let changed = result?;
                 // No signed save follows the vault save. A failed copy does
                 // not fail the save.
-                if let Some(transport) = &self.transport {
+                if let Some(transport) = &transport {
                     sync.publish(&**transport);
                 }
                 sync.settle_status();
@@ -947,7 +1013,8 @@ impl VaultWriter {
         sync.set_apply_fault(self.apply_fault);
         let session = locked.state.session(sync.replica(), sync.loaded());
         let now = Timestamp::now().as_second() + self.clock_offset;
-        if let Some(transport) = &self.transport {
+        let transport = self.transport(&mut sync);
+        if let Some(transport) = &transport {
             sync.join_own(&**transport, session);
             sync.join_peers(&**transport, session);
         }
@@ -985,7 +1052,7 @@ impl VaultWriter {
             None => {},
         }
         let committed = result?;
-        if let Some(transport) = &self.transport {
+        if let Some(transport) = &transport {
             sync.publish(&**transport);
         }
         sync.settle_status();

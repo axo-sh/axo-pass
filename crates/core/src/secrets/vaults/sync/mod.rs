@@ -7,6 +7,7 @@ pub mod join;
 pub mod keys;
 pub mod load;
 pub mod local_state;
+pub mod meta;
 pub mod model;
 pub mod publish;
 pub mod rebuild;

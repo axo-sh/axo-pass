@@ -11,6 +11,7 @@ mod join;
 mod keys;
 mod load;
 mod local_state;
+mod meta;
 mod model;
 mod publish;
 mod rebuild;
