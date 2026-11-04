@@ -17,7 +17,8 @@
 //! then copied to the synced folder. The transport of the synced folder is
 //! resolved from the root in the sidecar of the vault. A sidecar with no root
 //! gives no transport, and a root that fails to resolve pauses sync with
-//! `Unreachable`. A sync state under a key id the unlock
+//! `Unreachable`. A sidecar that cannot be read fails the transaction, as a
+//! sync state that cannot be read does. A sync state under a key id the unlock
 //! did not unwrap is unlocked once more. A second miss saves the vault only.
 //! Before any join, the no-edit guard diffs the vault as loaded against the
 //! view of the sync state. If it finds edits, sync stops by drift, and the
@@ -70,6 +71,8 @@ use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::SyncStatus;
 #[cfg(test)]
 use crate::secrets::vaults::sync::transport::FixedTransport;
+use crate::secrets::vaults::sync::transport::folder::FolderTransport;
+use crate::secrets::vaults::sync::transport::folder::io::CoordinatedIo;
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
 use crate::secrets::vaults::sync::txn::SyncTxn;
 
@@ -247,8 +250,10 @@ impl VaultWriter {
 }
 
 /// Transports of the app, one for each root, built at the first resolve of
-/// the root and kept for the process. No root resolves until the folder
-/// and iCloud transports are built.
+/// the root and kept for the process. A folder root resolves to a
+/// [`FolderTransport`] with [`CoordinatedIo`] if it is a folder. A root that
+/// fails is not kept, so the next resolve tries it again. An iCloud root does
+/// not resolve yet.
 #[derive(Debug, Default)]
 pub struct AppTransports {
     built: Mutex<HashMap<TransportRoot, Arc<dyn SyncTransport>>>,
@@ -257,9 +262,16 @@ pub struct AppTransports {
 impl AppTransports {
     /// New transport of `root`.
     fn build(root: &TransportRoot) -> Result<Arc<dyn SyncTransport>, Error> {
-        Err(Error::SyncTransportError(format!(
-            "no transport is built for {root}"
-        )))
+        match root {
+            TransportRoot::Folder { path } => {
+                let transport = FolderTransport::new(path.clone(), Arc::new(CoordinatedIo));
+                transport.check_root()?;
+                Ok(Arc::new(transport))
+            },
+            TransportRoot::ICloud {} => Err(Error::SyncTransportError(format!(
+                "no transport is built for {root}"
+            ))),
+        }
     }
 }
 
@@ -554,7 +566,7 @@ impl VaultWriter {
         );
         let mut sync = match (trusted, keyring, loaded_hash) {
             (Some(trusted), Some(keyring), Some(hash)) if rebuild || loads => {
-                let sidecar = Sidecar::load(&self.root, id);
+                let sidecar = Sidecar::read(&self.root, id)?;
                 let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
                 if let SyncLoad::NewerVault { vault, .. } = case {
                     sync.set_newer_vault(vault);
@@ -927,7 +939,7 @@ impl VaultWriter {
             // A retained version of a synced vault is older than its sync
             // state. Its differences against the view are recorded.
             (SyncLoad::OlderVault { .. }, Some(trusted), Some(keyring), Some(hash)) => {
-                let sidecar = Sidecar::load(&self.root, id);
+                let sidecar = Sidecar::read(&self.root, id)?;
                 let sync = SyncTxn::new(trusted, keyring, hash, sidecar);
                 let path = target.path.clone();
                 return self.restore_refused_synced(

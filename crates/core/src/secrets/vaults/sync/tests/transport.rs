@@ -511,10 +511,94 @@ impl SyncTransport for FakeTransport {
     }
 }
 
+/// Synced folder under test, with the hooks of the shared transport tests.
+/// The tests run against [`FakeTransport`] here, and against the folder
+/// transport in `sync/tests/folder.rs`.
+pub(super) trait SyncedFolder {
+    fn transport(&self) -> &dyn SyncTransport;
+    /// Put `bytes` at `name` in the directory of `replica`, with any name.
+    fn put(&self, vault_id: Uuid, replica: ReplicaId, name: &str, bytes: &[u8]);
+    /// Put the file `name` of `replica` as not local yet, holding `bytes`
+    /// once a download completes, if set.
+    fn put_not_local(&self, vault_id: Uuid, replica: ReplicaId, name: &str, bytes: Option<&[u8]>);
+    /// Make local each file under vault `vault_id` put with bytes by
+    /// [`Self::put_not_local`]. Returns the number of files made local.
+    fn complete_downloads(&self, vault_id: Uuid) -> usize;
+    /// Vaults of the `request_download` calls, in call order.
+    fn download_requests(&self) -> Vec<Uuid>;
+    /// Count of reads that returned a local file.
+    fn reads(&self) -> usize;
+    /// Make every call fail, as a folder that is missing or unreachable.
+    fn set_unavailable(&self, unavailable: bool);
+    /// Make every write and delete fail.
+    fn set_failing_writes(&self, failing: bool);
+    /// File names in the directory of `replica`.
+    fn names(&self, vault_id: Uuid, replica: ReplicaId) -> Vec<String>;
+    /// `meta.json` of the directory of vault `vault_id`, if any.
+    fn meta(&self, vault_id: Uuid) -> Option<Vec<u8>>;
+
+    /// Put the state file `bytes` in the directory of `replica`, named by
+    /// the hash of its bytes. Returns the hash.
+    fn put_state(&self, vault_id: Uuid, replica: ReplicaId, bytes: &[u8]) -> StateHash {
+        let hash = StateHash::of(bytes);
+        self.put(vault_id, replica, &StateFile::name(vault_id, hash), bytes);
+        hash
+    }
+}
+
+impl SyncedFolder for FakeTransport {
+    fn transport(&self) -> &dyn SyncTransport {
+        self
+    }
+
+    fn put(&self, vault_id: Uuid, replica: ReplicaId, name: &str, bytes: &[u8]) {
+        FakeTransport::put(self, vault_id, replica, name, bytes);
+    }
+
+    fn put_not_local(&self, vault_id: Uuid, replica: ReplicaId, name: &str, bytes: Option<&[u8]>) {
+        match bytes {
+            Some(bytes) => self.put_remote_with(vault_id, replica, name, bytes),
+            None => self.put_remote(vault_id, replica, name),
+        }
+    }
+
+    fn complete_downloads(&self, vault_id: Uuid) -> usize {
+        FakeTransport::complete_downloads(self, vault_id)
+    }
+
+    fn download_requests(&self) -> Vec<Uuid> {
+        FakeTransport::download_requests(self)
+    }
+
+    fn reads(&self) -> usize {
+        FakeTransport::reads(self)
+    }
+
+    fn set_unavailable(&self, unavailable: bool) {
+        FakeTransport::set_unavailable(self, unavailable);
+    }
+
+    fn set_failing_writes(&self, failing: bool) {
+        FakeTransport::set_failing_writes(self, failing);
+    }
+
+    fn names(&self, vault_id: Uuid, replica: ReplicaId) -> Vec<String> {
+        FakeTransport::names(self, vault_id, replica)
+    }
+
+    fn meta(&self, vault_id: Uuid) -> Option<Vec<u8>> {
+        FakeTransport::meta(self, vault_id)
+    }
+}
+
 #[test]
 fn fake_reads_only_exact_state_file_names() {
-    let transport = FakeTransport::default();
-    let hash = transport.put_state(VAULT, WRITER, b"state");
+    reads_only_exact_state_file_names(&FakeTransport::default());
+}
+
+pub(super) fn reads_only_exact_state_file_names(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
+    let hash = folder.put_state(VAULT, WRITER, b"state");
     let name = StateFile::name(VAULT, hash);
     // Conflict copies in iCloud, Dropbox, and Syncthing naming, another
     // vault id, and an uppercase hash.
@@ -533,7 +617,7 @@ fn fake_reads_only_exact_state_file_names() {
         other_vault,
         upper,
     ] {
-        transport.put(VAULT, WRITER, &planted, b"planted");
+        folder.put(VAULT, WRITER, &planted, b"planted");
     }
 
     assert_eq!(transport.list_states(VAULT, WRITER).unwrap(), vec![hash]);
@@ -554,9 +638,13 @@ fn fake_reads_only_exact_state_file_names() {
 
 #[test]
 fn fake_returns_remote_for_file_not_yet_local() {
-    let transport = FakeTransport::default();
+    returns_remote_for_file_not_yet_local(&FakeTransport::default());
+}
+
+pub(super) fn returns_remote_for_file_not_yet_local(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
     let hash = StateHash::of(b"state");
-    transport.put_remote(VAULT, WRITER, &StateFile::name(VAULT, hash));
+    folder.put_not_local(VAULT, WRITER, &StateFile::name(VAULT, hash), None);
 
     assert_eq!(transport.list_states(VAULT, WRITER).unwrap(), vec![hash]);
     assert_eq!(
@@ -565,19 +653,23 @@ fn fake_returns_remote_for_file_not_yet_local() {
             .unwrap(),
         ReadResult::Remote
     );
-    assert_eq!(transport.reads(), 0);
+    assert_eq!(folder.reads(), 0);
 }
 
 #[test]
 fn fake_writes_and_deletes_own_files_and_fails_while_unavailable() {
-    let transport = FakeTransport::default();
+    writes_and_deletes_own_files_and_fails_while_unavailable(&FakeTransport::default());
+}
+
+pub(super) fn writes_and_deletes_own_files_and_fails_while_unavailable(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
     let hash = StateHash::of(b"state");
     let name = FileName::State(hash);
     transport.write_own(VAULT, WRITER, name, b"state").unwrap();
     assert_eq!(transport.list_replicas(VAULT).unwrap(), vec![WRITER]);
-    assert_eq!(transport.names(VAULT, WRITER), vec![name.file_name(VAULT)]);
+    assert_eq!(folder.names(VAULT, WRITER), vec![name.file_name(VAULT)]);
 
-    transport.set_failing_writes(true);
+    folder.set_failing_writes(true);
     assert!(transport.delete_own(VAULT, WRITER, name).is_err());
     assert!(
         transport
@@ -585,20 +677,20 @@ fn fake_writes_and_deletes_own_files_and_fails_while_unavailable() {
             .is_err()
     );
     assert!(transport.list_states(VAULT, WRITER).is_ok());
-    transport.set_failing_writes(false);
+    folder.set_failing_writes(false);
 
-    transport.set_unavailable(true);
+    folder.set_unavailable(true);
     assert!(transport.list_replicas(VAULT).is_err());
     assert!(transport.list_states(VAULT, WRITER).is_err());
     assert!(transport.read(VAULT, WRITER, name).is_err());
-    transport.set_unavailable(false);
+    folder.set_unavailable(false);
 
     transport.delete_own(VAULT, WRITER, name).unwrap();
-    assert!(transport.names(VAULT, WRITER).is_empty());
+    assert!(folder.names(VAULT, WRITER).is_empty());
 }
 
 /// Request id `n`.
-fn request(n: u128) -> RequestId {
+pub(super) fn request(n: u128) -> RequestId {
     RequestId(Uuid::from_u128(n))
 }
 
@@ -627,60 +719,72 @@ fn request_id_parse_file_name_refuses_uppercase_uuid_name_without_json_and_non_u
 
 #[test]
 fn fake_lists_vaults_and_reads_and_writes_meta() {
-    let transport = FakeTransport::default();
+    lists_vaults_and_reads_and_writes_meta(&FakeTransport::default());
+}
+
+pub(super) fn lists_vaults_and_reads_and_writes_meta(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
     let other = Uuid::from_u128(0x200);
     assert_eq!(transport.read_meta(VAULT).unwrap(), ReadResult::Missing);
 
     transport.write_meta(VAULT, b"meta").unwrap();
-    transport.put_state(other, WRITER, b"state");
+    folder.put_state(other, WRITER, b"state");
 
     assert_eq!(transport.list_vaults().unwrap(), vec![VAULT, other]);
     assert_eq!(
         transport.read_meta(VAULT).unwrap(),
         ReadResult::Local(b"meta".to_vec())
     );
-    assert_eq!(transport.meta(VAULT), Some(b"meta".to_vec()));
+    assert_eq!(folder.meta(VAULT), Some(b"meta".to_vec()));
     // `meta.json` is not a file of a replica directory.
     assert!(transport.list_replicas(VAULT).unwrap().is_empty());
 
-    transport.set_failing_writes(true);
+    folder.set_failing_writes(true);
     assert!(transport.write_meta(VAULT, b"other").is_err());
-    transport.set_unavailable(true);
+    folder.set_unavailable(true);
     assert!(transport.list_vaults().is_err());
     assert!(transport.read_meta(VAULT).is_err());
 }
 
 #[test]
 fn fake_deletes_replica_directory_and_leaves_others() {
-    let transport = FakeTransport::default();
+    deletes_replica_directory_and_leaves_others(&FakeTransport::default());
+}
+
+pub(super) fn deletes_replica_directory_and_leaves_others(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
     let peer = ReplicaId(Uuid::from_u128(2));
-    transport.put_state(VAULT, WRITER, b"own");
+    folder.put_state(VAULT, WRITER, b"own");
     transport
         .write_own(VAULT, WRITER, FileName::Key, b"{}")
         .unwrap();
-    transport.put_state(VAULT, peer, b"peer");
+    folder.put_state(VAULT, peer, b"peer");
 
-    transport.set_failing_writes(true);
+    folder.set_failing_writes(true);
     assert!(transport.delete_replica(VAULT, WRITER).is_err());
-    transport.set_failing_writes(false);
+    folder.set_failing_writes(false);
     transport.delete_replica(VAULT, WRITER).unwrap();
 
     assert_eq!(transport.list_replicas(VAULT).unwrap(), vec![peer]);
-    assert!(transport.names(VAULT, WRITER).is_empty());
-    assert_eq!(transport.names(VAULT, peer).len(), 1);
+    assert!(folder.names(VAULT, WRITER).is_empty());
+    assert_eq!(folder.names(VAULT, peer).len(), 1);
 }
 
 #[test]
 fn fake_records_download_requests_and_makes_remote_files_local() {
-    let transport = FakeTransport::default();
+    records_download_requests_and_makes_remote_files_local(&FakeTransport::default());
+}
+
+pub(super) fn records_download_requests_and_makes_remote_files_local(folder: &dyn SyncedFolder) {
+    let transport = folder.transport();
     let hash = StateHash::of(b"state");
     let name = StateFile::name(VAULT, hash);
-    transport.put_remote_with(VAULT, WRITER, &name, b"state");
+    folder.put_not_local(VAULT, WRITER, &name, Some(b"state"));
     let pending = StateFile::name(VAULT, StateHash::of(b"pending"));
-    transport.put_remote(VAULT, WRITER, &pending);
+    folder.put_not_local(VAULT, WRITER, &pending, None);
 
     transport.request_download(VAULT).unwrap();
-    assert_eq!(transport.download_requests(), vec![VAULT]);
+    assert_eq!(folder.download_requests(), vec![VAULT]);
     // A request does not wait, so the file is still remote.
     assert_eq!(
         transport
@@ -689,7 +793,7 @@ fn fake_records_download_requests_and_makes_remote_files_local() {
         ReadResult::Remote
     );
 
-    assert_eq!(transport.complete_downloads(VAULT), 1);
+    assert_eq!(folder.complete_downloads(VAULT), 1);
     assert_eq!(
         transport
             .read(VAULT, WRITER, FileName::State(hash))
@@ -703,9 +807,9 @@ fn fake_records_download_requests_and_makes_remote_files_local() {
         ReadResult::Remote
     );
 
-    transport.set_unavailable(true);
+    folder.set_unavailable(true);
     assert!(transport.request_download(VAULT).is_err());
-    assert_eq!(transport.download_requests(), vec![VAULT]);
+    assert_eq!(folder.download_requests(), vec![VAULT]);
 }
 
 #[test]

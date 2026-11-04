@@ -5,9 +5,12 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
+use super::load::{Fixture, GENERATION};
 use super::state_file::{VAULT, WRITER};
+use crate::secrets::vaults::Error;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
+use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::StateHash;
 use crate::secrets::vaults::sync::transport::TransportRoot;
@@ -146,4 +149,83 @@ fn sidecar_with_no_transport_field_parses_with_no_root() {
     let loaded = Sidecar::load(dir.path(), VAULT);
     assert_eq!(loaded, filled());
     assert_eq!(loaded.transport, None);
+}
+
+#[test]
+fn sidecar_that_fails_to_parse_keeps_root_if_its_transport_field_parses() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = Sidecar::path(dir.path(), VAULT);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let root = TransportRoot::Folder {
+        path: PathBuf::from("/Users/me/Dropbox/Vaults"),
+    };
+    let saved = serde_json::to_value(Sidecar {
+        transport: Some(root.clone()),
+        ..filled()
+    })
+    .unwrap();
+    let with = |field: &str, value: serde_json::Value| {
+        let mut saved = saved.clone();
+        saved[field] = value;
+        saved.to_string()
+    };
+    for (contents, kept) in [
+        // A field of a later build.
+        (with("unknown", 1.into()), Some(root.clone())),
+        (
+            saved
+                .to_string()
+                .replace(&StateHash::of(b"own").to_string(), "abc"),
+            Some(root),
+        ),
+        // A root of an unknown kind, or with an unknown field.
+        (
+            with("transport", serde_json::json!({"kind": "Dropbox"})),
+            None,
+        ),
+        (
+            with(
+                "transport",
+                serde_json::json!({"kind": "ICloud", "path": "/"}),
+            ),
+            None,
+        ),
+        ("not json".to_string(), None),
+        ("[1, 2]".to_string(), None),
+    ] {
+        fs::write(&path, &contents).unwrap();
+        let expected = Sidecar {
+            transport: kept,
+            ..Sidecar::default()
+        };
+        assert_eq!(Sidecar::load(dir.path(), VAULT), expected, "{contents}");
+    }
+}
+
+#[test]
+fn sidecar_that_cannot_be_read_fails_with_read_error() {
+    let dir = tempfile::tempdir().unwrap();
+    // A directory at the path of the sidecar cannot be read as a file.
+    fs::create_dir_all(Sidecar::path(dir.path(), VAULT)).unwrap();
+
+    assert!(matches!(
+        Sidecar::read(dir.path(), VAULT),
+        Err(Error::SyncStateReadError(_))
+    ));
+}
+
+#[test]
+fn sidecar_that_cannot_be_read_fails_transaction_and_changes_no_file() {
+    let fx = Fixture::synced();
+    fx.put_state(GENERATION);
+    let path = Sidecar::path(&fx.root, fx.id());
+    fs::create_dir_all(&path).unwrap();
+    let before = fx.on_disk();
+
+    let result = fx.add_item();
+
+    assert!(matches!(result, Err(Error::SyncStateReadError(_))));
+    assert_eq!(fx.on_disk(), before);
+    assert!(!LocalSyncState::staged_path(&fx.root, fx.id()).exists());
+    assert!(path.is_dir());
 }

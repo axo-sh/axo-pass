@@ -2,8 +2,10 @@
 //! state files and `key.json` of each replica, and pairing requests.
 //!
 //! The root of a vault's transport is in its sidecar. [`SyncTransports`]
-//! resolves a root to a transport. Milestone 7 adds the real transports, and
-//! milestone 9 their watches.
+//! resolves a root to a transport. [`folder::FolderTransport`] is the local
+//! folder transport. Milestone 9 adds the watches of the real transports.
+
+pub mod folder;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -101,6 +103,10 @@ impl FileName {
         StateHash::parse(hash)
     }
 }
+
+/// Largest pairing request in bytes that a transport reads. A larger request
+/// is listed with its size and not read.
+pub const MAX_PAIRING_SIZE: u64 = 16 * 1024;
 
 /// Id of a pairing request, the name of its file under `{root}/pairing/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

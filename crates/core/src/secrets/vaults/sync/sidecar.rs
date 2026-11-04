@@ -4,9 +4,11 @@
 //! state files joined, the quarantined files, the causes of a paused sync,
 //! and the transport root. It is at
 //! `sync/{short_vault_id}.json` and is written under the vault locks. It is
-//! not a source of truth. A sidecar that fails to parse is read as empty,
-//! which causes an extra join and never a wrong result, since a join checks
-//! the hash of every file and decrypts it.
+//! not a source of truth, except for the transport root. A sidecar that fails
+//! to parse is read as empty, which causes an extra join and never a wrong
+//! result, since a join checks the hash of every file and decrypts it. Its
+//! root is kept if the `transport` field parses. A sidecar that cannot be
+//! read fails the transaction, so no save replaces its root.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -67,21 +69,49 @@ impl Sidecar {
     }
 
     /// Sidecar of vault `vault_id` under the app data directory `root`. Empty
-    /// if the file is missing, cannot be read, or fails to parse.
-    pub fn load(root: &Path, vault_id: Uuid) -> Self {
+    /// if the file is missing. A file that fails to parse is read as empty,
+    /// with the root of its `transport` field if that field parses. A file
+    /// that cannot be read fails with `SyncStateReadError`.
+    pub fn read(root: &Path, vault_id: Uuid) -> Result<Self, Error> {
         let path = Self::path(root, vault_id);
-        let contents = match fs::read_to_string(&path) {
+        let contents = match fs::read(&path) {
             Ok(contents) => contents,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
-            Err(e) => {
-                log::warn!("Failed to read {}, read as empty: {e}", path.display());
-                return Self::default();
-            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(Error::SyncStateReadError(e)),
         };
-        serde_json::from_str(&contents).unwrap_or_else(|e| {
-            log::warn!("Failed to parse {}, read as empty: {e}", path.display());
-            Self::default()
-        })
+        Ok(serde_json::from_slice(&contents).unwrap_or_else(|e| {
+            let sidecar = Self::recovered(&contents);
+            let kept = if sidecar.transport.is_some() {
+                ", root kept"
+            } else {
+                ""
+            };
+            log::warn!(
+                "Failed to parse {}, read as empty{kept}: {e}",
+                path.display()
+            );
+            sidecar
+        }))
+    }
+
+    /// [`Self::read`], with a file that cannot be read read as empty.
+    #[cfg(test)]
+    pub fn load(root: &Path, vault_id: Uuid) -> Self {
+        Self::read(root, vault_id).unwrap_or_default()
+    }
+
+    /// Empty sidecar with the root of `contents`, a sidecar that fails to
+    /// parse. No root if the `transport` field is missing or fails to parse.
+    fn recovered(contents: &[u8]) -> Self {
+        let transport = serde_json::from_slice::<serde_json::Value>(contents)
+            .ok()
+            .and_then(|mut value| value.get_mut("transport").map(serde_json::Value::take))
+            .and_then(|root| serde_json::from_value::<Option<TransportRoot>>(root).ok())
+            .flatten();
+        Self {
+            transport,
+            ..Self::default()
+        }
     }
 
     /// Write the sidecar of vault `vault_id` under the app data directory

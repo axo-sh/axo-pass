@@ -35,7 +35,7 @@ md5 = "0.8"
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
-objc2-foundation = "0.3.2"
+objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSOperation", "NSPathUtilities", "NSString", "NSURL"]}
 objc2-local-authentication = "0.3.2"
 objc2-security = "0.3.2"
 p256 = "0.13"
