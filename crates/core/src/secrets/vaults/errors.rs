@@ -47,6 +47,15 @@ pub enum Error {
     #[error("Pairing request of {0} bytes is too large")]
     PairingRequestTooLarge(usize),
 
+    #[error("Replica {0} is pinned with other keys")]
+    PairingPinConflict(String),
+
+    #[error("Vault cannot be paired, its sync state is not trusted: {0}")]
+    PairingSyncNotTrusted(String),
+
+    #[error("Vault is not offered by the pairing request: {0}")]
+    PairingVaultNotOffered(String),
+
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 

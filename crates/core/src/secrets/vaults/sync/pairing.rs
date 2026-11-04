@@ -1,5 +1,8 @@
 //! Device pairing on the new Mac (Device pairing steps 1 to 3 and 8).
 //!
+//! The unlocked Mac side is in `pairing/prompt.rs`, `pairing/grant.rs`, and
+//! `pairing/dismissed.rs`.
+//!
 //! The new Mac shows a one-time code, writes a pairing request with a new
 //! replica id for each vault directory under the root that it does not sync,
 //! and polls the `key.json` files of those vaults for `Device` wrappings to
@@ -12,6 +15,9 @@
 //! or after 15 minutes, are milestone 9. The import of a [`PairedVault`] is
 //! milestone 10.
 
+pub mod dismissed;
+pub mod grant;
+pub mod prompt;
 pub mod request;
 
 use std::collections::{BTreeMap, BTreeSet};

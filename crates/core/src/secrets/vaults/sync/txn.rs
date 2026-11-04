@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use jiff::Timestamp;
+use p256::ecdsa::VerifyingKey;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -48,11 +49,11 @@ use super::apply::ApplyFault;
 use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
 use super::join::StateJoin;
-use super::keys::SyncKeyring;
+use super::keys::{SyncKey, SyncKeyring};
 use super::load::TrustedState;
 use super::local_state::LocalSyncState;
-use super::model::SyncState;
-use super::pins::Pins;
+use super::model::{KeyId, ReplicaKeys, SyncState};
+use super::pins::{PairedPin, Pins};
 use super::publish::Staged;
 use super::rebuild::Rebuild;
 use super::repair::Repair;
@@ -299,6 +300,41 @@ impl SyncTxn {
         }
     }
 
+    /// Pin `keys` for `replica` with `pairing` (D14). A changed pin sets the
+    /// header changed, so a save of the pin alone keeps `s` and the body
+    /// ciphertext.
+    pub(crate) fn pin_paired(&mut self, replica: ReplicaId, keys: &ReplicaKeys) -> PairedPin {
+        let pin = Pins::pin_paired(&mut self.local, replica, keys);
+        if pin.changed() {
+            self.header_changed = true;
+        }
+        pin
+    }
+
+    /// Key id of the body and its key in the keyring. `None` if the keyring
+    /// lacks it, which a trusted state never does.
+    pub(crate) fn current_key(&self) -> Option<(KeyId, &SyncKey)> {
+        let key_id = self.local.key_id;
+        self.keyring.get(key_id).map(|key| (key_id, key))
+    }
+
+    /// Value of the own `replica_keys` register of the state that holds the
+    /// current key of `signer`, as the own key check of the load reads it.
+    /// `None` if no value holds it.
+    pub(crate) fn own_keys(&self, signer: &dyn VaultSigner) -> Result<Option<ReplicaKeys>, Error> {
+        let current = signer.verifying_key()?;
+        let Some(register) = self.state.store.replica_keys.get(&self.local.replica_id) else {
+            return Ok(None);
+        };
+        Ok(register
+            .values()
+            .map(|(_, keys)| &keys.value)
+            .find(|keys| {
+                VerifyingKey::from_sec1_bytes(&keys.signing.0).is_ok_and(|key| key == current)
+            })
+            .cloned())
+    }
+
     /// Join of state files into the state, as received by `session`.
     fn join<'a>(&'a mut self, session: &'a mut Session) -> StateJoin<'a> {
         StateJoin {
@@ -448,6 +484,12 @@ impl SyncTxn {
         log::error!("Failed to diff vault {vault_id} against its sync state, sync paused: {e}");
         self.found.diff_failed(e);
         self.fall_back()
+    }
+
+    /// Whether the user disabled sync and the final state file is not yet
+    /// copied.
+    pub(crate) fn is_leaving(&self) -> bool {
+        self.local.leaving
     }
 
     /// Whether sync is stopped by drift.

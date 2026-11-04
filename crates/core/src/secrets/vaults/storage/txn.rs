@@ -26,7 +26,9 @@
 //! period of stopped sync loads as it is and is not rebuilt. A `v > s` vault,
 //! and a sync stopped by drift on another build or after the user override,
 //! run a repair in place of the guard (`sync/repair.rs`). An apply or diff
-//! failure pauses sync and never fails the save (`sync/txn.rs`).
+//! failure pauses sync and never fails the save (`sync/txn.rs`). A pairing
+//! grant is a transaction that changes no vault content and pins and wraps
+//! for a new Mac under the locks (`sync/pairing/grant.rs`).
 //! [`VaultWriter::rebuild`] and
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
@@ -65,6 +67,7 @@ use crate::secrets::vaults::sync::keys::SyncKeyring;
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -485,6 +488,32 @@ impl VaultWriter {
         target: &Target,
         unlock: Unlock<'_>,
         request: SyncRequest,
+        f: impl FnOnce(&mut VaultHandle) -> Result<R, E>,
+    ) -> Result<Committed<R>, E>
+    where
+        E: From<Error>,
+    {
+        self.write_with(target, unlock, request, None, f)
+    }
+
+    /// Transaction on the vault `target` that changes no vault content and
+    /// runs `grant` under the locks (`sync/pairing/grant.rs`).
+    pub(crate) fn write_granting(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        grant: &mut PairingGrant<'_>,
+    ) -> Result<Committed<()>, Error> {
+        self.write_with(target, unlock, SyncRequest::Change, Some(grant), |_| Ok(()))
+    }
+
+    /// [`Self::write_as`], with the pairing grant `grant` if set.
+    fn write_with<R, E>(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        request: SyncRequest,
+        mut grant: Option<&mut PairingGrant<'_>>,
         mut f: impl FnOnce(&mut VaultHandle) -> Result<R, E>,
     ) -> Result<Committed<R>, E>
     where
@@ -492,7 +521,8 @@ impl VaultWriter {
     {
         let mut retry_key_missing = true;
         for _ in 0..MAX_ATTEMPTS {
-            match self.attempt(target, &unlock, request, retry_key_missing, f)? {
+            let grant = grant.as_deref_mut();
+            match self.attempt(target, &unlock, request, retry_key_missing, grant, f)? {
                 Attempt::Done(committed) => return Ok(committed),
                 Attempt::Retry(unused) => f = unused,
                 Attempt::KeyMissing(unused) => {
@@ -504,15 +534,17 @@ impl VaultWriter {
         Err(Error::VaultFileKeyChanged.into())
     }
 
-    /// One attempt of [`Self::write_as`]. `f` is returned in `Retry` or
+    /// One attempt of [`Self::write_with`]. `f` is returned in `Retry` or
     /// `KeyMissing` if it did not run. `KeyMissing` is returned only if
-    /// `retry_key_missing` is set.
+    /// `retry_key_missing` is set. `grant` is checked before the joins,
+    /// prepared after them, and written after the saves.
     fn attempt<R, E, F>(
         &self,
         target: &Target,
         unlock: &Unlock<'_>,
         request: SyncRequest,
         retry_key_missing: bool,
+        mut grant: Option<&mut PairingGrant<'_>>,
         f: F,
     ) -> Result<Attempt<R, F>, E>
     where
@@ -580,6 +612,11 @@ impl VaultWriter {
                 None
             },
         };
+        // A pairing grant refuses a vault whose sync state is not trusted
+        // before any join, and writes nothing.
+        if let Some(grant) = grant.as_deref() {
+            grant.check(&case, sync.as_ref())?;
+        }
         // The override runs only while it is offered, and writes nothing
         // otherwise.
         let confirmed = request == SyncRequest::Override;
@@ -653,6 +690,12 @@ impl VaultWriter {
                 vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
             } else if changed && sync.syncs() {
                 sync.apply_joined(&mut vault)?;
+            }
+            // A pairing grant pins the new Mac before the first-use pins, so
+            // a value joined by this transaction cannot pin its replica id
+            // first. A refused grant writes nothing.
+            if let Some(grant) = grant.as_deref_mut() {
+                grant.prepare(sync, transport, &*self.signer)?;
             }
             // Peers are pinned after the joins and the apply, so a discarded
             // join pins nothing it held. A stopped sync pins nothing.
@@ -744,6 +787,11 @@ impl VaultWriter {
                     None => {},
                 }
                 let changed = result?;
+                // A pairing grant writes its wrapping only after the sync
+                // state is saved. A failed write does not fail the save.
+                if let (Some(grant), Some(transport)) = (grant, &transport) {
+                    grant.write(sync, &**transport);
+                }
                 // No signed save follows the vault save. A failed copy does
                 // not fail the save.
                 if let Some(transport) = &transport {

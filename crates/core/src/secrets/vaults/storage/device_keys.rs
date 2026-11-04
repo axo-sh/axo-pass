@@ -18,6 +18,7 @@ use crate::secrets::vaults::storage::txn::VERSIONS_DIR;
 use crate::secrets::vaults::storage::unreadable::Unreadable;
 use crate::secrets::vaults::sync::local_state::SYNC_DIR;
 use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
+use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
 
 /// Name of the vaults directory under the app data directory.
 pub(super) const VAULTS_DIR: &str = "vaults";
@@ -213,13 +214,15 @@ impl VaultFiles {
 
     /// Whether `vaults/`, `versions/`, or `sync/` holds a file, or a listed
     /// external vault file exists. A path that cannot be read counts as
-    /// present, so no key is created for it.
+    /// present, so no key is created for it. `sync/pairing.json`, the
+    /// dismissed pairing requests, is not a vault file.
     pub fn present(&self) -> bool {
+        let dismissed = DismissedRequests::path(&self.root);
         self.external.iter().any(|path| Self::exists(path))
             || self
                 .dirs()
                 .into_iter()
-                .any(|(_, dir)| Self::holds_file(dir))
+                .any(|(_, dir)| Self::holds_file(dir, &dismissed))
     }
 
     /// Whether `path` exists. Only a not found error counts as absent.
@@ -230,8 +233,8 @@ impl VaultFiles {
         }
     }
 
-    /// Whether `dir` holds a file at any depth.
-    fn holds_file(dir: &Path) -> bool {
+    /// Whether `dir` holds a file at any depth other than the file `ignored`.
+    fn holds_file(dir: &Path, ignored: &Path) -> bool {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
@@ -243,10 +246,11 @@ impl VaultFiles {
             };
             match entry.file_type() {
                 Ok(kind) if kind.is_dir() => {
-                    if Self::holds_file(&entry.path()) {
+                    if Self::holds_file(&entry.path(), ignored) {
                         return true;
                     }
                 },
+                _ if entry.path() == ignored => {},
                 _ => return true,
             }
         }
