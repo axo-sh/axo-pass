@@ -37,7 +37,7 @@ fn fingerprint_and_state_key_match_fixed_vectors() {
     // Vectors computed with OpenSSL, not with the code under test:
     //   K=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
     //   openssl kdf -keylen 16 -kdfopt digest:SHA256 -kdfopt hexkey:$K \
-    //     -kdfopt info:ap-state-key-fingerprint-v1 HKDF
+    //     -kdfopt info:ap-key-fingerprint-v1 HKDF
     //   openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt hexkey:$K \
     //     -kdfopt hexsalt:6f1c2b9e5d4a4c3b8a291e0f2d3c4b5a \
     //     -kdfopt info:ap-state-key-v1 HKDF
@@ -46,7 +46,7 @@ fn fingerprint_and_state_key_match_fixed_vectors() {
     let key = vector_key();
     assert_eq!(
         key.fingerprint().0.to_vec(),
-        unhex("2557c1525579fe780e8a3ceb368ee916")
+        unhex("7ff6f50dffb4e2dd6f7fe8f45f90e7c5")
     );
     assert_eq!(
         key.state_key(VECTOR_VAULT).as_bytes().to_vec(),

@@ -25,6 +25,7 @@ mod sync_keys;
 mod transport;
 mod txn;
 mod view;
+mod wrapping;
 
 /// Time of every mint in the tests.
 const NOW: i64 = 1_000;

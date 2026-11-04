@@ -16,9 +16,9 @@ use objc2_core_foundation::{
 use objc2_local_authentication::LAContext;
 use objc2_security::{
     SecItemDelete, SecKey, kSecAttrAccessControl, kSecAttrApplicationLabel, kSecAttrApplicationTag,
-    kSecAttrIsPermanent, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
-    kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecMatchItemList,
-    kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseAuthenticationContext,
+    kSecAttrIsPermanent, kSecAttrKeyClass, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom,
+    kSecAttrLabel, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey,
+    kSecMatchItemList, kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseAuthenticationContext,
     kSecUseDataProtectionKeychain,
 };
 pub use query::ManagedKeyQuery;
@@ -182,6 +182,31 @@ impl ManagedKey {
         }
     }
 
+    /// In-memory software P-256 key with no keychain item, for tests.
+    #[cfg(test)]
+    pub(crate) fn create_software_for_test() -> Result<ManagedKey, KeychainError> {
+        unsafe {
+            let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
+            private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(false));
+
+            let query = CFMutableDictionary::<CFString, CFType>::empty();
+            query.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
+            query.add(kSecPrivateKeyAttrs, &private_attrs);
+
+            let mut cf_error = CFErrorOut::new();
+            let sec_key = SecKey::new_random_key(query.as_opaque(), cf_error.out());
+            if let Some(cf_error) = cf_error.get() {
+                return Err(KeychainError::Generic(anyhow::anyhow!(
+                    cf_error.to_string()
+                )));
+            }
+            let Some(sec_key) = sec_key else {
+                return Err(KeychainError::KeyCreationFailed);
+            };
+            Ok(ManagedKey::new(None, None, sec_key.into()))
+        }
+    }
+
     pub fn is_private(&self) -> bool {
         unsafe {
             self.sec_key
@@ -291,10 +316,57 @@ impl ManagedKey {
         }
     }
 
-    pub fn decrypt(&self, b64_ciphertext: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    /// ECIES ciphertext of `plaintext` to the P-256 public key `public_sec1`,
+    /// with the algorithm of [`Self::encrypt`]. `public_sec1` is an
+    /// uncompressed SEC1 point. Makes no keychain call. The ciphertext is raw
+    /// bytes, not base64.
+    pub fn encrypt_to(public_sec1: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, KeychainError> {
         unsafe {
-            let ciphertext = b64.decode(b64_ciphertext).ok()?;
-            let ciphertext = &CFData::from_bytes(&ciphertext);
+            let attrs = CFMutableDictionary::<CFString, CFType>::empty();
+            attrs.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
+            attrs.add(kSecAttrKeyClass, KeyClass::Public.as_objc());
+
+            let mut cf_error = CFErrorOut::new();
+            let public_key = SecKey::with_data(
+                &CFData::from_bytes(public_sec1),
+                attrs.as_opaque(),
+                cf_error.out(),
+            );
+            if let Some(cf_error) = cf_error.get() {
+                return Err(KeychainError::PublicKeyCreationFailed(anyhow::anyhow!(
+                    cf_error.to_string()
+                )));
+            }
+            let Some(public_key) = public_key else {
+                return Err(KeychainError::PublicKeyCreationFailed(anyhow::anyhow!(
+                    "No public key from SEC1 bytes"
+                )));
+            };
+
+            let mut cf_error = CFErrorOut::new();
+            let ciphertext = public_key
+                .encrypted_data(alg(), &CFData::from_bytes(plaintext), cf_error.out())
+                .map(|data| data.as_bytes_unchecked().to_vec());
+            if let Some(cf_error) = cf_error.get() {
+                return Err(KeychainError::Generic(anyhow::anyhow!(
+                    "Encryption to public key failed: {cf_error}"
+                )));
+            }
+            ciphertext.ok_or(KeychainError::Generic(anyhow::anyhow!(
+                "No ciphertext returned"
+            )))
+        }
+    }
+
+    pub fn decrypt(&self, b64_ciphertext: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        let ciphertext = b64.decode(b64_ciphertext).ok()?;
+        self.decrypt_bytes(&ciphertext)
+    }
+
+    /// Plaintext of the raw ECIES ciphertext `ciphertext`. Can prompt.
+    pub fn decrypt_bytes(&self, ciphertext: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        unsafe {
+            let ciphertext = &CFData::from_bytes(ciphertext);
             let mut cf_error = CFErrorOut::new();
             let res = self
                 .sec_key

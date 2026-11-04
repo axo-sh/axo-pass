@@ -18,6 +18,7 @@ pub mod status;
 pub mod transport;
 pub mod txn;
 pub mod view;
+pub mod wrapping;
 
 #[cfg(test)]
 mod tests;

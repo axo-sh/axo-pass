@@ -295,6 +295,7 @@ dependencies = [
  "age-core",
  "anyhow",
  "async-trait",
+ "base32",
  "base64 0.23.1",
  "block2",
  "ciborium",

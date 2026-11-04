@@ -38,6 +38,9 @@ pub enum Error {
     #[error("Failed to decrypt sync key {0}")]
     SyncKeyDecryptionError(u32),
 
+    #[error("Sync key {0} does not match the fingerprint of its wrapping")]
+    SyncKeyFingerprintMismatch(u32),
+
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 

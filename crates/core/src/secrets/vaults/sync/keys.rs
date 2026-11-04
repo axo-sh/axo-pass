@@ -29,7 +29,7 @@ use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 
 /// HKDF info of the key fingerprint.
-const FINGERPRINT_INFO: &[u8] = b"ap-state-key-fingerprint-v1";
+const FINGERPRINT_INFO: &[u8] = b"ap-key-fingerprint-v1";
 
 /// HKDF info of the state key.
 const STATE_KEY_INFO: &[u8] = b"ap-state-key-v1";
@@ -51,11 +51,21 @@ impl SyncKey {
         Self(Zeroizing::new(bytes))
     }
 
+    /// Key of the unwrapped bytes `bytes`. Fails if `bytes` is not 32 bytes.
+    pub(crate) fn from_slice(bytes: &[u8]) -> Option<Self> {
+        let mut key = Zeroizing::new([0u8; 32]);
+        if bytes.len() != key.len() {
+            return None;
+        }
+        key.copy_from_slice(bytes);
+        Some(Self(key))
+    }
+
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
-    /// `HKDF-SHA-256(sync_key, info = "ap-state-key-fingerprint-v1")`,
+    /// `HKDF-SHA-256(sync_key, info = "ap-key-fingerprint-v1")`,
     /// truncated to 16 bytes. No salt.
     pub fn fingerprint(&self) -> KeyFingerprint {
         let mut fingerprint = [0u8; 16];
