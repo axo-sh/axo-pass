@@ -185,12 +185,18 @@ impl ManagedKey {
     /// In-memory software P-256 key with no keychain item, for tests.
     #[cfg(test)]
     pub(crate) fn create_software_for_test() -> Result<ManagedKey, KeychainError> {
+        use objc2_core_foundation::CFNumber;
+        use objc2_security::kSecAttrKeySizeInBits;
+
         unsafe {
             let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
             private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(false));
 
+            // A key with no token needs its size. The Secure Enclave token
+            // sets it for the keys of `create_secure_enclave`.
             let query = CFMutableDictionary::<CFString, CFType>::empty();
             query.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
+            query.add(kSecAttrKeySizeInBits, &CFNumber::new_i32(256));
             query.add(kSecPrivateKeyAttrs, &private_attrs);
 
             let mut cf_error = CFErrorOut::new();
