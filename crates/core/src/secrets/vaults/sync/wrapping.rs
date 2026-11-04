@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use thiserror::Error;
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use self::encoding::Canonical;
 use super::crdt::ReplicaId;
 use super::keys::{KeyFingerprint, SyncKey};
 use super::model::{ByteString, KeyId, PublicKey, ReplicaKeys};
@@ -265,9 +267,35 @@ impl DeviceWrapping {
         }
         Ok(key)
     }
+
+    /// Canonical bytes that the pairing MAC of the wrapping covers (D4):
+    /// `vault_id`, `from_replica`, `to_replica`, `key_id`, `key_fingerprint`,
+    /// the keys `to` of the new Mac, `from_encryption`, `from_signing`, and
+    /// `wrapped`. `from_replica` is the directory of the `key.json` that
+    /// holds the wrapping.
+    pub fn pairing_input(
+        &self,
+        vault_id: Uuid,
+        from_replica: ReplicaId,
+        to: &ReplicaKeys,
+    ) -> Vec<u8> {
+        Canonical::new()
+            .id(vault_id)
+            .id(from_replica.0)
+            .id(self.to_replica.0)
+            .number(self.key_id.0)
+            .field(self.key_fingerprint.0)
+            .field(&to.encryption.0)
+            .field(&to.signing.0)
+            .field(&self.from_encryption.0)
+            .field(&self.from_signing.0)
+            .field(&self.wrapped)
+            .into_bytes()
+    }
 }
 
-/// HMAC-SHA-256 of a pairing wrapping under the pairing key.
+/// HMAC-SHA-256 of a pairing request or a pairing wrapping under the pairing
+/// key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PairingMac(#[serde(with = "ByteString")] pub [u8; 32]);

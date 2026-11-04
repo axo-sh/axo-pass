@@ -109,10 +109,17 @@ impl FileName {
 pub const MAX_PAIRING_SIZE: u64 = 16 * 1024;
 
 /// Id of a pairing request, the name of its file under `{root}/pairing/`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The serde form is the `Uuid`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RequestId(pub Uuid);
 
 impl RequestId {
+    /// New random request id.
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+
     /// File name of the request: the lowercase hyphenated UUID and `.json`.
     pub fn file_name(&self) -> String {
         format!("{}.json", self.0.hyphenated())

@@ -14,6 +14,7 @@ mod load;
 mod local_state;
 mod meta;
 mod model;
+mod pairing;
 mod pins;
 mod publish;
 mod rebuild;

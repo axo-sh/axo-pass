@@ -4,6 +4,17 @@
 //! 4-byte big-endian count and its items. Moving bytes from one field to the
 //! next changes the encoded bytes. The pairing HMACs and the rotation
 //! signature use it.
+//!
+//! Byte form of each field:
+//! - A vault id, replica id, or request id is the 16 bytes of its UUID, in the
+//!   order of [`Uuid::as_bytes`].
+//! - A key id is its `u32` in 4 big-endian bytes.
+//! - A public key is its SEC1 bytes as held, unparsed.
+//! - A key fingerprint is its 16 bytes.
+//! - A name is its UTF-8 bytes.
+//! - A wrapped key is its raw ciphertext.
+
+use uuid::Uuid;
 
 /// Canonical encoding of a sequence of fields and lists.
 #[derive(Debug, Default)]
@@ -22,6 +33,16 @@ impl Canonical {
         self.bytes.extend_from_slice(&Self::length(bytes.len()));
         self.bytes.extend_from_slice(bytes);
         self
+    }
+
+    /// Append the id `id` as a field of its 16 bytes.
+    pub fn id(self, id: Uuid) -> Self {
+        self.field(id.as_bytes())
+    }
+
+    /// Append `number` as a field of its 4 big-endian bytes.
+    pub fn number(self, number: u32) -> Self {
+        self.field(number.to_be_bytes())
     }
 
     /// Append the list `items` with its count. `encode` appends each item.

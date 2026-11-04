@@ -4,6 +4,7 @@ use crate::core::auth::AuthContext;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeyProbe};
+use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
 
 /// Keys in memory for tests. Creating a key makes it present and counts it.
 pub struct TestKeys {
@@ -14,6 +15,8 @@ struct TestKeyState {
     encryption: KeyProbe,
     signing: KeyProbe,
     created: usize,
+    /// Public keys returned while both keys are present.
+    public: ReplicaKeys,
 }
 
 impl TestKeys {
@@ -23,6 +26,10 @@ impl TestKeys {
                 encryption,
                 signing,
                 created: 0,
+                public: ReplicaKeys {
+                    encryption: PublicKey(vec![4; 65]),
+                    signing: PublicKey(vec![5; 65]),
+                },
             }),
         }
     }
@@ -35,6 +42,12 @@ impl TestKeys {
     /// Neither key present.
     pub fn neither() -> Self {
         Self::new(KeyProbe::Missing, KeyProbe::Missing)
+    }
+
+    /// Keys whose public keys are `public`.
+    pub fn with_public_keys(self, public: ReplicaKeys) -> Self {
+        self.state().public = public;
+        self
     }
 
     /// Number of keys created so far.
@@ -85,5 +98,16 @@ impl DeviceKeys for TestKeys {
         state.signing = KeyProbe::Present;
         state.created += 1;
         Ok(())
+    }
+
+    fn public_keys(&self, _context: AuthContext) -> Result<ReplicaKeys, Error> {
+        let state = self.state();
+        if state.encryption.is_missing()? {
+            return Err(Error::VaultEncryptionKeyMissing);
+        }
+        if state.signing.is_missing()? {
+            return Err(Error::SigningKeyNotFound);
+        }
+        Ok(state.public.clone())
     }
 }

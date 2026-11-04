@@ -41,6 +41,12 @@ pub enum Error {
     #[error("Sync key {0} does not match the fingerprint of its wrapping")]
     SyncKeyFingerprintMismatch(u32),
 
+    #[error("No vault in the synced folder can be paired")]
+    PairingNoVaults,
+
+    #[error("Pairing request of {0} bytes is too large")]
+    PairingRequestTooLarge(usize),
+
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 

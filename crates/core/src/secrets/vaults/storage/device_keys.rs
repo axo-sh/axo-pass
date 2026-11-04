@@ -10,13 +10,14 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::signing::KeychainSigner;
+use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::storage::handle::{
     VAULT_ENCRYPTION_KEY_LABEL, probe_vault_encryption_key,
 };
 use crate::secrets::vaults::storage::txn::VERSIONS_DIR;
 use crate::secrets::vaults::storage::unreadable::Unreadable;
 use crate::secrets::vaults::sync::local_state::SYNC_DIR;
+use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
 
 /// Name of the vaults directory under the app data directory.
 pub(super) const VAULTS_DIR: &str = "vaults";
@@ -26,7 +27,7 @@ mod tests;
 
 /// Result of a probe for one Secure Enclave key.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum KeyProbe {
+pub(crate) enum KeyProbe {
     Present,
     Missing,
     /// Any keychain error other than item not found.
@@ -62,7 +63,7 @@ impl KeyProbe {
 /// The two Secure Enclave keys of this Mac, `vault-encryption-key` and
 /// `device-signing-key`. Implemented as a trait so tests do not read the
 /// keychain.
-pub(super) trait DeviceKeys: Send + Sync {
+pub(crate) trait DeviceKeys: Send + Sync {
     /// Look for `vault-encryption-key` without a prompt.
     fn probe_encryption_key(&self) -> KeyProbe;
 
@@ -80,6 +81,11 @@ pub(super) trait DeviceKeys: Send + Sync {
     /// Create `device-signing-key`, which is missing. Only the confirmed
     /// re-sign calls this.
     fn create_signing_key(&self) -> Result<(), Error>;
+
+    /// Public keys of `vault-encryption-key` and `device-signing-key`, as
+    /// uncompressed SEC1 bytes. Reads `vault-encryption-key` on `context`,
+    /// which can prompt. Fails if a key is missing. This never creates a key.
+    fn public_keys(&self, context: AuthContext) -> Result<ReplicaKeys, Error>;
 }
 
 /// The keys in the keychain.
@@ -150,11 +156,24 @@ impl DeviceKeys for KeychainKeys {
     fn create_signing_key(&self) -> Result<(), Error> {
         KeychainSigner::create_key()
     }
+
+    fn public_keys(&self, context: AuthContext) -> Result<ReplicaKeys, Error> {
+        let encryption = self
+            .read_encryption_key(context)?
+            .ok_or(Error::VaultEncryptionKeyMissing)?
+            .public_key_sec1()
+            .map_err(Error::KeyRetrievalFailed)?;
+        let signing = KeychainSigner.verifying_key()?.to_encoded_point(false);
+        Ok(ReplicaKeys {
+            encryption: PublicKey(encryption),
+            signing: PublicKey(signing.as_bytes().to_vec()),
+        })
+    }
 }
 
 /// Where vault files of this Mac are found.
 #[derive(Clone, Debug)]
-pub(super) struct VaultFiles {
+pub(crate) struct VaultFiles {
     /// App data directory.
     root: PathBuf,
     vaults: PathBuf,
@@ -258,7 +277,7 @@ pub enum KeyState {
 impl KeyState {
     /// Classify the keys against the vault files. A probe error gives
     /// `KeychainError`, whatever the files are.
-    pub(super) fn probe(keys: &dyn DeviceKeys, files: &VaultFiles) -> Self {
+    pub(crate) fn probe(keys: &dyn DeviceKeys, files: &VaultFiles) -> Self {
         let encryption = keys.probe_encryption_key();
         let signing = keys.probe_signing_key();
         for probe in [&encryption, &signing] {
@@ -279,7 +298,7 @@ impl KeyState {
 
 /// What [`ensure_device_keys`] does on new hardware.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum OnNewHardware {
+pub(crate) enum OnNewHardware {
     /// Fail with `Error::NewHardware`, as an import does.
     Fail,
     /// Move the vault files to `unreadable/`, then create the missing keys,
@@ -298,7 +317,7 @@ pub(super) enum OnNewHardware {
 /// then created. A failed move creates no key. `SigningKeyLost` fails with
 /// `SigningKeyNotFound`, and the re-sign creates that key. A keychain error
 /// fails with it.
-pub(super) fn ensure_device_keys(
+pub(crate) fn ensure_device_keys(
     keys: &dyn DeviceKeys,
     files: &VaultFiles,
     context: AuthContext,

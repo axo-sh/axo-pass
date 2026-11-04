@@ -305,6 +305,7 @@ dependencies = [
  "flate2",
  "glob",
  "hkdf",
+ "hmac",
  "indoc",
  "itertools 0.15.0",
  "jiff",
