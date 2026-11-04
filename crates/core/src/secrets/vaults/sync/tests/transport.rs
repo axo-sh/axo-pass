@@ -784,7 +784,7 @@ fn app_transports_give_no_transport_for_no_root_and_resolve_no_root_yet() {
     let transports = AppTransports::default();
     assert!(transports.resolve(None).unwrap().is_none());
     for root in [
-        TransportRoot::ICloud,
+        TransportRoot::ICloud {},
         TransportRoot::Folder {
             path: PathBuf::from("/tmp/Vaults"),
         },
@@ -818,7 +818,7 @@ fn writer_with_app_transports_and_sidecar_with_no_root_writes_staged_file_and_co
 #[test]
 fn root_that_fails_to_resolve_pauses_sync_with_unreachable_and_save_succeeds() {
     for root in [
-        TransportRoot::ICloud,
+        TransportRoot::ICloud {},
         TransportRoot::Folder {
             path: PathBuf::from("/tmp/Vaults"),
         },

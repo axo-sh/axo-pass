@@ -91,7 +91,7 @@ fn joined_hashes_are_kept_only_while_listed() {
 fn sidecar_with_root_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     for (root, json) in [
-        (TransportRoot::ICloud, r#"{"kind":"ICloud"}"#),
+        (TransportRoot::ICloud {}, r#"{"kind":"ICloud"}"#),
         (
             TransportRoot::Folder {
                 path: PathBuf::from("/Users/me/Dropbox/Vaults"),

@@ -170,7 +170,7 @@ impl fmt::Debug for WatchHandle {
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum TransportRoot {
     /// `Vaults` in the ubiquity container of the app.
-    ICloud,
+    ICloud {},
     /// Folder the user picked.
     Folder { path: PathBuf },
 }
@@ -178,7 +178,7 @@ pub enum TransportRoot {
 impl fmt::Display for TransportRoot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ICloud => f.write_str("iCloud"),
+            Self::ICloud {} => f.write_str("iCloud"),
             Self::Folder { path } => write!(f, "folder {}", path.display()),
         }
     }
