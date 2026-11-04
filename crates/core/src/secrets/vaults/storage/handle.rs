@@ -10,12 +10,11 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
-use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
+use crate::core::auth::{AuthContext, probe_shared_context};
 use crate::core::dirs::app_data_dir;
-use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
@@ -30,6 +29,7 @@ use crate::secrets::vaults::model::{
     VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
+use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeychainKeys};
 use crate::secrets::vaults::storage::txn::VaultLocks;
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 use crate::secrets::vaults::sync::load::SyncLoad;
@@ -50,7 +50,7 @@ pub enum ExportProgress {
     Writing,
 }
 
-const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
+pub(super) const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
 enum VaultState {
     Locked {
@@ -835,23 +835,27 @@ pub fn normalized_key(key: &str) -> Option<String> {
     }
 }
 
-/// Check whether the shared authentication still covers the vault encryption
-/// key, without prompting for it.
-///
-/// Being able to read the key authentication is still valid. A key that is
-/// present but blocked means auth has lapsed. A key that is absent is not an
-/// auth failure at all: it has yet to be created, and
-/// `get_vault_encryption_key` will make one on the next unlock.
-pub fn check_vault_auth_still_valid() -> Result<(), Error> {
-    let result = probe_shared_context(|la_context| {
+/// Query the vault encryption key on the shared context with interaction not
+/// allowed. A key gated by authentication fails the inner result with
+/// `ItemNotAccessible`.
+pub(super) fn probe_vault_encryption_key()
+-> Result<Result<Option<ManagedKey>, KeychainError>, KeychainError> {
+    probe_shared_context(|la_context| {
         ManagedKeyQuery::build()
             .with_label(VAULT_ENCRYPTION_KEY_LABEL)
             .with_key_class(KeyClass::Private)
             .one_with_retry(la_context, false)
     })
-    .map_err(Error::VaultInvalidAuth)?;
+}
 
-    match result {
+/// Check whether the shared authentication still covers the vault encryption
+/// key, without prompting for it.
+///
+/// Being able to read the key authentication is still valid. A key that is
+/// present but blocked means auth has lapsed. A key that is absent is not an
+/// auth failure at all. Reading it fails with `VaultEncryptionKeyMissing`.
+pub fn check_vault_auth_still_valid() -> Result<(), Error> {
+    match probe_vault_encryption_key().map_err(Error::VaultInvalidAuth)? {
         Ok(_) => Ok(()),
         Err(KeychainError::ItemNotAccessible) => {
             log::debug!("Vault encryption key is gated; authentication has lapsed");
@@ -863,58 +867,20 @@ pub fn check_vault_auth_still_valid() -> Result<(), Error> {
     }
 }
 
-pub fn get_vault_encryption_key() -> Result<ManagedKey, Error> {
-    get_vault_encryption_key_on(AuthContext::SharedThreadLocal)
+/// Read the vault encryption key on a specific [`AuthContext`]. A missing key
+/// fails with `VaultEncryptionKeyMissing`. This never creates a key. Only
+/// `ensure_device_keys` creates keys.
+pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedKey, Error> {
+    get_vault_encryption_key_with(&KeychainKeys, auth_context)
 }
 
-/// Read the vault encryption key on a specific [`AuthContext`], creating it if
-/// it does not exist yet. Key creation runs on the same context, so the Secure
-/// Enclave biometric prompt is drawn wherever the caller's context draws it.
-/// A missing `device-signing-key` is created as well, without a prompt.
-///
-/// A foreign context arrives already authenticated by the process that owns it,
-/// so nothing is evaluated here: a second evaluation of the same context would
-/// put a second prompt in front of the user for one request.
-pub fn get_vault_encryption_key_on(auth_context: AuthContext) -> Result<ManagedKey, Error> {
-    let reason = match Provenance::resolve_current_parent()
-        .inspect(|provenance| log::debug!("get_vault_encryption_key: {provenance:#?}"))
-        .and_then(|p| p.caller())
-    {
-        Some(parent) => format!("unlock the vault for {parent}"),
-        None => "unlock the vault".to_string(),
-    };
-    let auth_method = match auth_context {
-        AuthContext::Foreign(_) => AuthMethod::None,
-        _ => AuthMethod::Policy { reason },
-    };
-    let key_result = run_on_auth_thread(auth_context.clone(), auth_method, move |la_context| {
-        ManagedKeyQuery::build()
-            .with_label(VAULT_ENCRYPTION_KEY_LABEL)
-            .with_key_class(KeyClass::Private)
-            .one(la_context)
-    })
-    .map_err(Error::KeyRetrievalFailed)?;
-
-    let key = match key_result {
-        Ok(Some(user_encryption_key)) => user_encryption_key,
-        Ok(None) => {
-            log::debug!("Vault encryption key not found, initializing new key...");
-            run_on_auth_thread(auth_context, AuthMethod::None, move |la_context| {
-                ManagedKey::create_with_context(
-                    VAULT_ENCRYPTION_KEY_LABEL,
-                    KeyPolicy::AlwaysRequireAuth,
-                    Some(la_context),
-                )
-            })
-            .map_err(Error::KeyCreationFailed)?
-            .map_err(Error::KeyCreationFailed)?
-        },
-        Err(e) => return Err(Error::KeyRetrievalFailed(e)),
-    };
-    // Temporary: create a missing device-signing-key if vault-encryption-key
-    // exists. Key creation does not yet follow a policy.
-    KeychainSigner::ensure_key()?;
-    Ok(key)
+/// [`get_vault_encryption_key_on`] over `keys`.
+pub(super) fn get_vault_encryption_key_with(
+    keys: &dyn DeviceKeys,
+    auth_context: AuthContext,
+) -> Result<ManagedKey, Error> {
+    keys.read_encryption_key(auth_context)?
+        .ok_or(Error::VaultEncryptionKeyMissing)
 }
 
 #[cfg(test)]

@@ -19,10 +19,15 @@ use crate::secrets::vaults::format::encrypted_vault::{VaultFileKey, VaultHeader}
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::Vault;
-use crate::secrets::vaults::storage::handle::{
-    ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key,
-    get_vault_encryption_key_on, normalized_key, validate_key,
+use crate::secrets::vaults::storage::device_keys::{
+    DeviceKeys, KeyState, KeychainKeys, VaultFiles, ensure_device_keys,
 };
+use crate::secrets::vaults::storage::handle::{
+    ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key_on, normalized_key,
+    validate_key,
+};
+#[cfg(test)]
+use crate::secrets::vaults::storage::test_keys::TestKeys;
 use crate::secrets::vaults::storage::txn::{Committed, RetainedVersion, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
@@ -37,6 +42,8 @@ pub struct VaultCatalog {
     /// External vault paths. `None` reads the app config each time.
     external: Option<Vec<PathBuf>>,
     unlocker: Arc<dyn Unlocker>,
+    /// The Secure Enclave keys. Only `create` and `import` create them.
+    keys: Arc<dyn DeviceKeys>,
 }
 
 /// Vault files found by [`VaultCatalog::scan`].
@@ -89,6 +96,14 @@ pub trait Unlocker: Send + Sync {
 
     /// Wrapper of the raw file keys of imported vaults, read on `context`.
     fn file_key_wrapper(&self, context: AuthContext) -> Result<FileKeyWrapper, Error>;
+
+    /// New empty vault with key `key`, with a file key wrapped on `context`.
+    fn new_vault(
+        &self,
+        name: Option<String>,
+        key: String,
+        context: AuthContext,
+    ) -> Result<Vault, Error>;
 }
 
 /// Unlock with the file key in the keychain. This can prompt.
@@ -111,6 +126,15 @@ impl Unlocker for KeychainUnlocker {
             ))
         }))
     }
+
+    fn new_vault(
+        &self,
+        name: Option<String>,
+        key: String,
+        context: AuthContext,
+    ) -> Result<Vault, Error> {
+        Vault::new(name, key, get_vault_encryption_key_on(context)?)
+    }
 }
 
 impl Default for VaultCatalog {
@@ -128,11 +152,13 @@ impl VaultCatalog {
             files: VaultWriter::app(),
             external: None,
             unlocker: Arc::new(KeychainUnlocker),
+            keys: Arc::new(KeychainKeys),
         }
     }
 
     /// Vaults in `vaults_dir` and `external`, with lock files under `files`.
-    /// [`Self::unlock`] uses `unlocker`.
+    /// [`Self::unlock`] uses `unlocker`. Both keys are present, as
+    /// `TestKeys::both` holds them. [`Self::with_keys`] replaces them.
     #[cfg(test)]
     pub fn with_unlocker(
         vaults_dir: PathBuf,
@@ -145,7 +171,15 @@ impl VaultCatalog {
             files,
             external: Some(external),
             unlocker,
+            keys: Arc::new(TestKeys::both()),
         }
+    }
+
+    /// This catalog over the keys `keys`.
+    #[cfg(test)]
+    pub(super) fn with_keys(mut self, keys: Arc<dyn DeviceKeys>) -> Self {
+        self.keys = keys;
+        self
     }
 
     pub fn vaults_dir(&self) -> &Path {
@@ -173,6 +207,28 @@ impl VaultCatalog {
                 .map(|config| config.path.clone())
                 .collect(),
         }
+    }
+
+    /// Where the vault files of this Mac are: the vaults directory, the
+    /// retained versions and sync files under the data directory, and the
+    /// external vaults.
+    pub(super) fn vault_files(&self) -> VaultFiles {
+        VaultFiles::new(
+            self.vaults_dir.clone(),
+            self.files.root(),
+            self.external_vaults(),
+        )
+    }
+
+    /// Key state of this Mac, probed without a prompt.
+    pub fn key_state(&self) -> KeyState {
+        KeyState::probe(self.keys.as_ref(), &self.vault_files())
+    }
+
+    /// Create the missing keys on `context` if no vault file exists. See
+    /// [`ensure_device_keys`].
+    fn ensure_keys(&self, context: AuthContext) -> Result<(), Error> {
+        ensure_device_keys(self.keys.as_ref(), &self.vault_files(), context)
     }
 
     /// Every vault by key, locked. Same as the vaults of [`Self::scan`].
@@ -440,11 +496,15 @@ impl VaultCatalog {
 
     /// Create and write a new vault with key `key`, normalized. A key that
     /// another vault file claims is refused before the keychain is read.
-    /// Returns the vault unlocked.
+    /// Creates both Secure Enclave keys first if no vault file exists
+    /// ([`Self::ensure_keys`]). Returns the vault unlocked.
     pub fn create(&self, name: Option<String>, key: &str) -> Result<VaultHandle, Error> {
         let key = self.unclaimed_key(key, None)?;
-        let user_encryption_key = get_vault_encryption_key()?;
-        self.create_vault(Vault::new(name, key, user_encryption_key)?)
+        self.ensure_keys(AuthContext::SharedThreadLocal)?;
+        let vault = self
+            .unlocker
+            .new_vault(name, key, AuthContext::SharedThreadLocal)?;
+        self.create_vault(vault)
     }
 
     /// Write `vault` as a new file in the vaults directory, named by its id.
@@ -486,6 +546,9 @@ impl VaultCatalog {
     /// and an action. Copied vaults are given a new vault id. Returns the
     /// imported vaults (locked).
     ///
+    /// Creates both Secure Enclave keys first if no vault file exists. With a
+    /// vault file present it creates none.
+    ///
     /// The id and key checks read the headers of all vault files before the
     /// keychain is read. A vault imported with an id is rejected if an existing
     /// vault uses the id ([`Self::existing_ids`]). Keys already in use are
@@ -523,6 +586,7 @@ impl VaultCatalog {
             targets.insert(*id, ImportSelection::new(key, selected.action));
         }
         bundle.import_with(&targets, &self.vaults_dir, &self.files, || {
+            self.ensure_keys(context.clone())?;
             self.unlocker.file_key_wrapper(context)
         })
     }
@@ -1254,6 +1318,15 @@ mod tests {
 
         fn file_key_wrapper(&self, _context: AuthContext) -> Result<FileKeyWrapper, Error> {
             panic!("file key wrapper was requested");
+        }
+
+        fn new_vault(
+            &self,
+            _name: Option<String>,
+            _key: String,
+            _context: AuthContext,
+        ) -> Result<Vault, Error> {
+            panic!("new vault was requested");
         }
     }
 

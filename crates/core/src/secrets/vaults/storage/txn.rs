@@ -75,6 +75,9 @@ use locks::{Locked, VaultLock};
 pub use versions::RetainedVersion;
 use versions::{VersionsDir, now_ms};
 
+/// Directory of the retained versions under the app data directory.
+pub(super) const VERSIONS_DIR: &str = "versions";
+
 /// Attempts to open a vault whose wrapped file key changed after it was
 /// unwrapped.
 const MAX_ATTEMPTS: usize = 3;
@@ -186,7 +189,7 @@ impl VaultWriter {
 
     /// Retained versions of vault `id`, in a directory named by its short id.
     fn versions(&self, id: Uuid) -> VersionsDir {
-        VersionsDir::at(self.root.join("versions").join(ShortId::encode_uuid(id)))
+        VersionsDir::at(self.root.join(VERSIONS_DIR).join(ShortId::encode_uuid(id)))
     }
 
     /// Lock file of vault `id`, named by its short id.
@@ -221,7 +224,7 @@ impl VaultWriter {
 /// How a transaction gets the vault file key and the sync keyring.
 pub enum Unlock<'a> {
     /// The shared context the app authenticated. Fails if its authentication
-    /// lapsed, instead of prompting.
+    /// lapsed, instead of prompting. Creates no key.
     App,
     /// Use the file key and keyring of a vault already unlocked in memory. No
     /// keychain call runs.
@@ -279,7 +282,8 @@ impl Unlock<'_> {
     /// state under the app data directory `root`, for a rebuild with no vault
     /// file that verifies. The keyring is `None` if it fails to unwrap. A
     /// vault unlocked in memory holds no vault encryption key to wrap a new
-    /// file key, so `Unlocked` fails with `VaultLocked`.
+    /// file key, so `Unlocked` fails with `VaultLocked`. `App` creates no
+    /// key. It fails with `VaultEncryptionKeyMissing` if the key is missing.
     fn new_keys(
         &self,
         root: &Path,
@@ -1122,7 +1126,7 @@ impl VaultWriter {
     /// on each save, so this covers vaults that are not saved again. Failures
     /// are logged.
     pub fn prune_all(&self) {
-        let root = self.root.join("versions");
+        let root = self.root.join(VERSIONS_DIR);
         let entries = match fs::read_dir(&root) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return,

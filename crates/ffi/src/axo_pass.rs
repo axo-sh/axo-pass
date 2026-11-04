@@ -37,8 +37,10 @@ impl AxoPass {
         PRUNE.call_once(|| {
             std::thread::spawn(|| VaultWriter::app().prune_all());
         });
+        let manager = VaultsManager::new();
+        log::info!("Key state at launch: {:?}", manager.key_state());
         Arc::new(Self {
-            manager: Arc::new(Mutex::new(VaultsManager::new())),
+            manager: Arc::new(Mutex::new(manager)),
             embedded_auth_lock: Mutex::new(None),
             app_broker: Mutex::new(None),
             login_index: Arc::new(app_broker::LoginIndex::default()),

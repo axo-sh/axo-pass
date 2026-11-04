@@ -116,6 +116,12 @@ pub enum Error {
     #[error("The device signing key is not in the keychain")]
     SigningKeyNotFound,
 
+    #[error("The vault encryption key is not in the keychain")]
+    VaultEncryptionKeyMissing,
+
+    #[error("This Mac has vault files but not the vault encryption key that reads them")]
+    NewHardware,
+
     #[error("Failed to sign vault: {0}")]
     VaultSigningFailed(String),
 

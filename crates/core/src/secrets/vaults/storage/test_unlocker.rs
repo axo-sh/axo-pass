@@ -66,4 +66,16 @@ impl Unlocker for KeyUnlocker {
             Ok(VaultFileKey::new([Self::RAW_KEY_PREFIX, raw].concat()))
         }))
     }
+
+    /// Empty vault with the fixed test file key. The name is not kept.
+    fn new_vault(
+        &self,
+        _name: Option<String>,
+        key: String,
+        _context: AuthContext,
+    ) -> Result<Vault, Error> {
+        let mut vault = Vault::new_for_test();
+        vault.set_key(key);
+        Ok(vault)
+    }
 }

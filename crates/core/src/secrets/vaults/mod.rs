@@ -22,5 +22,6 @@ pub use model::{
 pub use storage::catalog::{
     DuplicateVaultKeys, DuplicateVaults, MissingVault, Unlocker, VaultCatalog, VaultScanResult,
 };
+pub use storage::device_keys::KeyState;
 pub use storage::handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use storage::manager::VaultsManager;

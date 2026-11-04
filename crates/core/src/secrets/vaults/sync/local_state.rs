@@ -41,7 +41,7 @@ const SIGNATURE_PREFIX: &[u8] = b"ap-local-state-v1:";
 const AAD_PREFIX: &str = "ap-local-body-v1";
 
 /// Directory of the local sync files under the app data directory.
-const SYNC_DIR: &str = "sync";
+pub(crate) const SYNC_DIR: &str = "sync";
 
 /// Outer object of a local sync state file.
 #[serde_as]

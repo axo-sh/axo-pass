@@ -9,6 +9,7 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::{
     DuplicateVaultKeys, DuplicateVaults, MissingVault, VaultCatalog, VaultScanResult,
 };
+use crate::secrets::vaults::storage::device_keys::KeyState;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 
@@ -26,6 +27,8 @@ pub struct VaultsManager {
     duplicate_keys: Vec<DuplicateVaultKeys>,
     /// Local sync states with no vault file when the manager was created.
     missing: Vec<MissingVault>,
+    /// Key state when the manager was created.
+    key_state: KeyState,
 }
 
 impl VaultsManager {
@@ -46,13 +49,20 @@ impl VaultsManager {
             duplicate_keys,
             missing,
         } = store.scan();
+        let key_state = store.key_state();
         Self {
             store,
             vaults,
             duplicates,
             duplicate_keys,
             missing,
+            key_state,
         }
+    }
+
+    /// Key state probed when the manager was created.
+    pub fn key_state(&self) -> &KeyState {
+        &self.key_state
     }
 
     pub fn store(&self) -> &VaultCatalog {

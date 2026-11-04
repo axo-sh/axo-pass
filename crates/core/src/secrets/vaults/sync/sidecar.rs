@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::crdt::ReplicaId;
+use super::local_state::SYNC_DIR;
 use super::state_file::StateHash;
 use super::status::PausedCause;
 use crate::core::files::write_atomic;
@@ -56,7 +57,7 @@ impl Sidecar {
     /// Sidecar file of vault `vault_id` under the app data directory `root`.
     pub fn path(root: &Path, vault_id: Uuid) -> PathBuf {
         let vault_id = ShortId::encode_uuid(vault_id);
-        root.join("sync").join(format!("{vault_id}.json"))
+        root.join(SYNC_DIR).join(format!("{vault_id}.json"))
     }
 
     /// Sidecar of vault `vault_id` under the app data directory `root`. Empty

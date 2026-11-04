@@ -51,14 +51,24 @@ pub fn verify(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Result<()
 pub struct KeychainSigner;
 
 impl KeychainSigner {
-    /// Create `device-signing-key` if it is missing.
-    pub fn ensure_key() -> Result<(), Error> {
-        if Self::find_key()?.is_none() {
-            log::debug!("Device signing key not found, creating it");
-            ManagedKey::create_device_key(DEVICE_SIGNING_KEY_LABEL)
-                .map_err(Error::KeyCreationFailed)?;
-        }
-        Ok(())
+    /// Look for `device-signing-key` with interaction not allowed. A key gated
+    /// by authentication fails with `ItemNotAccessible`.
+    pub(crate) fn probe_key() -> Result<Option<ManagedKey>, KeychainError> {
+        run_local_onetime(|la_context| {
+            ManagedKeyQuery::build()
+                .with_label(DEVICE_SIGNING_KEY_LABEL)
+                .with_key_class(KeyClass::Private)
+                .one_with_retry(la_context, false)
+        })
+    }
+
+    /// Create `device-signing-key`. The caller checks that it is missing, as
+    /// `ensure_device_keys` does.
+    pub(crate) fn create_key() -> Result<(), Error> {
+        log::debug!("Creating the device signing key");
+        ManagedKey::create_device_key(DEVICE_SIGNING_KEY_LABEL)
+            .map(|_| ())
+            .map_err(Error::KeyCreationFailed)
     }
 
     /// Read `device-signing-key`. The key never prompts.
