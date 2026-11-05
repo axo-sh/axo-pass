@@ -13,6 +13,7 @@ pub mod pairing;
 pub mod pins;
 pub mod publish;
 pub mod rebuild;
+pub mod recovery;
 pub mod repair;
 pub mod resolve;
 pub mod sidecar;

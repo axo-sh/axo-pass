@@ -23,6 +23,7 @@ use self::encoding::Canonical;
 use super::crdt::ReplicaId;
 use super::keys::{KeyFingerprint, SyncKey};
 use super::model::{ByteString, KeyId, PublicKey, ReplicaKeys};
+use super::transport::{FileName, ReadResult, SyncTransport};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity};
 use crate::secrets::vaults::errors::Error;
@@ -81,6 +82,43 @@ impl KeyFile {
             wrappings: &self.wrappings,
         };
         serde_json::to_vec(&file).expect("key file has only string map keys")
+    }
+
+    /// Own `key.json` of `replica` in vault `vault_id`, read through
+    /// `transport` before this Mac rewrites it. A missing file, or one that
+    /// fails to parse, is read as empty. A file that is `Remote` or of
+    /// another version fails, so no wrapping of it is lost.
+    pub(crate) fn read_own(
+        transport: &dyn SyncTransport,
+        vault_id: Uuid,
+        replica: ReplicaId,
+    ) -> Result<Self, Error> {
+        match transport.read(vault_id, replica, FileName::Key)? {
+            ReadResult::Missing => Ok(Self::default()),
+            ReadResult::Remote => Err(Error::SyncTransportError(
+                "own key.json is not local".to_string(),
+            )),
+            ReadResult::Local(bytes) => match Self::parse(&bytes) {
+                Ok(file) => Ok(file),
+                Err(KeyFileError::VersionSkew(message)) => {
+                    Err(Error::SyncStateVersionSkew(message))
+                },
+                Err(e) => {
+                    log::warn!("Own key.json of vault {vault_id} is read as empty: {e}");
+                    Ok(Self::default())
+                },
+            },
+        }
+    }
+
+    /// Add `wrapping` in place of any `Device` wrapping to the same replica
+    /// id and key id.
+    pub(crate) fn put_device(&mut self, wrapping: DeviceWrapping) {
+        self.wrappings.retain(|existing| {
+            !matches!(existing, Wrapping::Device(device)
+                if device.to_replica == wrapping.to_replica && device.key_id == wrapping.key_id)
+        });
+        self.wrappings.push(Wrapping::Device(wrapping));
     }
 
     pub fn devices(&self) -> impl Iterator<Item = &DeviceWrapping> {

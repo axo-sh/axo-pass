@@ -15,6 +15,7 @@
 //! [`LocalEdits::find_repair`]: super::diff::LocalEdits::find_repair
 
 use super::local_state::LocalSyncState;
+use super::recovery::RecoveryAdd;
 use super::status::BUILD_ID;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock, VaultWriter};
@@ -32,7 +33,7 @@ pub(crate) enum Repair {
 }
 
 /// What a transaction asks of the sync state besides its change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SyncRequest {
     /// Record the change as local edits.
     Change,
@@ -42,6 +43,11 @@ pub(crate) enum SyncRequest {
     /// Run the recovery merge on this build. Fails with
     /// `SyncOverrideNotOffered` if the override is not offered.
     Override,
+    /// Write the recipient of a saved recovery kit into `recovery`, under
+    /// the write id of the change (D18). Fails with `RecoveryKitNotAdded`
+    /// and writes nothing if sync does not run or the kit is not for the
+    /// current key.
+    AddRecovery(RecoveryAdd),
 }
 
 impl Repair {

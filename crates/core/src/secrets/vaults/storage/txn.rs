@@ -13,8 +13,9 @@
 //! (`sync/txn.rs`). A synced vault at `v < s`, or of another replica id than
 //! its sync state, is rebuilt from the sync state before the change. `s`
 //! advances if and only if the vault file changes. The staged file is
-//! written first, then the sync state, then the vault, and the staged file is
-//! then copied to the synced folder. The transport of the synced folder is
+//! written first, then the sync state, then the vault. The own `key.json` is
+//! then written once if it lacks a wrapping, and the staged file is then
+//! copied to the synced folder. The transport of the synced folder is
 //! resolved from the root in the sidecar of the vault. A sidecar with no root
 //! gives no transport, and a root that fails to resolve pauses sync with
 //! `Unreachable`. A sidecar that cannot be read fails the transaction, as a
@@ -443,6 +444,11 @@ pub struct Committed<R> {
     /// synced or is being disabled, and for a rebuild or a restore over a
     /// refused file.
     pub sync_status: Option<SyncStatus>,
+    /// Whether the `recovery` map of the sync state holds no recipient of
+    /// the current key, the degraded state (D18). False if the transaction
+    /// holds no trusted sync state, and for a rebuild or a restore over a
+    /// refused file of a vault that is not synced.
+    pub recovery_kit_missing: bool,
 }
 
 /// Outcome of one attempt of [`VaultWriter::write`].
@@ -522,7 +528,7 @@ impl VaultWriter {
         let mut retry_key_missing = true;
         for _ in 0..MAX_ATTEMPTS {
             let grant = grant.as_deref_mut();
-            match self.attempt(target, &unlock, request, retry_key_missing, grant, f)? {
+            match self.attempt(target, &unlock, &request, retry_key_missing, grant, f)? {
                 Attempt::Done(committed) => return Ok(committed),
                 Attempt::Retry(unused) => f = unused,
                 Attempt::KeyMissing(unused) => {
@@ -542,7 +548,7 @@ impl VaultWriter {
         &self,
         target: &Target,
         unlock: &Unlock<'_>,
-        request: SyncRequest,
+        request: &SyncRequest,
         retry_key_missing: bool,
         mut grant: Option<&mut PairingGrant<'_>>,
         f: F,
@@ -617,9 +623,17 @@ impl VaultWriter {
         if let Some(grant) = grant.as_deref() {
             grant.check(&case, sync.as_ref())?;
         }
+        // A recovery recipient is added only to a trusted sync state.
+        let recovery = match request {
+            SyncRequest::AddRecovery(add) => Some(add),
+            _ => None,
+        };
+        if recovery.is_some() && sync.is_none() {
+            return Err(Error::RecoveryKitNotAdded(case.to_string()).into());
+        }
         // The override runs only while it is offered, and writes nothing
         // otherwise.
-        let confirmed = request == SyncRequest::Override;
+        let confirmed = *request == SyncRequest::Override;
         if confirmed
             && !sync
                 .as_ref()
@@ -723,14 +737,25 @@ impl VaultWriter {
                 // edits. A stopped sync records no edit. After a repair, the
                 // change is recorded under a second write id, minted after
                 // the peer join. If that view fails to apply, the edit is
-                // kept and the vault is saved as the change left it.
-                let restore = request == SyncRequest::Restore;
+                // kept and the vault is saved as the change left it. A
+                // recovery recipient is refused before any save if sync does
+                // not run or the kit is not for the current key, and if the
+                // diff fails it is not recorded and nothing is saved.
+                if let Some(add) = recovery {
+                    sync.check_recovery(add)?;
+                }
                 if sync.syncs()
                     && sync
-                        .record(vh.get_unlocked_vault()?, session, now, restore)?
+                        .record(vh.get_unlocked_vault()?, session, now, request)?
                         .is_some()
                 {
                     sync.apply_recorded(vh.get_unlocked_vault_mut()?)?;
+                }
+                if recovery.is_some() && !sync.syncs() {
+                    return Err(Error::RecoveryKitNotAdded(
+                        "vault failed to diff against its sync state".to_string(),
+                    )
+                    .into());
                 }
                 // `s` advances if and only if the vault file changes. A key
                 // change writes the same path. A rebuild always changes the
@@ -787,10 +812,16 @@ impl VaultWriter {
                     None => {},
                 }
                 let changed = result?;
-                // A pairing grant writes its wrapping only after the sync
-                // state is saved. A failed write does not fail the save.
-                if let (Some(grant), Some(transport)) = (grant, &transport) {
-                    grant.write(sync, &**transport);
+                // The own `key.json` is read and written once, after the
+                // saves: the wrapping of a pairing grant, then the missing
+                // `Age` wrappings. A failed write does not fail the save.
+                if let Some(transport) = &transport {
+                    match grant {
+                        Some(grant) => grant.write(sync, &**transport),
+                        None => {
+                            let _ = sync.write_key_file(&**transport, None);
+                        },
+                    }
                 }
                 // No signed save follows the vault save. A failed copy does
                 // not fail the save.
@@ -825,6 +856,7 @@ impl VaultWriter {
         } else {
             vault_lock.save_count()
         };
+        let recovery_kit_missing = sync.as_ref().is_some_and(SyncTxn::recovery_kit_missing);
         Ok(Attempt::Done(Committed {
             value,
             vault: vh,
@@ -833,6 +865,7 @@ impl VaultWriter {
             changed,
             save_count,
             sync_status,
+            recovery_kit_missing,
         }))
     }
 
@@ -1083,7 +1116,7 @@ impl VaultWriter {
             sync.join_own(&**transport, session);
             sync.join_peers(&**transport, session);
         }
-        sync.record(&vault, session, now, true)?;
+        sync.record(&vault, session, now, &SyncRequest::Restore)?;
         if sync.state_changed() {
             sync.apply_restored(&mut vault)?;
         }
@@ -1119,12 +1152,14 @@ impl VaultWriter {
             },
             None => {},
         }
-        let committed = result?;
+        let mut committed = result?;
         if let Some(transport) = &transport {
+            let _ = sync.write_key_file(&**transport, None);
             sync.publish(&**transport);
         }
         sync.settle_status();
         sync.save_sidecar(&self.root);
+        committed.recovery_kit_missing = sync.recovery_kit_missing();
         Ok(committed)
     }
 
@@ -1224,6 +1259,7 @@ impl VaultWriter {
             save_count: entry.record_save(),
             vault: vh,
             sync_status: None,
+            recovery_kit_missing: false,
         })
     }
 

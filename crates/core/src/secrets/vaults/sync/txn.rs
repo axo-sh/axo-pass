@@ -14,6 +14,9 @@
 //!
 //! A transaction that publishes writes the staged file before the sync state,
 //! and copies it to the synced folder after the vault (`sync/publish.rs`).
+//! Before the copy, the own `key.json` is read and written once, with the
+//! `Device` wrapping of a pairing grant and the missing `Age` wrappings of the
+//! recovery recipients (`sync/recovery.rs`).
 //!
 //! Before any join, the no-edit guard diffs the vault as loaded against the
 //! view of the state as loaded. If it finds edits, sync stops by drift. A
@@ -56,13 +59,15 @@ use super::model::{KeyId, ReplicaKeys, SyncState};
 use super::pins::{PairedPin, Pins};
 use super::publish::Staged;
 use super::rebuild::Rebuild;
-use super::repair::Repair;
+use super::recovery::{RecoveryAdd, RecoveryRecipients};
+use super::repair::{Repair, SyncRequest};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
 use super::status::{BUILD_ID, FoundCauses, SyncStatus};
 use super::transport::{FileName, SyncTransport, TransportRoot};
 use super::view::VaultView;
+use super::wrapping::{DeviceWrapping, KeyFile};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::{UnlockedKey, Vault};
@@ -316,6 +321,111 @@ impl SyncTxn {
     pub(crate) fn current_key(&self) -> Option<(KeyId, &SyncKey)> {
         let key_id = self.local.key_id;
         self.keyring.get(key_id).map(|key| (key_id, key))
+    }
+
+    /// Refuse the recipient `add` of a saved kit, before it is recorded, if
+    /// sync does not run, if the sync state is `leaving`, if the kit is for
+    /// another vault, or if the kit is not for the current key.
+    pub(crate) fn check_recovery(&self, add: &RecoveryAdd) -> Result<(), Error> {
+        let refused = |reason: &str| Err(Error::RecoveryKitNotAdded(reason.to_string()));
+        if add.vault_id != self.vault_id() {
+            return refused("kit is for another vault");
+        }
+        if !self.syncs() {
+            return refused("sync is stopped or paused");
+        }
+        if self.is_leaving() {
+            return refused("sync is being disabled");
+        }
+        let current = self
+            .current_key()
+            .map(|(key_id, key)| (key_id, key.fingerprint().0));
+        if current != Some((add.value.key_id, add.value.key_fingerprint)) {
+            return refused("kit is not for the current key");
+        }
+        Ok(())
+    }
+
+    /// Recipients of the `recovery` map that receive an `Age` wrapping of the
+    /// current key (`sync/recovery.rs`).
+    pub(crate) fn recovery_recipients(&self) -> Vec<String> {
+        match self.current_key() {
+            Some((key_id, key)) => {
+                RecoveryRecipients::current(&self.state.store, key_id, &key.fingerprint())
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// Whether the `recovery` map holds no recipient of the current key, the
+    /// degraded state (D18).
+    pub(crate) fn recovery_kit_missing(&self) -> bool {
+        self.recovery_recipients().is_empty()
+    }
+
+    /// Write the own `key.json` through `transport`, after the saves, with
+    /// one read and one write. `device` is the `Device` wrapping of a pairing
+    /// grant, which replaces any `Device` wrapping to the same replica id and
+    /// key id. If the transaction syncs, the `Age` wrapping of each recipient
+    /// of [`Self::recovery_recipients`] that the file lacks is then added. The
+    /// other wrappings are written back unchanged. Nothing is read with no
+    /// `device` and no recipient, and nothing is written if nothing was
+    /// added. A missing or malformed file is read as empty, so its `Device`
+    /// wrappings are lost. A failed read or write fails with its error, and
+    /// pauses sync with `PublishFailed` if a recipient was wanted.
+    pub(crate) fn write_key_file(
+        &mut self,
+        transport: &dyn SyncTransport,
+        device: Option<DeviceWrapping>,
+    ) -> Result<(), Error> {
+        let recipients = if self.syncs() {
+            self.recovery_recipients()
+        } else {
+            Vec::new()
+        };
+        if device.is_none() && recipients.is_empty() {
+            return Ok(());
+        }
+        let result = self.rewrite_key_file(transport, device, &recipients);
+        if let Err(e) = &result
+            && !recipients.is_empty()
+        {
+            let vault_id = self.vault_id();
+            log::warn!("Failed to write the age wrappings of vault {vault_id}: {e}");
+            self.found
+                .publish_failed
+                .get_or_insert_with(|| e.to_string());
+        }
+        result
+    }
+
+    /// Read, change, and write the own `key.json` for
+    /// [`Self::write_key_file`].
+    fn rewrite_key_file(
+        &self,
+        transport: &dyn SyncTransport,
+        device: Option<DeviceWrapping>,
+        recipients: &[String],
+    ) -> Result<(), Error> {
+        let vault_id = self.vault_id();
+        let own = self.replica();
+        let mut file = KeyFile::read_own(transport, vault_id, own)?;
+        let mut changed = false;
+        if let Some(device) = device {
+            file.put_device(device);
+            changed = true;
+        }
+        if let Some((key_id, key)) = self.current_key() {
+            let added = RecoveryRecipients::add_missing(&mut file, key_id, key, recipients);
+            if added > 0 {
+                log::info!("Vault {vault_id} adds {added} age wrappings to its key.json");
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+        transport.write_own(vault_id, own, FileName::Key, &file.to_bytes())
     }
 
     /// Value of the own `replica_keys` register of the state that holds the
@@ -587,31 +697,35 @@ impl SyncTxn {
 
     /// Record the local edits of `vault` against the view of the state, under
     /// one write id of `session` minted at `now`, in Unix seconds. Returns
-    /// the write id, or `None` if the vault has no edits. For a `restore`,
-    /// an item or credential the vault lacks is moved to the trash, not
-    /// removed. If the diff fails, nothing is recorded, and the transaction
-    /// saves the vault only.
+    /// the write id, or `None` if the vault has no edits. For
+    /// `SyncRequest::Restore`, an item or credential the vault lacks is moved
+    /// to the trash, not removed. `SyncRequest::AddRecovery` adds the write
+    /// of its recipient under the same write id. If the diff fails, nothing
+    /// is recorded, and the transaction saves the vault only.
     pub(crate) fn record(
         &mut self,
         vault: &Vault,
         session: &mut Session,
         now: i64,
-        restore: bool,
+        request: &SyncRequest,
     ) -> Result<Option<WriteId>, Error> {
-        let edits = if restore {
+        let edits = if *request == SyncRequest::Restore {
             let trashed_at = Timestamp::now().as_second();
             LocalEdits::find_restore(&self.state, vault, self.replica(), trashed_at)
                 .map_err(Error::from)
         } else {
             self.find(vault)
         };
-        let edits = match edits {
+        let mut edits = match edits {
             Ok(edits) => edits,
             Err(e) => {
                 self.diff_failed(e)?;
                 return Ok(None);
             },
         };
+        if let SyncRequest::AddRecovery(add) = request {
+            edits.add_recovery(add.recipient.clone(), add.value.clone());
+        }
         let write_id = edits.record(&mut self.state, session, now);
         if write_id.is_some() {
             self.mark_changed();

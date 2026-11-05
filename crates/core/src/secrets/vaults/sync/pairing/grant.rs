@@ -17,8 +17,10 @@
 //! 3. Saves the sync state, before the vault if the transaction saves the
 //!    vault. A changed pin alone saves the header at `s`.
 //! 4. Reads its own `key.json`, replaces any `Device` wrapping to the same
-//!    replica id and key id with the new one, and writes it with `write_own`.
-//!    The other wrappings are written back unchanged.
+//!    replica id and key id with the new one, adds the missing `Age` wrappings
+//!    of the recovery recipients (`sync/recovery.rs`), and writes it with
+//!    `write_own`. This is the one read and write of `key.json` in the
+//!    transaction. The other wrappings are written back unchanged.
 //! 5. Publishes the staged file and saves the sidecar, as any transaction does.
 //!
 //! A failed save in step 3 writes no wrapping. A failed write in step 4
@@ -35,9 +37,9 @@ use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock, VaultWrite
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::pins::PairedPin;
-use crate::secrets::vaults::sync::transport::{FileName, ReadResult, SyncTransport, TransportRoot};
+use crate::secrets::vaults::sync::transport::{SyncTransport, TransportRoot};
 use crate::secrets::vaults::sync::txn::SyncTxn;
-use crate::secrets::vaults::sync::wrapping::{DeviceWrapping, KeyFile, KeyFileError, Wrapping};
+use crate::secrets::vaults::sync::wrapping::DeviceWrapping;
 
 /// Result of the grant of one picked vault.
 #[derive(Debug)]
@@ -165,56 +167,20 @@ impl<'a> PairingGrant<'a> {
     }
 
     /// Write the wrapping into the own `key.json` of the vault of `sync`
-    /// through `transport`, after the saves. The result is kept for the
-    /// outcome.
-    pub(crate) fn write(&mut self, sync: &SyncTxn, transport: &dyn SyncTransport) {
-        let result = self.write_key_file(sync, transport);
+    /// through `transport`, after the saves, in the one read and write of
+    /// [`SyncTxn::write_key_file`]. The result is kept for the outcome.
+    pub(crate) fn write(&mut self, sync: &mut SyncTxn, transport: &dyn SyncTransport) {
+        let result = match self.wrapping.take() {
+            Some(wrapping) => sync.write_key_file(transport, Some(wrapping)),
+            None => Err(Error::SyncStateEncodeError(
+                "pairing wrapping was not built".to_string(),
+            )),
+        };
         if let Err(e) = &result {
             let vault_id = sync.vault_id();
             log::warn!("Failed to write the pairing wrapping of vault {vault_id}: {e}");
         }
         self.written = Some(result);
-    }
-
-    /// Read the own `key.json`, replace any `Device` wrapping to the same
-    /// replica id and key id with the sealed wrapping, and write it. A
-    /// missing file, or one that fails to parse, is read as empty. A file
-    /// that is `Remote` or of another version fails, so no wrapping of it is
-    /// lost.
-    fn write_key_file(
-        &mut self,
-        sync: &SyncTxn,
-        transport: &dyn SyncTransport,
-    ) -> Result<(), Error> {
-        let wrapping = self.wrapping.take().ok_or_else(|| {
-            Error::SyncStateEncodeError("pairing wrapping was not built".to_string())
-        })?;
-        let vault_id = sync.vault_id();
-        let own = sync.replica();
-        let mut file = match transport.read(vault_id, own, FileName::Key)? {
-            ReadResult::Missing => KeyFile::default(),
-            ReadResult::Remote => {
-                return Err(Error::SyncTransportError(
-                    "own key.json is not local".to_string(),
-                ));
-            },
-            ReadResult::Local(bytes) => match KeyFile::parse(&bytes) {
-                Ok(file) => file,
-                Err(KeyFileError::VersionSkew(message)) => {
-                    return Err(Error::SyncStateVersionSkew(message));
-                },
-                Err(e) => {
-                    log::warn!("Own key.json of vault {vault_id} is read as empty: {e}");
-                    KeyFile::default()
-                },
-            },
-        };
-        file.wrappings.retain(|existing| {
-            !matches!(existing, Wrapping::Device(device)
-                if device.to_replica == wrapping.to_replica && device.key_id == wrapping.key_id)
-        });
-        file.wrappings.push(Wrapping::Device(wrapping));
-        transport.write_own(vault_id, own, FileName::Key, &file.to_bytes())
     }
 
     /// Outcome of the transaction `result`.

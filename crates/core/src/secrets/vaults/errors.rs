@@ -56,6 +56,12 @@ pub enum Error {
     #[error("Vault is not offered by the pairing request: {0}")]
     PairingVaultNotOffered(String),
 
+    #[error("Recovery kit is malformed: {0}")]
+    RecoveryKitMalformed(String),
+
+    #[error("Recovery kit recipient was not added: {0}")]
+    RecoveryKitNotAdded(String),
+
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 

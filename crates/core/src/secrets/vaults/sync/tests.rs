@@ -18,6 +18,7 @@ mod pairing;
 mod pins;
 mod publish;
 mod rebuild;
+mod recovery;
 mod repair;
 mod resolve;
 mod round_trip;

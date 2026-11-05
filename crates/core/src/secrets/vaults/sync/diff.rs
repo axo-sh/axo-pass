@@ -22,8 +22,9 @@ use super::crdt::{
     WriteId,
 };
 use super::model::{
-    CredentialId, FolderId, FolderValue, HistoryId, HistoryValue, ItemId, Placement, SecretText,
-    SectionId, SectionValue, SyncCredential, SyncItem, SyncState, TrashValue, WebsiteValue,
+    CredentialId, FolderId, FolderValue, HistoryId, HistoryValue, ItemId, Placement,
+    RecoveryRecipient, SecretText, SectionId, SectionValue, SyncCredential, SyncItem, SyncState,
+    TrashValue, WebsiteValue,
 };
 use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
 use super::view::{VaultView, list_order};
@@ -92,6 +93,10 @@ pub(crate) enum Edit {
     RemoveHistory(CredentialId, HistoryId),
     /// Write to the register of one replica.
     LastUsed(CredentialId, ReplicaId, i64),
+    /// Write of a recovery recipient, by its age recipient. The vault holds
+    /// no recovery map, so the diff never finds it. Only
+    /// `SyncRequest::AddRecovery` adds it.
+    Recovery(String, RecoveryRecipient),
 }
 
 /// Write to one register of an item.
@@ -245,6 +250,12 @@ impl LocalEdits {
         &self.edits
     }
 
+    /// Add a write of `value` into the `recovery` register of `recipient`.
+    /// It supersedes every value of the register.
+    pub(crate) fn add_recovery(&mut self, recipient: String, value: RecoveryRecipient) {
+        self.edits.push(Edit::Recovery(recipient, value));
+    }
+
     /// Record the edits in `state` at `now`, in Unix seconds.
     ///
     /// Mints one write id if the edits are not empty, and writes every changed
@@ -383,7 +394,8 @@ impl Edit {
             | Self::RemoveSection(..)
             | Self::RemoveWebsite(..)
             | Self::RemoveCredential(_)
-            | Self::RemoveHistory(..) => false,
+            | Self::RemoveHistory(..)
+            | Self::Recovery(..) => false,
         }
     }
 
@@ -442,6 +454,9 @@ impl Edit {
             Self::LastUsed(credential, replica, at) => {
                 let last_used = &mut store.credentials.entry(credential).last_used_day_at;
                 last_used.entry(replica).write(mint, at);
+            },
+            Self::Recovery(recipient, value) => {
+                store.recovery.entry(recipient).put(mint, value, kind)
             },
         }
     }

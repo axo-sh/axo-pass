@@ -243,17 +243,7 @@ impl StateFile {
         if StateHash::of(bytes) != source.hash {
             return Err(quarantine(Damage::HashMismatch));
         }
-        let rest = bytes
-            .strip_prefix(MAGIC)
-            .ok_or(quarantine(Damage::NoMagic))?;
-        let (header_len, rest) = rest
-            .split_first_chunk::<4>()
-            .ok_or(quarantine(Damage::HeaderLength))?;
-        let header_len = u32::from_be_bytes(*header_len) as usize;
-        if header_len > rest.len() {
-            return Err(quarantine(Damage::HeaderLength));
-        }
-        let (header_json, ciphertext) = rest.split_at(header_len);
+        let (header_json, ciphertext) = Self::split(bytes)?;
         let header = Self::header(header_json)?;
         if header.vault_id != source.vault_id {
             return Err(quarantine(Damage::WrongVault(header.vault_id)));
@@ -274,6 +264,35 @@ impl StateFile {
         Ok((header, padded))
     }
 
+    /// Key id of the plaintext header of the state file `bytes`, for the age
+    /// import. Reads the magic bytes, the header length, and the `key_id`
+    /// field of the header only. The hash, the format version, the other
+    /// header fields, and the body are not checked, and nothing is
+    /// decrypted. No state is read from the file.
+    pub fn peek_key_id(bytes: &[u8]) -> Result<KeyId, StateFileError> {
+        let (header_json, _) = Self::split(bytes)?;
+        serde_json::from_slice::<HeaderKeyId>(header_json)
+            .map(|header| header.key_id)
+            .map_err(|e| StateFileError::Quarantine(Damage::Header(e.to_string())))
+    }
+
+    /// JSON header and ciphertext of the state file `bytes`. Checks the magic
+    /// bytes and that the header length lies inside the file.
+    fn split(bytes: &[u8]) -> Result<(&[u8], &[u8]), StateFileError> {
+        let quarantine = StateFileError::Quarantine;
+        let rest = bytes
+            .strip_prefix(MAGIC)
+            .ok_or(quarantine(Damage::NoMagic))?;
+        let (header_len, rest) = rest
+            .split_first_chunk::<4>()
+            .ok_or(quarantine(Damage::HeaderLength))?;
+        let header_len = u32::from_be_bytes(*header_len) as usize;
+        if header_len > rest.len() {
+            return Err(quarantine(Damage::HeaderLength));
+        }
+        Ok(rest.split_at(header_len))
+    }
+
     /// Header of the JSON `header_json`. A newer format version is version
     /// skew, checked before the other fields.
     fn header(header_json: &[u8]) -> Result<StateHeader, StateFileError> {
@@ -289,6 +308,12 @@ impl StateFile {
         }
         serde_json::from_slice(header_json).map_err(|e| damage(e.to_string()))
     }
+}
+
+/// `key_id` of a JSON header. Other fields are ignored.
+#[derive(Deserialize)]
+struct HeaderKeyId {
+    key_id: KeyId,
 }
 
 /// `format_version` of a JSON header, read before the other fields.
