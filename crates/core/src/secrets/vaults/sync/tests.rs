@@ -14,6 +14,7 @@ mod join;
 mod keys;
 mod load;
 mod local_state;
+mod manager;
 mod meta;
 mod model;
 mod pairing;

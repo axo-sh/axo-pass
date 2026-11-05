@@ -253,6 +253,16 @@ impl SyncTransport for FolderTransport {
         self.read_file(&self.file_path(vault_id, replica, name), u64::MAX)
     }
 
+    fn is_local(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> Result<bool, Error> {
+        self.check_root()?;
+        let path = self.file_path(vault_id, replica, name);
+        let status = self
+            .io
+            .status(&path)
+            .map_err(|e| Self::error("read", &path, e))?;
+        Ok(status == FileStatus::Local)
+    }
+
     fn read_meta(&self, vault_id: Uuid) -> Result<ReadResult, Error> {
         self.check_root()?;
         self.read_file(&self.meta_path(vault_id), u64::MAX)

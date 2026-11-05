@@ -69,6 +69,17 @@ impl fmt::Debug for ReadHook {
     }
 }
 
+/// Function a test runs before each write or delete of a vault directory,
+/// with the vault id.
+#[derive(Clone)]
+struct WriteHook(Arc<dyn Fn(Uuid) + Send + Sync>);
+
+impl fmt::Debug for WriteHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WriteHook").finish_non_exhaustive()
+    }
+}
+
 /// Synced folder in memory. Files are held by vault id, replica, and file
 /// name. The folder can be made unavailable, and writes can be made to fail.
 #[derive(Debug, Default)]
@@ -101,6 +112,7 @@ struct FakeFolder {
     watches: Vec<FakeWatch>,
     next_watch: u64,
     read_hook: Option<ReadHook>,
+    write_hook: Option<WriteHook>,
 }
 
 impl FakeTransport {
@@ -263,6 +275,20 @@ impl FakeTransport {
         self.folder().read_hook = Some(ReadHook(Arc::new(hook)));
     }
 
+    /// Run `hook` with the vault id before each write or delete of a vault
+    /// directory, with the folder unlocked. Pairing requests do not run it.
+    pub(super) fn on_write(&self, hook: impl Fn(Uuid) + Send + Sync + 'static) {
+        self.folder().write_hook = Some(WriteHook(Arc::new(hook)));
+    }
+
+    /// Run the write hook for vault `vault_id`, if any.
+    fn run_write_hook(&self, vault_id: Uuid) {
+        let hook = self.folder().write_hook.clone();
+        if let Some(WriteHook(hook)) = hook {
+            hook(vault_id);
+        }
+    }
+
     /// Count of reads that returned a local pairing request.
     pub(super) fn pairing_reads(&self) -> usize {
         self.folder().pairing_reads
@@ -423,6 +449,13 @@ impl SyncTransport for FakeTransport {
         Ok(result)
     }
 
+    fn is_local(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> Result<bool, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        let key = (vault_id, replica, name.file_name(vault_id));
+        Ok(matches!(folder.files.get(&key), Some(FakeFile::Local(_))))
+    }
+
     fn read_meta(&self, vault_id: Uuid) -> Result<ReadResult, Error> {
         let folder = self.folder();
         Self::check_available(&folder)?;
@@ -433,6 +466,7 @@ impl SyncTransport for FakeTransport {
     }
 
     fn write_meta(&self, vault_id: Uuid, data: &[u8]) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         folder.meta.insert(vault_id, data.to_vec());
@@ -447,6 +481,7 @@ impl SyncTransport for FakeTransport {
         name: FileName,
         data: &[u8],
     ) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         let key = (vault_id, replica, name.file_name(vault_id));
@@ -456,6 +491,7 @@ impl SyncTransport for FakeTransport {
     }
 
     fn delete_own(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         folder
@@ -465,6 +501,7 @@ impl SyncTransport for FakeTransport {
     }
 
     fn delete_replica(&self, vault_id: Uuid, replica: ReplicaId) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         folder
@@ -679,6 +716,37 @@ pub(super) fn returns_remote_for_file_not_yet_local(folder: &dyn SyncedFolder) {
         ReadResult::Remote
     );
     assert_eq!(folder.reads(), 0);
+}
+
+#[test]
+fn fake_tells_local_file_from_one_not_local_or_missing_without_read() {
+    tells_local_file_from_one_not_local_or_missing_without_read(&FakeTransport::default());
+}
+
+pub(super) fn tells_local_file_from_one_not_local_or_missing_without_read(
+    folder: &dyn SyncedFolder,
+) {
+    let transport = folder.transport();
+    let local = folder.put_state(VAULT, WRITER, b"local");
+    let remote = StateHash::of(b"remote");
+    folder.put_not_local(VAULT, WRITER, &StateFile::name(VAULT, remote), None);
+
+    let is_local = |hash| {
+        transport
+            .is_local(VAULT, WRITER, FileName::State(hash))
+            .unwrap()
+    };
+    assert!(is_local(local));
+    assert!(!is_local(remote));
+    assert!(!is_local(StateHash::of(b"absent")));
+    assert_eq!(folder.reads(), 0);
+
+    folder.set_unavailable(true);
+    assert!(
+        transport
+            .is_local(VAULT, WRITER, FileName::State(local))
+            .is_err()
+    );
 }
 
 #[test]

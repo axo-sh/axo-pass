@@ -150,6 +150,13 @@ impl VaultLocks {
             .is_some_and(|entry| entry.save_count() == saved)
     }
 
+    /// Whether the per-vault mutex of vault `id` is held, by any thread.
+    #[cfg(test)]
+    pub(crate) fn is_held(&self, id: Uuid) -> bool {
+        self.get(id)
+            .is_some_and(|entry| entry.state.try_lock().is_err())
+    }
+
     /// Whether there is a lock entry for vault `id`.
     #[cfg(test)]
     pub(crate) fn contains(&self, id: Uuid) -> bool {

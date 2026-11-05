@@ -41,6 +41,10 @@
 //! A peer join that lists every peer directory clears the pending flag of the
 //! vault, unless the flag was set again after the join started.
 //!
+//! [`VaultWriter::copy_staged`] copies a staged file that a transaction
+//! failed to publish, under the locks and with no key, for the
+//! `SyncManager` (`sync/manager.rs`).
+//!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file. A read runs a transaction with no
 //! requested change first if [`VaultWriter::read_joins`] holds
@@ -84,10 +88,11 @@ use crate::secrets::vaults::sync::listing::PeerListing;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
+use crate::secrets::vaults::sync::publish::Staged;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
-use crate::secrets::vaults::sync::status::SyncStatus;
+use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 #[cfg(test)]
 use crate::secrets::vaults::sync::transport::FixedTransport;
 use crate::secrets::vaults::sync::transport::folder::FolderTransport;
@@ -309,6 +314,15 @@ impl VaultWriter {
                 false
             },
         }
+    }
+
+    /// Transport of the synced folder at `root`, as a transaction resolves
+    /// it. `Ok(None)` if the vault has no root.
+    pub(crate) fn transport_of(
+        &self,
+        root: Option<&TransportRoot>,
+    ) -> Result<Option<Arc<dyn SyncTransport>>, Error> {
+        self.transports.resolve(root)
     }
 
     /// Count of the peer state files of vault `id` that the sidecar neither
@@ -542,6 +556,19 @@ pub struct Committed<R> {
     /// holds no trusted sync state, and for a rebuild or a restore over a
     /// refused file of a vault that is not synced.
     pub recovery_kit_missing: bool,
+}
+
+/// Outcome of [`VaultWriter::copy_staged`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StagedCopy {
+    /// The staged file was copied, or was already listed under its hash, and
+    /// the sidecar records it as the last publish.
+    Copied,
+    /// No staged file waits for a copy, or the vault cannot copy one.
+    NotStaged,
+    /// The staged file does not hash to the staged hash, so it is not copied
+    /// (D14). The next transaction rewrites it.
+    Refused,
 }
 
 /// Outcome of one attempt of [`VaultWriter::write`].
@@ -1150,6 +1177,62 @@ impl VaultWriter {
         };
         let vh = VaultHandle::unlocked_with_keyring(target.path.clone(), vault, keyring);
         self.replace_refused(&entry, &mut locked, refused, vh, previous_key, || Ok(()))
+    }
+
+    /// Copy the staged file of vault `id`, found at `path`, to the synced
+    /// folder, for a publish that failed (D12). Runs under the per-vault
+    /// mutex and the lock file, with no key and no unlock.
+    ///
+    /// The local sync state is verified under `device-signing-key`, which
+    /// never prompts. Nothing is copied unless the sync state verifies, is of
+    /// vault `id`, is neither stopped nor `leaving`, and names a staged hash
+    /// that the sidecar does not record as the last publish, and unless the
+    /// sidecar gives a transport. A staged file whose bytes do not hash to
+    /// the staged hash is refused (D14). A file already listed under the
+    /// hash is not written again. On success the sidecar records the hash as
+    /// the last publish and as joined, and drops a `PublishFailed` cause. No
+    /// file is decrypted and no own file is deleted. The next transaction
+    /// moves `staged_context` to `published_context`.
+    pub fn copy_staged(&self, id: Uuid, path: &Path) -> Result<StagedCopy, Error> {
+        let entry = self.locks.entry(id, path);
+        let _locked = self.lock_entry(&entry, id)?;
+        let local = match LocalSyncState::load(&self.root, id, &*self.signer) {
+            Ok(local) => local,
+            Err(e) => {
+                log::debug!("Vault {id} has no valid sync state to copy a staged file for: {e}");
+                return Ok(StagedCopy::NotStaged);
+            },
+        };
+        if local.vault_id != id || local.leaving || local.stopped_build.is_some() {
+            return Ok(StagedCopy::NotStaged);
+        }
+        let Some(hash) = local.staged_hash else {
+            return Ok(StagedCopy::NotStaged);
+        };
+        let mut sidecar = Sidecar::read(&self.root, id)?;
+        if sidecar.last_publish == Some(hash) {
+            return Ok(StagedCopy::NotStaged);
+        }
+        let Some(staged) = Staged::existing(&self.root, id, hash) else {
+            log::warn!("Staged file of vault {id} does not hash to {hash}, so it is not copied");
+            return Ok(StagedCopy::Refused);
+        };
+        let Some(transport) = self.transports.resolve(sidecar.transport.as_ref())? else {
+            return Ok(StagedCopy::NotStaged);
+        };
+        let replica = local.replica_id;
+        let listed = transport.list_states(id, replica).unwrap_or_default();
+        if !listed.contains(&hash) {
+            staged.copy(&*transport, id, replica, &[])?;
+        }
+        sidecar.last_publish = Some(hash);
+        sidecar.record_joined(replica, hash);
+        sidecar
+            .paused
+            .retain(|cause| !matches!(cause, PausedCause::PublishFailed { .. }));
+        sidecar.save(&self.root, id)?;
+        log::info!("Copied the staged file {hash} of vault {id} to the synced folder");
+        Ok(StagedCopy::Copied)
     }
 
     /// Number of differences the recovery merge would add to the vault of

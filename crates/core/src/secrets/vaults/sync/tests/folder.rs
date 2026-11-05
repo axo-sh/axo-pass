@@ -266,6 +266,11 @@ fn coordinated_io_reads_only_exact_state_file_names() {
 }
 
 #[test]
+fn plain_io_tells_local_file_from_one_not_local_or_missing_without_read() {
+    transport::tells_local_file_from_one_not_local_or_missing_without_read(&Folder::plain());
+}
+
+#[test]
 fn plain_io_returns_remote_for_file_not_yet_local() {
     transport::returns_remote_for_file_not_yet_local(&Folder::plain());
 }

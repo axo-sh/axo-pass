@@ -21,6 +21,9 @@ use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 pub struct VaultsManager {
     store: VaultCatalog,
     vaults: BTreeMap<String, VaultHandle>,
+    /// Save count at which each unlocked copy was kept, by key. A copy whose
+    /// count is no longer current is locked at its next use (D5).
+    saves: BTreeMap<String, u64>,
     /// Vault ids held by more than one file when the manager was created.
     duplicates: Vec<DuplicateVaults>,
     /// Vault keys claimed by more than one file when the manager was created.
@@ -53,6 +56,7 @@ impl VaultsManager {
         Self {
             store,
             vaults,
+            saves: BTreeMap::new(),
             duplicates,
             duplicate_keys,
             missing,
@@ -103,8 +107,11 @@ impl VaultsManager {
     }
 
     /// The copy of vault `key`, loaded from disk, locked, if this manager has
-    /// none yet.
+    /// none yet. A copy that a later save replaced, such as a transaction of
+    /// the `SyncManager`, is locked first, so the next read reloads the file
+    /// (D5).
     pub fn get_or_create_vault_mut(&mut self, key: &str) -> Result<&mut VaultHandle, Error> {
+        self.relock_replaced(key);
         if !self.vaults.contains_key(key) {
             log::debug!("Vault {key} not loaded, reading it from disk");
             let vw = self.store.load(key).inspect_err(|e| {
@@ -115,6 +122,35 @@ impl VaultsManager {
         Ok(self.vaults.get_mut(key).unwrap())
     }
 
+    /// Lock the copy of vault `key` if it was kept unlocked at a save count
+    /// that is no longer current.
+    fn relock_replaced(&mut self, key: &str) {
+        let (Some(&saved), Some(vault)) = (self.saves.get(key), self.vaults.get_mut(key)) else {
+            return;
+        };
+        let locks = self.store.files().locks();
+        if vault
+            .peek_vault_id()
+            .is_ok_and(|id| locks.is_current(id, saved))
+        {
+            return;
+        }
+        log::debug!("Relocking vault {key}, which a later save replaced");
+        vault.lock();
+        self.saves.remove(key);
+    }
+
+    /// Record `vault`, kept under its key, as unlocked at save count
+    /// `save_count` if that count is current. Otherwise lock it.
+    fn keep_count(&mut self, vault: &mut VaultHandle, vault_id: Uuid, save_count: u64) {
+        if self.store.files().locks().is_current(vault_id, save_count) {
+            self.saves.insert(vault.key.clone(), save_count);
+        } else {
+            vault.lock();
+            self.saves.remove(&vault.key);
+        }
+    }
+
     /// Drop every decrypted vault from memory. Pair with `invalidate_auth` so
     /// that reading items again costs both a decryption and a fresh prompt.
     pub fn lock_all(&mut self) {
@@ -122,6 +158,7 @@ impl VaultsManager {
             log::debug!("Locking vault {key}");
             vault.lock();
         }
+        self.saves.clear();
     }
 
     /// Drop one decrypted vault from memory, so the next read reloads it from
@@ -151,6 +188,7 @@ impl VaultsManager {
     pub fn delete_vault(&mut self, key: &str) -> Result<(), Error> {
         self.store.delete(key)?;
         self.vaults.remove(key);
+        self.saves.remove(key);
         Ok(())
     }
 
@@ -214,12 +252,14 @@ impl VaultsManager {
     fn install_unlocked(&mut self, previous_key: &str, mut vault: VaultHandle, save_count: u64) {
         if vault.key != previous_key {
             self.vaults.remove(previous_key);
+            self.saves.remove(previous_key);
         }
-        let current = vault
-            .peek_vault_id()
-            .is_ok_and(|id| self.store.files().locks().is_current(id, save_count));
-        if !current {
-            vault.lock();
+        match vault.peek_vault_id() {
+            Ok(id) => self.keep_count(&mut vault, id, save_count),
+            Err(_) => {
+                vault.lock();
+                self.saves.remove(&vault.key);
+            },
         }
         self.vaults.insert(vault.key.clone(), vault);
     }
@@ -287,6 +327,7 @@ impl VaultsManager {
             && listed_key != key
         {
             m.vaults.remove(&listed_key);
+            m.saves.remove(&listed_key);
         }
         m.missing.retain(|missing| missing.id != id);
         m.install(committed);
@@ -315,10 +356,9 @@ impl VaultsManager {
         } = committed;
         if vault.key != previous_key {
             self.vaults.remove(&previous_key);
+            self.saves.remove(&previous_key);
         }
-        if !self.store.files().locks().is_current(vault_id, save_count) {
-            vault.lock();
-        }
+        self.keep_count(&mut vault, vault_id, save_count);
         self.vaults.insert(vault.key.clone(), vault);
         value
     }

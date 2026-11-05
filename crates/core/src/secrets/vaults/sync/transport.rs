@@ -33,6 +33,9 @@ pub trait SyncTransport: fmt::Debug + Send + Sync {
     /// Returns `Remote` if the file exists but is not local yet.
     fn read(&self, vault_id: Uuid, replica: ReplicaId, name: FileName)
     -> Result<ReadResult, Error>;
+    /// Whether a state file or `key.json` exists and is local. Reads no
+    /// bytes. False for a file that is missing or not local yet.
+    fn is_local(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> Result<bool, Error>;
     /// Read `meta.json` of the directory of vault `vault_id`.
     fn read_meta(&self, vault_id: Uuid) -> Result<ReadResult, Error>;
     /// Write `meta.json` of the directory of vault `vault_id`.

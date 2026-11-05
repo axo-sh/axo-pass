@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker;
@@ -6,10 +6,14 @@ use axo_pass_core::core::auth::{
     AuthContext, AuthMethod, adopt_shared_context, external_auth_lock, invalidate_auth,
     run_on_auth_thread,
 };
-use axo_pass_core::secrets::vaults::VaultsManager;
 use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
+use axo_pass_core::secrets::vaults::sync::manager::{AppUnlock, LogEvents, SyncManager};
+use axo_pass_core::secrets::vaults::{VaultCatalog, VaultsManager};
 
 use crate::*;
+
+/// Sync manager of the process, started by the first [`AxoPass`].
+static SYNC_MANAGER: OnceLock<SyncManager> = OnceLock::new();
 
 #[derive(uniffi::Object)]
 pub struct AxoPass {
@@ -36,6 +40,15 @@ impl AxoPass {
         static PRUNE: Once = Once::new();
         PRUNE.call_once(|| {
             std::thread::spawn(|| VaultWriter::app().prune_all());
+        });
+        // One sync manager per process, for the same reason. It runs on its
+        // own thread and logs its events until the app registers its own.
+        SYNC_MANAGER.get_or_init(|| {
+            SyncManager::start(
+                VaultCatalog::app(),
+                Arc::new(LogEvents),
+                Arc::new(AppUnlock),
+            )
         });
         let manager = VaultsManager::new();
         log::info!("Key state at launch: {:?}", manager.key_state());

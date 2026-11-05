@@ -8,6 +8,7 @@ pub mod keys;
 pub mod listing;
 pub mod load;
 pub mod local_state;
+pub mod manager;
 pub mod meta;
 pub mod model;
 pub mod pairing;

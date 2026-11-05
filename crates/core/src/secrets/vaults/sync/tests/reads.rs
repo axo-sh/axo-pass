@@ -88,13 +88,13 @@ impl Unlocker for CountingUnlocker {
 
 /// Catalog of the vault of a fixture, with the writer and locks of the
 /// fixture, whose unlocker counts the key reads.
-struct Reader {
+pub(super) struct Reader {
     catalog: VaultCatalog,
     reads: Arc<AtomicUsize>,
 }
 
 impl Reader {
-    fn of(fx: &Fixture) -> Self {
+    pub(super) fn of(fx: &Fixture) -> Self {
         let keys = HashMap::from([(fx.id(), fx.vault.unlocked_key().unwrap())]);
         let reads = Arc::new(AtomicUsize::new(0));
         let unlocker = CountingUnlocker {
@@ -111,13 +111,13 @@ impl Reader {
     }
 
     /// Unlock the vault through the catalog, a read.
-    fn read(&self) -> Result<VaultHandle, Error> {
+    pub(super) fn read(&self) -> Result<VaultHandle, Error> {
         let mut vh = self.catalog.load("personal")?;
         self.catalog.unlock(&mut vh, AuthContext::OneTime)?;
         Ok(vh)
     }
 
-    fn key_reads(&self) -> usize {
+    pub(super) fn key_reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
     }
 }
@@ -133,11 +133,11 @@ pub(super) fn put_peer(
     transport.put_state(fx.id(), replica, &state_file(fx, replica, &peer));
 }
 
-fn save_count(fx: &Fixture) -> u64 {
+pub(super) fn save_count(fx: &Fixture) -> u64 {
     fx.catalog.files().locks().save_count(fx.id()).unwrap()
 }
 
-fn has_item(vh: &VaultHandle, key: &str) -> bool {
+pub(super) fn has_item(vh: &VaultHandle, key: &str) -> bool {
     vh.get_item_overview(key).unwrap().is_some()
 }
 
