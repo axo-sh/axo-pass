@@ -51,6 +51,17 @@ impl From<FileJoin> for OwnFileState {
     }
 }
 
+/// Result of the join of the peer state files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PeerJoin {
+    /// Whether the state changed.
+    pub changed: bool,
+    /// Whether the replica directories and every peer directory were listed.
+    pub listed: bool,
+    /// Count of listed peer files that are not local yet.
+    pub remote: usize,
+}
+
 /// Join of the state files of vault `vault_id` into `state`, as received by
 /// `session`. Joined and quarantined files are recorded in `sidecar`.
 /// Listing failures, quarantined files, and files of a newer format are
@@ -153,23 +164,23 @@ impl StateJoin<'_> {
     }
 
     /// Join the state files of every replica directory that `transport`
-    /// lists, other than the directory of `own`. Returns whether the state
-    /// changed.
+    /// lists, other than the directory of `own`.
     ///
     /// A folder that cannot be listed joins no peer file. A replica directory
     /// that cannot be listed is left, and its joined hashes are kept. The
     /// joined hashes of a replica whose directory is not listed are dropped.
-    pub(crate) fn peers(&mut self, transport: &dyn SyncTransport, own: ReplicaId) -> bool {
+    pub(crate) fn peers(&mut self, transport: &dyn SyncTransport, own: ReplicaId) -> PeerJoin {
         let vault_id = self.vault_id;
+        let mut join = PeerJoin::default();
         let replicas = match transport.list_replicas(vault_id) {
             Ok(replicas) => replicas,
             Err(e) => {
                 log::warn!("Failed to list the replicas of vault {vault_id}: {e}");
                 self.found.unreachable(e);
-                return false;
+                return join;
             },
         };
-        let mut changed = false;
+        join.listed = true;
         for &replica in replicas.iter().filter(|replica| **replica != own) {
             let listed = match transport.list_states(vault_id, replica) {
                 Ok(listed) => listed,
@@ -179,16 +190,20 @@ impl StateJoin<'_> {
                         "Failed to list state files of replica {replica} of vault {vault_id}: {e}"
                     );
                     self.found.unreachable(e);
+                    join.listed = false;
                     continue;
                 },
             };
             for hash in &listed {
-                changed |= self.file(transport, replica, *hash).changed();
+                match self.file(transport, replica, *hash) {
+                    FileJoin::Remote => join.remote += 1,
+                    file => join.changed |= file.changed(),
+                }
             }
             self.retain(replica, &listed);
         }
         *self.sidecar_changed |= self.sidecar.retain_replicas(own, &replicas);
-        changed
+        join
     }
 
     /// Quarantine the file `name` of `replica` with content hash `hash`.

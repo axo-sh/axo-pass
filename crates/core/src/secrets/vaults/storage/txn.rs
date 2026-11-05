@@ -36,14 +36,26 @@
 //! [`VaultWriter::restore_refused`] replace a refused or missing vault file
 //! without loading it. A replaced refused file is kept as an invalid file.
 //!
+//! A transaction whose joins list a state file that is not local yet asks
+//! the transport once to download the files of the vault, and does not wait.
+//! A peer join that lists every peer directory clears the pending flag of the
+//! vault, unless the flag was set again after the join started.
+//!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
-//! either the old or the new file.
+//! either the old or the new file. A read runs a transaction with no
+//! requested change first if [`VaultWriter::read_joins`] holds
+//! (`storage/catalog.rs`).
 
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -68,6 +80,7 @@ use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
+use crate::secrets::vaults::sync::listing::PeerListing;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
@@ -115,6 +128,9 @@ pub struct VaultWriter {
     /// them.
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
+    /// Seconds added to the clock of the read listings, shared by clones.
+    #[cfg(test)]
+    listing_offset: Arc<AtomicU64>,
 }
 
 impl Default for VaultWriter {
@@ -135,6 +151,8 @@ impl VaultWriter {
             clock_offset: 0,
             #[cfg(test)]
             apply_fault: None,
+            #[cfg(test)]
+            listing_offset: Arc::default(),
         }
     }
 
@@ -156,7 +174,15 @@ impl VaultWriter {
             transports: Arc::new(AppTransports::default()),
             clock_offset: 0,
             apply_fault: None,
+            listing_offset: Arc::default(),
         }
+    }
+
+    /// Advance the clock of the read listings by `seconds`, for this writer
+    /// and its clones.
+    #[cfg(test)]
+    pub(crate) fn advance_listing_clock(&self, seconds: u64) {
+        self.listing_offset.fetch_add(seconds, Ordering::SeqCst);
     }
 
     /// This writer with the apply of the sync state view failing at the
@@ -253,6 +279,60 @@ impl VaultWriter {
             },
         }
     }
+
+    /// Clock of the read listings.
+    fn listing_now(&self) -> Instant {
+        let now = Instant::now();
+        #[cfg(test)]
+        let now = now + Duration::from_secs(self.listing_offset.load(Ordering::SeqCst));
+        now
+    }
+
+    /// Whether a read of vault `id` runs a transaction with no requested
+    /// change before it serves the vault. It does if the pending flag is set.
+    /// Otherwise, if the vault has no live watch and no read listed it in the
+    /// last minute, the peer directories are listed, and it does if a listed
+    /// file is neither joined nor quarantined (D20). The flag costs no file
+    /// I/O. The listing reads no state file. A vault with no trusted sync
+    /// state to list for, no transport, or a listing that fails runs none.
+    pub(crate) fn read_joins(&self, id: Uuid) -> bool {
+        if self.locks.is_pending(id) {
+            return true;
+        }
+        if !self.locks.take_listing(id, self.listing_now()) {
+            return false;
+        }
+        match self.peer_changes(id) {
+            Ok(changed) => changed > 0,
+            Err(e) => {
+                log::warn!("Failed to list the peer state files of vault {id}: {e}");
+                false
+            },
+        }
+    }
+
+    /// Count of the peer state files of vault `id` that the sidecar neither
+    /// records as joined nor quarantines ([`PeerListing::changed`]). Zero if
+    /// the local sync state fails to load or is `leaving`, or if the sidecar
+    /// gives no transport.
+    fn peer_changes(&self, id: Uuid) -> Result<usize, Error> {
+        let Ok(local) = LocalSyncState::load(&self.root, id, &*self.signer) else {
+            return Ok(0);
+        };
+        if local.leaving {
+            return Ok(0);
+        }
+        let sidecar = Sidecar::read(&self.root, id)?;
+        let Some(transport) = self.transports.resolve(sidecar.transport.as_ref())? else {
+            return Ok(0);
+        };
+        let changed = PeerListing::changed(&*transport, &sidecar, id, local.replica_id)?;
+        if !changed.is_empty() {
+            let count = changed.len();
+            log::info!("Vault {id} lists {count} peer state files not joined");
+        }
+        Ok(changed.len())
+    }
 }
 
 /// Transports of the app, one for each root, built at the first resolve of
@@ -304,6 +384,11 @@ pub enum Unlock<'a> {
     /// The shared context the app authenticated. Fails if its authentication
     /// lapsed, instead of prompting. Creates no key.
     App,
+    /// Context of a read, such as the context of a broker request. Checks
+    /// nothing, and unwraps the keys on the context as `App` does on the
+    /// shared context. A read already authenticated the context, so the
+    /// transaction adds no prompt (D7).
+    Context(AuthContext),
     /// Use the file key and keyring of a vault already unlocked in memory. No
     /// keychain call runs.
     Unlocked(&'a VaultHandle),
@@ -338,6 +423,7 @@ impl Unlock<'_> {
                 check_vault_auth_still_valid()?;
                 Self::unwrap_keys(root, path, signer, AuthContext::SharedThreadLocal)
             },
+            Unlock::Context(context) => Self::unwrap_keys(root, path, signer, context.clone()),
             Unlock::Unlocked(vh) => Ok(UnlockedKeys {
                 id: vh.vault_id()?,
                 file_key: vh.unlocked_key()?,
@@ -360,22 +446,27 @@ impl Unlock<'_> {
     /// state under the app data directory `root`, for a rebuild with no vault
     /// file that verifies. The keyring is `None` if it fails to unwrap. A
     /// vault unlocked in memory holds no vault encryption key to wrap a new
-    /// file key, so `Unlocked` fails with `VaultLocked`. `App` creates no
-    /// key. It fails with `VaultEncryptionKeyMissing` if the key is missing.
+    /// file key, so `Unlocked` fails with `VaultLocked`. `App` and `Context`
+    /// create no key. They fail with `VaultEncryptionKeyMissing` if the key
+    /// is missing.
     fn new_keys(
         &self,
         root: &Path,
         id: Uuid,
         signer: &dyn VaultSigner,
     ) -> Result<(UnlockedKey, Option<SyncKeyring>), Error> {
+        let generate = |context: AuthContext| {
+            let managed_key = get_vault_encryption_key_on(context)?;
+            let file_key = UnlockedKey::generate(&managed_key, id)?;
+            let keyring = SyncLoad::keyring_of(root, id, signer, &managed_key);
+            Ok((file_key, keyring))
+        };
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                let managed_key = get_vault_encryption_key_on(AuthContext::SharedThreadLocal)?;
-                let file_key = UnlockedKey::generate(&managed_key, id)?;
-                let keyring = SyncLoad::keyring_of(root, id, signer, &managed_key);
-                Ok((file_key, keyring))
+                generate(AuthContext::SharedThreadLocal)
             },
+            Unlock::Context(context) => generate(context.clone()),
             Unlock::Unlocked(_) => Err(Error::VaultLocked),
             #[cfg(test)]
             Unlock::Test(key) => {
@@ -699,8 +790,18 @@ impl VaultWriter {
             if repair.is_some() && sync.syncs() {
                 changed |= sync.record_repair(&vault, session, now)?.is_some();
             }
+            // The pending flag is cleared after a peer join that listed every
+            // peer directory, whatever each file's outcome, unless it was set
+            // again after the epoch was read (D4).
             if let Some(transport) = transport.filter(|_| sync.syncs()) {
+                let epoch = vault_lock.pending_epoch();
                 changed |= sync.join_peers(transport, session);
+                if sync.listed_every_peer() {
+                    vault_lock.clear_pending(epoch);
+                }
+            }
+            if let Some(transport) = transport {
+                sync.request_downloads(transport);
             }
             if rebuild {
                 vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
@@ -1117,6 +1218,7 @@ impl VaultWriter {
         if let Some(transport) = &transport {
             sync.join_own(&**transport, session);
             sync.join_peers(&**transport, session);
+            sync.request_downloads(&**transport);
         }
         sync.record(&mut vault, session, now, &SyncRequest::Restore)?;
         if sync.state_changed() {

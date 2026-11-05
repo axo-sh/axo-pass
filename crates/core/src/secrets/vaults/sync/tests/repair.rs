@@ -190,7 +190,10 @@ fn v_greater_than_s_row_of_generation_table_takes_stated_action() {
     };
     assert_eq!(fx.read_case(), case);
     assert_eq!(fx.write_case(), case);
-    assert!(matches!(fx.read(), Err(Error::SyncRepairNeeded(_))));
+    // The load check refuses the vault. A read runs the repair in place of
+    // the refusal (9.2), so the check is asserted here and the transaction
+    // below runs the repair.
+    assert!(matches!(case.check(), Err(Error::SyncRepairNeeded(_))));
 
     let committed = fx.write(|_| Ok(())).unwrap();
 

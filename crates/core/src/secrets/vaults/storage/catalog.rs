@@ -29,7 +29,9 @@ use crate::secrets::vaults::storage::handle::{
 use crate::secrets::vaults::storage::resign::{Resign, Resigned};
 #[cfg(test)]
 use crate::secrets::vaults::storage::test_keys::TestKeys;
-use crate::secrets::vaults::storage::txn::{Committed, RetainedVersion, Unlock, VaultWriter};
+use crate::secrets::vaults::storage::txn::{
+    Committed, RetainedVersion, Target, Unlock, VaultWriter,
+};
 use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
@@ -96,6 +98,16 @@ pub trait Unlocker: Send + Sync {
     /// directory `root`.
     fn unlock(&self, vw: &mut VaultHandle, root: &Path, context: AuthContext) -> Result<(), Error>;
 
+    /// Transaction with no requested change on the vault `target` through
+    /// `files`, unlocked on `context`, for a read. The app unlocks with
+    /// `Unlock::Context`, and the tests with `Unlock::Test`.
+    fn read_transaction(
+        &self,
+        files: &VaultWriter,
+        target: &Target,
+        context: AuthContext,
+    ) -> Result<Committed<()>, Error>;
+
     /// Wrapper of the raw file keys of imported vaults, read on `context`.
     fn file_key_wrapper(&self, context: AuthContext) -> Result<FileKeyWrapper, Error>;
 
@@ -114,6 +126,15 @@ struct KeychainUnlocker;
 impl Unlocker for KeychainUnlocker {
     fn unlock(&self, vw: &mut VaultHandle, root: &Path, context: AuthContext) -> Result<(), Error> {
         vw.unlock_on(root, context)
+    }
+
+    fn read_transaction(
+        &self,
+        files: &VaultWriter,
+        target: &Target,
+        context: AuthContext,
+    ) -> Result<Committed<()>, Error> {
+        files.write(target, Unlock::Context(context), |_| Ok(()))
     }
 
     /// Wrap each raw file key with the vault encryption key, read once.
@@ -514,9 +535,53 @@ impl VaultCatalog {
         Ok(vw)
     }
 
-    /// Unlock `vw` on `context`. This can prompt.
+    /// Unlock `vw` on `context`. This can prompt. See [`Self::unlock_counted`].
     pub fn unlock(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<(), Error> {
-        self.unlocker.unlock(vw, self.files.root(), context)
+        self.unlock_counted(vw, context).map(|_| ())
+    }
+
+    /// Unlock `vw` on `context` for a read, and return the save count at
+    /// which the unlocked copy is current. This can prompt.
+    ///
+    /// If [`VaultWriter::read_joins`] holds, the read runs a transaction with
+    /// no requested change on the same context and serves the vault it saved.
+    /// If that transaction fails, the failure is logged and the vault is
+    /// unlocked as before. If the unlock fails with `SyncRepairNeeded`, the
+    /// read runs the same transaction, which rebuilds `v < s` and a sync
+    /// state of another replica id, and repairs `v > s`. A repair transaction
+    /// that fails fails the read with its error, so a sync state of another
+    /// vault id is still refused (D8, D10). The transaction runs with the
+    /// vault locks and adds no prompt, since the context is authenticated by
+    /// the read.
+    pub fn unlock_counted(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<u64, Error> {
+        let id = vw.peek_vault_id().ok();
+        if let Some(id) = id.filter(|id| self.files.read_joins(*id)) {
+            match self.read_transaction(vw, context.clone()) {
+                Ok(save_count) => return Ok(save_count),
+                Err(e) => log::warn!("Failed to join vault {id} before a read: {e}"),
+            }
+        }
+        let save_count = id.and_then(|id| self.files.locks().save_count(id));
+        match self.unlocker.unlock(vw, self.files.root(), context.clone()) {
+            Ok(()) => Ok(save_count.unwrap_or_default()),
+            Err(Error::SyncRepairNeeded(reason)) => {
+                let key = &vw.key;
+                log::warn!("Vault {key} needs a sync repair at a read, running it: {reason}");
+                self.read_transaction(vw, context)
+            },
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Run a transaction with no requested change on `vw` for a read, and
+    /// put the vault it saved, unlocked, in place of `vw`. Returns the save
+    /// count of the transaction.
+    fn read_transaction(&self, vw: &mut VaultHandle, context: AuthContext) -> Result<u64, Error> {
+        let committed = self
+            .unlocker
+            .read_transaction(&self.files, &Target::of(vw), context)?;
+        *vw = committed.vault;
+        Ok(committed.save_count)
     }
 
     /// Create and write a new vault with key `key`, normalized. A key that
@@ -1341,6 +1406,15 @@ mod tests {
             _context: AuthContext,
         ) -> Result<(), Error> {
             panic!("unlock was called");
+        }
+
+        fn read_transaction(
+            &self,
+            _files: &VaultWriter,
+            _target: &Target,
+            _context: AuthContext,
+        ) -> Result<Committed<()>, Error> {
+            panic!("read transaction was called");
         }
 
         fn file_key_wrapper(&self, _context: AuthContext) -> Result<FileKeyWrapper, Error> {

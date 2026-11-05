@@ -191,6 +191,39 @@ impl VaultsManager {
         Ok(VaultsManager::lock(manager).install(committed))
     }
 
+    /// Unlock vault `vault_key` of a shared manager on the shared context and
+    /// keep the unlocked copy. The read follows the rule of a broker read
+    /// ([`VaultCatalog::unlock_counted`]), so it can run a transaction with
+    /// no requested change first (D6).
+    ///
+    /// The manager mutex is held only to find the vault and to keep the
+    /// copy, and is released while the read unlocks, so no per-vault mutex
+    /// is taken under it. A copy that a later save replaced is kept locked,
+    /// as [`Self::install`] keeps it.
+    pub fn unlock_vault(manager: &Mutex<Self>, vault_key: &str) -> Result<(), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let mut vh = VaultHandle::load_from_path(&target.path, store.files().locks())?;
+        let save_count = store.unlock_counted(&mut vh, AuthContext::SharedThreadLocal)?;
+        VaultsManager::lock(manager).install_unlocked(&target.key, vh, save_count);
+        Ok(())
+    }
+
+    /// Keep `vault`, unlocked for a read at save count `save_count`, in place
+    /// of the copy known by `previous_key`. The copy is kept locked if a
+    /// later save replaced it.
+    fn install_unlocked(&mut self, previous_key: &str, mut vault: VaultHandle, save_count: u64) {
+        if vault.key != previous_key {
+            self.vaults.remove(previous_key);
+        }
+        let current = vault
+            .peek_vault_id()
+            .is_ok_and(|id| self.store.files().locks().is_current(id, save_count));
+        if !current {
+            vault.lock();
+        }
+        self.vaults.insert(vault.key.clone(), vault);
+    }
+
     /// Replace a vault of a shared manager with its retained version `name`,
     /// and keep the restored copy. Returns the key, name, and id of the
     /// restored vault. The key differs from `vault_key` if the vault was

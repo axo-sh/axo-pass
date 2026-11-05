@@ -391,22 +391,26 @@ fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
         assert_eq!(fx.read_case(), expected, "{name}: case at unlock");
         assert_eq!(fx.write_case(), expected, "{name}: case at transaction");
 
-        let served = expected.check().map_err(|e| e.to_string());
-        let before = fx.on_disk();
-        let read = fx.read().map(|_| ()).map_err(|e| e.to_string());
-        assert_eq!(read, served, "{name}: unlock");
-        assert_eq!(fx.on_disk(), before, "{name}: unlock writes nothing");
-
         // A transaction rebuilds a `v < s` vault and a vault of another
         // replica id from the sync state (6a.6), and repairs a `v > s` vault
-        // (6c.3).
+        // (6c.3). A read runs the same transaction in these cases (9.2).
         let rebuilt = matches!(
             expected,
             SyncLoad::OlderVault { .. }
                 | SyncLoad::Mismatch(Mismatch::ReplicaId(_))
                 | SyncLoad::NewerVault { .. }
         );
+        let served = expected.check().map_err(|e| e.to_string());
         let written = if rebuilt { Ok(()) } else { served.clone() };
+        let before = fx.on_disk();
+        let read = fx.read().map(|_| ()).map_err(|e| e.to_string());
+        assert_eq!(read, written, "{name}: unlock");
+        if rebuilt {
+            assert_ne!(fx.on_disk(), before, "{name}: unlock writes");
+        } else {
+            assert_eq!(fx.on_disk(), before, "{name}: unlock writes nothing");
+        }
+
         let write = fx.add_item().map(|_| ()).map_err(|e| e.to_string());
         assert_eq!(write, written, "{name}: transaction");
         if written.is_err() {
@@ -439,19 +443,25 @@ fn only_repair_cases_and_newer_format_are_refused() {
 }
 
 #[test]
-fn read_path_on_vault_with_v_other_than_s_fails_with_sync_repair_needed_and_writes_nothing() {
-    for state in [GENERATION - 1, GENERATION + 1] {
+fn read_path_on_vault_with_v_other_than_s_runs_repair_transaction_and_serves_repaired_vault() {
+    // `v > s` is repaired at `v + 1`, and `v < s` is rebuilt at `s + 1`.
+    for (state, saved) in [
+        (GENERATION - 1, GENERATION + 1),
+        (GENERATION + 1, GENERATION + 2),
+    ] {
         let fx = Fixture::synced();
         fx.put_state(state);
         let before = fx.on_disk();
 
-        let result = fx.read();
+        let vh = fx.read().unwrap();
 
-        assert!(
-            matches!(result, Err(Error::SyncRepairNeeded(_))),
-            "s = {state}"
-        );
-        assert_eq!(fx.on_disk(), before, "s = {state}");
+        assert_ne!(fx.on_disk(), before, "s = {state}");
+        assert_eq!(fx.read_case(), SyncLoad::Current, "s = {state}");
+        let file = EncryptedVault::load(&fx.vault.path, &TestSigner::device()).unwrap();
+        assert_eq!(file.generation, saved, "s = {state}");
+        let served = vh.get_unlocked_vault().unwrap();
+        assert_eq!(served.generation(), saved, "s = {state}");
+        assert!(!vh.keyring().unwrap().keys().is_empty(), "s = {state}");
     }
 }
 

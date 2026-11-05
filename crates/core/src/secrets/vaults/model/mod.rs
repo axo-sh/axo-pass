@@ -95,6 +95,15 @@ impl UnlockedKey {
     pub(crate) fn cipher_for_test(&self) -> VaultCipher {
         self.cipher.duplicate()
     }
+
+    /// Copy of this key, for tests.
+    #[cfg(test)]
+    pub(crate) fn duplicate_for_test(&self) -> Self {
+        Self {
+            file_key: self.file_key.clone(),
+            cipher: self.cipher.duplicate(),
+        }
+    }
 }
 
 /// Vault contains decrypted metadata for all folders, items, and credentials

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker::IndexedPasskey;
@@ -472,13 +472,47 @@ impl AxoPass {
     }
 }
 
-/// Decrypt a vault from disk if it is not already in memory. Uses the shared
-/// LAContext, so there is no re-prompt after a successful `unlock`.
-fn ensure_unlocked(vault: &mut VaultHandle) -> Result<(), FfiError> {
-    if matches!(vault.list_items(), Err(VaultError::VaultLocked)) {
-        vault.unlock()?;
+/// Decrypt vault `vault_key` from disk if it is not already in memory. Uses
+/// the shared LAContext, so there is no re-prompt after a successful
+/// `unlock`. The manager mutex is released while the vault unlocks, since the
+/// read can run a transaction ([`VaultsManager::unlock_vault`]).
+fn ensure_unlocked(manager: &Mutex<VaultsManager>, vault_key: &str) -> Result<(), FfiError> {
+    let locked = {
+        let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+        let vault = m.get_or_create_vault_mut(vault_key)?;
+        matches!(vault.list_items(), Err(VaultError::VaultLocked))
+    };
+    if locked {
+        VaultsManager::unlock_vault(manager, vault_key)?;
     }
     Ok(())
+}
+
+/// Unlock every vault of the manager, with the manager mutex released while
+/// each vault unlocks ([`VaultsManager::unlock_vault`]). A vault that fails to
+/// unlock is logged with `purpose` and skipped. Returns the keys of the vaults
+/// that unlocked.
+fn unlock_every_vault(
+    manager: &Mutex<VaultsManager>,
+    purpose: &str,
+) -> Result<Vec<String>, FfiError> {
+    let vault_keys: Vec<String> = manager
+        .lock()
+        .map_err(|_| FfiError::Poisoned)?
+        .iter_vault_keys()
+        .collect();
+    Ok(vault_keys
+        .into_iter()
+        .filter(
+            |vault_key| match VaultsManager::unlock_vault(manager, vault_key) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::error!("Failed to unlock vault {vault_key} for {purpose}: {e}");
+                    false
+                },
+            },
+        )
+        .collect())
 }
 
 /// Item sections in display order, and a comparator that orders item
@@ -687,12 +721,11 @@ impl AxoPass {
     pub async fn list_items(&self, vault_key: String) -> Result<Vec<ItemInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
-
-            ensure_unlocked(vault)?;
 
             let signals = vault.passkey_signals().map_err(FfiError::from)?;
             let items = vault.list_items().map_err(FfiError::from)?;
@@ -778,11 +811,11 @@ impl AxoPass {
     pub async fn list_folders(&self, vault_key: String) -> Result<Vec<FolderInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
-            ensure_unlocked(vault)?;
 
             let mut folders = vault.list_folders().map_err(FfiError::from)?;
             folders.sort_by(|a, b| {
@@ -807,18 +840,14 @@ impl AxoPass {
         let manager = Arc::clone(&self.manager);
         let index = Arc::clone(&self.login_index);
         tokio::task::spawn_blocking(move || {
+            let vault_keys = unlock_every_vault(&manager, "autofill")?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let vault_keys: Vec<String> = m.iter_vault_keys().collect();
             let mut found_items = Vec::new();
             let mut places = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
                 };
-                if let Err(e) = vault.unlock() {
-                    log::error!("Failed to unlock vault {vault_key} for autofill: {e}");
-                    continue;
-                }
                 match autofill::collect_items(vault, None) {
                     Ok(found) => found_items.extend(found),
                     Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
@@ -853,17 +882,13 @@ impl AxoPass {
         let manager = Arc::clone(&self.manager);
         let index = Arc::clone(&self.login_index);
         tokio::task::spawn_blocking(move || {
+            let vault_keys = unlock_every_vault(&manager, "passkeys")?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let vault_keys: Vec<String> = m.iter_vault_keys().collect();
             let mut identities = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
                 };
-                if let Err(e) = vault.unlock() {
-                    log::error!("Failed to unlock vault {vault_key} for passkeys: {e}");
-                    continue;
-                }
                 let signals = vault.passkey_signals().unwrap_or_default();
                 match passkey::list(vault) {
                     Ok(found) => identities.extend(
@@ -946,11 +971,11 @@ impl AxoPass {
     ) -> Result<Vec<HistoryEntryInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
-            ensure_unlocked(vault)?;
 
             let history = vault
                 .list_history(&item_key, &cred_key)
@@ -1280,11 +1305,11 @@ impl AxoPass {
     ) -> Result<Vec<DeletedItemInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
-            ensure_unlocked(vault)?;
 
             let deleted = vault.list_deleted_items().map_err(FfiError::from)?;
             Ok(deleted
@@ -1549,11 +1574,11 @@ impl AxoPass {
     ) -> Result<Vec<DeletedCredentialInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
-            ensure_unlocked(vault)?;
 
             let deleted = vault.list_all_deleted().map_err(FfiError::from)?;
             Ok(deleted

@@ -59,6 +59,16 @@ impl fmt::Debug for FakeWatch {
     }
 }
 
+/// Function a test runs after each read of a local state file or `key.json`.
+#[derive(Clone)]
+struct ReadHook(Arc<dyn Fn() + Send + Sync>);
+
+impl fmt::Debug for ReadHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadHook").finish_non_exhaustive()
+    }
+}
+
 /// Synced folder in memory. Files are held by vault id, replica, and file
 /// name. The folder can be made unavailable, and writes can be made to fail.
 #[derive(Debug, Default)]
@@ -90,6 +100,7 @@ struct FakeFolder {
     downloads: Vec<Uuid>,
     watches: Vec<FakeWatch>,
     next_watch: u64,
+    read_hook: Option<ReadHook>,
 }
 
 impl FakeTransport {
@@ -246,6 +257,12 @@ impl FakeTransport {
         self.folder().reads
     }
 
+    /// Run `hook` after each read that returns a local file of a replica
+    /// directory, with the folder unlocked.
+    pub(super) fn on_read(&self, hook: impl Fn() + Send + Sync + 'static) {
+        self.folder().read_hook = Some(ReadHook(Arc::new(hook)));
+    }
+
     /// Count of reads that returned a local pairing request.
     pub(super) fn pairing_reads(&self) -> usize {
         self.folder().pairing_reads
@@ -392,8 +409,16 @@ impl SyncTransport for FakeTransport {
             Some(FakeFile::Remote(_)) => ReadResult::Remote,
             Some(FakeFile::Local(bytes)) => ReadResult::Local(bytes.clone()),
         };
-        if matches!(result, ReadResult::Local(_)) {
-            folder.reads += 1;
+        let hook = match &result {
+            ReadResult::Local(_) => {
+                folder.reads += 1;
+                folder.read_hook.clone()
+            },
+            _ => None,
+        };
+        drop(folder);
+        if let Some(ReadHook(hook)) = hook {
+            hook();
         }
         Ok(result)
     }

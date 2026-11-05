@@ -117,8 +117,9 @@ fn each_row_of_generation_table_takes_stated_action() {
     assert_ne!(state, before);
     assert_eq!(fx.read_case(), SyncLoad::Current);
 
-    // v < s: a read is refused. A transaction rebuilds the vault from the
-    // sync state, retains the replaced file, and saves both with the next
+    // v < s: the load check refuses the vault, and a read runs the rebuild
+    // in its place (9.2). A transaction rebuilds the vault from the sync
+    // state, retains the replaced file, and saves both with the next
     // generation.
     let fx = Fixture::synced();
     let content = filled(REPLICA, "Personal");
@@ -128,7 +129,10 @@ fn each_row_of_generation_table_takes_stated_action() {
     );
     let replaced = fs::read_to_string(&fx.vault.path).unwrap();
     let replaced_file = EncryptedVault::load(&fx.vault.path, &device).unwrap();
-    assert!(matches!(fx.read(), Err(Error::SyncRepairNeeded(_))));
+    assert!(matches!(
+        fx.read_case().check(),
+        Err(Error::SyncRepairNeeded(_))
+    ));
 
     let committed = fx.write(|_| Ok(())).unwrap();
 

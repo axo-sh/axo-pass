@@ -5,6 +5,7 @@ pub mod crdt;
 pub mod diff;
 pub mod join;
 pub mod keys;
+pub mod listing;
 pub mod load;
 pub mod local_state;
 pub mod meta;

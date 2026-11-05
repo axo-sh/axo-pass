@@ -2,7 +2,9 @@
 //!
 //! A transaction on a vault with a trusted sync state joins this replica's
 //! own state files first, then the local state files of the other replicas,
-//! before any write id is minted (`sync/join.rs`). If the join changed the
+//! before any write id is minted (`sync/join.rs`). If the joins listed a file
+//! that is not local yet, the transaction asks the transport once to download
+//! the files of the vault, and does not wait. If the join changed the
 //! state, the view is applied to the vault without a diff. The requested
 //! change then runs, and its local edits are recorded under one write id of
 //! the session. `s` advances if and only if the vault file changes. The sync
@@ -51,7 +53,7 @@ use zeroize::Zeroizing;
 use super::apply::ApplyFault;
 use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
-use super::join::StateJoin;
+use super::join::{FileJoin, StateJoin};
 use super::keys::{SyncKey, SyncKeyring};
 use super::load::TrustedState;
 use super::local_state::LocalSyncState;
@@ -112,6 +114,11 @@ pub(crate) struct SyncTxn {
     vault_only: bool,
     /// Paused causes found by this transaction.
     found: FoundCauses,
+    /// Count of listed own and peer files that are not local yet.
+    remote: usize,
+    /// Whether the peer join listed the replica directories and every peer
+    /// directory.
+    peers_listed: bool,
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
 }
@@ -146,6 +153,8 @@ impl SyncTxn {
             repairing: false,
             vault_only: false,
             found: FoundCauses::default(),
+            remote: 0,
+            peers_listed: false,
             #[cfg(test)]
             apply_fault: None,
         }
@@ -261,9 +270,13 @@ impl SyncTxn {
         let mut join = self.join(session);
         let mut changed = false;
         let mut own_files = Vec::with_capacity(listed.len());
+        let mut remote = 0;
         for hash in &listed {
             let file = join.file(transport, replica, *hash);
             changed |= file.changed();
+            if file == FileJoin::Remote {
+                remote += 1;
+            }
             own_files.push(OwnFile {
                 hash: *hash,
                 state: file.into(),
@@ -271,6 +284,7 @@ impl SyncTxn {
         }
         join.retain(replica, &listed);
         self.own_files = Some(own_files);
+        self.remote += remote;
         self.changed |= changed;
         changed
     }
@@ -290,9 +304,33 @@ impl SyncTxn {
         session: &mut Session,
     ) -> bool {
         let own = self.replica();
-        let changed = self.join(session).peers(transport, own);
-        self.changed |= changed;
-        changed
+        let join = self.join(session).peers(transport, own);
+        self.remote += join.remote;
+        self.peers_listed = join.listed;
+        self.changed |= join.changed;
+        join.changed
+    }
+
+    /// Whether the peer join listed the replica directories and every peer
+    /// directory, whatever the outcome of each file.
+    pub(crate) fn listed_every_peer(&self) -> bool {
+        self.peers_listed
+    }
+
+    /// Ask `transport` once to make the files of the vault local, if the
+    /// joins listed an own or peer file that is not local yet. The request
+    /// does not wait. A failure is logged and pauses nothing. A transaction
+    /// that listed nothing requests nothing.
+    pub(crate) fn request_downloads(&self, transport: &dyn SyncTransport) {
+        if self.remote == 0 {
+            return;
+        }
+        let vault_id = self.vault_id();
+        let remote = self.remote;
+        log::info!("Vault {vault_id} lists {remote} state files that are not local");
+        if let Err(e) = transport.request_download(vault_id) {
+            log::warn!("Failed to request the download of the files of vault {vault_id}: {e}");
+        }
     }
 
     /// Pin with `first_use` each peer of the `replica_keys` of the state that
