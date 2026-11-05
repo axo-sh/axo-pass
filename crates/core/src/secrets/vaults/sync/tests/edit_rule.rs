@@ -2,6 +2,9 @@
 //! every value of the register, from the UI and from every writer outside it.
 //! Each credential value not chosen is written to `history` under its derived
 //! id. The tests run each writer as a transaction of the 6b simulator.
+//!
+//! History id rewrite (9.1). The entry that a change adds for the replaced
+//! shown value takes the id derived from the write id of that value.
 
 use std::collections::BTreeMap;
 
@@ -376,4 +379,92 @@ fn rename_account_on_passkey_with_value_conflict_keeps_values_not_chosen_and_add
         let history: Vec<String> = history(&sim, n).into_values().collect();
         assert!(!history.contains(&shown), "Mac {n}");
     }
+}
+
+/// Simulator of `macs` Macs whose vault holds `mail/password` set to `first`
+/// on Mac 0, joined by every Mac. Returns the credential id and the write id
+/// of `first`.
+fn set_first(macs: usize) -> (Sim, Uuid, WriteId) {
+    let mut sim = Sim::new(macs, None);
+    sim.write(0, |vh| {
+        vh.add_item(ITEM, "Mail")?;
+        vh.add_secret(
+            ITEM,
+            FIELD,
+            "Password",
+            FieldKind::default(),
+            secret("first"),
+        )
+    });
+    sim.converge();
+    let (_, credential) = ids(&sim.macs[0].saved_vault());
+    let shown = values(&sim.macs[0].state(), credential);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].1, "first");
+    (sim, credential, shown[0].0)
+}
+
+#[test]
+fn two_macs_that_replace_one_shown_value_concurrently_write_one_entry_under_derived_id() {
+    let (mut sim, credential, first) = set_first(3);
+    let derived = HistoryIds::derive(credential, first);
+
+    // Macs 0 and 1 replace `first` before either joins the other.
+    for (n, value) in ["zero", "one"].into_iter().enumerate() {
+        sim.write(n, |vh| {
+            vh.add_secret(ITEM, FIELD, "Password", FieldKind::default(), secret(value))
+        });
+        let history = history(&sim, n);
+        assert_eq!(
+            history,
+            BTreeMap::from([(derived, "first".to_string())]),
+            "Mac {n}"
+        );
+    }
+
+    sim.converge();
+    sim.check_quiet();
+    let state = sim.check_converged();
+    let shown = &VaultView::of(&state).credentials[&credential].history;
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].id, derived);
+    for n in 0..sim.macs.len() {
+        let history = history(&sim, n);
+        assert_eq!(
+            history,
+            BTreeMap::from([(derived, "first".to_string())]),
+            "Mac {n}"
+        );
+    }
+}
+
+#[test]
+fn entry_added_by_change_for_value_other_than_shown_value_keeps_random_id() {
+    let (mut sim, credential, first) = set_first(2);
+
+    // One change replaces `first` with `two`, then `two` with `three`. The
+    // vault mutation adds an entry for each replaced value.
+    let mut random = None;
+    sim.write(0, |vh| {
+        for value in ["two", "three"] {
+            vh.add_secret(ITEM, FIELD, "Password", FieldKind::default(), secret(value))?;
+        }
+        for entry in vh.list_history(ITEM, FIELD)? {
+            if vh.get_history_value(ITEM, FIELD, entry.id)?.expose_secret() == "two" {
+                random = Some(entry.id);
+            }
+        }
+        Ok(())
+    });
+
+    let random = random.expect("change added entry for two");
+    let expected = BTreeMap::from([
+        (HistoryIds::derive(credential, first), "first".to_string()),
+        (random, "two".to_string()),
+    ]);
+    assert_eq!(history(&sim, 0), expected);
+    sim.converge();
+    sim.check_quiet();
+    sim.check_converged();
+    assert_eq!(history(&sim, 1), expected);
 }

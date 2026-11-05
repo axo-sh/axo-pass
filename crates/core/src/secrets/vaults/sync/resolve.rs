@@ -77,12 +77,14 @@ impl HistoryIds {
     /// Give each history entry that the requested change added to `vault`
     /// the id derived from the write id of the value it replaced.
     ///
-    /// Runs after the requested change and before the diff. An added entry is
-    /// one that the sync state lacks. The value it replaced is the shown
-    /// value of the credential, so the first added entry that holds the shown
-    /// value takes the derived id. Other added entries keep their random ids,
-    /// as do the entries of a credential whose value register holds no value,
-    /// and an entry whose derived id the credential already holds.
+    /// `SyncTxn::record` calls it for every request, after the requested
+    /// change and before the diff. A repair does not call it, since it
+    /// replaces no value. An added entry is one that the sync state lacks.
+    /// The value it replaced is the shown value of the credential, so the
+    /// first added entry that holds the shown value takes the derived id.
+    /// Other added entries keep their random ids, as do the entries of a
+    /// credential whose value register holds no value, and an entry whose
+    /// derived id the credential already holds.
     pub fn rewrite(state: &CausalState<SyncState>, vault: &mut Vault) -> Result<(), Error> {
         let mut renames = Vec::new();
         for entry in &vault.sync_entries()?.credentials {

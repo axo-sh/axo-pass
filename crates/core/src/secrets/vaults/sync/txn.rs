@@ -61,6 +61,7 @@ use super::publish::Staged;
 use super::rebuild::Rebuild;
 use super::recovery::{RecoveryAdd, RecoveryRecipients};
 use super::repair::{Repair, SyncRequest};
+use super::resolve::HistoryIds;
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
@@ -703,17 +704,27 @@ impl SyncTxn {
     /// of its recipient under the same write id. If the diff fails, nothing
     /// is recorded, and the transaction saves the vault only.
     ///
+    /// Before the diff, the history entry that the requested change added for
+    /// a replaced shown value takes the id derived from the write id of that
+    /// value ([`HistoryIds::rewrite`]), for every request. Macs that replace
+    /// one value therefore write one entry. A rewrite that fails is handled
+    /// as a diff that fails.
+    ///
     /// MVP edit rule. A write to an Ask register supersedes every value of
     /// the register, for every request and writer. Each credential value not
     /// chosen is written to `history` under the same write id
     /// ([`LocalEdits::keep_not_chosen`]).
     pub(crate) fn record(
         &mut self,
-        vault: &Vault,
+        vault: &mut Vault,
         session: &mut Session,
         now: i64,
         request: &SyncRequest,
     ) -> Result<Option<WriteId>, Error> {
+        if let Err(e) = HistoryIds::rewrite(&self.state, vault) {
+            self.diff_failed(e)?;
+            return Ok(None);
+        }
         let edits = if *request == SyncRequest::Restore {
             let trashed_at = Timestamp::now().as_second();
             LocalEdits::find_restore(&self.state, vault, self.replica(), trashed_at)

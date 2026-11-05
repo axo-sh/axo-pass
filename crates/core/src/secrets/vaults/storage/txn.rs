@@ -10,8 +10,10 @@
 //!
 //! A write to a vault with a trusted sync state joins this replica's own state
 //! files, runs the change, and records its local edits in the sync state
-//! (`sync/txn.rs`). A synced vault at `v < s`, or of another replica id than
-//! its sync state, is rebuilt from the sync state before the change. `s`
+//! (`sync/txn.rs`). Before the edits are recorded, the history entry that the
+//! change added for a replaced shown value takes its derived id
+//! (`sync/resolve.rs`). A synced vault at `v < s`, or of another replica id
+//! than its sync state, is rebuilt from the sync state before the change. `s`
 //! advances if and only if the vault file changes. The staged file is
 //! written first, then the sync state, then the vault. The own `key.json` is
 //! then written once if it lacks a wrapping, and the staged file is then
@@ -746,7 +748,7 @@ impl VaultWriter {
                 }
                 if sync.syncs()
                     && sync
-                        .record(vh.get_unlocked_vault()?, session, now, request)?
+                        .record(vh.get_unlocked_vault_mut()?, session, now, request)?
                         .is_some()
                 {
                     sync.apply_recorded(vh.get_unlocked_vault_mut()?)?;
@@ -1116,7 +1118,7 @@ impl VaultWriter {
             sync.join_own(&**transport, session);
             sync.join_peers(&**transport, session);
         }
-        sync.record(&vault, session, now, &SyncRequest::Restore)?;
+        sync.record(&mut vault, session, now, &SyncRequest::Restore)?;
         if sync.state_changed() {
             sync.apply_restored(&mut vault)?;
         }
