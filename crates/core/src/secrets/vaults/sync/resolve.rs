@@ -8,6 +8,11 @@
 //! write id of the transaction, whatever the diff finds, so it supersedes every
 //! value of the register. "Keep `{key}-{suffix}`" writes the shown key into the
 //! key register the same way.
+//!
+//! MVP edit rule. Every write to an Ask register supersedes every value of the
+//! register, whatever writer made it. For a credential value, each value not
+//! chosen is written to `history` under its derived id, as a resolve request
+//! writes it. Edits carry no write ids.
 
 use std::collections::BTreeSet;
 
@@ -46,6 +51,27 @@ impl HistoryIds {
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(&digest[..16]);
         Uuid::from_bytes(bytes)
+    }
+
+    /// History writes of `values`, values of the value register of
+    /// `credential`, replaced at `now`, in Unix seconds. Each value takes the
+    /// id derived from its write id. An empty value has no entry, as a vault
+    /// edit that replaces an empty value adds none.
+    fn writes<'a>(
+        credential: CredentialId,
+        values: impl IntoIterator<Item = (WriteId, &'a Versioned<SecretText>)>,
+        now: i64,
+    ) -> impl Iterator<Item = Edit> {
+        values
+            .into_iter()
+            .filter(|(_, versioned)| !versioned.value.0.is_empty())
+            .map(move |(write_id, versioned)| {
+                let entry = HistoryValue {
+                    value: versioned.value.clone(),
+                    replaced_at: now,
+                };
+                Edit::History(credential, Self::derive(credential, write_id), entry)
+            })
     }
 
     /// Give each history entry that the requested change added to `vault`
@@ -215,6 +241,17 @@ impl Edit {
         };
         Some(Conflict { entity, register })
     }
+
+    /// Credential and history entry that this edit writes or removes, if
+    /// any.
+    fn history_entry(&self) -> Option<(CredentialId, HistoryId)> {
+        match self {
+            Self::History(credential, id, _) | Self::RemoveHistory(credential, id) => {
+                Some((*credential, *id))
+            },
+            _ => None,
+        }
+    }
 }
 
 impl LocalEdits {
@@ -300,20 +337,7 @@ impl LocalEdits {
             )?),
             Choice::Value(id, value) => {
                 let values = Self::not_chosen(&credential(id)?.value, &read, value, register)?;
-                for (write_id, versioned) in &values {
-                    if versioned.value.0.is_empty() {
-                        continue;
-                    }
-                    let entry = HistoryValue {
-                        value: versioned.value.clone(),
-                        replaced_at: now,
-                    };
-                    history.push(Edit::History(
-                        *id,
-                        HistoryIds::derive(*id, *write_id),
-                        entry,
-                    ));
-                }
+                history.extend(HistoryIds::writes(*id, values.iter().copied(), now));
                 Self::times(values)
             },
         };
@@ -356,6 +380,42 @@ impl LocalEdits {
         };
         self.write_request(register, edit);
         Ok(())
+    }
+
+    /// Add the history writes of the MVP edit rule to these edits, with `now`
+    /// in Unix seconds as the time of each entry.
+    ///
+    /// Each write of these edits to the value of a credential in `state`
+    /// supersedes every value of its register. Each value of the register
+    /// that differs from the written value and from the shown value is
+    /// written to `history` under its derived id, as [`Self::resolve`] writes
+    /// a value not chosen. The vault mutation that replaced the shown value
+    /// decides whether history keeps it, as for any edit. A history entry that
+    /// these edits already write or remove is left as they state.
+    pub fn keep_not_chosen(&mut self, state: &CausalState<SyncState>, now: i64) {
+        let mut history = Vec::new();
+        for edit in &self.edits {
+            let Edit::Credential(id, CredentialWrite::Value(written)) = edit else {
+                continue;
+            };
+            let Some(credential) = state.store.credentials.get(id) else {
+                continue;
+            };
+            let mut values = credential.value.ordered();
+            let Some((_, shown)) = values.pop() else {
+                continue;
+            };
+            let not_chosen = values
+                .into_iter()
+                .filter(|(_, v)| v.value != *written && v.value != shown.value)
+                .map(|(key, v)| (key.write_id, v));
+            history.extend(HistoryIds::writes(*id, not_chosen, now));
+        }
+        history.retain(|write: &Edit| {
+            let entry = write.history_entry();
+            !self.edits.iter().any(|e| e.history_entry() == entry)
+        });
+        self.edits.extend(history);
     }
 
     /// Replace the edits to `register` with `edit`.

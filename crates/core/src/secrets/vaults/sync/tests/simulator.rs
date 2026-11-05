@@ -197,12 +197,12 @@ struct Published {
 }
 
 /// One Mac with its app data directory and its copy of the synced folder.
-struct Mac {
+pub(super) struct Mac {
     _dir: TempDir,
     root: PathBuf,
-    replica: ReplicaId,
+    pub(super) replica: ReplicaId,
     /// Vault as created, for its path and file key.
-    vault: VaultHandle,
+    pub(super) vault: VaultHandle,
     writer: VaultWriter,
     /// Copy of the synced folder that this Mac reads and writes.
     transport: Arc<FakeTransport>,
@@ -224,14 +224,14 @@ impl Mac {
     }
 
     /// Body of the saved sync state.
-    fn state(&self) -> State {
+    pub(super) fn state(&self) -> State {
         let local =
             LocalSyncState::load(&self.root, self.vault_id(), &TestSigner::device()).unwrap();
         local.open(&keyring()).unwrap()
     }
 
     /// Vault file as saved, verified.
-    fn saved_vault(&self) -> Vault {
+    pub(super) fn saved_vault(&self) -> Vault {
         let file = EncryptedVault::load(&self.vault.path, &TestSigner::device()).unwrap();
         Vault::from_unlocked_key(&self.vault.unlocked_key().unwrap(), file).unwrap()
     }
@@ -252,9 +252,9 @@ impl Mac {
 }
 
 /// Macs of one vault, with every file they published.
-struct Sim {
+pub(super) struct Sim {
     vault_id: Uuid,
-    macs: Vec<Mac>,
+    pub(super) macs: Vec<Mac>,
     files: Vec<Published>,
     /// Context of the saved state after each mint, by write id of the mint.
     observed: BTreeMap<WriteId, CausalContext>,
@@ -262,14 +262,14 @@ struct Sim {
 
 impl Sim {
     /// Replica id of Mac `n`.
-    fn replica(n: usize) -> ReplicaId {
+    pub(super) fn replica(n: usize) -> ReplicaId {
         ReplicaId(Uuid::from_u128(n as u128 + 1))
     }
 
     /// `macs` Macs of one vault at [`GENERATION`], each with a sync state
     /// that holds the `replica_keys` entry of every Mac. Mac `n` of `slow`
     /// mints with its clock off by `seconds`.
-    fn new(macs: usize, slow: Option<(usize, i64)>) -> Self {
+    pub(super) fn new(macs: usize, slow: Option<(usize, i64)>) -> Self {
         let mut initial = State::default();
         for n in 0..macs {
             initial.join(body(Self::replica(n), &[device_key()]));
@@ -351,7 +351,7 @@ impl Sim {
     }
 
     /// Put the latest file of Mac `from` in the folder copy of Mac `n`.
-    fn deliver_latest(&self, n: usize, from: usize) {
+    pub(super) fn deliver_latest(&self, n: usize, from: usize) {
         let latest = *self.files_of(from).last().expect("Mac has published");
         self.deliver(n, latest);
     }
@@ -419,11 +419,31 @@ impl Sim {
     /// context did not move past its last published file, or does not
     /// publish when it did.
     fn transaction(&mut self, n: usize, edit: Option<&Edit>) -> bool {
+        self.transaction_with(n, edit.map(|edit| |vh: &mut VaultHandle| edit.apply(vh)))
+    }
+
+    /// Transaction of Mac `n` that runs `f`, with the checks of
+    /// [`Self::transaction`]. Returns whether the Mac published.
+    pub(super) fn write(
+        &mut self,
+        n: usize,
+        f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
+    ) -> bool {
+        self.transaction_with(n, Some(f))
+    }
+
+    /// [`Self::transaction`] with `edit` as a vault mutation.
+    fn transaction_with(
+        &mut self,
+        n: usize,
+        edit: Option<impl FnOnce(&mut VaultHandle) -> Result<(), Error>>,
+    ) -> bool {
         let mac = &self.macs[n];
         let before = mac.state();
         let writes = mac.transport.writes();
+        let allowed = usize::from(edit.is_some());
 
-        let committed = mac.write(|vh| edit.map_or(Ok(()), |edit| edit.apply(vh)));
+        let committed = mac.write(|vh| edit.map_or(Ok(()), |edit| edit(vh)));
 
         // The guard finds no drift, so sync stays active.
         assert_eq!(
@@ -441,7 +461,6 @@ impl Sim {
             .into_iter()
             .filter(|id| after.actors[&id.actor].replica == mac.replica)
             .collect();
-        let allowed = usize::from(edit.is_some());
         assert!(minted.len() <= allowed, "Mac {n} minted {minted:?}");
         let published = match mac.transport.writes() - writes {
             0 => false,
@@ -469,7 +488,7 @@ impl Sim {
     ///
     /// Panics if publishing has not stopped after one round per Mac and two
     /// more.
-    fn converge(&mut self) {
+    pub(super) fn converge(&mut self) {
         let rounds = self.macs.len() + 2;
         for _ in 0..rounds {
             self.sync_folders();
@@ -486,7 +505,7 @@ impl Sim {
 
     /// Check that a transaction with no edit on each Mac changes no file and
     /// publishes nothing.
-    fn check_quiet(&self) {
+    pub(super) fn check_quiet(&self) {
         self.sync_folders();
         for (n, mac) in self.macs.iter().enumerate() {
             let before = mac.on_disk();
@@ -507,7 +526,7 @@ impl Sim {
 
     /// Check that every Mac holds the same state, and that every vault shows
     /// the view of that state and its keys. Returns the state.
-    fn check_converged(&self) -> State {
+    pub(super) fn check_converged(&self) -> State {
         let state = self.macs[0].state();
         let view = VaultView::of(&state);
         let keys = view_keys(&view);

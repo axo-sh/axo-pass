@@ -937,7 +937,8 @@ pub fn remove_record(
 /// Set the account name of the passkey at `item_key`/`credential_key`, as a
 /// site reported it. The record username, display name, and credential title
 /// all take the new name. The replaced record is not kept as a previous value,
-/// since it differs only in the name. The caller saves the vault.
+/// since it differs only in the name, and no history entry is added or purged.
+/// The caller saves the vault.
 pub fn rename_account(
     vw: &mut VaultHandle,
     item_key: &str,
@@ -956,24 +957,13 @@ pub fn rename_account(
     let value = serde_json::to_string(&stored)
         .map_err(|e| Error::Passkey(format!("Failed to encode the passkey: {e}")))?;
 
-    let before: Vec<Uuid> = vw
-        .list_history(item_key, credential_key)?
-        .into_iter()
-        .map(|entry| entry.id)
-        .collect();
-    vw.add_secret(
+    vw.replace_secret(
         item_key,
         credential_key,
         name,
         FieldKind::Passkey,
         SecretString::from(value),
-    )?;
-    for entry in vw.list_history(item_key, credential_key)? {
-        if !before.contains(&entry.id) {
-            vw.purge_history(item_key, credential_key, entry.id)?;
-        }
-    }
-    Ok(())
+    )
 }
 
 #[async_trait]

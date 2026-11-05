@@ -702,6 +702,11 @@ impl SyncTxn {
     /// to the trash, not removed. `SyncRequest::AddRecovery` adds the write
     /// of its recipient under the same write id. If the diff fails, nothing
     /// is recorded, and the transaction saves the vault only.
+    ///
+    /// MVP edit rule. A write to an Ask register supersedes every value of
+    /// the register, for every request and writer. Each credential value not
+    /// chosen is written to `history` under the same write id
+    /// ([`LocalEdits::keep_not_chosen`]).
     pub(crate) fn record(
         &mut self,
         vault: &Vault,
@@ -723,6 +728,7 @@ impl SyncTxn {
                 return Ok(None);
             },
         };
+        edits.keep_not_chosen(&self.state, now);
         if let SyncRequest::AddRecovery(add) = request {
             edits.add_recovery(add.recipient.clone(), add.value.clone());
         }

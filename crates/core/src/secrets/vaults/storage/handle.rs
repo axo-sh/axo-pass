@@ -362,6 +362,21 @@ impl VaultHandle {
         Ok(())
     }
 
+    /// Replace the title, kind, and value of an existing credential. The
+    /// replaced value is not kept in history.
+    pub fn replace_secret(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        cred_title: &str,
+        cred_kind: FieldKind,
+        cred_value: SecretString,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.replace_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value)?;
+        Ok(())
+    }
+
     /// Add a credential. Fails if the key is already taken in the item.
     pub fn add_new_secret(
         &mut self,

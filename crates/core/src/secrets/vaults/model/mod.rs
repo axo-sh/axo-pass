@@ -1819,6 +1819,35 @@ impl Vault {
         cred_kind: FieldKind,
         cred_value: SecretString,
     ) -> Result<&VaultItemCredentialOverview, Error> {
+        self.put_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value, true)
+    }
+
+    /// Replace the title, kind, and value of an existing credential. The
+    /// replaced value is not kept in history. Fails with
+    /// `InvalidCredentialKey` if the item has no credential with this key.
+    pub fn replace_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        cred_title: &str,
+        cred_kind: FieldKind,
+        cred_value: SecretString,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
+        self.get_item_credential(item_key, cred_key)?;
+        self.put_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value, false)
+    }
+
+    /// Add a credential, or update the title, kind, and value of an existing
+    /// one. The replaced value is kept in history if `keep_replaced` is set.
+    fn put_item_credential(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        cred_title: &str,
+        cred_kind: FieldKind,
+        cred_value: SecretString,
+        keep_replaced: bool,
+    ) -> Result<&VaultItemCredentialOverview, Error> {
         // get existing cred by key or create new one
         let cred_overview = match self.get_item_credential(item_key, cred_key) {
             Ok(existing) => VaultItemCredentialOverview {
@@ -1836,7 +1865,11 @@ impl Vault {
 
         let item_id = *self.get_item_id(item_key)?;
         let secret = cred_value.expose_secret();
-        let replaced = self.replaced_value_entry(item_id, cred_id, secret)?;
+        let replaced = if keep_replaced {
+            self.replaced_value_entry(item_id, cred_id, secret)?
+        } else {
+            None
+        };
         let encrypted_secret = self.cipher.encrypt_cred_value(item_id, cred_id, secret)?;
 
         let item = self
