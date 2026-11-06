@@ -160,6 +160,22 @@ impl SyncTxn {
         }
     }
 
+    /// Transaction on the first state of a sync setup: `local`, a sync state
+    /// that no file holds yet, with an empty state, the keyring `keyring`,
+    /// and the sidecar `sidecar`. The stage, the saves, the `key.json` write,
+    /// and the publish are those of a transaction built by [`Self::new`]. The
+    /// sidecar is saved even if the publish fails, so its root is kept.
+    pub(crate) fn first(local: LocalSyncState, keyring: SyncKeyring, sidecar: Sidecar) -> Self {
+        let trusted = TrustedState {
+            local,
+            state: CausalState::default(),
+        };
+        // No file was loaded, so no session continues from this hash.
+        let mut txn = Self::new(trusted, keyring, StateHash::of(&[]), sidecar);
+        txn.sidecar_changed = true;
+        txn
+    }
+
     /// Make the apply fail at the first item for which `fault` holds, as on
     /// a build whose view cannot be applied.
     #[cfg(test)]
@@ -785,6 +801,33 @@ impl SyncTxn {
         if write_id.is_some() {
             self.mark_changed();
         }
+        Ok(write_id)
+    }
+
+    /// Record the first state of a sync setup under one write id of `session`
+    /// minted at `now`, in Unix seconds: every entry of `vault`, the display
+    /// name `name` and the public keys `keys` of this replica, and the
+    /// recipient `recovery` of the saved kit. Returns the write id. Fails and
+    /// records nothing if the kit is not for the current key or the diff
+    /// fails.
+    pub(crate) fn record_first(
+        &mut self,
+        vault: &Vault,
+        name: String,
+        keys: ReplicaKeys,
+        recovery: &RecoveryAdd,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<WriteId, Error> {
+        self.check_recovery(recovery)?;
+        let replica = self.replica();
+        let mut edits = self.find(vault)?;
+        edits.add_own(replica, name, keys);
+        edits.add_recovery(recovery.recipient.clone(), recovery.value.clone());
+        let write_id = edits
+            .record(&mut self.state, session, now)
+            .ok_or_else(|| Error::SyncStateEncodeError("first state holds no edit".to_string()))?;
+        self.mark_changed();
         Ok(write_id)
     }
 

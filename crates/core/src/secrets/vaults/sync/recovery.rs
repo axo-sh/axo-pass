@@ -167,12 +167,17 @@ impl RecoveryKit {
         target: &Target,
         unlock: Unlock<'_>,
     ) -> Result<Committed<()>, Error> {
-        let add = RecoveryAdd {
+        let add = self.recovery_add();
+        writer.write_as(target, unlock, SyncRequest::AddRecovery(add), |_| Ok(()))
+    }
+
+    /// Recipient of the kit, as a transaction writes it.
+    pub(crate) fn recovery_add(&self) -> RecoveryAdd {
+        RecoveryAdd {
             vault_id: self.vault_id,
             recipient: self.recipient(),
             value: self.recipient_value(),
-        };
-        writer.write_as(target, unlock, SyncRequest::AddRecovery(add), |_| Ok(()))
+        }
     }
 }
 

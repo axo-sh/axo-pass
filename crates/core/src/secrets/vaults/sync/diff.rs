@@ -23,8 +23,8 @@ use super::crdt::{
 };
 use super::model::{
     CredentialId, FolderId, FolderValue, HistoryId, HistoryValue, ItemId, Placement,
-    RecoveryRecipient, SecretText, SectionId, SectionValue, SyncCredential, SyncItem, SyncState,
-    TrashValue, WebsiteValue,
+    RecoveryRecipient, ReplicaKeys, SecretText, SectionId, SectionValue, SyncCredential, SyncItem,
+    SyncState, TrashValue, WebsiteValue,
 };
 use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
 use super::view::{VaultView, list_order};
@@ -94,9 +94,15 @@ pub(crate) enum Edit {
     /// Write to the register of one replica.
     LastUsed(CredentialId, ReplicaId, i64),
     /// Write of a recovery recipient, by its age recipient. The vault holds
-    /// no recovery map, so the diff never finds it. Only
-    /// `SyncRequest::AddRecovery` adds it.
+    /// no recovery map, so the diff never finds it. `SyncRequest::AddRecovery`
+    /// and the sync setup add it.
     Recovery(String, RecoveryRecipient),
+    /// Write of the display name of this replica. The vault holds no replica
+    /// names, so the diff never finds it.
+    ReplicaName(ReplicaId, String),
+    /// Write of the public keys of this replica. The vault holds no replica
+    /// keys, so the diff never finds it.
+    ReplicaKeys(ReplicaId, ReplicaKeys),
 }
 
 /// Write to one register of an item.
@@ -256,6 +262,14 @@ impl LocalEdits {
         self.edits.push(Edit::Recovery(recipient, value));
     }
 
+    /// Add writes of the display name `name` and the public keys `keys` into
+    /// the `replica_names` and `replica_keys` registers of `replica`, which
+    /// must be this replica. Each supersedes every value of its register.
+    pub(crate) fn add_own(&mut self, replica: ReplicaId, name: String, keys: ReplicaKeys) {
+        self.edits.push(Edit::ReplicaName(replica, name));
+        self.edits.push(Edit::ReplicaKeys(replica, keys));
+    }
+
     /// Record the edits in `state` at `now`, in Unix seconds.
     ///
     /// Mints one write id if the edits are not empty, and writes every changed
@@ -395,7 +409,9 @@ impl Edit {
             | Self::RemoveWebsite(..)
             | Self::RemoveCredential(_)
             | Self::RemoveHistory(..)
-            | Self::Recovery(..) => false,
+            | Self::Recovery(..)
+            | Self::ReplicaName(..)
+            | Self::ReplicaKeys(..) => false,
         }
     }
 
@@ -457,6 +473,12 @@ impl Edit {
             },
             Self::Recovery(recipient, value) => {
                 store.recovery.entry(recipient).put(mint, value, kind)
+            },
+            Self::ReplicaName(replica, name) => {
+                store.replica_names.entry(replica).put(mint, name, kind)
+            },
+            Self::ReplicaKeys(replica, keys) => {
+                store.replica_keys.entry(replica).put(mint, keys, kind)
             },
         }
     }

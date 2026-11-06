@@ -64,7 +64,11 @@ fn confirm(fx: &Fixture, kit: &RecoveryKit) -> Result<Committed<()>, Error> {
 }
 
 /// Own `key.json` of `replica` in vault `vault_id`, if any.
-fn key_file(transport: &FakeTransport, vault_id: Uuid, replica: ReplicaId) -> Option<KeyFile> {
+pub(super) fn key_file(
+    transport: &FakeTransport,
+    vault_id: Uuid,
+    replica: ReplicaId,
+) -> Option<KeyFile> {
     match transport.read(vault_id, replica, FileName::Key).unwrap() {
         ReadResult::Local(bytes) => Some(KeyFile::parse(&bytes).unwrap()),
         _ => None,
@@ -72,7 +76,11 @@ fn key_file(transport: &FakeTransport, vault_id: Uuid, replica: ReplicaId) -> Op
 }
 
 /// `Age` wrappings of the own `key.json` of `replica`, as recipient and key id.
-fn ages(transport: &FakeTransport, vault_id: Uuid, replica: ReplicaId) -> Vec<(String, KeyId)> {
+pub(super) fn ages(
+    transport: &FakeTransport,
+    vault_id: Uuid,
+    replica: ReplicaId,
+) -> Vec<(String, KeyId)> {
     key_file(transport, vault_id, replica)
         .map(|file| {
             file.ages()

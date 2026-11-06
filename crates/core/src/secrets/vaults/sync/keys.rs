@@ -24,6 +24,8 @@ use sha2::Sha256;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
+#[cfg(test)]
+use super::model::PublicKey;
 use super::model::{ByteString, KeyId};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
@@ -280,6 +282,11 @@ pub(crate) struct TestKeyWrapper;
 #[cfg(test)]
 impl TestKeyWrapper {
     const PREFIX: &[u8] = b"test-wrapped-sync-key:";
+
+    /// Public key of `vault-encryption-key` in the tests.
+    pub(crate) fn public_key() -> PublicKey {
+        PublicKey(vec![4; 65])
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ pub mod rebuild;
 pub mod recovery;
 pub mod repair;
 pub mod resolve;
+pub mod setup;
 pub mod sidecar;
 pub mod state_file;
 pub mod status;

@@ -1432,6 +1432,28 @@ impl Vault {
         Ok(())
     }
 
+    /// Remove each later website of an item with two websites of one URL.
+    /// The first website of each URL by order stays. Live and trashed items
+    /// are changed. Returns the ids of the changed items, in id order.
+    pub(crate) fn remove_duplicate_websites(&mut self) -> Vec<ItemId> {
+        let mut changed = Vec::new();
+        for item in self.items.values_mut() {
+            if item.autofill.remove_duplicate_websites() {
+                self.autofill_blobs.remove(&item.id);
+                changed.push(item.id);
+            }
+        }
+        for entry in self.deleted_items.values_mut() {
+            let item = &mut entry.item;
+            if item.overview.autofill.remove_duplicate_websites() {
+                item.autofill = None;
+                changed.push(item.overview.id);
+            }
+        }
+        changed.sort();
+        changed
+    }
+
     pub fn get_item_by_id(&self, item_id: Uuid) -> Result<&VaultItemOverview, Error> {
         self.items
             .get(&item_id)

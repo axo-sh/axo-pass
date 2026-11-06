@@ -89,6 +89,15 @@ pub enum Error {
     #[error("Synced folder failed: {0}")]
     SyncTransportError(String),
 
+    #[error("Sync is already enabled for this vault")]
+    SyncAlreadyEnabled,
+
+    #[error("Sync was turned off for this vault and the change has not reached the synced folder")]
+    SyncDisableInProgress,
+
+    #[error("Synced folder already holds this vault")]
+    SyncFolderHasVault,
+
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,
 

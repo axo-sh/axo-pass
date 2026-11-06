@@ -45,6 +45,10 @@
 //! failed to publish, under the locks and with no key, for the
 //! `SyncManager` (`sync/manager.rs`).
 //!
+//! [`VaultWriter::enable_sync`] writes `meta.json`, the first sync state, the
+//! vault, and `key.json` of a vault at its sync setup, under the locks
+//! (`sync/setup.rs`).
+//!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file. A read runs a transaction with no
 //! requested change first if [`VaultWriter::read_joins`] holds
@@ -81,16 +85,19 @@ use crate::secrets::vaults::storage::resign::Resigned;
 #[cfg(test)]
 use crate::secrets::vaults::sync::apply::ApplyFault;
 use crate::secrets::vaults::sync::diff::LocalEdits;
-use crate::secrets::vaults::sync::keys::SyncKeyring;
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
+use crate::secrets::vaults::sync::keys::{SyncKeyring, WrappedSyncKey};
 use crate::secrets::vaults::sync::listing::PeerListing;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::meta::MetaFile;
+use crate::secrets::vaults::sync::model::{ItemId, PublicKey, ReplicaKeys};
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
 use crate::secrets::vaults::sync::publish::Staged;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
+use crate::secrets::vaults::sync::setup::{FIRST_KEY_ID, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 #[cfg(test)]
@@ -490,6 +497,54 @@ impl Unlock<'_> {
         }
     }
 
+    /// Vault id and unwrapped file key of the vault at `path`, `keyring`
+    /// wrapped to `vault-encryption-key`, and the public key of
+    /// `vault-encryption-key`, for a sync setup. The file is verified under
+    /// the key of `signer` first. `App` and `Context` read the key once. A
+    /// vault unlocked in memory holds no vault encryption key, so `Unlocked`
+    /// fails with `VaultLocked`.
+    fn setup_keys(
+        &self,
+        path: &Path,
+        signer: &dyn VaultSigner,
+        keyring: &SyncKeyring,
+    ) -> Result<SetupKeys, Error> {
+        let read = |context: AuthContext| -> Result<SetupKeys, Error> {
+            let enc_vault = EncryptedVault::load(path, signer)?;
+            let managed_key = get_vault_encryption_key_on(context)?;
+            let file_key = UnlockedKey::unwrap(&managed_key, &enc_vault)
+                .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
+                .map_err(|_| Error::VaultFileKeyDecryptionError)?;
+            let encryption = managed_key
+                .public_key_sec1()
+                .map_err(Error::KeyRetrievalFailed)?;
+            Ok(SetupKeys {
+                id: enc_vault.id,
+                file_key,
+                sync_keys: keyring.wrap(&managed_key)?,
+                encryption: PublicKey(encryption),
+            })
+        };
+        match self {
+            Unlock::App => {
+                check_vault_auth_still_valid()?;
+                read(AuthContext::SharedThreadLocal)
+            },
+            Unlock::Context(context) => read(context.clone()),
+            Unlock::Unlocked(_) => Err(Error::VaultLocked),
+            #[cfg(test)]
+            Unlock::Test(key) => {
+                let enc_vault = EncryptedVault::load(path, signer)?;
+                Ok(SetupKeys {
+                    id: enc_vault.id,
+                    file_key: key(),
+                    sync_keys: keyring.wrap(&TestKeyWrapper)?,
+                    encryption: TestKeyWrapper::public_key(),
+                })
+            },
+        }
+    }
+
     /// Unwrap the file key and the sync keyring with one vault encryption
     /// key read on `context`.
     fn unwrap_keys(
@@ -510,6 +565,16 @@ impl Unlock<'_> {
             keyring,
         })
     }
+}
+
+/// Keys a sync setup writes with.
+struct SetupKeys {
+    id: Uuid,
+    file_key: UnlockedKey,
+    /// Sync keyring of the setup, wrapped to `vault-encryption-key`.
+    sync_keys: Vec<WrappedSyncKey>,
+    /// Public key of `vault-encryption-key`.
+    encryption: PublicKey,
 }
 
 /// Vault a transaction writes: its key, and the path where the caller found
@@ -1268,6 +1333,141 @@ impl VaultWriter {
         let vault = Vault::from_unlocked_key(&file_key, enc_vault)?;
         let edits = LocalEdits::find_repair(&trusted.state, &vault, trusted.local.replica_id)?;
         Ok(edits.len())
+    }
+
+    /// Enable sync of the vault `target` with `setup`, after the user
+    /// confirmed that its kit is saved (`sync/setup.rs`). Returns the ids of
+    /// the items whose later duplicate websites were removed.
+    ///
+    /// The file key, the wrapped keyring, and the public key of
+    /// `vault-encryption-key` are read before the locks. Under the locks the
+    /// vault is reloaded and verified, and a vault that syncs and a folder
+    /// that now holds the vault (`SyncFolderHasVault`) are refused again.
+    /// `meta.json` is written next, and a failed write fails the setup before
+    /// any local save. Each later website of an item with two websites of one
+    /// URL is removed (D15). The first state is built from an empty state
+    /// under one write id: every vault entry, the display name and the public
+    /// keys of this Mac, and the kit recipient. The sidecar with the root is
+    /// saved first, then the staged file, the sync state at generation 1, and
+    /// the vault at generation 1 with the replica id, then `key.json` with the
+    /// `Age` wrapping of the kit recipient, then the staged file is copied.
+    /// Sync is enabled once the saves succeed. A failed `key.json` write or
+    /// copy pauses sync with `PublishFailed`, and the next transaction or
+    /// [`Self::copy_staged`] completes it.
+    pub(crate) fn enable_sync(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        setup: &SyncSetup,
+    ) -> Result<Committed<Vec<ItemId>>, Error> {
+        let keyring = SyncKeyring::new(vec![(FIRST_KEY_ID, setup.key().clone())])?;
+        let SetupKeys {
+            id,
+            file_key,
+            sync_keys,
+            encryption,
+        } = unlock.setup_keys(&target.path, &*self.signer, &keyring)?;
+        if id != setup.vault_id() {
+            return Err(Error::VaultNotFound(target.path.display().to_string()));
+        }
+        let signing = self.signer.verifying_key()?.to_encoded_point(false);
+        let keys = ReplicaKeys {
+            encryption,
+            signing: PublicKey(signing.as_bytes().to_vec()),
+        };
+        let transport = SyncSetup::transport(self, setup.root())?;
+
+        let vault_lock = self.locks.entry(id, &target.path);
+        let mut locked = self.lock_entry(&vault_lock, id)?;
+        let path = locked.state.resolve(id, &target.path)?;
+        let contents = EncryptedVault::read_file(&path)?;
+        let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
+        if enc_vault.id != id {
+            return Err(Error::VaultNotFound(path.display().to_string()));
+        }
+        SyncSetup::check_not_synced(&self.root, &enc_vault, &*self.signer)?;
+        if SyncSetup::folder_holds(&*transport, id)? {
+            return Err(Error::SyncFolderHasVault);
+        }
+        let mut vault = Vault::from_unlocked_key(&file_key, enc_vault)?;
+
+        // The bytes of `meta.json` are a function of the vault id, so a file
+        // left by a failed setup is the file of the next one.
+        transport.write_meta(id, &MetaFile::new(id).to_bytes())?;
+
+        let removed = vault.remove_duplicate_websites();
+        if !removed.is_empty() {
+            let count = removed.len();
+            log::info!("Vault {id} sync setup removed duplicate websites of {count} items");
+        }
+
+        let replica = setup.replica_id();
+        let mut local = LocalSyncState::new(id, replica, FIRST_KEY_ID);
+        local.sync_keys = sync_keys;
+        let sidecar = Sidecar {
+            transport: Some(setup.root().clone()),
+            ..Sidecar::default()
+        };
+        let mut sync = SyncTxn::first(local, keyring, sidecar);
+        #[cfg(test)]
+        sync.set_apply_fault(self.apply_fault);
+        let now = Timestamp::now().as_second() + self.clock_offset;
+        let session = locked.state.session(replica, sync.loaded());
+        let recovery = setup.kit().recovery_add();
+        sync.record_first(
+            &vault,
+            setup.name().to_string(),
+            keys,
+            &recovery,
+            session,
+            now,
+        )?;
+        // The vault shows the view of the first state, so the next diff finds
+        // no edits.
+        sync.apply_recorded(&mut vault)?;
+        vault.set_sync(sync.next_generation(), Some(replica.0));
+        let vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, sync.keyring().clone());
+
+        // The root is saved before the sync state, so it is kept if the
+        // process stops after the saves.
+        sync.save_sidecar(&self.root);
+        sync.stage(&self.root)?;
+        let mut saved = None;
+        let result = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
+            self.retain(id, old);
+            saved = Some(sync.save(&self.root, &*self.signer, true)?);
+            Ok(())
+        });
+        match saved {
+            Some(hash) => locked.state.record_saved_state(hash),
+            None if result.is_err() => {
+                sync.discard_staged(&self.root);
+                locked.state.end_actor();
+            },
+            None => {},
+        }
+        let changed = result?;
+        let replica_id = replica.0;
+        log::info!("Enabled sync of vault {id} as replica {replica_id}");
+        let _ = sync.write_key_file(&*transport, None);
+        sync.publish(&*transport);
+        sync.settle_status();
+        sync.save_sidecar(&self.root);
+        let save_count = if changed {
+            vault_lock.record_save()
+        } else {
+            vault_lock.save_count()
+        };
+        Ok(Committed {
+            value: removed,
+            vault: vh,
+            vault_id: id,
+            previous_key: target.key.clone(),
+            changed,
+            save_count,
+            sync_status: Some(sync.status()),
+            recovery_kit_missing: sync.recovery_kit_missing(),
+        })
     }
 
     /// Write the retained version `vault` at `path` over the refused file

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use uuid::Uuid;
@@ -101,6 +103,17 @@ impl ItemAutofill {
     /// Whether one credential fills both roles.
     pub fn has_shared_slot(&self) -> bool {
         self.username.is_some() && self.username == self.password
+    }
+
+    /// Remove each later website with the URL of an earlier one. The first
+    /// website of each URL by order stays. Returns whether a website was
+    /// removed.
+    pub fn remove_duplicate_websites(&mut self) -> bool {
+        let before = self.websites.len();
+        let mut urls = BTreeSet::new();
+        self.websites
+            .retain(|website| urls.insert(website.url.clone()));
+        self.websites.len() != before
     }
 
     /// Role slot of `role`.
