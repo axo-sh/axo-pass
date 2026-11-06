@@ -4,6 +4,7 @@ pub mod apply;
 pub mod crdt;
 pub mod diff;
 pub mod join;
+pub mod join_sync;
 pub mod keys;
 pub mod listing;
 pub mod load;

@@ -539,9 +539,35 @@ impl SyncTxn {
         }
     }
 
+    /// New vault with file key `file_key`, holding the view of the joined
+    /// state, at the generation and the replica id of the sync state, for a
+    /// join of a new vault. Its key is the key that `choose_key` returns for
+    /// the vault name of the view. Fails if the view fails to apply.
+    pub(crate) fn joined_vault(
+        &self,
+        choose_key: impl FnOnce(Option<&str>) -> Result<String, Error>,
+        file_key: &UnlockedKey,
+    ) -> Result<Vault, Error> {
+        let view = VaultView::of(&self.state);
+        let key = choose_key(view.name.as_deref())?;
+        let mut vault = Rebuild::empty(&self.local, key, file_key)?;
+        self.apply(&view, &mut vault)?;
+        Ok(vault)
+    }
+
+    /// Apply the view of the joined state to `vault`, an existing vault
+    /// after the recovery merge of a join. Fails if the view fails to apply.
+    pub(crate) fn apply_merged(&self, vault: &mut Vault) -> Result<(), Error> {
+        self.apply_view(vault)
+    }
+
     /// Apply the view of the state to `vault`, without a diff.
     fn apply_view(&self, vault: &mut Vault) -> Result<(), Error> {
-        let view = VaultView::of(&self.state);
+        self.apply(&VaultView::of(&self.state), vault)
+    }
+
+    /// Apply `view` to `vault`, without a diff.
+    fn apply(&self, view: &VaultView, vault: &mut Vault) -> Result<(), Error> {
         #[cfg(test)]
         if let Some(fault) = self.apply_fault {
             return view.apply_with_fault(vault, fault).map(|_| ());
@@ -740,6 +766,32 @@ impl SyncTxn {
                 return Ok(None);
             },
         };
+        Ok(self.record_repair_edits(edits, session, now))
+    }
+
+    /// Recovery merge of a join: [`Self::record_repair`] of the existing
+    /// vault `vault` against the view of the joined state. Fails with the
+    /// diff error and records nothing if the diff fails, since a join saves
+    /// no vault alone.
+    pub(crate) fn record_merge(
+        &mut self,
+        vault: &Vault,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<Option<WriteId>, Error> {
+        let edits = LocalEdits::find_repair(&self.state, vault, self.replica())?;
+        Ok(self.record_repair_edits(edits, session, now))
+    }
+
+    /// Record the repair writes `edits` under one write id of `session`
+    /// minted at `now`, in Unix seconds. Returns the write id, or `None` if
+    /// `edits` is empty.
+    fn record_repair_edits(
+        &mut self,
+        edits: LocalEdits,
+        session: &mut Session,
+        now: i64,
+    ) -> Option<WriteId> {
         let count = edits.len();
         let write_id = edits.record_repair(&mut self.state, session, now);
         if write_id.is_some() {
@@ -747,7 +799,7 @@ impl SyncTxn {
             log::warn!("Vault {vault_id} sync repair added {count} differences as conflicts");
             self.mark_changed();
         }
-        Ok(write_id)
+        write_id
     }
 
     /// Record the local edits of `vault` against the view of the state, under
@@ -824,9 +876,36 @@ impl SyncTxn {
         let mut edits = self.find(vault)?;
         edits.add_own(replica, name, keys);
         edits.add_recovery(recovery.recipient.clone(), recovery.value.clone());
-        let write_id = edits
-            .record(&mut self.state, session, now)
-            .ok_or_else(|| Error::SyncStateEncodeError("first state holds no edit".to_string()))?;
+        self.record_own_edits(edits, session, now)
+    }
+
+    /// Record the display name `name` and the public keys `keys` of this
+    /// replica under one write id of `session` minted at `now`, in Unix
+    /// seconds, for a join. Diffs nothing. Returns the write id.
+    pub(crate) fn record_own(
+        &mut self,
+        name: String,
+        keys: ReplicaKeys,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<WriteId, Error> {
+        let mut edits = LocalEdits::default();
+        edits.add_own(self.replica(), name, keys);
+        self.record_own_edits(edits, session, now)
+    }
+
+    /// Record `edits`, which hold the own registers of this replica, under
+    /// one write id of `session` minted at `now`, in Unix seconds. Returns
+    /// the write id.
+    fn record_own_edits(
+        &mut self,
+        edits: LocalEdits,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<WriteId, Error> {
+        let write_id = edits.record(&mut self.state, session, now).ok_or_else(|| {
+            Error::SyncStateEncodeError("own registers record no edit".to_string())
+        })?;
         self.mark_changed();
         Ok(write_id)
     }

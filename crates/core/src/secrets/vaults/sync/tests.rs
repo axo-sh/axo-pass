@@ -11,6 +11,7 @@ mod folder;
 mod generators;
 mod guard;
 mod join;
+mod join_sync;
 mod keys;
 mod load;
 mod local_state;

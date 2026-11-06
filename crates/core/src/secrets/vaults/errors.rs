@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::secrets::keychain::errors::KeychainError;
+use crate::secrets::vaults::sync::meta::MetaFileError;
 
 #[derive(Error, Debug)]
 #[allow(clippy::enum_variant_names)]
@@ -97,6 +98,12 @@ pub enum Error {
 
     #[error("Synced folder already holds this vault")]
     SyncFolderHasVault,
+
+    #[error("Synced folder does not hold this vault")]
+    SyncFolderLacksVault,
+
+    #[error("Synced folder meta.json failed: {0}")]
+    SyncMetaFileError(#[source] MetaFileError),
 
     #[error("Failed to encrypt secret")]
     VaultSecretEncryptionError,

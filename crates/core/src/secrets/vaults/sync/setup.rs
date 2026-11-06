@@ -11,7 +11,7 @@
 //! A synced folder holds a vault if the vault directory has a `meta.json`,
 //! local or not. A directory with no `meta.json`, such as one with only a
 //! conflict copy of it, holds no vault. A folder that holds the vault is
-//! offered for the join in place of the kit.
+//! offered for the join in place of the kit (`sync/join_sync.rs`).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,7 +19,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::crdt::ReplicaId;
-use super::keys::SyncKey;
+use super::keys::{SyncKey, SyncKeyring};
+use super::load::SyncLoad;
 use super::local_state::{LocalStateError, LocalSyncState};
 use super::meta::MetaFile;
 use super::model::{ItemId, KeyId};
@@ -151,6 +152,75 @@ impl SyncSetup {
             return Err(Error::SyncAlreadyEnabled);
         }
         Ok(())
+    }
+
+    /// Refuse a join of vault `vault_id` while its local sync state under the
+    /// app data directory `root` syncs. `vault` is the verified vault file of
+    /// a join into an existing vault, and `None` for a new vault. `keyring`
+    /// opens the sync state of `vault` for the trust check.
+    ///
+    /// A `leaving` sync state fails with `SyncDisableInProgress` (D13), and
+    /// one of a newer format with `SyncStateVersionSkew`. For an existing
+    /// vault, a trusted sync state fails with `SyncAlreadyEnabled`, as does a
+    /// sync state under a key id that `keyring` lacks, or of another vault or
+    /// replica. A sync state that is missing or fails its signature is the
+    /// re-link case, and the join replaces it. So is a sync state left by a
+    /// disable of a vault that holds no replica id. For a new vault, a sync
+    /// state that verifies is one of a vault file that is missing, and fails
+    /// with `SyncAlreadyEnabled`.
+    pub(crate) fn check_joinable(
+        root: &Path,
+        vault_id: Uuid,
+        vault: Option<&VerifiedVault>,
+        keyring: Option<&SyncKeyring>,
+        signer: &dyn VaultSigner,
+    ) -> Result<(), Error> {
+        let local = match LocalSyncState::load(root, vault_id, signer) {
+            Err(LocalStateError::Read(e)) => return Err(Error::SyncStateReadError(e)),
+            Err(LocalStateError::SigningKey(e)) => return Err(e),
+            Err(LocalStateError::VersionSkew(message)) => {
+                return Err(Error::SyncStateVersionSkew(message));
+            },
+            Ok(local) if local.leaving => return Err(Error::SyncDisableInProgress),
+            local => local,
+        };
+        let Some(vault) = vault else {
+            return match local {
+                Ok(_) => Err(Error::SyncAlreadyEnabled),
+                Err(_) => Ok(()),
+            };
+        };
+        if vault.replica_id.is_none() {
+            return Ok(());
+        }
+        match SyncLoad::classify_trusted(vault, local, keyring, signer)?.0 {
+            SyncLoad::StateMissing | SyncLoad::SignatureFailed(_) => Ok(()),
+            SyncLoad::VersionSkew(message) => Err(Error::SyncStateVersionSkew(message)),
+            _ => Err(Error::SyncAlreadyEnabled),
+        }
+    }
+
+    /// Check that the synced folder of `transport` holds vault `vault_id`,
+    /// for a join. A missing `meta.json` fails with `SyncFolderLacksVault`,
+    /// and one that fails to parse, such as one of a newer version or of
+    /// another vault, with `SyncMetaFileError`. A `meta.json` that is not
+    /// local yet is requested, and the check fails with `SyncTransportError`.
+    /// The transport never reads a conflict copy of `meta.json`.
+    pub(crate) fn check_folder(transport: &dyn SyncTransport, vault_id: Uuid) -> Result<(), Error> {
+        match transport.read_meta(vault_id)? {
+            ReadResult::Missing => Err(Error::SyncFolderLacksVault),
+            ReadResult::Remote => {
+                if let Err(e) = transport.request_download(vault_id) {
+                    log::warn!("Failed to request the download of vault {vault_id}: {e}");
+                }
+                Err(Error::SyncTransportError(format!(
+                    "meta.json of vault {vault_id} is not downloaded yet"
+                )))
+            },
+            ReadResult::Local(bytes) => MetaFile::parse(&bytes, vault_id)
+                .map(|_| ())
+                .map_err(Error::SyncMetaFileError),
+        }
     }
 
     /// Transport of the synced folder `root`. Fails if the folder cannot be

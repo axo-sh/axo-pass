@@ -33,7 +33,10 @@ use crate::secrets::vaults::storage::txn::{
     Committed, RetainedVersion, Target, Unlock, VaultWriter,
 };
 use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
+use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinInto, JoinKey};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::model::ItemId;
+use crate::secrets::vaults::sync::transport::TransportRoot;
 
 /// This struct tracks vault files on disk: the vaults directory, the external
 /// vaults, and the retained versions and lock files. Operations read the
@@ -719,6 +722,45 @@ impl VaultCatalog {
         self.files.rebuild(id, &path, unlock, |name| {
             Ok(self.rebuild_key(header_key, name, &path, today))
         })
+    }
+
+    /// Join the sync key `join` into the vault `into`, with the synced
+    /// folder `root`, as the Mac named `name` (`sync/join_sync.rs`). See
+    /// [`VaultWriter::join_sync`]. Returns the ids of the items whose later
+    /// duplicate websites were removed.
+    ///
+    /// For `JoinInto::New`, a vault id that a vault file on this Mac holds is
+    /// refused with `VaultIdExists` ([`Self::existing_ids`]). The new vault
+    /// file is written in the vaults directory, named by its id, with the key
+    /// that [`Self::rebuild_key`] gives for the vault name of the view. The
+    /// caller then calls `SyncManager::refresh`, so the vault is watched.
+    pub fn join_sync(
+        &self,
+        join: &JoinKey,
+        into: JoinInto,
+        root: &TransportRoot,
+        name: &str,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<Vec<ItemId>>, Error> {
+        let path = match into {
+            JoinInto::Existing(target) => {
+                return self
+                    .files
+                    .join_sync(join, JoinFile::Existing(&target), root, name, unlock);
+            },
+            JoinInto::New => VaultHandle::file_path(&self.vaults_dir, join.vault_id()),
+        };
+        if !self.existing_ids([join.vault_id()]).is_empty() {
+            return Err(Error::VaultIdExists(ShortId::encode_uuid(join.vault_id())));
+        }
+        let today = Zoned::now().date();
+        let choose_key =
+            |view_name: Option<&str>| Ok(self.rebuild_key(None, view_name, &path, today));
+        let file = JoinFile::New {
+            path: path.clone(),
+            choose_key: &choose_key,
+        };
+        self.files.join_sync(join, file, root, name, unlock)
     }
 
     /// Key of a vault rebuilt at `path`, as [`Self::rebuild`] states.
