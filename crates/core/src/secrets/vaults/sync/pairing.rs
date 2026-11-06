@@ -11,14 +11,15 @@
 //! and the MAC of a wrapping authenticates the key and the sender keys to
 //! the new Mac.
 //!
-//! The pairing watcher, and the deletion of the request when the app quits
-//! or after 15 minutes, are milestone 9. The import of a [`PairedVault`] is
-//! milestone 10.
+//! The pairing watcher in `pairing/watcher.rs` polls for the wrappings and
+//! deletes the request when the user finishes, the app quits, or 15 minutes
+//! pass. The import of a [`PairedVault`] is milestone 10.
 
 pub mod dismissed;
 pub mod grant;
 pub mod prompt;
 pub mod request;
+pub mod watcher;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -300,7 +301,7 @@ impl PendingPairing {
     }
 
     /// Delete the request and drop the code. The code is dropped even if the
-    /// delete fails.
+    /// delete fails. The pairing watcher calls it.
     pub fn finish(self, transport: &dyn SyncTransport) -> Result<(), Error> {
         transport.delete_pairing(self.request.request_id)
     }

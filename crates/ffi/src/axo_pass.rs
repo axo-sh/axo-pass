@@ -151,3 +151,14 @@ impl AxoPass {
         Ok(())
     }
 }
+
+/// Stop the sync manager of the process at quit (D17). Ends every watch and
+/// deletes the pairing request of the new Mac, if one is pending. Waits for
+/// a scan, a poll, or a transaction that runs. Does nothing if no manager
+/// started or it already stopped.
+#[uniffi::export]
+pub fn sync_shutdown() {
+    if let Some(manager) = SYNC_MANAGER.get() {
+        manager.shutdown();
+    }
+}

@@ -1,6 +1,6 @@
 //! Tests of the pairing code, the pairing request, the pairing HMACs, the
 //! new Mac side of pairing, and the unlocked Mac side: the prompt, the code
-//! match, the dismissed requests, and the grant.
+//! match, the dismissed requests, and the grant, and the pairing watcher.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,8 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::load::{Fixture, GENERATION, REPLICA, body, device_key, state};
+use super::manager::{Event, Managed, folder_root, set_root};
+use super::reads::put_peer;
 use super::state_file::key;
 use super::transport::FakeTransport;
 use super::txn::{synced, two_keys, under_key_2};
@@ -36,6 +38,7 @@ use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
 use crate::secrets::vaults::sync::pairing::grant::GrantOutcome;
 use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use crate::secrets::vaults::sync::pairing::request::PairingRequest;
+use crate::secrets::vaults::sync::pairing::watcher::{PAIRING_EXPIRY, POLL_INTERVAL};
 use crate::secrets::vaults::sync::pairing::{PairKey, PairingCode, PendingPairing};
 use crate::secrets::vaults::sync::pins::PairedPin;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -1707,4 +1710,269 @@ fn vault_of_another_root_or_not_in_request_map_receives_no_wrapping() {
         );
         assert_eq!(fx.on_disk(), before, "{name}");
     }
+}
+
+// Pairing watcher of the new Mac (9.5). Each watcher runs in a manager on
+// the test thread through `SyncManager::run_queued`, with watch events fired
+// by `FakeTransport::fire_watch` and the clock moved by
+// `SyncManager::advance_clock`.
+
+/// Unwrap that returns fixed bytes, or fails if it has none, and counts its
+/// calls through a counter the test keeps.
+struct SharedUnwrap {
+    raw: Option<Vec<u8>>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl SharedUnwrap {
+    /// Unwrap that returns `key`, or fails if `None`, and its call counter.
+    fn boxed(key: Option<&SyncKey>) -> (Box<dyn DeviceUnwrap + Send>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let unwrap = Self {
+            raw: key.map(|key| key.as_bytes().to_vec()),
+            calls: calls.clone(),
+        };
+        (Box::new(unwrap), calls)
+    }
+}
+
+impl DeviceUnwrap for SharedUnwrap {
+    fn unwrap_sync_key(&self, _wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.raw.clone().map(Zeroizing::new)
+    }
+}
+
+/// Manager of a new Mac with no synced vault, with its start run. The
+/// fixture holds the app data directory of the manager.
+fn new_mac_manager() -> (Fixture, Managed) {
+    let fx = Fixture::new(GENERATION, None);
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    (fx, managed)
+}
+
+#[test]
+fn wrapping_written_after_start_is_accepted_at_next_event_with_one_unwrap_key() {
+    let mac = NewMac::new();
+    let transport = Arc::new(folder(&[vault(1), vault(2)]));
+    let pending = mac.start(&transport, &[]).unwrap();
+    let request_id = pending.request().request_id;
+    let sync_key = SyncKey::generate();
+    let first = granted(&pending, vault(1), peer(1), &sync_key);
+    let second = granted(&pending, vault(2), peer(2), &sync_key);
+    let (unwrap, calls) = SharedUnwrap::boxed(Some(&sync_key));
+    let (_fx, managed) = new_mac_manager();
+
+    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed.run();
+
+    // One watch per vault of the request map. The first poll finds nothing.
+    assert_eq!(transport.watch_count(), 2);
+    assert!(managed.events.taken().is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    put_key_file(&transport, vault(1), peer(1), vec![first]);
+    assert_eq!(transport.fire_watch(vault(1)), 1);
+    managed.run();
+
+    let key = sync_key.as_bytes().to_vec();
+    assert_eq!(
+        managed.events.taken(),
+        [Event::Paired(vault(1), key.clone())]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // With no event, the next poll is 10 seconds after the last one.
+    put_key_file(&transport, vault(2), peer(2), vec![second]);
+    managed.manager.advance_clock(POLL_INTERVAL.as_secs() - 1);
+    managed.run();
+    assert!(managed.events.taken().is_empty());
+    managed.manager.advance_clock(1);
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Paired(vault(2), key)]);
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "one unwrap per vault");
+    // The request stays until the user finishes.
+    assert!(transport.pairing(request_id).is_some());
+}
+
+#[test]
+fn pairing_request_is_deleted_when_app_quits_or_after_15_minutes() {
+    for quit in [true, false] {
+        let mac = NewMac::new();
+        let transport = Arc::new(folder(&[vault(1)]));
+        let pending = mac.start(&transport, &[]).unwrap();
+        let request_id = pending.request().request_id;
+        let (unwrap, _) = SharedUnwrap::boxed(None);
+        let (_fx, managed) = new_mac_manager();
+        managed.manager.pair(pending, transport.clone(), unwrap);
+        managed.run();
+        assert!(transport.pairing(request_id).is_some());
+        assert_eq!(transport.watch_count(), 1);
+        assert_eq!(transport.pairing_writes(), 1);
+
+        if quit {
+            managed.manager.shutdown();
+        } else {
+            managed.manager.advance_clock(PAIRING_EXPIRY.as_secs() - 1);
+            managed.run();
+            assert!(transport.pairing(request_id).is_some(), "quit {quit}");
+            managed.manager.advance_clock(1);
+            managed.run();
+        }
+
+        assert!(transport.pairing(request_id).is_none(), "quit {quit}");
+        assert_eq!(transport.watch_count(), 0, "quit {quit}");
+        assert_eq!(transport.pairing_writes(), 2, "quit {quit}");
+        // The request is deleted once.
+        managed.manager.shutdown();
+        assert_eq!(transport.pairing_writes(), 2, "quit {quit}");
+    }
+}
+
+#[test]
+fn finished_pairing_ends_its_watches() {
+    let mac = NewMac::new();
+    let transport = Arc::new(folder(&[vault(1), vault(2)]));
+    let pending = mac.start(&transport, &[]).unwrap();
+    let request_id = pending.request().request_id;
+    let (unwrap, _) = SharedUnwrap::boxed(None);
+    let (_fx, managed) = new_mac_manager();
+    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed.run();
+    assert_eq!(transport.watch_count(), 2);
+
+    managed.manager.finish_pairing();
+    managed.run();
+
+    assert_eq!(transport.watch_count(), 0);
+    assert_eq!(transport.fire_watch(vault(1)), 0);
+    assert!(transport.pairing(request_id).is_none());
+    assert_eq!(transport.pairing_writes(), 2);
+
+    // A second pairing finishes the one that runs.
+    let first = mac.start(&transport, &[]).unwrap();
+    let first_id = first.request().request_id;
+    let (unwrap, _) = SharedUnwrap::boxed(None);
+    managed.manager.pair(first, transport.clone(), unwrap);
+    managed.run();
+    let second = mac.start(&transport, &[]).unwrap();
+    let second_id = second.request().request_id;
+    let (unwrap, _) = SharedUnwrap::boxed(None);
+    managed.manager.pair(second, transport.clone(), unwrap);
+    managed.run();
+
+    assert!(transport.pairing(first_id).is_none());
+    assert!(transport.pairing(second_id).is_some());
+    assert_eq!(transport.watch_count(), 2);
+}
+
+#[test]
+fn only_pairing_watcher_writes_pairing_requests_and_manager_writes_none() {
+    // Unlocked Mac: a synced vault whose root holds a request of another
+    // Mac, with a peer change and a pairing event.
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    set_root(&fx, &folder_root());
+    transport.set_now(Timestamp::now());
+    put_request(
+        &transport,
+        &request_of(&PairingCode::generate(), &[fx.id()]),
+    );
+    let managed = Managed::start(&fx, true);
+    managed.run();
+    put_peer(&fx, &transport, peer(1), "joined");
+    transport.fire_watch(fx.id());
+    transport.fire_pairing_watch();
+    managed.run();
+    managed.manager.shutdown();
+
+    assert_eq!(managed.unlock.transactions(), 1);
+    assert_eq!(
+        managed.events.taken(),
+        [
+            Event::Pairings(folder_root(), 1),
+            Event::Synced(fx.id()),
+            Event::Pairings(folder_root(), 1),
+        ]
+    );
+    assert_eq!(transport.pairing_writes(), 0);
+    assert_eq!(transport.list_pairings().unwrap().len(), 1);
+
+    // New Mac: the request write of the start, and the one delete of the
+    // watcher.
+    let mac = NewMac::new();
+    let new = Arc::new(folder(&[vault(1)]));
+    let pending = mac.start(&new, &[]).unwrap();
+    assert_eq!(new.pairing_writes(), 1);
+    let (unwrap, _) = SharedUnwrap::boxed(None);
+    let (_new_fx, new_managed) = new_mac_manager();
+    new_managed.manager.pair(pending, new.clone(), unwrap);
+    new_managed.run();
+    new.fire_watch(vault(1));
+    new_managed.run();
+    new_managed.manager.advance_clock(POLL_INTERVAL.as_secs());
+    new_managed.run();
+    assert_eq!(new.pairing_writes(), 1);
+
+    new_managed.manager.finish_pairing();
+    new_managed.run();
+
+    assert_eq!(new.pairing_writes(), 2);
+    assert!(new.list_pairings().unwrap().is_empty());
+}
+
+#[test]
+fn wrapping_whose_unwrap_fails_is_not_unwrapped_again_and_new_wrapping_is() {
+    let mac = NewMac::new();
+    let transport = Arc::new(folder(&[vault(1)]));
+    let pending = mac.start(&transport, &[]).unwrap();
+    let sync_key = SyncKey::generate();
+    put_key_file(
+        &transport,
+        vault(1),
+        peer(1),
+        vec![granted(&pending, vault(1), peer(1), &sync_key)],
+    );
+    // A second wrapping with other wrapped bytes, from another replica.
+    let request = pending.request().clone();
+    let mut other = wrapping(&sync_key, request.replicas[&vault(1)]);
+    other.wrapped = vec![0xd1, 0xd2];
+    typed_key(&pending).seal_wrapping(&mut other, vault(1), peer(2), &request.keys());
+    let (unwrap, calls) = SharedUnwrap::boxed(None);
+    let (_fx, managed) = new_mac_manager();
+
+    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed.run();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    transport.fire_watch(vault(1));
+    managed.run();
+    managed.manager.advance_clock(POLL_INTERVAL.as_secs());
+    managed.run();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "no second unwrap");
+    assert!(managed.events.taken().is_empty());
+
+    put_key_file(&transport, vault(1), peer(2), vec![other]);
+    transport.fire_watch(vault(1));
+    managed.run();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn pairing_handed_to_stopped_manager_deletes_its_request() {
+    let mac = NewMac::new();
+    let transport = Arc::new(folder(&[vault(1)]));
+    let (_fx, managed) = new_mac_manager();
+    managed.manager.shutdown();
+    let pending = mac.start(&transport, &[]).unwrap();
+    let request_id = pending.request().request_id;
+    let (unwrap, _) = SharedUnwrap::boxed(None);
+
+    managed.manager.pair(pending, transport.clone(), unwrap);
+
+    assert!(transport.pairing(request_id).is_none());
+    assert_eq!(transport.watch_count(), 0);
 }

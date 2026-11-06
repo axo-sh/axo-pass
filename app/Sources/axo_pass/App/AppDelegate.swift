@@ -1,4 +1,5 @@
 import AppKit
+import AxoPassFFI
 import SunshineCore
 import SunshineUI
 import SwiftUI
@@ -99,6 +100,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
     windows.requestMain()
     return true
+  }
+
+  /// Stop the sync manager, which deletes a pending pairing request.
+  func applicationWillTerminate(_ notification: Notification) {
+    syncShutdown()
   }
 
   /// The broker and SSH agent outlive the window.

@@ -23,23 +23,38 @@
 //! file if a publish failed ([`VaultWriter::copy_staged`]). Every
 //! [`RETRY_INTERVAL`] it copies again while the copy fails or is refused, and
 //! watches again a vault with no watch (D13).
+//!
+//! Pairing (9.5). The manager watches the pairing directory of each root of
+//! the synced vaults, one watch per root. The watch start and each event
+//! count the requests that prompt ([`PairingPrompt::pending`]), with the
+//! dismissed ids of the root, and report `pairing_requests`. On the new Mac
+//! the manager runs the [`PairingWatcher`] that [`SyncManager::pair`] hands
+//! it, until [`SyncManager::finish_pairing`], the expiry, or the shutdown.
+//! The manager writes no pairing request. The watcher deletes its own.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use jiff::SignedDuration;
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::crdt::ReplicaId;
 use super::listing::PeerListing;
 use super::local_state::LocalSyncState;
-use super::pairing::PairedVault;
+use super::pairing::dismissed::DismissedRequests;
+use super::pairing::prompt::PairingPrompt;
+use super::pairing::watcher::PairingWatcher;
+use super::pairing::{PairedVault, PendingPairing};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::transport::{FileName, SyncTransport, TransportRoot, WatchHandle};
+use super::wrapping::DeviceUnwrap;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::VaultCatalog;
 use crate::secrets::vaults::storage::handle::check_vault_auth_still_valid;
@@ -116,7 +131,22 @@ enum Message {
     Changed(Uuid),
     /// Find the synced vaults again.
     Refresh,
+    /// A pairing watch reported a change under the root.
+    Pairings(TransportRoot),
+    /// Run a pairing of the new Mac.
+    Pair(Box<PairingStart>),
+    /// The user finished the pairing of the new Mac.
+    FinishPairing,
+    /// A watch of the pairing of the new Mac reported a change.
+    PairingChanged,
     Shutdown,
+}
+
+/// Pairing of the new Mac handed to the manager thread.
+struct PairingStart {
+    pending: PendingPairing,
+    transport: Arc<dyn SyncTransport>,
+    unwrap: Box<dyn DeviceUnwrap + Send>,
 }
 
 /// Watches and reactions of the synced vaults, run on one thread. Clones of
@@ -184,8 +214,39 @@ impl SyncManager {
         let _ = self.sender.send(Message::Refresh);
     }
 
-    /// End every watch and stop the manager. Waits for a scan or a
-    /// transaction that runs.
+    /// Run the pairing `pending` of the new Mac through `transport` until
+    /// [`Self::finish_pairing`], 15 minutes, or the shutdown, each of which
+    /// deletes the request. `unwrap` holds `vault-encryption-key`, read once
+    /// on the context of `PendingPairing::start` (D16). A pairing already
+    /// running is finished first. If the manager stopped, the request is
+    /// deleted immediately.
+    pub fn pair(
+        &self,
+        pending: PendingPairing,
+        transport: Arc<dyn SyncTransport>,
+        unwrap: Box<dyn DeviceUnwrap + Send>,
+    ) {
+        let start = Box::new(PairingStart {
+            pending,
+            transport,
+            unwrap,
+        });
+        if let Err(SendError(Message::Pair(start))) = self.sender.send(Message::Pair(start)) {
+            let request_id = start.pending.request().request_id;
+            if let Err(e) = start.pending.finish(&*start.transport) {
+                log::warn!("Failed to delete pairing request {request_id}: {e}");
+            }
+        }
+    }
+
+    /// Finish the pairing of the new Mac: end its watches and delete its
+    /// request.
+    pub fn finish_pairing(&self) {
+        let _ = self.sender.send(Message::FinishPairing);
+    }
+
+    /// End every watch, finish the pairing of the new Mac, and stop the
+    /// manager. Waits for a scan, a poll, or a transaction that runs.
     pub fn shutdown(&self) {
         let _ = self.sender.send(Message::Shutdown);
         let mut run = self.run.lock().unwrap_or_else(|e| e.into_inner());
@@ -283,6 +344,10 @@ struct Worker {
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     vaults: BTreeMap<Uuid, ManagedVault>,
+    /// Pairing watch of each root of the synced vaults.
+    roots: HashMap<TransportRoot, WatchHandle>,
+    /// Pairing of the new Mac, if one runs.
+    pairing: Option<PairingWatcher>,
     /// Time added to the clock of the retries. Zero outside the tests.
     #[cfg(test)]
     clock_offset: Duration,
@@ -304,6 +369,8 @@ impl Worker {
             sender: sender.clone(),
             receiver,
             vaults: BTreeMap::new(),
+            roots: HashMap::new(),
+            pairing: None,
             #[cfg(test)]
             clock_offset: Duration::ZERO,
         };
@@ -319,6 +386,14 @@ impl Worker {
         let now = Instant::now();
         #[cfg(test)]
         let now = now + self.clock_offset;
+        now
+    }
+
+    /// Clock of the pairing prompt, moved with the clock of the retries.
+    fn timestamp(&self) -> Timestamp {
+        let now = Timestamp::now();
+        #[cfg(test)]
+        let now = now + SignedDuration::try_from(self.clock_offset).unwrap_or(SignedDuration::ZERO);
         now
     }
 
@@ -348,20 +423,40 @@ impl Worker {
     }
 
     /// Run `received` and every message queued after it, then the retries
-    /// that are due. Each vault with a change is scanned once. Returns false
-    /// at shutdown.
+    /// and the pairing polls that are due. Each vault with a change is
+    /// scanned once, and each root with a pairing change is counted once. A
+    /// pairing start or finish runs in message order. Returns false at
+    /// shutdown, after the pairing messages of the batch ran.
     fn process(&mut self, mut received: Vec<Message>) -> bool {
         received.extend(self.receiver.try_iter());
+        let mut shutdown = false;
         let mut refresh = false;
         let mut changed = BTreeSet::new();
+        let mut roots: Vec<TransportRoot> = Vec::new();
+        let mut pairing_changed = false;
         for message in received {
             match message {
-                Message::Shutdown => return false,
+                Message::Shutdown => shutdown = true,
                 Message::Refresh => refresh = true,
                 Message::Changed(vault_id) => {
                     changed.insert(vault_id);
                 },
+                Message::Pairings(root) => {
+                    if !roots.contains(&root) {
+                        roots.push(root);
+                    }
+                },
+                Message::Pair(start) => self.pair(*start),
+                Message::FinishPairing => {
+                    if let Some(pairing) = self.pairing.take() {
+                        pairing.finish();
+                    }
+                },
+                Message::PairingChanged => pairing_changed = true,
             }
+        }
+        if shutdown {
+            return false;
         }
         if refresh {
             for vault_id in self.refresh() {
@@ -372,22 +467,120 @@ impl Worker {
             self.scan(vault_id);
         }
         self.retry_due();
+        for root in self.watch_roots() {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        for root in &roots {
+            self.report_pairings(root);
+        }
+        self.poll_pairing(pairing_changed);
         true
     }
 
-    /// Earliest retry of any vault.
+    /// Earliest retry of any vault, or the next wake of the pairing.
     fn next_retry(&self) -> Option<Instant> {
         self.vaults
             .values()
             .filter_map(|vault| vault.retry_at)
+            .chain(self.pairing.as_ref().map(PairingWatcher::next_wake))
             .min()
     }
 
-    /// End every watch.
+    /// End every watch and finish the pairing.
     fn stop(&mut self) {
         let locks = self.files().locks().clone();
         for vault in std::mem::take(&mut self.vaults).into_values() {
             locks.set_watched(vault.id, false);
+        }
+        self.roots.clear();
+        if let Some(pairing) = self.pairing.take() {
+            pairing.finish();
+        }
+    }
+
+    /// Start the pairing `start` of the new Mac, after finishing the one
+    /// that runs.
+    fn pair(&mut self, start: PairingStart) {
+        if let Some(pairing) = self.pairing.take() {
+            pairing.finish();
+        }
+        let sender = self.sender.clone();
+        let notify = move || {
+            let _ = sender.send(Message::PairingChanged);
+        };
+        self.pairing = Some(PairingWatcher::start(
+            start.pending,
+            start.transport,
+            start.unwrap,
+            self.events.clone(),
+            notify,
+            self.now(),
+        ));
+    }
+
+    /// Poll the pairing of the new Mac if a watch reported a change or the
+    /// poll is due, or finish it if it expired.
+    fn poll_pairing(&mut self, changed: bool) {
+        let now = self.now();
+        let Some(pairing) = &mut self.pairing else {
+            return;
+        };
+        if pairing.expired(now) {
+            log::info!("Pairing request expired");
+            if let Some(pairing) = self.pairing.take() {
+                pairing.finish();
+            }
+        } else if changed || pairing.poll_due(now) {
+            pairing.poll(now);
+        }
+    }
+
+    /// Watch the pairing directory of each root of the synced vaults that
+    /// has a transport and no watch, and end the watch of a root no longer
+    /// used. Returns the roots whose watch started.
+    fn watch_roots(&mut self) -> Vec<TransportRoot> {
+        let mut used: HashMap<TransportRoot, Arc<dyn SyncTransport>> = HashMap::new();
+        for vault in self.vaults.values() {
+            if let (Some(root), Some(transport)) = (&vault.root, &vault.transport) {
+                used.entry(root.clone())
+                    .or_insert_with(|| transport.clone());
+            }
+        }
+        self.roots.retain(|root, _| used.contains_key(root));
+        let mut started = Vec::new();
+        for (root, transport) in used {
+            if self.roots.contains_key(&root) {
+                continue;
+            }
+            let sender = self.sender.clone();
+            let changed = root.clone();
+            let notify = Box::new(move || {
+                let _ = sender.send(Message::Pairings(changed.clone()));
+            });
+            if let Some(watch) = transport.watch_pairings(notify) {
+                self.roots.insert(root.clone(), watch);
+                started.push(root);
+            }
+        }
+        started
+    }
+
+    /// Count the pairing requests of `root` that prompt and report them.
+    fn report_pairings(&self, root: &TransportRoot) {
+        let transport = self
+            .vaults
+            .values()
+            .find(|vault| vault.root.as_ref() == Some(root))
+            .and_then(|vault| vault.transport.clone());
+        let Some(transport) = transport else {
+            return;
+        };
+        let dismissed = DismissedRequests::load(self.files().root()).of(root);
+        match PairingPrompt::pending(&*transport, &dismissed, self.timestamp()) {
+            Ok(count) => self.events.pairing_requests(root, count),
+            Err(e) => log::warn!("Failed to list the pairing requests of {root}: {e}"),
         }
     }
 

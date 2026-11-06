@@ -107,6 +107,8 @@ struct FakeFolder {
     pairing_reads: usize,
     /// Count of successful writes.
     writes: usize,
+    /// Count of successful writes and deletes of pairing requests.
+    pairing_writes: usize,
     /// Vaults of the `request_download` calls, in call order.
     downloads: Vec<Uuid>,
     watches: Vec<FakeWatch>,
@@ -292,6 +294,11 @@ impl FakeTransport {
     /// Count of reads that returned a local pairing request.
     pub(super) fn pairing_reads(&self) -> usize {
         self.folder().pairing_reads
+    }
+
+    /// Count of writes and deletes of pairing requests that succeeded.
+    pub(super) fn pairing_writes(&self) -> usize {
+        self.folder().pairing_writes
     }
 
     /// Count of writes that succeeded.
@@ -558,6 +565,7 @@ impl SyncTransport for FakeTransport {
         };
         folder.pairings.insert(request, pairing);
         folder.writes += 1;
+        folder.pairing_writes += 1;
         Ok(())
     }
 
@@ -565,6 +573,7 @@ impl SyncTransport for FakeTransport {
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         folder.pairings.remove(&request);
+        folder.pairing_writes += 1;
         Ok(())
     }
 

@@ -7,6 +7,10 @@
 //! `FakeTransport::fire_watch`, downloads complete with
 //! `FakeTransport::complete_downloads`, and the retry clock is advanced with
 //! `SyncManager::advance_clock`.
+//!
+//! The pairing request notifications of 9.5 are tested here, with pairing
+//! events fired by `FakeTransport::fire_pairing_watch`. The pairing watcher
+//! of the new Mac is tested in `sync/tests/pairing.rs`.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
@@ -15,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::join::{PEER, peer_state, with_format_version};
@@ -22,7 +27,7 @@ use super::load::{Fixture, GENERATION, REPLICA};
 use super::publish::{last_publish, published};
 use super::reads::{Reader, has_item, put_peer, save_count};
 use super::state_file::key;
-use super::transport::FakeTransport;
+use super::transport::{FakeTransport, request};
 use super::txn::{saved, saved_vault, state_file, synced};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::TestSigner;
@@ -33,6 +38,7 @@ use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::manager::{RETRY_INTERVAL, SyncEvents, SyncManager, SyncUnlock};
 use crate::secrets::vaults::sync::model::KeyId;
 use crate::secrets::vaults::sync::pairing::PairedVault;
+use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
@@ -45,17 +51,21 @@ const OTHER_PEER: ReplicaId = ReplicaId(Uuid::from_u128(3));
 
 /// Notification of the manager.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Event {
+pub(super) enum Event {
     Synced(Uuid),
     Changed(Uuid),
+    /// Count of the pairing requests of a root that prompt.
+    Pairings(TransportRoot, usize),
+    /// Vault paired on the new Mac, with its sync key bytes.
+    Paired(Uuid, Vec<u8>),
 }
 
 /// Notifications in the order the manager sent them.
 #[derive(Default)]
-struct Events(Mutex<Vec<Event>>);
+pub(super) struct Events(Mutex<Vec<Event>>);
 
 impl Events {
-    fn taken(&self) -> Vec<Event> {
+    pub(super) fn taken(&self) -> Vec<Event> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
 }
@@ -69,21 +79,32 @@ impl SyncEvents for Events {
         self.0.lock().unwrap().push(Event::Changed(vault_id));
     }
 
-    fn pairing_requests(&self, _root: &TransportRoot, _count: usize) {}
+    fn pairing_requests(&self, root: &TransportRoot, count: usize) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(Event::Pairings(root.clone(), count));
+    }
 
-    fn paired(&self, _vault: PairedVault) {}
+    fn paired(&self, vault: PairedVault) {
+        let key = vault.key.as_bytes().to_vec();
+        self.0
+            .lock()
+            .unwrap()
+            .push(Event::Paired(vault.vault_id, key));
+    }
 }
 
 /// Unlock of the tests: an unlocked flag the test sets, and transactions
 /// with the file key of the fixture vault, counted.
-struct TestUnlock {
+pub(super) struct TestUnlock {
     unlocked: AtomicBool,
     key: UnlockedKey,
     transactions: AtomicUsize,
 }
 
 impl TestUnlock {
-    fn transactions(&self) -> usize {
+    pub(super) fn transactions(&self) -> usize {
         self.transactions.load(Ordering::SeqCst)
     }
 }
@@ -102,14 +123,14 @@ impl SyncUnlock for TestUnlock {
 
 /// Manager of the vault of `fx`, run on the test thread, and its events
 /// and unlock. The start scan is queued.
-struct Managed {
-    manager: SyncManager,
-    events: Arc<Events>,
-    unlock: Arc<TestUnlock>,
+pub(super) struct Managed {
+    pub(super) manager: SyncManager,
+    pub(super) events: Arc<Events>,
+    pub(super) unlock: Arc<TestUnlock>,
 }
 
 impl Managed {
-    fn start(fx: &Fixture, unlocked: bool) -> Self {
+    pub(super) fn start(fx: &Fixture, unlocked: bool) -> Self {
         let events = Arc::new(Events::default());
         let unlock = Arc::new(TestUnlock {
             unlocked: AtomicBool::new(unlocked),
@@ -124,9 +145,23 @@ impl Managed {
         }
     }
 
-    fn run(&self) {
+    pub(super) fn run(&self) {
         self.manager.run_queued();
     }
+}
+
+/// Root of the synced folder of the pairing tests.
+pub(super) fn folder_root() -> TransportRoot {
+    TransportRoot::Folder {
+        path: PathBuf::from("/manager/Vaults"),
+    }
+}
+
+/// Record `root` as the transport root in the sidecar of `fx`.
+pub(super) fn set_root(fx: &Fixture, root: &TransportRoot) {
+    let mut sidecar = Sidecar::load(&fx.root, fx.id());
+    sidecar.transport = Some(root.clone());
+    sidecar.save(&fx.root, fx.id()).unwrap();
 }
 
 /// Bytes of each file under `dir`, by path, with the lock files left out.
@@ -592,4 +627,69 @@ fn refresh_watches_vault_whose_sync_was_enabled_after_start() {
     assert_eq!(transport.watch_count(), 1);
     assert!(fx.catalog.files().locks().is_pending(fx.id()));
     assert_eq!(managed.events.taken(), [Event::Changed(fx.id())]);
+}
+
+#[test]
+fn new_pairing_request_reaches_app() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    set_root(&fx, &folder_root());
+    transport.set_now(Timestamp::now());
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    // One watch of the vault and one of the pairing directory of its root.
+    assert_eq!(transport.watch_count(), 2);
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
+
+    transport.put_pairing(request(1), b"{}");
+    assert_eq!(transport.fire_pairing_watch(), 1);
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 1)]);
+
+    // A burst of events gives one count.
+    transport.put_pairing(request(2), b"{}");
+    transport.fire_pairing_watch();
+    transport.fire_pairing_watch();
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 2)]);
+    assert!(!fx.catalog.files().locks().is_pending(fx.id()));
+
+    managed.manager.shutdown();
+
+    assert_eq!(transport.watch_count(), 0);
+    assert_eq!(transport.fire_pairing_watch(), 0);
+}
+
+#[test]
+fn dismissed_request_does_not_raise_count_and_request_with_new_id_does() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    set_root(&fx, &folder_root());
+    transport.set_now(Timestamp::now());
+    transport.put_pairing(request(1), b"{}");
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 1)]);
+
+    PairingPrompt::dismiss(&*transport, &folder_root(), &fx.root).unwrap();
+    transport.fire_pairing_watch();
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
+
+    transport.put_pairing(request(2), b"{}");
+    transport.fire_pairing_watch();
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 1)]);
+
+    // A request older than 24 hours on the clock of the manager is not
+    // counted.
+    managed.manager.advance_clock(24 * 60 * 60 + 60);
+    transport.fire_pairing_watch();
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
 }
