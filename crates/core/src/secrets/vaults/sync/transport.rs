@@ -3,7 +3,7 @@
 //!
 //! The root of a vault's transport is in its sidecar. [`SyncTransports`]
 //! resolves a root to a transport. [`folder::FolderTransport`] is the local
-//! folder transport. Milestone 9 adds the watches of the real transports.
+//! folder transport, which watches with FSEvents.
 
 pub mod folder;
 

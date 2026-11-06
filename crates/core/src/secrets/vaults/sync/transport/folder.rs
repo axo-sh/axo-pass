@@ -16,6 +16,7 @@
 //! created, and a root that is missing or not a folder fails every call.
 
 pub mod io;
+pub mod watch;
 
 use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use self::io::{FileStatus, FolderIo, WriteMode};
+use self::watch::FolderWatch;
 use super::{
     FileName, MAX_PAIRING_SIZE, PairingEntry, ReadResult, RequestId, SyncTransport, WatchHandle,
 };
@@ -327,8 +329,14 @@ impl SyncTransport for FolderTransport {
         Ok(())
     }
 
-    fn watch(&self, _vault_id: Uuid, _notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        None
+    /// Watch the root with FSEvents and call `notify` for events under the
+    /// vault directory. `None` if the root is missing.
+    fn watch(&self, vault_id: Uuid, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
+        FolderWatch::start(
+            &self.root,
+            Path::new(&ShortId::encode_uuid(vault_id)),
+            notify,
+        )
     }
 
     fn list_pairings(&self) -> Result<Vec<PairingEntry>, Error> {
@@ -389,7 +397,9 @@ impl SyncTransport for FolderTransport {
         self.delete_path(&self.pairing_path(request))
     }
 
-    fn watch_pairings(&self, _notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        None
+    /// Watch the root with FSEvents and call `notify` for events under
+    /// `pairing/`. `None` if the root is missing.
+    fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
+        FolderWatch::start(&self.root, Path::new(PAIRING_DIR), notify)
     }
 }
