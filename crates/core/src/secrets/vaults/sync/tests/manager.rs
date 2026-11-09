@@ -380,8 +380,7 @@ fn every_synced_vault_folder_write_holds_per_vault_mutex_and_lock_file() {
 }
 
 #[test]
-fn peer_change_while_vault_is_locked_sets_flag_and_next_read_joins_it_before_serving_with_one_prompt()
- {
+fn watch_event_for_peer_change_while_vault_is_locked_sets_flag() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let reader = Reader::of(&fx);

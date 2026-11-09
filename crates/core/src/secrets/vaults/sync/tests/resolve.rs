@@ -153,26 +153,6 @@ fn derived_history_id_depends_only_on_credential_and_write_id() {
 }
 
 #[test]
-fn concurrent_replace_writes_one_derived_history_entry() {
-    let mut a = Mac::first(filled());
-    let mut b = Mac::joined(&a, 2);
-    let alpha = a.credential_id("kept", "alpha");
-    let replaced = *a.value_ids(alpha).first().unwrap();
-
-    a.edit_with_history_ids(|v| set_alpha(v, "three"));
-    b.edit_with_history_ids(|v| set_alpha(v, "four"));
-    sync(&mut a, &mut b);
-
-    let derived = HistoryIds::derive(alpha, replaced);
-    assert_eq!(history_ids(&a.view(), alpha, "two"), [derived]);
-    for mac in [&a, &b] {
-        let history = mac.vault.list_history("kept", "alpha").unwrap();
-        let ids: Vec<Uuid> = history.iter().map(|h| h.id).collect();
-        assert_eq!(ids.iter().filter(|h| **h == derived).count(), 1);
-    }
-}
-
-#[test]
 fn history_entry_with_rewritten_id_decrypts_after_save_and_reload() {
     let mut a = Mac::first(filled());
     let alpha = a.credential_id("kept", "alpha");

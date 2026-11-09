@@ -201,8 +201,7 @@ fn with_pending_flag_clear_secret_read_and_login_fill_read_no_synced_folder_file
 }
 
 #[test]
-fn peer_change_while_vault_is_locked_sets_flag_and_next_read_joins_it_before_serving_with_one_prompt()
- {
+fn pending_flag_makes_next_read_join_with_one_prompt_and_following_read_runs_no_transaction() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let reader = Reader::of(&fx);

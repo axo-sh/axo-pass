@@ -252,14 +252,8 @@ fn vault_of_another_replica_id_is_rebuilt_and_kept_as_invalid_file() {
 fn signed_vault_file_copied_over_another_synced_vault_path_refused_and_rebuilt_from_sync_state() {
     let device = TestSigner::device();
     let fx = Fixture::synced();
-    fx.put_state(GENERATION);
+    let (work, work_replica) = fx.put_state_and_create_work_vault();
     let personal = fs::read_to_string(&fx.vault.path).unwrap();
-    let work_replica = ReplicaId(Uuid::from_u128(2));
-    let mut vault = Vault::new_for_test();
-    vault.set_key("work".to_string());
-    vault.set_sync(GENERATION, Some(work_replica.0));
-    let work = VaultHandle::new_in(&fx.vaults_dir, vault);
-    fx.catalog.files().create(&work).unwrap();
     let work_id = work.vault_id().unwrap();
     let work_file_key = EncryptedVault::load(&work.path, &device)
         .unwrap()

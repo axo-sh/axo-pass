@@ -237,6 +237,20 @@ impl Fixture {
         );
     }
 
+    /// Write a valid sync state of this vault at [`GENERATION`] and create a
+    /// second synced vault, `work`, in the same directory. The sync state of
+    /// `work` is not written. Return the handle and replica of `work`.
+    pub(super) fn put_state_and_create_work_vault(&self) -> (VaultHandle, ReplicaId) {
+        self.put_state(GENERATION);
+        let work_replica = ReplicaId(Uuid::from_u128(2));
+        let mut vault = Vault::new_for_test();
+        vault.set_key("work".to_string());
+        vault.set_sync(GENERATION, Some(work_replica.0));
+        let work = VaultHandle::new_in(&self.vaults_dir, vault);
+        self.catalog.files().create(&work).unwrap();
+        (work, work_replica)
+    }
+
     /// Vault file and sync state file as they are on disk now.
     pub(super) fn on_disk(&self) -> (String, Option<String>) {
         (
@@ -672,13 +686,7 @@ fn renaming_vault_key_leaves_sync_state_in_place_and_next_transaction_finds_it()
 #[test]
 fn vault_file_copied_to_other_path_refused() {
     let fx = Fixture::synced();
-    fx.put_state(GENERATION);
-    let work_replica = ReplicaId(Uuid::from_u128(2));
-    let mut vault = Vault::new_for_test();
-    vault.set_key("work".to_string());
-    vault.set_sync(GENERATION, Some(work_replica.0));
-    let work = VaultHandle::new_in(&fx.vaults_dir, vault);
-    fx.catalog.files().create(&work).unwrap();
+    let (work, work_replica) = fx.put_state_and_create_work_vault();
     let work_id = work.vault_id().unwrap();
     state(work_id, work_replica, GENERATION)
         .save(&fx.root, &TestSigner::device())
