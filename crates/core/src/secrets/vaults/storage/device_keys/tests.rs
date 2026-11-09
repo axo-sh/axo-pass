@@ -189,37 +189,27 @@ fn each_state_classified_from_keys_and_files() {
 }
 
 #[test]
-fn mac_with_only_retained_versions_has_vault_files() {
-    let mac = Mac::new();
-    mac.put("versions/abc/1000-1.json");
+fn mac_with_only_one_kind_of_vault_file_has_vault_files() {
+    // Label, file path, and whether the file is listed as an external vault.
+    let rows = [
+        ("retained version", "versions/abc/1000-1.json", false),
+        ("sync state", "sync/abc.json", false),
+        ("external vault", "external/work.json", true),
+    ];
+    for (label, path, external) in rows {
+        let mac = Mac::new();
+        mac.put(path);
+        let files = if external {
+            mac.files_with(vec![mac.root().join(path)])
+        } else {
+            mac.files()
+        };
 
-    let keys = TestKeys::both();
-    assert_eq!(classify(&keys, &mac.files()), KeyState::Normal);
-    let keys = TestKeys::neither();
-    assert_eq!(classify(&keys, &mac.files()), KeyState::NewHardware);
-}
-
-#[test]
-fn mac_with_only_sync_state_has_vault_files() {
-    let mac = Mac::new();
-    mac.put("sync/abc.json");
-
-    let keys = TestKeys::both();
-    assert_eq!(classify(&keys, &mac.files()), KeyState::Normal);
-    let keys = TestKeys::neither();
-    assert_eq!(classify(&keys, &mac.files()), KeyState::NewHardware);
-}
-
-#[test]
-fn mac_with_only_external_vault_has_vault_files() {
-    let mac = Mac::new();
-    mac.put("external/work.json");
-    let files = mac.files_with(vec![mac.root().join("external").join("work.json")]);
-
-    let keys = TestKeys::both();
-    assert_eq!(classify(&keys, &files), KeyState::Normal);
-    let keys = TestKeys::neither();
-    assert_eq!(classify(&keys, &files), KeyState::NewHardware);
+        let keys = TestKeys::both();
+        assert_eq!(classify(&keys, &files), KeyState::Normal, "{label}");
+        let keys = TestKeys::neither();
+        assert_eq!(classify(&keys, &files), KeyState::NewHardware, "{label}");
+    }
 }
 
 #[test]

@@ -335,44 +335,48 @@ fn retained_versions_of_vault_with_no_file_signed_again() {
 }
 
 #[test]
-fn confirmation_with_signing_key_present_fails_and_changes_nothing() {
+fn confirmation_outside_signing_key_lost_fails_and_changes_nothing() {
+    type Refused = fn(&Error) -> bool;
+    let rows: [(&str, KeyProbe, KeyProbe, Refused); 4] = [
+        (
+            "both keys present",
+            KeyProbe::Present,
+            KeyProbe::Present,
+            |e| matches!(e, Error::ResignNotOffered),
+        ),
+        ("neither key", KeyProbe::Missing, KeyProbe::Missing, |e| {
+            matches!(e, Error::ResignNotOffered)
+        }),
+        (
+            "signing key present, encryption key missing",
+            KeyProbe::Missing,
+            KeyProbe::Present,
+            |e| matches!(e, Error::ResignNotOffered),
+        ),
+        (
+            "keychain error",
+            KeyProbe::Error("keychain failed".into()),
+            KeyProbe::Missing,
+            |e| matches!(e, Error::KeyRetrievalFailed(_)),
+        ),
+    ];
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add("personal");
-    let keys = Arc::new(TestKeys::both());
-    let catalog = mac.catalog(&keys, NEW_KEY);
     let before = mac.snapshot();
     assert!(!verifies(&mac.vault("personal").path, NEW_KEY));
-
-    let result = catalog.resign();
-
-    assert!(matches!(result, Err(Error::ResignNotOffered)), "{result:?}");
-    assert_eq!(keys.created(), 0);
-    assert_eq!(mac.snapshot(), before);
-    assert!(resigned_events().is_empty());
-}
-
-#[test]
-fn confirmation_in_other_key_states_fails_and_changes_nothing() {
-    let _audit = test_dir();
-    let mut mac = Mac::new();
-    mac.add("personal");
-    let before = mac.snapshot();
-    for (encryption, signing) in [
-        (KeyProbe::Missing, KeyProbe::Missing),
-        (KeyProbe::Missing, KeyProbe::Present),
-        (KeyProbe::Error("keychain failed".into()), KeyProbe::Missing),
-    ] {
-        let keys = keys(encryption.clone(), signing);
+    for (label, encryption, signing, refused) in rows {
+        let keys = keys(encryption, signing);
 
         let result = mac.catalog(&keys, NEW_KEY).resign();
 
-        match encryption {
-            KeyProbe::Error(_) => assert!(matches!(result, Err(Error::KeyRetrievalFailed(_)))),
-            _ => assert!(matches!(result, Err(Error::ResignNotOffered))),
-        }
-        assert_eq!(keys.created(), 0);
-        assert_eq!(mac.snapshot(), before);
+        assert!(
+            matches!(&result, Err(e) if refused(e)),
+            "{label}: {result:?}"
+        );
+        assert_eq!(keys.created(), 0, "{label}");
+        assert_eq!(mac.snapshot(), before, "{label}");
+        assert!(resigned_events().is_empty(), "{label}");
     }
 }
 
