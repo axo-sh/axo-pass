@@ -21,12 +21,13 @@ use zeroize::Zeroizing;
 
 use self::encoding::Canonical;
 use super::crdt::ReplicaId;
-use super::keys::{KeyFingerprint, SyncKey};
+use super::keys::{KeyFingerprint, SyncKey, SyncKeyWrapper};
 use super::model::{ByteString, KeyId, PublicKey, ReplicaKeys};
 use super::transport::{FileName, ReadResult, SyncTransport};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::storage::txn::Unlock;
 
 /// Version of the `key.json` format.
 pub const KEY_FILE_VERSION: u32 = 1;
@@ -354,6 +355,21 @@ pub trait DeviceUnwrap {
 impl DeviceUnwrap for ManagedKey {
     fn unwrap_sync_key(&self, wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         self.decrypt_bytes(wrapped)
+    }
+}
+
+/// Keys of a pairing of the new Mac, held by the `SyncManager` (D6 of doc
+/// 18). They unwrap a `Device` wrapping, unwrap the keyring of a local sync
+/// state, and wrap the keyring and the file key of each import.
+pub trait PairingKeys: DeviceUnwrap + SyncKeyWrapper {
+    /// Unlock of the join of a paired vault with these keys. Reads no key.
+    fn unlock(&self) -> Unlock<'_>;
+}
+
+/// `vault-encryption-key`, read once on the context of the pairing start.
+impl PairingKeys for ManagedKey {
+    fn unlock(&self) -> Unlock<'_> {
+        Unlock::Key(self)
     }
 }
 

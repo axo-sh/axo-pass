@@ -31,7 +31,7 @@ use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeyProbe, KeyStat
 use crate::secrets::vaults::storage::test_keys::TestKeys;
 use crate::secrets::vaults::storage::txn::{Target, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
-use crate::secrets::vaults::sync::keys::{KeyFingerprint, SyncKey};
+use crate::secrets::vaults::sync::keys::{KeyFingerprint, SyncKey, SyncKeyWrapper, TestKeyWrapper};
 use crate::secrets::vaults::sync::local_state::{LocalSyncState, PinSource, PinnedKeys};
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys};
 use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
@@ -47,7 +47,7 @@ use crate::secrets::vaults::sync::transport::{
     FileName, MAX_PAIRING_SIZE, ReadResult, RequestId, SyncTransport, TransportRoot,
 };
 use crate::secrets::vaults::sync::wrapping::{
-    DeviceUnwrap, DeviceWrapping, KeyFile, PairingMac, Wrapping,
+    DeviceUnwrap, DeviceWrapping, KeyFile, PairingKeys, PairingMac, Wrapping,
 };
 
 /// Name of the new Mac in the tests.
@@ -150,7 +150,7 @@ fn folder(vaults: &[Uuid]) -> FakeTransport {
 }
 
 /// Pairing key that the unlocked Mac derives from the code the user typed.
-fn typed_key(pending: &PendingPairing) -> PairKey {
+pub(super) fn typed_key(pending: &PendingPairing) -> PairKey {
     PairingCode::parse(&pending.code().shown())
         .unwrap()
         .pair_key()
@@ -1717,22 +1717,36 @@ fn vault_of_another_root_or_not_in_request_map_receives_no_wrapping() {
 // by `FakeTransport::fire_watch` and the clock moved by
 // `SyncManager::advance_clock`.
 
-/// Unwrap that returns fixed bytes, or fails if it has none, and counts its
-/// calls through a counter the test keeps.
-struct SharedUnwrap {
+/// Pairing keys whose unwrap returns fixed bytes, or fails if it has none,
+/// and counts its calls through a counter the test keeps. The keyring is
+/// wrapped with [`TestKeyWrapper`], and the join of an import takes the file
+/// key of `file_key`.
+pub(super) struct SharedUnwrap {
     raw: Option<Vec<u8>>,
     calls: Arc<AtomicUsize>,
+    file_key: Box<dyn Fn() -> UnlockedKey + Send + Sync>,
 }
 
 impl SharedUnwrap {
-    /// Unwrap that returns `key`, or fails if `None`, and its call counter.
-    fn boxed(key: Option<&SyncKey>) -> (Box<dyn DeviceUnwrap + Send>, Arc<AtomicUsize>) {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let unwrap = Self {
+    /// Keys whose unwrap returns `key`, or fails if `None`, and whose join
+    /// takes the file key of `file_key`.
+    pub(super) fn new(
+        key: Option<&SyncKey>,
+        file_key: impl Fn() -> UnlockedKey + Send + Sync + 'static,
+    ) -> Self {
+        Self {
             raw: key.map(|key| key.as_bytes().to_vec()),
-            calls: calls.clone(),
-        };
-        (Box::new(unwrap), calls)
+            calls: Arc::new(AtomicUsize::new(0)),
+            file_key: Box::new(file_key),
+        }
+    }
+
+    /// Keys that return `key`, or fail if `None`, and their call counter.
+    /// The tests run no join with them.
+    fn boxed(key: Option<&SyncKey>) -> (Box<dyn PairingKeys + Send>, Arc<AtomicUsize>) {
+        let keys = Self::new(key, || panic!("the test runs no join"));
+        let calls = keys.calls.clone();
+        (Box::new(keys), calls)
     }
 }
 
@@ -1740,6 +1754,22 @@ impl DeviceUnwrap for SharedUnwrap {
     fn unwrap_sync_key(&self, _wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.raw.clone().map(Zeroizing::new)
+    }
+}
+
+impl SyncKeyWrapper for SharedUnwrap {
+    fn wrap(&self, raw: &[u8]) -> Option<String> {
+        TestKeyWrapper.wrap(raw)
+    }
+
+    fn unwrap(&self, wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        TestKeyWrapper.unwrap(wrapped)
+    }
+}
+
+impl PairingKeys for SharedUnwrap {
+    fn unlock(&self) -> Unlock<'_> {
+        Unlock::Test(&*self.file_key)
     }
 }
 
@@ -1764,7 +1794,9 @@ fn wrapping_written_after_start_is_accepted_at_next_event_with_one_unwrap_key() 
     let (unwrap, calls) = SharedUnwrap::boxed(Some(&sync_key));
     let (_fx, managed) = new_mac_manager();
 
-    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed
+        .manager
+        .pair(pending, transport.clone(), unwrap, None);
     managed.run();
 
     // One watch per vault of the request map. The first poll finds nothing.
@@ -1806,7 +1838,9 @@ fn pairing_request_is_deleted_when_app_quits_or_after_15_minutes() {
         let request_id = pending.request().request_id;
         let (unwrap, _) = SharedUnwrap::boxed(None);
         let (_fx, managed) = new_mac_manager();
-        managed.manager.pair(pending, transport.clone(), unwrap);
+        managed
+            .manager
+            .pair(pending, transport.clone(), unwrap, None);
         managed.run();
         assert!(transport.pairing(request_id).is_some());
         assert_eq!(transport.watch_count(), 1);
@@ -1839,7 +1873,9 @@ fn finished_pairing_ends_its_watches() {
     let request_id = pending.request().request_id;
     let (unwrap, _) = SharedUnwrap::boxed(None);
     let (_fx, managed) = new_mac_manager();
-    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed
+        .manager
+        .pair(pending, transport.clone(), unwrap, None);
     managed.run();
     assert_eq!(transport.watch_count(), 2);
 
@@ -1855,12 +1891,14 @@ fn finished_pairing_ends_its_watches() {
     let first = mac.start(&transport, &[]).unwrap();
     let first_id = first.request().request_id;
     let (unwrap, _) = SharedUnwrap::boxed(None);
-    managed.manager.pair(first, transport.clone(), unwrap);
+    managed.manager.pair(first, transport.clone(), unwrap, None);
     managed.run();
     let second = mac.start(&transport, &[]).unwrap();
     let second_id = second.request().request_id;
     let (unwrap, _) = SharedUnwrap::boxed(None);
-    managed.manager.pair(second, transport.clone(), unwrap);
+    managed
+        .manager
+        .pair(second, transport.clone(), unwrap, None);
     managed.run();
 
     assert!(transport.pairing(first_id).is_none());
@@ -1908,7 +1946,7 @@ fn only_pairing_watcher_writes_pairing_requests_and_manager_writes_none() {
     assert_eq!(new.pairing_writes(), 1);
     let (unwrap, _) = SharedUnwrap::boxed(None);
     let (_new_fx, new_managed) = new_mac_manager();
-    new_managed.manager.pair(pending, new.clone(), unwrap);
+    new_managed.manager.pair(pending, new.clone(), unwrap, None);
     new_managed.run();
     new.fire_watch(vault(1));
     new_managed.run();
@@ -1943,7 +1981,9 @@ fn wrapping_whose_unwrap_fails_is_not_unwrapped_again_and_new_wrapping_is() {
     let (unwrap, calls) = SharedUnwrap::boxed(None);
     let (_fx, managed) = new_mac_manager();
 
-    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed
+        .manager
+        .pair(pending, transport.clone(), unwrap, None);
     managed.run();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     transport.fire_watch(vault(1));
@@ -1971,7 +2011,9 @@ fn pairing_handed_to_stopped_manager_deletes_its_request() {
     let request_id = pending.request().request_id;
     let (unwrap, _) = SharedUnwrap::boxed(None);
 
-    managed.manager.pair(pending, transport.clone(), unwrap);
+    managed
+        .manager
+        .pair(pending, transport.clone(), unwrap, None);
 
     assert!(transport.pairing(request_id).is_none());
     assert_eq!(transport.watch_count(), 0);

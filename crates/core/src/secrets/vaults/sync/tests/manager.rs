@@ -44,7 +44,7 @@ use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::PausedCause;
 use crate::secrets::vaults::sync::transport::TransportRoot;
-use crate::secrets::vaults::{Error, VaultsManager};
+use crate::secrets::vaults::{Error, VaultCatalog, VaultsManager};
 
 /// Replica of a third Mac.
 const OTHER_PEER: ReplicaId = ReplicaId(Uuid::from_u128(3));
@@ -58,6 +58,12 @@ pub(super) enum Event {
     Pairings(TransportRoot, usize),
     /// Vault paired on the new Mac, with its sync key bytes.
     Paired(Uuid, Vec<u8>),
+    /// Import of a paired vault that waits.
+    ImportWaiting(Uuid),
+    /// Paired vault imported, with its vault key.
+    Imported(Uuid, String),
+    /// Import of a paired vault that failed, with the error text.
+    ImportFailed(Uuid, String),
 }
 
 /// Notifications in the order the manager sent them.
@@ -86,12 +92,30 @@ impl SyncEvents for Events {
             .push(Event::Pairings(root.clone(), count));
     }
 
-    fn paired(&self, vault: PairedVault) {
+    fn paired(&self, vault: &PairedVault) {
         let key = vault.key.as_bytes().to_vec();
         self.0
             .lock()
             .unwrap()
             .push(Event::Paired(vault.vault_id, key));
+    }
+
+    fn import_waiting(&self, vault_id: Uuid) {
+        self.0.lock().unwrap().push(Event::ImportWaiting(vault_id));
+    }
+
+    fn vault_imported(&self, vault_id: Uuid, vault_key: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(Event::Imported(vault_id, vault_key.to_string()));
+    }
+
+    fn import_failed(&self, vault_id: Uuid, error: &Error) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(Event::ImportFailed(vault_id, error.to_string()));
     }
 }
 
@@ -131,13 +155,18 @@ pub(super) struct Managed {
 
 impl Managed {
     pub(super) fn start(fx: &Fixture, unlocked: bool) -> Self {
+        Self::of(&fx.catalog, fx.vault.unlocked_key().unwrap(), unlocked)
+    }
+
+    /// Manager of `catalog`, whose transactions use the file key `key`.
+    pub(super) fn of(catalog: &VaultCatalog, key: UnlockedKey, unlocked: bool) -> Self {
         let events = Arc::new(Events::default());
         let unlock = Arc::new(TestUnlock {
             unlocked: AtomicBool::new(unlocked),
-            key: fx.vault.unlocked_key().unwrap(),
+            key,
             transactions: AtomicUsize::new(0),
         });
-        let manager = SyncManager::manual(fx.catalog.clone(), events.clone(), unlock.clone());
+        let manager = SyncManager::manual(catalog.clone(), events.clone(), unlock.clone());
         Self {
             manager,
             events,

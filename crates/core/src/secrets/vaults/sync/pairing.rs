@@ -13,7 +13,7 @@
 //!
 //! The pairing watcher in `pairing/watcher.rs` polls for the wrappings and
 //! deletes the request when the user finishes, the app quits, or 15 minutes
-//! pass. The import of a [`PairedVault`] is milestone 10.
+//! pass. The `SyncManager` imports each [`PairedVault`] (`sync/join_sync.rs`).
 
 pub mod dismissed;
 pub mod grant;
@@ -212,8 +212,8 @@ impl PendingPairing {
     /// `PairingNoVaults` if no vault is left. Then creates the missing keys
     /// with `OnNewHardware::MoveFiles`, reads the public keys on `context`,
     /// which can prompt, generates a replica id for each vault and the code,
-    /// and writes the request.
-    #[allow(dead_code, reason = "the pairing UI of milestone 10 calls it")]
+    /// and writes the request. `VaultCatalog::start_pairing` is the public
+    /// start, which computes `synced` (D14 of doc 18).
     pub(crate) fn start(
         transport: &dyn SyncTransport,
         synced: &BTreeSet<Uuid>,

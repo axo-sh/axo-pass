@@ -4,7 +4,8 @@
 //! request expires, or the app quits. It watches the directory of each vault
 //! in the request map and polls the `key.json` files on each event and every
 //! [`POLL_INTERVAL`], so a transport with no watch is still polled. Each
-//! accepted vault goes to [`SyncEvents::paired`].
+//! accepted vault is returned to the `SyncManager`, which reports it and
+//! starts its import (D6 of doc 18).
 //!
 //! The `SyncManager` thread runs the watcher, so `SyncManager::shutdown`
 //! finishes it with the watches of the synced vaults. The watcher holds no
@@ -24,8 +25,7 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
-use super::PendingPairing;
-use crate::secrets::vaults::sync::manager::SyncEvents;
+use super::{PairedVault, PendingPairing};
 use crate::secrets::vaults::sync::transport::{SyncTransport, WatchHandle};
 use crate::secrets::vaults::sync::wrapping::DeviceUnwrap;
 
@@ -41,7 +41,6 @@ pub struct PairingWatcher {
     pending: Option<PendingPairing>,
     transport: Arc<dyn SyncTransport>,
     unwrap: WatcherUnwrap,
-    events: Arc<dyn SyncEvents>,
     watches: Vec<WatchHandle>,
     expires_at: Instant,
     next_poll: Instant,
@@ -56,7 +55,6 @@ impl PairingWatcher {
         pending: PendingPairing,
         transport: Arc<dyn SyncTransport>,
         unwrap: Box<dyn DeviceUnwrap + Send>,
-        events: Arc<dyn SyncEvents>,
         notify: impl Fn() + Clone + Send + 'static,
         now: Instant,
     ) -> Self {
@@ -74,7 +72,6 @@ impl PairingWatcher {
             pending: Some(pending),
             transport,
             unwrap: WatcherUnwrap::new(unwrap),
-            events,
             watches,
             expires_at: now + PAIRING_EXPIRY,
             next_poll: now,
@@ -96,16 +93,14 @@ impl PairingWatcher {
         now >= self.next_poll
     }
 
-    /// Poll the `key.json` files and send each accepted vault to `paired`.
+    /// Poll the `key.json` files. Returns the vaults accepted by this poll.
     /// The next poll is due [`POLL_INTERVAL`] after `now`.
-    pub fn poll(&mut self, now: Instant) {
+    pub fn poll(&mut self, now: Instant) -> Vec<PairedVault> {
         self.next_poll = now + POLL_INTERVAL;
         let Some(pending) = &mut self.pending else {
-            return;
+            return Vec::new();
         };
-        for vault in pending.poll(&*self.transport, &self.unwrap) {
-            self.events.paired(vault);
-        }
+        pending.poll(&*self.transport, &self.unwrap)
     }
 
     /// End the watches, delete the request, and drop the code.

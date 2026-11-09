@@ -52,7 +52,7 @@ const MAC_B: &str = "Home Mac";
 const MAC_C: &str = "Studio Mac";
 
 /// Root of the synced folder of the join tests.
-fn root() -> TransportRoot {
+pub(super) fn root() -> TransportRoot {
     TransportRoot::Folder {
         path: PathBuf::from("/join/Vaults"),
     }
@@ -60,7 +60,7 @@ fn root() -> TransportRoot {
 
 /// Enable sync of the vault of `fx` with the synced folder `root`, as
 /// [`MAC_A`]. Returns the setup, which holds the kit.
-fn enable(fx: &Fixture, root: TransportRoot) -> SyncSetup {
+pub(super) fn enable(fx: &Fixture, root: TransportRoot) -> SyncSetup {
     let target = Target::of(&fx.vault);
     let setup = match SyncSetup::prepare(fx.catalog.files(), &target, root, MAC_A).unwrap() {
         SetupStart::Kit(setup) => setup,
@@ -111,7 +111,7 @@ fn join_fx(fx: &Fixture, join: &JoinKey) -> Result<Committed<Vec<ItemId>>, Error
 
 /// New file key of vault `vault_id`, whose wrapped form is `wrapped` in every
 /// byte.
-fn file_key(vault_id: Uuid, wrapped: u8) -> UnlockedKey {
+pub(super) fn file_key(vault_id: Uuid, wrapped: u8) -> UnlockedKey {
     UnlockedKey::for_test(
         VaultFileKey::new(vec![wrapped; 32]),
         VaultCipher::new(vault_id),
@@ -120,7 +120,7 @@ fn file_key(vault_id: Uuid, wrapped: u8) -> UnlockedKey {
 
 /// Sync state of vault `vault_id` under the app data directory `root`, and
 /// its body, opened with the keyring it holds.
-fn opened(root: &Path, vault_id: Uuid) -> (LocalSyncState, State) {
+pub(super) fn opened(root: &Path, vault_id: Uuid) -> (LocalSyncState, State) {
     let local = LocalSyncState::load(root, vault_id, &TestSigner::device()).unwrap();
     let keyring = SyncKeyring::unwrap(&local.sync_keys, &TestKeyWrapper).unwrap();
     let state = local.open(&keyring).unwrap();
@@ -150,15 +150,15 @@ fn titles(state: &State, item: ItemId) -> BTreeSet<String> {
 
 /// Mac with its own app data directory and vaults directory, that syncs
 /// through the folder `transport`.
-struct Mac {
+pub(super) struct Mac {
     _dir: TempDir,
-    root: PathBuf,
-    vaults_dir: PathBuf,
-    catalog: VaultCatalog,
+    pub(super) root: PathBuf,
+    pub(super) vaults_dir: PathBuf,
+    pub(super) catalog: VaultCatalog,
 }
 
 impl Mac {
-    fn new(transport: Arc<dyn SyncTransport>) -> Self {
+    pub(super) fn new(transport: Arc<dyn SyncTransport>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("data");
         let vaults_dir = dir.path().join("vaults");
@@ -181,7 +181,7 @@ impl Mac {
     /// Copy of the vault file of `fx` on this Mac, unlocked, as an import of
     /// one export on both Macs. It holds the vault id and the file key of
     /// `fx`.
-    fn copy_of(&self, fx: &Fixture) -> VaultHandle {
+    pub(super) fn copy_of(&self, fx: &Fixture) -> VaultHandle {
         let path = VaultHandle::file_path(&self.vaults_dir, fx.id());
         fs::copy(&fx.vault.path, &path).unwrap();
         VaultHandle::unlocked(path, saved_vault(fx))
@@ -214,14 +214,14 @@ impl Mac {
     }
 
     /// Vault file of `vh` as saved, verified.
-    fn saved(&self, vh: &VaultHandle) -> Vault {
+    pub(super) fn saved(&self, vh: &VaultHandle) -> Vault {
         let file = EncryptedVault::load(&vh.path, &TestSigner::device()).unwrap();
         Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), file).unwrap()
     }
 
     /// App data files of vault `vault_id` that a join writes: the sync state,
     /// the staged file, and the sidecar.
-    fn sync_files(&self, vault_id: Uuid) -> [bool; 3] {
+    pub(super) fn sync_files(&self, vault_id: Uuid) -> [bool; 3] {
         [
             LocalSyncState::path(&self.root, vault_id),
             LocalSyncState::staged_path(&self.root, vault_id),

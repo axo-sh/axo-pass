@@ -11,16 +11,17 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::bundle::{
     ExportMode, FileKeyWrapper, ImportAction, ImportSelection, ImportableBundle,
 };
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::encrypted_vault::{VaultFileKey, VaultHeader};
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::device_keys::{
-    DeviceKeys, KeyState, KeychainKeys, OnNewHardware, VaultFiles, ensure_device_keys,
+    DeviceKeys, KeyProbe, KeyState, KeychainKeys, OnNewHardware, VaultFiles, ensure_device_keys,
 };
 use crate::secrets::vaults::storage::handle::{
     ExportProgress, VaultHandle, export_bundle, get_vault_encryption_key_on, normalized_key,
@@ -33,10 +34,16 @@ use crate::secrets::vaults::storage::txn::{
     Committed, RetainedVersion, Target, Unlock, VaultWriter,
 };
 use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
-use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinInto, JoinKey};
+use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinInto, JoinKey, PairingImport};
+use crate::secrets::vaults::sync::keys::SyncKeyWrapper;
+use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::ItemId;
+use crate::secrets::vaults::sync::pairing::PendingPairing;
+use crate::secrets::vaults::sync::recovery::import::RecoveredKey;
+use crate::secrets::vaults::sync::setup::SyncSetup;
 use crate::secrets::vaults::sync::transport::TransportRoot;
+use crate::secrets::vaults::sync::wrapping::PairingKeys;
 
 /// This struct tracks vault files on disk: the vaults directory, the external
 /// vaults, and the retained versions and lock files. Operations read the
@@ -203,7 +210,7 @@ impl VaultCatalog {
 
     /// This catalog over the keys `keys`.
     #[cfg(test)]
-    pub(super) fn with_keys(mut self, keys: Arc<dyn DeviceKeys>) -> Self {
+    pub(crate) fn with_keys(mut self, keys: Arc<dyn DeviceKeys>) -> Self {
         self.keys = keys;
         self
     }
@@ -761,6 +768,186 @@ impl VaultCatalog {
             choose_key: &choose_key,
         };
         self.files.join_sync(join, file, root, name, unlock)
+    }
+
+    /// Start a pairing of this Mac as the new Mac with the synced folder
+    /// `root`, as the Mac named `name` (Device pairing steps 1 to 3). Returns
+    /// the pairing and `vault-encryption-key`, which the caller hands to
+    /// `SyncManager::pair` as its `PairingKeys`.
+    ///
+    /// The request map leaves out each vault whose join is refused (D14 of
+    /// doc 18, [`Self::pairing_synced`]), so a vault whose sync state fails
+    /// its signature or is missing is in the map for its re-link. If
+    /// `vault-encryption-key` is present, it is read on `context` before the
+    /// start, for the trust check. Otherwise the start creates it, and it is
+    /// read after the start. Either way the caller reads it once. See
+    /// `PendingPairing::start`, which moves every vault file to
+    /// `unreadable/` on new hardware.
+    pub fn start_pairing(
+        &self,
+        root: &TransportRoot,
+        name: &str,
+        context: AuthContext,
+    ) -> Result<(PendingPairing, ManagedKey), Error> {
+        self.start_pairing_with(root, name, context, |context| {
+            self.keys.read_encryption_key(context)
+        })
+    }
+
+    /// [`Self::start_pairing`] with the keys that `read` returns for a
+    /// context, `None` if `vault-encryption-key` is missing.
+    pub(crate) fn start_pairing_with<K: PairingKeys>(
+        &self,
+        root: &TransportRoot,
+        name: &str,
+        context: AuthContext,
+        read: impl Fn(AuthContext) -> Result<Option<K>, Error>,
+    ) -> Result<(PendingPairing, K), Error> {
+        let transport = SyncSetup::transport(&self.files, root)?;
+        let present = self.keys.probe_encryption_key() == KeyProbe::Present;
+        let read_first = if present {
+            read(context.clone())?
+        } else {
+            None
+        };
+        let synced = match &read_first {
+            Some(keys) => self.pairing_synced(keys),
+            None => BTreeSet::new(),
+        };
+        let pending = PendingPairing::start(
+            &*transport,
+            &synced,
+            self.keys.as_ref(),
+            &self.vault_files(),
+            context.clone(),
+            name,
+        )?;
+        let keys = match read_first {
+            Some(keys) => keys,
+            None => read(context)?.ok_or(Error::VaultEncryptionKeyMissing)?,
+        };
+        Ok((pending, keys))
+    }
+
+    /// Vault ids on this Mac whose join is refused, which a pairing request
+    /// leaves out (D14 of doc 18).
+    ///
+    /// Each vault file and each local sync state is checked as the join
+    /// checks it ([`SyncSetup::check_joinable`]). A vault file is verified,
+    /// and the keyring of its sync state is unwrapped by `wrapper`. A sync
+    /// state with no vault file is checked as the import of a new vault. A
+    /// vault file that fails to load is left out, since its join fails too.
+    fn pairing_synced(&self, wrapper: &impl SyncKeyWrapper) -> BTreeSet<Uuid> {
+        let root = self.files.root();
+        let signer = &**self.signer();
+        let files = self.listed_targets();
+        let ids: BTreeSet<Uuid> = files
+            .keys()
+            .copied()
+            .chain(LocalSyncState::list(root).into_iter().map(|(id, _)| id))
+            .collect();
+        ids.into_iter()
+            .filter(|id| {
+                let joinable = match files.get(id) {
+                    Some(target) => EncryptedVault::load(&target.path, signer).and_then(|vault| {
+                        let keyring = SyncLoad::keyring(root, &vault, signer, wrapper);
+                        SyncSetup::check_joinable(root, *id, Some(&vault), keyring.as_ref(), signer)
+                    }),
+                    None => SyncSetup::check_joinable(root, *id, None, None, signer),
+                };
+                if let Err(e) = &joinable {
+                    log::info!("Pairing leaves out vault {id}: {e}");
+                }
+                joinable.is_err()
+            })
+            .collect()
+    }
+
+    /// Import of the vaults in the request of `pending` with the synced
+    /// folder `root`, as the Mac named `name` (D5 and D6 of doc 18). A vault
+    /// id that a listed vault file holds joins that vault, and any other is
+    /// imported as a new vault. Called after [`Self::start_pairing`], whose
+    /// move on new hardware leaves no vault file.
+    pub fn pairing_import(
+        &self,
+        pending: &PendingPairing,
+        root: &TransportRoot,
+        name: &str,
+    ) -> PairingImport {
+        let listed = self.listed_targets();
+        let into = pending
+            .request()
+            .replicas
+            .keys()
+            .map(|vault_id| {
+                let into = match listed.get(vault_id) {
+                    Some(target) => JoinInto::Existing(target.clone()),
+                    None => JoinInto::New,
+                };
+                (*vault_id, into)
+            })
+            .collect();
+        PairingImport {
+            name: name.to_string(),
+            root: root.clone(),
+            into,
+        }
+    }
+
+    /// Target of each listed vault file, by vault id.
+    fn listed_targets(&self) -> BTreeMap<Uuid, Target> {
+        self.scan()
+            .vaults
+            .into_iter()
+            .filter_map(|(key, vh)| {
+                let id = vh.peek_vault_id().ok()?;
+                Some((id, Target::new(key, vh.path.clone())))
+            })
+            .collect()
+    }
+
+    /// Import the sync key `key`, opened with a recovery kit, into the vault
+    /// `into` with the synced folder `root`, as the Mac named `name` (D7 of
+    /// doc 18). The UI calls `RecoveryImport::check` again while its wait is
+    /// shown, and calls this after `Recovered`.
+    ///
+    /// The missing keys are created first with `OnNewHardware::MoveFiles`
+    /// (P18 of doc 16). On new hardware every vault file moves to
+    /// `unreadable/`, so no local vault holds the vault id, and the import
+    /// builds a new vault whatever `into` states. The join reads
+    /// `vault-encryption-key` on `context` once ([`Self::join_sync`]).
+    pub fn import_recovered(
+        &self,
+        key: RecoveredKey,
+        root: &TransportRoot,
+        name: &str,
+        into: JoinInto,
+        context: AuthContext,
+    ) -> Result<Committed<Vec<ItemId>>, Error> {
+        self.import_recovered_with(
+            key,
+            root,
+            name,
+            into,
+            context.clone(),
+            Unlock::Context(context),
+        )
+    }
+
+    /// [`Self::import_recovered`] with the keys of the join from `unlock`.
+    pub(crate) fn import_recovered_with(
+        &self,
+        key: RecoveredKey,
+        root: &TransportRoot,
+        name: &str,
+        into: JoinInto,
+        context: AuthContext,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<Vec<ItemId>>, Error> {
+        let new_hardware = self.key_state() == KeyState::NewHardware;
+        self.ensure_keys(context, OnNewHardware::MoveFiles)?;
+        let into = if new_hardware { JoinInto::New } else { into };
+        self.join_sync(&JoinKey::recovered(key), into, root, name, unlock)
     }
 
     /// Key of a vault rebuilt at `path`, as [`Self::rebuild`] states.

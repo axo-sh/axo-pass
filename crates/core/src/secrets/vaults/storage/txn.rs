@@ -57,6 +57,7 @@
 //! requested change first if [`VaultWriter::read_joins`] holds
 //! (`storage/catalog.rs`).
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
@@ -74,6 +75,7 @@ use uuid::Uuid;
 use crate::core::auth::AuthContext;
 use crate::core::dirs::app_data_dir;
 use crate::core::files::write_atomic;
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -414,6 +416,10 @@ pub enum Unlock<'a> {
     /// shared context. A read already authenticated the context, so the
     /// transaction adds no prompt (D7).
     Context(AuthContext),
+    /// Vault encryption key already read on a context, such as the key that
+    /// a pairing holds for its imports (D6 of doc 18). Reads no key. An
+    /// unwrap with the key prompts if its context lapsed.
+    Key(&'a ManagedKey),
     /// Use the file key and keyring of a vault already unlocked in memory. No
     /// keychain call runs.
     Unlocked(&'a VaultHandle),
@@ -446,9 +452,14 @@ impl Unlock<'_> {
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                Self::unwrap_keys(root, path, signer, AuthContext::SharedThreadLocal)
+                Self::unwrap_keys(root, path, signer, || {
+                    get_vault_encryption_key_on(AuthContext::SharedThreadLocal)
+                })
             },
-            Unlock::Context(context) => Self::unwrap_keys(root, path, signer, context.clone()),
+            Unlock::Context(context) => Self::unwrap_keys(root, path, signer, || {
+                get_vault_encryption_key_on(context.clone())
+            }),
+            Unlock::Key(managed_key) => Self::unwrap_keys(root, path, signer, || Ok(*managed_key)),
             Unlock::Unlocked(vh) => Ok(UnlockedKeys {
                 id: vh.vault_id()?,
                 file_key: vh.unlocked_key()?,
@@ -480,18 +491,20 @@ impl Unlock<'_> {
         id: Uuid,
         signer: &dyn VaultSigner,
     ) -> Result<(UnlockedKey, Option<SyncKeyring>), Error> {
-        let generate = |context: AuthContext| {
-            let managed_key = get_vault_encryption_key_on(context)?;
-            let file_key = UnlockedKey::generate(&managed_key, id)?;
-            let keyring = SyncLoad::keyring_of(root, id, signer, &managed_key);
+        let generate = |managed_key: &ManagedKey| {
+            let file_key = UnlockedKey::generate(managed_key, id)?;
+            let keyring = SyncLoad::keyring_of(root, id, signer, managed_key);
             Ok((file_key, keyring))
         };
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                generate(AuthContext::SharedThreadLocal)
+                generate(&get_vault_encryption_key_on(
+                    AuthContext::SharedThreadLocal,
+                )?)
             },
-            Unlock::Context(context) => generate(context.clone()),
+            Unlock::Context(context) => generate(&get_vault_encryption_key_on(context.clone())?),
+            Unlock::Key(managed_key) => generate(managed_key),
             Unlock::Unlocked(_) => Err(Error::VaultLocked),
             #[cfg(test)]
             Unlock::Test(key) => {
@@ -507,9 +520,9 @@ impl Unlock<'_> {
     /// `vault-encryption-key`, and the keyring of the local sync state of an
     /// existing vault. An existing vault file is verified under the key of
     /// `signer` first, and its file key is unwrapped. A new vault takes a new
-    /// file key. `App` and `Context` read the key once. A vault unlocked in
-    /// memory holds no vault encryption key, so `Unlocked` fails with
-    /// `VaultLocked`.
+    /// file key. `App` and `Context` read the key once, and `Key` reads none.
+    /// A vault unlocked in memory holds no vault encryption key, so
+    /// `Unlocked` fails with `VaultLocked`.
     fn setup_keys(
         &self,
         root: &Path,
@@ -517,45 +530,19 @@ impl Unlock<'_> {
         signer: &dyn VaultSigner,
         keyring: &SyncKeyring,
     ) -> Result<SetupKeys, Error> {
-        let read = |context: AuthContext| -> Result<SetupKeys, Error> {
-            let (id, enc_vault) = match file {
-                SetupFile::Existing(path) => {
-                    let enc_vault = EncryptedVault::load(path, signer)?;
-                    (enc_vault.id, Some(enc_vault))
-                },
-                SetupFile::New(id) => (id, None),
-            };
-            let managed_key = get_vault_encryption_key_on(context)?;
-            let (file_key, local_keyring) = match &enc_vault {
-                Some(enc_vault) => {
-                    let file_key = UnlockedKey::unwrap(&managed_key, enc_vault)
-                        .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
-                        .map_err(|_| Error::VaultFileKeyDecryptionError)?;
-                    let local_keyring = SyncLoad::keyring(root, enc_vault, signer, &managed_key);
-                    (file_key, local_keyring)
-                },
-                None => (
-                    UnlockedKey::generate(&managed_key, id)?,
-                    Some(SyncKeyring::default()),
-                ),
-            };
-            let encryption = managed_key
-                .public_key_sec1()
-                .map_err(Error::KeyRetrievalFailed)?;
-            Ok(SetupKeys {
-                id,
-                file_key,
-                sync_keys: keyring.wrap(&managed_key)?,
-                encryption: PublicKey(encryption),
-                local_keyring,
-            })
-        };
         match self {
             Unlock::App => {
                 check_vault_auth_still_valid()?;
-                read(AuthContext::SharedThreadLocal)
+                Self::read_setup_keys(root, file, signer, keyring, || {
+                    get_vault_encryption_key_on(AuthContext::SharedThreadLocal)
+                })
             },
-            Unlock::Context(context) => read(context.clone()),
+            Unlock::Context(context) => Self::read_setup_keys(root, file, signer, keyring, || {
+                get_vault_encryption_key_on(context.clone())
+            }),
+            Unlock::Key(managed_key) => {
+                Self::read_setup_keys(root, file, signer, keyring, || Ok(*managed_key))
+            },
             Unlock::Unlocked(_) => Err(Error::VaultLocked),
             #[cfg(test)]
             Unlock::Test(key) => {
@@ -579,20 +566,64 @@ impl Unlock<'_> {
         }
     }
 
-    /// Unwrap the file key and the sync keyring with one vault encryption
-    /// key read on `context`.
-    fn unwrap_keys(
+    /// [`Self::setup_keys`] with the vault encryption key of `read`. The
+    /// vault file is verified before `read` runs.
+    fn read_setup_keys<K: Borrow<ManagedKey>>(
+        root: &Path,
+        file: SetupFile<'_>,
+        signer: &dyn VaultSigner,
+        keyring: &SyncKeyring,
+        read: impl FnOnce() -> Result<K, Error>,
+    ) -> Result<SetupKeys, Error> {
+        let (id, enc_vault) = match file {
+            SetupFile::Existing(path) => {
+                let enc_vault = EncryptedVault::load(path, signer)?;
+                (enc_vault.id, Some(enc_vault))
+            },
+            SetupFile::New(id) => (id, None),
+        };
+        let managed_key = read()?;
+        let managed_key = managed_key.borrow();
+        let (file_key, local_keyring) = match &enc_vault {
+            Some(enc_vault) => {
+                let file_key = UnlockedKey::unwrap(managed_key, enc_vault)
+                    .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
+                    .map_err(|_| Error::VaultFileKeyDecryptionError)?;
+                let local_keyring = SyncLoad::keyring(root, enc_vault, signer, managed_key);
+                (file_key, local_keyring)
+            },
+            None => (
+                UnlockedKey::generate(managed_key, id)?,
+                Some(SyncKeyring::default()),
+            ),
+        };
+        let encryption = managed_key
+            .public_key_sec1()
+            .map_err(Error::KeyRetrievalFailed)?;
+        Ok(SetupKeys {
+            id,
+            file_key,
+            sync_keys: keyring.wrap(managed_key)?,
+            encryption: PublicKey(encryption),
+            local_keyring,
+        })
+    }
+
+    /// Unwrap the file key and the sync keyring with the vault encryption
+    /// key of `read`. The vault file is verified before `read` runs.
+    fn unwrap_keys<K: Borrow<ManagedKey>>(
         root: &Path,
         path: &Path,
         signer: &dyn VaultSigner,
-        context: AuthContext,
+        read: impl FnOnce() -> Result<K, Error>,
     ) -> Result<UnlockedKeys, Error> {
         let enc_vault = EncryptedVault::load(path, signer)?;
-        let managed_key = get_vault_encryption_key_on(context)?;
-        let file_key = UnlockedKey::unwrap(&managed_key, &enc_vault)
+        let managed_key = read()?;
+        let managed_key = managed_key.borrow();
+        let file_key = UnlockedKey::unwrap(managed_key, &enc_vault)
             .inspect_err(|e| log::debug!("failed to unwrap the vault file key: {e}"))
             .map_err(|_| Error::VaultFileKeyDecryptionError)?;
-        let keyring = SyncLoad::keyring(root, &enc_vault, signer, &managed_key);
+        let keyring = SyncLoad::keyring(root, &enc_vault, signer, managed_key);
         Ok(UnlockedKeys {
             id: enc_vault.id,
             file_key,

@@ -14,8 +14,8 @@
 //! differs from the kit fingerprint in any of the 16 bytes, is refused,
 //! whatever `key_fingerprint` the wrapping holds.
 //!
-//! The import that takes a [`RecoveredKey`] and builds the vault is
-//! milestone 10.
+//! `VaultCatalog::import_recovered` takes a [`RecoveredKey`] and joins it
+//! (`sync/join_sync.rs`).
 
 use std::collections::BTreeSet;
 

@@ -31,11 +31,21 @@
 //! the manager runs the [`PairingWatcher`] that [`SyncManager::pair`] hands
 //! it, until [`SyncManager::finish_pairing`], the expiry, or the shutdown.
 //! The manager writes no pairing request. The watcher deletes its own.
+//!
+//! Pairing import (10.3, D6 of doc 18). With a [`PairingImport`], each vault
+//! that the watcher accepts waits in an [`ImportWait`], with its own watch of
+//! the vault and the download of the vault requested. The wait is checked at
+//! each watch event of the vault, at each poll of the watcher, and every
+//! [`POLL_INTERVAL`]. Once a state file of the Mac that paired decodes under
+//! the received key, the manager runs `VaultCatalog::join_sync` with the keys
+//! of the pairing and finds the synced vaults again in the next batch. A wait
+//! outlives the finish and the expiry of its pairing, since the key is
+//! already received. It ends at the shutdown, and the keys are dropped.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SendError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -43,18 +53,20 @@ use std::time::{Duration, Instant};
 use jiff::SignedDuration;
 use jiff::Timestamp;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::crdt::ReplicaId;
+use super::join_sync::{ImportWait, PairingImport};
 use super::listing::PeerListing;
 use super::local_state::LocalSyncState;
 use super::pairing::dismissed::DismissedRequests;
 use super::pairing::prompt::PairingPrompt;
-use super::pairing::watcher::PairingWatcher;
+use super::pairing::watcher::{POLL_INTERVAL, PairingWatcher};
 use super::pairing::{PairedVault, PendingPairing};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::transport::{FileName, SyncTransport, TransportRoot, WatchHandle};
-use super::wrapping::DeviceUnwrap;
+use super::wrapping::{DeviceUnwrap, PairingKeys};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::catalog::VaultCatalog;
 use crate::secrets::vaults::storage::handle::check_vault_auth_still_valid;
@@ -74,7 +86,16 @@ pub trait SyncEvents: Send + Sync {
     /// `count` pairing requests under `root` prompt (9.5).
     fn pairing_requests(&self, root: &TransportRoot, count: usize);
     /// The new Mac received the sync key of a vault by pairing (9.5).
-    fn paired(&self, vault: PairedVault);
+    fn paired(&self, vault: &PairedVault);
+    /// The import of vault `vault_id` waits for a state file of the Mac that
+    /// paired (10.3).
+    fn import_waiting(&self, vault_id: Uuid);
+    /// The pairing import joined vault `vault_id` into the vault with the
+    /// vault key `vault_key` (10.3).
+    fn vault_imported(&self, vault_id: Uuid, vault_key: &str);
+    /// The pairing import of vault `vault_id` failed with `error`. The user
+    /// pairs again (10.3).
+    fn import_failed(&self, vault_id: Uuid, error: &Error);
 }
 
 /// Events that are only logged, until milestone 10 adds the app callback.
@@ -94,9 +115,21 @@ impl SyncEvents for LogEvents {
         log::info!("{count} pairing requests prompt under {root}");
     }
 
-    fn paired(&self, vault: PairedVault) {
+    fn paired(&self, vault: &PairedVault) {
         let vault_id = vault.vault_id;
         log::info!("Vault {vault_id} was paired");
+    }
+
+    fn import_waiting(&self, vault_id: Uuid) {
+        log::info!("Import of vault {vault_id} waits for the paired Mac's state file");
+    }
+
+    fn vault_imported(&self, vault_id: Uuid, vault_key: &str) {
+        log::info!("Vault {vault_id} was imported as {vault_key}");
+    }
+
+    fn import_failed(&self, vault_id: Uuid, error: &Error) {
+        log::warn!("Import of vault {vault_id} failed: {error}");
     }
 }
 
@@ -146,7 +179,54 @@ enum Message {
 struct PairingStart {
     pending: PendingPairing,
     transport: Arc<dyn SyncTransport>,
-    unwrap: Box<dyn DeviceUnwrap + Send>,
+    keys: Box<dyn PairingKeys + Send>,
+    import: Option<PairingImport>,
+}
+
+/// Keys of one pairing, shared by its watcher and its import waits on the
+/// manager thread. `ManagedKey` is `Send` and not `Sync`, so the keys are
+/// held in a mutex.
+#[derive(Clone)]
+struct SharedKeys(Arc<Mutex<Box<dyn PairingKeys + Send>>>);
+
+impl SharedKeys {
+    fn new(keys: Box<dyn PairingKeys + Send>) -> Self {
+        Self(Arc::new(Mutex::new(keys)))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Box<dyn PairingKeys + Send>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl DeviceUnwrap for SharedKeys {
+    fn unwrap_sync_key(&self, wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        self.lock().unwrap_sync_key(wrapped)
+    }
+}
+
+/// Pairing of the new Mac that runs, with its keys and its import.
+struct Pairing {
+    watcher: PairingWatcher,
+    keys: SharedKeys,
+    transport: Arc<dyn SyncTransport>,
+    import: Option<PairingImport>,
+}
+
+/// Import of a paired vault that waits for a state file of the Mac that
+/// paired.
+struct PendingImport {
+    wait: ImportWait,
+    root: TransportRoot,
+    /// Display name of this Mac.
+    name: String,
+    keys: SharedKeys,
+    transport: Arc<dyn SyncTransport>,
+    /// Watch of the vault, which outlives the watches of the pairing. It
+    /// ends when the import is dropped.
+    _watch: Option<WatchHandle>,
+    /// Time of the next check with no event.
+    next_check: Instant,
 }
 
 /// Watches and reactions of the synced vaults, run on one thread. Clones of
@@ -216,20 +296,25 @@ impl SyncManager {
 
     /// Run the pairing `pending` of the new Mac through `transport` until
     /// [`Self::finish_pairing`], 15 minutes, or the shutdown, each of which
-    /// deletes the request. `unwrap` holds `vault-encryption-key`, read once
-    /// on the context of `PendingPairing::start` (D16). A pairing already
-    /// running is finished first. If the manager stopped, the request is
-    /// deleted immediately.
+    /// deletes the request. `keys` hold `vault-encryption-key`, read once on
+    /// the context of the pairing start (D16 of doc 17). With `import`, each
+    /// paired vault is imported once a state file of the Mac that paired
+    /// decodes (D6 of doc 18). With `None`, the manager only reports
+    /// `paired`. A pairing already running is finished first, and its
+    /// import waits continue. If the manager stopped, the request is deleted
+    /// immediately.
     pub fn pair(
         &self,
         pending: PendingPairing,
         transport: Arc<dyn SyncTransport>,
-        unwrap: Box<dyn DeviceUnwrap + Send>,
+        keys: Box<dyn PairingKeys + Send>,
+        import: Option<PairingImport>,
     ) {
         let start = Box::new(PairingStart {
             pending,
             transport,
-            unwrap,
+            keys,
+            import,
         });
         if let Err(SendError(Message::Pair(start))) = self.sender.send(Message::Pair(start)) {
             let request_id = start.pending.request().request_id;
@@ -245,8 +330,9 @@ impl SyncManager {
         let _ = self.sender.send(Message::FinishPairing);
     }
 
-    /// End every watch, finish the pairing of the new Mac, and stop the
-    /// manager. Waits for a scan, a poll, or a transaction that runs.
+    /// End every watch, finish the pairing of the new Mac, end the import
+    /// waits, and stop the manager. Waits for a scan, a poll, a transaction,
+    /// or an import that runs.
     pub fn shutdown(&self) {
         let _ = self.sender.send(Message::Shutdown);
         let mut run = self.run.lock().unwrap_or_else(|e| e.into_inner());
@@ -347,7 +433,9 @@ struct Worker {
     /// Pairing watch of each root of the synced vaults.
     roots: HashMap<TransportRoot, WatchHandle>,
     /// Pairing of the new Mac, if one runs.
-    pairing: Option<PairingWatcher>,
+    pairing: Option<Pairing>,
+    /// Imports of paired vaults that wait, by vault id.
+    imports: BTreeMap<Uuid, PendingImport>,
     /// Time added to the clock of the retries. Zero outside the tests.
     #[cfg(test)]
     clock_offset: Duration,
@@ -371,6 +459,7 @@ impl Worker {
             vaults: BTreeMap::new(),
             roots: HashMap::new(),
             pairing: None,
+            imports: BTreeMap::new(),
             #[cfg(test)]
             clock_offset: Duration::ZERO,
         };
@@ -422,16 +511,18 @@ impl Worker {
         self.stop();
     }
 
-    /// Run `received` and every message queued after it, then the retries
-    /// and the pairing polls that are due. Each vault with a change is
-    /// scanned once, and each root with a pairing change is counted once. A
-    /// pairing start or finish runs in message order. Returns false at
-    /// shutdown, after the pairing messages of the batch ran.
+    /// Run `received` and every message queued after it, then the retries,
+    /// the pairing polls, and the import checks that are due. Each vault
+    /// with a change is scanned once, and each root with a pairing change is
+    /// counted once. A pairing start or finish runs in message order.
+    /// Returns false at shutdown, after the pairing messages of the batch
+    /// ran.
     fn process(&mut self, mut received: Vec<Message>) -> bool {
         received.extend(self.receiver.try_iter());
         let mut shutdown = false;
         let mut refresh = false;
         let mut changed = BTreeSet::new();
+        let mut import_changed = BTreeSet::new();
         let mut roots: Vec<TransportRoot> = Vec::new();
         let mut pairing_changed = false;
         for message in received {
@@ -439,6 +530,9 @@ impl Worker {
                 Message::Shutdown => shutdown = true,
                 Message::Refresh => refresh = true,
                 Message::Changed(vault_id) => {
+                    if self.imports.contains_key(&vault_id) {
+                        import_changed.insert(vault_id);
+                    }
                     changed.insert(vault_id);
                 },
                 Message::Pairings(root) => {
@@ -449,7 +543,7 @@ impl Worker {
                 Message::Pair(start) => self.pair(*start),
                 Message::FinishPairing => {
                     if let Some(pairing) = self.pairing.take() {
-                        pairing.finish();
+                        pairing.watcher.finish();
                     }
                 },
                 Message::PairingChanged => pairing_changed = true,
@@ -475,20 +569,27 @@ impl Worker {
         for root in &roots {
             self.report_pairings(root);
         }
-        self.poll_pairing(pairing_changed);
+        let polled = self.poll_pairing(pairing_changed);
+        self.check_imports(&import_changed, polled);
         true
     }
 
-    /// Earliest retry of any vault, or the next wake of the pairing.
+    /// Earliest retry of any vault, the next wake of the pairing, or the
+    /// next check of an import.
     fn next_retry(&self) -> Option<Instant> {
         self.vaults
             .values()
             .filter_map(|vault| vault.retry_at)
-            .chain(self.pairing.as_ref().map(PairingWatcher::next_wake))
+            .chain(
+                self.pairing
+                    .as_ref()
+                    .map(|pairing| pairing.watcher.next_wake()),
+            )
+            .chain(self.imports.values().map(|import| import.next_check))
             .min()
     }
 
-    /// End every watch and finish the pairing.
+    /// End every watch, finish the pairing, and end the import waits.
     fn stop(&mut self) {
         let locks = self.files().locks().clone();
         for vault in std::mem::take(&mut self.vaults).into_values() {
@@ -496,44 +597,165 @@ impl Worker {
         }
         self.roots.clear();
         if let Some(pairing) = self.pairing.take() {
-            pairing.finish();
+            pairing.watcher.finish();
         }
+        self.imports.clear();
     }
 
     /// Start the pairing `start` of the new Mac, after finishing the one
     /// that runs.
     fn pair(&mut self, start: PairingStart) {
         if let Some(pairing) = self.pairing.take() {
-            pairing.finish();
+            pairing.watcher.finish();
         }
         let sender = self.sender.clone();
         let notify = move || {
             let _ = sender.send(Message::PairingChanged);
         };
-        self.pairing = Some(PairingWatcher::start(
+        let keys = SharedKeys::new(start.keys);
+        let watcher = PairingWatcher::start(
             start.pending,
-            start.transport,
-            start.unwrap,
-            self.events.clone(),
+            start.transport.clone(),
+            Box::new(keys.clone()),
             notify,
             self.now(),
-        ));
+        );
+        self.pairing = Some(Pairing {
+            watcher,
+            keys,
+            transport: start.transport,
+            import: start.import,
+        });
     }
 
     /// Poll the pairing of the new Mac if a watch reported a change or the
-    /// poll is due, or finish it if it expired.
-    fn poll_pairing(&mut self, changed: bool) {
+    /// poll is due, or finish it if it expired. Each accepted vault is
+    /// reported, and its import starts. Returns whether the pairing was
+    /// polled.
+    fn poll_pairing(&mut self, changed: bool) -> bool {
         let now = self.now();
         let Some(pairing) = &mut self.pairing else {
-            return;
+            return false;
         };
-        if pairing.expired(now) {
+        if pairing.watcher.expired(now) {
             log::info!("Pairing request expired");
             if let Some(pairing) = self.pairing.take() {
-                pairing.finish();
+                pairing.watcher.finish();
             }
-        } else if changed || pairing.poll_due(now) {
-            pairing.poll(now);
+            return false;
+        }
+        if !changed && !pairing.watcher.poll_due(now) {
+            return false;
+        }
+        let paired = pairing.watcher.poll(now);
+        if paired.is_empty() {
+            return true;
+        }
+        let keys = pairing.keys.clone();
+        let transport = pairing.transport.clone();
+        let import = pairing.import.clone();
+        for vault in paired {
+            self.events.paired(&vault);
+            if let Some(import) = &import {
+                self.wait_for(vault, import, &keys, &transport, now);
+            }
+        }
+        true
+    }
+
+    /// Start the import of the paired vault `vault` as `import` states:
+    /// watch the vault, request its download, and report `import_waiting`.
+    /// The first check is due at `now`. A wait of the same vault is
+    /// replaced.
+    fn wait_for(
+        &mut self,
+        vault: PairedVault,
+        import: &PairingImport,
+        keys: &SharedKeys,
+        transport: &Arc<dyn SyncTransport>,
+        now: Instant,
+    ) {
+        let vault_id = vault.vault_id;
+        let sender = self.sender.clone();
+        let notify = Box::new(move || {
+            let _ = sender.send(Message::Changed(vault_id));
+        });
+        let watch = transport.watch(vault_id, notify);
+        if let Err(e) = transport.request_download(vault_id) {
+            log::warn!("Failed to request the download of vault {vault_id}: {e}");
+        }
+        let into = import.join_into(vault_id);
+        self.imports.insert(
+            vault_id,
+            PendingImport {
+                wait: ImportWait::new(vault, into),
+                root: import.root.clone(),
+                name: import.name.clone(),
+                keys: keys.clone(),
+                transport: transport.clone(),
+                _watch: watch,
+                next_check: now,
+            },
+        );
+        self.events.import_waiting(vault_id);
+    }
+
+    /// Check each import whose vault reported a change in `changed`, every
+    /// import if the pairing was `polled`, and each import whose check is
+    /// due. An import whose wait holds runs, and the next check of the
+    /// others is due [`POLL_INTERVAL`] later.
+    fn check_imports(&mut self, changed: &BTreeSet<Uuid>, polled: bool) {
+        let now = self.now();
+        let due: Vec<Uuid> = self
+            .imports
+            .iter()
+            .filter(|(vault_id, import)| {
+                polled || changed.contains(vault_id) || import.next_check <= now
+            })
+            .map(|(vault_id, _)| *vault_id)
+            .collect();
+        for vault_id in due {
+            let Some(mut import) = self.imports.remove(&vault_id) else {
+                continue;
+            };
+            if import.wait.ready(&*import.transport) {
+                self.import(import);
+            } else {
+                import.next_check = now + POLL_INTERVAL;
+                self.imports.insert(vault_id, import);
+            }
+        }
+    }
+
+    /// Join the paired vault of `import` with the keys of its pairing, and
+    /// report `vault_imported` or `import_failed`. After an import the
+    /// synced vaults are found again in the next batch, so the vault is
+    /// watched.
+    fn import(&self, import: PendingImport) {
+        let PendingImport {
+            wait,
+            root,
+            name,
+            keys,
+            ..
+        } = import;
+        let vault_id = wait.vault_id();
+        let (join, into) = wait.into_join();
+        let result = {
+            let keys = keys.lock();
+            self.catalog
+                .join_sync(&join, into, &root, &name, keys.unlock())
+        };
+        match result {
+            Ok(committed) => {
+                log::info!("Vault {vault_id} was imported by pairing");
+                self.events.vault_imported(vault_id, &committed.vault.key);
+                let _ = self.sender.send(Message::Refresh);
+            },
+            Err(e) => {
+                log::warn!("Failed to import vault {vault_id} by pairing: {e}");
+                self.events.import_failed(vault_id, &e);
+            },
         }
     }
 
