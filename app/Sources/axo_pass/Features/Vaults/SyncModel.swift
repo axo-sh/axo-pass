@@ -47,6 +47,29 @@ struct SyncVaultRef: Identifiable, Equatable {
   var id: String { key }
 }
 
+/// Sync sheet that `SyncModel` requests. A nil `root` is shown as the pointer
+/// to the synced folder in Settings.
+enum SyncSheet: Identifiable {
+  /// Enable sheet of the vault.
+  case enable(SyncVaultRef)
+  /// Pairing of this Mac as the new Mac. `join` is the vault of the join
+  /// offer.
+  case pair(root: SyncRootInfo?, join: SyncVaultRef?)
+  /// Kit import. `join` is the vault of the join offer, which the kit joins.
+  case kitImport(root: SyncRootInfo?, join: SyncVaultRef?)
+  /// Pairing prompt of the pairing requests under `root`.
+  case pairingPrompt(root: SyncRootInfo)
+
+  var id: String {
+    switch self {
+    case .enable(let vault): return "enable-\(vault.key)"
+    case .pair(_, let join): return "pair-\(join?.key ?? "")"
+    case .kitImport(_, let join): return "kit-\(join?.key ?? "")"
+    case .pairingPrompt(let root): return "prompt-\(rootDescription(root))"
+    }
+  }
+}
+
 /// Sync of the vaults for the app. One instance registers the sync events
 /// delegate at launch, and holds the sync state of each vault, the pairing
 /// counts, and the pairing imports.
@@ -69,8 +92,8 @@ final class SyncModel {
   /// Pairing imports by vault id.
   private(set) var imports: [String: VaultImportProgress] = [:]
 
-  /// Vault whose enable sheet is shown.
-  var enableRequest: SyncVaultRef? = nil
+  /// Sync sheet that is shown. Setting another sheet replaces it.
+  var sheet: SyncSheet? = nil
 
   /// Vault whose turn-off confirmation is shown.
   var disableRequest: SyncVaultRef? = nil
@@ -79,6 +102,7 @@ final class SyncModel {
   private(set) var disableError: (vaultKey: String, message: String)? = nil
 
   /// Handler of the join offer. The join buttons are disabled while it is nil.
+  /// Set at init to replace the enable sheet with the pairing or kit sheet.
   var onJoin: ((SyncJoinChoice, SyncVaultRef, SyncRootInfo) -> Void)? = nil
 
   /// Display name of this Mac for the other Macs.
@@ -92,6 +116,12 @@ final class SyncModel {
 
   init(vaults: VaultsModel) {
     self.vaults = vaults
+    onJoin = { [weak self] choice, vault, root in
+      switch choice {
+      case .pair: self?.sheet = .pair(root: root, join: vault)
+      case .recoveryKit: self?.sheet = .kitImport(root: root, join: vault)
+      }
+    }
   }
 
   /// Set the synced folder of the app to `url`.
@@ -211,6 +241,90 @@ final class SyncModel {
 
   func clearDisableError() {
     disableError = nil
+  }
+
+  // MARK: - Pairing on the new Mac
+
+  /// Start pairing this Mac as the new Mac with the folder `root`. Reads
+  /// `vault-encryption-key` once on the shared context. Clears the import
+  /// progress of the vaults of the request. The sync manager reports each
+  /// vault through the events.
+  func startPairing(root: SyncRootInfo) async throws -> PairingHandle {
+    let handle = try await lockingOnExpiry {
+      try await vaults.core.pairingStart(root: root, name: macName)
+    }
+    for id in handle.vaultIds() { imports[id] = nil }
+    return handle
+  }
+
+  // MARK: - Pairing prompt
+
+  /// Computer name of the request under `root` that `code` matches. Nil if no
+  /// request matches. Reads no key.
+  func matchCode(root: SyncRootInfo, code: String) async throws -> String? {
+    try await vaults.core.pairingMatchCode(root: root, code: code)
+  }
+
+  /// Synced vaults of this Mac that the request matched by `code` asks for.
+  func pairingVaults(root: SyncRootInfo, code: String) async throws -> [PairingVaultInfo] {
+    try await vaults.core.pairingVaults(root: root, code: code)
+  }
+
+  /// Share the vaults `vaultIds` with the new Mac of the request matched by
+  /// `code`. Needs the app unlocked.
+  func grant(root: SyncRootInfo, code: String, vaultIds: [String]) async throws
+    -> [PairingGrantInfo]
+  {
+    try await lockingOnExpiry {
+      try await vaults.core.pairingGrant(root: root, code: code, vaultIds: vaultIds)
+    }
+  }
+
+  /// Dismiss the current pairing requests under `root` and clear their count.
+  /// Only a request with a new id prompts again.
+  func dismissPairing(root: SyncRootInfo) async throws {
+    try await vaults.core.pairingDismiss(root: root)
+    pairingCounts[root] = nil
+  }
+
+  // MARK: - Kit import
+
+  /// Check the kit `kitText` against the folder `root`. Writes nothing other
+  /// than download requests. Reads no key.
+  func checkKit(root: SyncRootInfo, kitText: String) async throws -> RecoveryCheckInfo {
+    try await vaults.core.recoveryCheck(root: root, kitText: kitText)
+  }
+
+  /// Import the vault of the kit `kitText` from the folder `root`, or join the
+  /// vault `join` with it. The kit is checked again first. Reads
+  /// `vault-encryption-key` once on the shared context. A kit of another vault
+  /// than `join` is refused.
+  func importKit(root: SyncRootInfo, kitText: String, join: SyncVaultRef?) async throws
+    -> RecoveryImportInfo
+  {
+    let result = try await lockingOnExpiry {
+      if let join {
+        return try await vaults.core.syncJoinWithKit(
+          vaultKey: join.key, root: root, kitText: kitText, name: macName)
+      }
+      return try await vaults.core.recoveryImport(root: root, kitText: kitText, name: macName)
+    }
+    if case .imported(let vaultKey, _) = result {
+      vaults.reload()
+      await reload(vaultKey)
+      await vaults.syncedVaultChanged(vaultKey)
+    }
+    return result
+  }
+
+  /// Run `call`. An expired authentication locks the app and is thrown again.
+  private func lockingOnExpiry<T>(_ call: () async throws -> T) async throws -> T {
+    do {
+      return try await call()
+    } catch FfiError.AuthExpired {
+      vaults.lock()
+      throw FfiError.AuthExpired
+    }
   }
 
   // MARK: - Events

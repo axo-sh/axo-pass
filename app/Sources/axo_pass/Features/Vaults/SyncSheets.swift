@@ -4,8 +4,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension View {
-  /// Present the sync sheets that `SyncModel` requests: the enable sheet and
-  /// the turn-off confirmation. Attach once, in the main window.
+  /// Present the sync sheets that `SyncModel` requests: the enable sheet, the
+  /// pairing sheets, the kit import, and the turn-off confirmation. Attach
+  /// once, in the main window.
   func syncSheets() -> some View {
     modifier(SyncSheetsModifier())
   }
@@ -17,8 +18,13 @@ private struct SyncSheetsModifier: ViewModifier {
   func body(content: Content) -> some View {
     @Bindable var sync = sync
     content
-      .sheet(item: $sync.enableRequest) { vault in
-        SyncEnableSheet(vault: vault)
+      .sheet(item: $sync.sheet) { sheet in
+        switch sheet {
+        case .enable(let vault): SyncEnableSheet(vault: vault)
+        case .pair(let root, let join): PairingSheet(root: root, join: join)
+        case .kitImport(let root, let join): KitImportSheet(root: root, join: join)
+        case .pairingPrompt(let root): PairingPromptSheet(root: root)
+        }
       }
       .confirmationDialog(
         "Turn off sync for \(sync.disableRequest?.name ?? "this vault")?",
@@ -56,6 +62,23 @@ let syncedVaultDeleteMessage =
 /// Text for a vault whose earlier turn-off waits for the synced folder.
 let syncDisableInProgressMessage =
   "Sync is still turning off for this vault. You can turn it on again once the change reaches the synced folder."
+
+/// Text for a sync sheet if no synced folder is chosen.
+let syncNoFolderMessage = "Choose a synced folder in Settings › Vaults first."
+
+/// Error of a sync sheet.
+struct SyncErrorLabel: View {
+  let message: String
+
+  var body: some View {
+    Label(message, systemImage: "xmark.circle.fill")
+      .font(.caption)
+      .foregroundStyle(.red)
+      .lineLimit(4)
+      .fixedSize(horizontal: false, vertical: true)
+      .textSelection(.enabled)
+  }
+}
 
 /// Sync symbol of a vault row in the sidebar. Shows nothing for a vault that
 /// does not sync. The help text gives the synced folder, the turn-off that
@@ -152,7 +175,7 @@ struct SyncEnableSheet: View {
 
   private var preparingStep: some View {
     VStack(alignment: .leading, spacing: 12) {
-      if let error {
+      if error != nil {
         errorLabel
         HStack {
           Spacer()
@@ -170,11 +193,9 @@ struct SyncEnableSheet: View {
 
   private var noFolderStep: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(
-        "Choose a synced folder in Settings › Vaults first."
-      )
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(syncNoFolderMessage)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
       HStack {
         Spacer()
         Button("OK") { dismiss() }
@@ -337,9 +358,10 @@ struct SyncEnableSheet: View {
     }
   }
 
+  /// Hand the choice to `onJoin`, which replaces this sheet with the pairing or
+  /// kit sheet.
   private func join(_ choice: SyncJoinChoice, _ root: SyncRootInfo) {
     guard let onJoin = sync.onJoin else { return }
-    dismiss()
     onJoin(choice, vault, root)
   }
 
@@ -393,12 +415,7 @@ struct SyncEnableSheet: View {
   @ViewBuilder
   private var errorLabel: some View {
     if let error {
-      Label(error, systemImage: "xmark.circle.fill")
-        .font(.caption)
-        .foregroundStyle(.red)
-        .lineLimit(4)
-        .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
+      SyncErrorLabel(message: error)
     }
   }
 }

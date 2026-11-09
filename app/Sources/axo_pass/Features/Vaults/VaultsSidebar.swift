@@ -56,6 +56,17 @@ struct VaultsSidebar: View {
         } label: {
           Label("New Vault", systemImage: "plus")
         }
+        // Add synced vaults to this Mac from the synced folder of the app.
+        Menu {
+          Button("Pair with Another Mac…") { sync.sheet = .pair(root: sync.folder, join: nil) }
+          Button("Use a Recovery Kit…") { sync.sheet = .kitImport(root: sync.folder, join: nil) }
+        } label: {
+          Label("Add Synced Vaults", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Add synced vaults from another Mac or with a recovery kit")
         Spacer()
         Button {
           model.lock()
@@ -110,6 +121,26 @@ struct VaultsSidebar: View {
 
   @ViewBuilder
   private var vaultItems: some View {
+    // Pairing requests of each synced folder. The counts are held while the
+    // app is locked, and show here at the next unlock. A count of zero has no
+    // entry.
+    ForEach(pairingRoots, id: \.self) { root in
+      let count = sync.pairingCounts[root] ?? 0
+      Button {
+        sync.sheet = .pairingPrompt(root: root)
+      } label: {
+        Label {
+          Text(count == 1 ? "1 pairing request" : "\(count) pairing requests")
+        } icon: {
+          Image(systemName: "laptopcomputer.and.arrow.down")
+            .foregroundStyle(.tint)
+        }
+        .font(.caption)
+      }
+      .buttonStyle(.plain)
+      .help("Another Mac asks to pair with the vaults in \(rootDescription(root))")
+    }
+
     let hidden = model.hiddenVaultFileCount
     if hidden > 0 {
       Button {
@@ -182,6 +213,11 @@ struct VaultsSidebar: View {
     }
   }
 
+  /// Synced folders with pairing requests, ordered by path.
+  private var pairingRoots: [SyncRootInfo] {
+    sync.pairingCounts.keys.sorted { rootDescription($0) < rootDescription($1) }
+  }
+
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
     SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
   }
@@ -197,7 +233,7 @@ struct VaultsSidebar: View {
         sync.disableRequest = syncRef(vault)
       }
     case .off:
-      Button("Turn On Sync…") { sync.enableRequest = syncRef(vault) }
+      Button("Turn On Sync…") { sync.sheet = .enable(syncRef(vault)) }
     default:
       Button("Turn On Sync…") {}.disabled(true)
     }
