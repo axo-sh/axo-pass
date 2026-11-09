@@ -79,60 +79,90 @@ fn filters_narrow_results() {
         Outcome::Succeeded,
     ));
 
-    let by_action = read(&AuditFilter {
-        actions: vec![Action::SshSign],
-        ..Default::default()
-    });
-    assert_eq!(by_action.events.len(), 2);
-
-    let by_requester = read(&AuditFilter {
-        requesters: vec![Requester::GpgClient],
-        ..Default::default()
-    });
-    assert_eq!(by_requester.events.len(), 1);
-
-    let by_category = read(&AuditFilter {
-        categories: vec![Category::Gpg],
-        ..Default::default()
-    });
-    assert_eq!(by_category.events.len(), 1);
-
-    let by_kind = read(&AuditFilter {
-        kind: Some(ActionKind::Access),
-        ..Default::default()
-    });
-    assert_eq!(by_kind.events.len(), 3);
-
-    let changes = read(&AuditFilter {
-        kind: Some(ActionKind::Change),
-        ..Default::default()
-    });
-    assert_eq!(changes.events.len(), 0);
-
-    let by_outcome = read(&AuditFilter {
-        outcomes: vec![Outcome::Denied],
-        ..Default::default()
-    });
-    assert_eq!(by_outcome.events.len(), 1);
-
-    let by_query = read(&AuditFilter {
-        query: Some("vs code".into()),
-        ..Default::default()
-    });
-    assert_eq!(by_query.events.len(), 1);
-
-    let limited = read(&AuditFilter {
-        limit: Some(1),
-        ..Default::default()
-    });
-    assert_eq!(limited.events.len(), 1);
-
-    let offset = read(&AuditFilter {
-        limit: Some(5),
-        offset: 1,
-        ..Default::default()
-    });
-    assert_eq!(offset.events.len(), 2);
+    // Label, filter, and the number of events that pass it.
+    let rows = [
+        (
+            "action",
+            AuditFilter {
+                actions: vec![Action::SshSign],
+                ..Default::default()
+            },
+            2,
+        ),
+        (
+            "requester",
+            AuditFilter {
+                requesters: vec![Requester::GpgClient],
+                ..Default::default()
+            },
+            1,
+        ),
+        (
+            "category",
+            AuditFilter {
+                categories: vec![Category::Gpg],
+                ..Default::default()
+            },
+            1,
+        ),
+        (
+            "access kind",
+            AuditFilter {
+                kind: Some(ActionKind::Access),
+                ..Default::default()
+            },
+            3,
+        ),
+        (
+            "change kind",
+            AuditFilter {
+                kind: Some(ActionKind::Change),
+                ..Default::default()
+            },
+            0,
+        ),
+        (
+            "outcome",
+            AuditFilter {
+                outcomes: vec![Outcome::Denied],
+                ..Default::default()
+            },
+            1,
+        ),
+        (
+            "query",
+            AuditFilter {
+                query: Some("vs code".into()),
+                ..Default::default()
+            },
+            1,
+        ),
+        (
+            "limit",
+            AuditFilter {
+                limit: Some(1),
+                ..Default::default()
+            },
+            1,
+        ),
+        (
+            "limit and offset",
+            AuditFilter {
+                limit: Some(5),
+                offset: 1,
+                ..Default::default()
+            },
+            2,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (label, filter, expected) in rows {
+        let found = read(&filter).events.len();
+        if found != expected {
+            wrong.push(format!("{label}: {found} events, expected {expected}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 #[test]

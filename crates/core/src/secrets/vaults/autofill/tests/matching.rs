@@ -85,48 +85,98 @@ fn host_requires_equal_hosts() {
 }
 
 #[test]
-fn domain_matching_ignores_ports() {
-    assert!(matches(
-        &domain("http://example.com:8080"),
-        "https://example.com:9000/x"
-    ));
-    assert!(matches(&domain("localhost:3000"), "http://localhost:8080"));
-}
-
-#[test]
-fn host_matching_compares_ports() {
-    let websites = [site("http://localhost:3000", MatchKind::Host)];
-    assert!(matches(&websites, "http://localhost:3000/login"));
-    assert!(!matches(&websites, "http://localhost:8080"));
-    assert!(!matches(&websites, "http://localhost"));
-}
-
-#[test]
-fn default_ports_agree_with_no_port() {
-    let websites = [site("https://example.com", MatchKind::Host)];
-    assert!(matches(&websites, "https://example.com:443/x"));
-    assert!(!matches(&websites, "https://example.com:8443"));
-    let websites = [site("https://example.com:443", MatchKind::Host)];
-    assert!(matches(&websites, "https://example.com"));
-}
-
-#[test]
-fn bare_domain_names_no_port() {
-    assert!(matches(
-        &[site("https://example.com:8443", MatchKind::Host)],
-        "example.com"
-    ));
-    assert!(matches(
-        &[site("example.com", MatchKind::Host)],
-        "https://example.com:8443"
-    ));
-}
-
-#[test]
-fn starts_with_compares_ports() {
-    let websites = [site("https://example.com:8443/app", MatchKind::StartsWith)];
-    assert!(matches(&websites, "https://example.com:8443/app/x"));
-    assert!(!matches(&websites, "https://example.com/app/x"));
+fn ports_ignored_by_domain_and_compared_by_host_and_starts_with() {
+    use MatchKind::{Domain, Host, StartsWith};
+    // Label, stored website, match kind, page, and whether it matches.
+    let rows = [
+        (
+            "domain ignores ports",
+            "http://example.com:8080",
+            Domain,
+            "https://example.com:9000/x",
+            true,
+        ),
+        (
+            "domain ignores ports on localhost",
+            "localhost:3000",
+            Domain,
+            "http://localhost:8080",
+            true,
+        ),
+        (
+            "host same port",
+            "http://localhost:3000",
+            Host,
+            "http://localhost:3000/login",
+            true,
+        ),
+        (
+            "host other port",
+            "http://localhost:3000",
+            Host,
+            "http://localhost:8080",
+            false,
+        ),
+        (
+            "host no port",
+            "http://localhost:3000",
+            Host,
+            "http://localhost",
+            false,
+        ),
+        (
+            "default port in page",
+            "https://example.com",
+            Host,
+            "https://example.com:443/x",
+            true,
+        ),
+        (
+            "other port in page",
+            "https://example.com",
+            Host,
+            "https://example.com:8443",
+            false,
+        ),
+        (
+            "default port stored",
+            "https://example.com:443",
+            Host,
+            "https://example.com",
+            true,
+        ),
+        (
+            "bare page, port stored",
+            "https://example.com:8443",
+            Host,
+            "example.com",
+            true,
+        ),
+        (
+            "bare stored, port in page",
+            "example.com",
+            Host,
+            "https://example.com:8443",
+            true,
+        ),
+        (
+            "starts with same port",
+            "https://example.com:8443/app",
+            StartsWith,
+            "https://example.com:8443/app/x",
+            true,
+        ),
+        (
+            "starts with other port",
+            "https://example.com:8443/app",
+            StartsWith,
+            "https://example.com/app/x",
+            false,
+        ),
+    ];
+    for (label, stored, kind, page, expected) in rows {
+        assert_eq!(matches(&[site(stored, kind)], page), expected, "{label}");
+    }
 }
 
 #[test]

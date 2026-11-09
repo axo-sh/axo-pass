@@ -97,85 +97,44 @@ fn destination_key_mismatch() {
 }
 
 #[test]
-fn username_match() {
+fn username_checked_against_constraint() {
     let origin_key = &TEST_RSA_KEY;
     let dest_key = &TEST_ED25519_KEY;
-
-    let result = permitted_by_dest_constraints(
-        SessionHop::IntermediateHop {
-            origin: origin_key,
-            destination: dest_key,
-            final_hop: false,
-        },
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", origin_key),
-            to: HostTuple {
-                username: "alice".to_string(),
-                hostname: "server2.example.com".to_string(),
-                keys: vec![KeySpec {
-                    keyblob: (*dest_key).clone(),
-                    is_ca: false,
-                }],
+    // Label, username of the constraint, requested username, and the
+    // permitted hostname if the hop is permitted. An empty constraint
+    // username matches any requested username.
+    let rows = [
+        ("match", "alice", "alice", Some("server2.example.com")),
+        ("mismatch", "alice", "bob", None),
+        (
+            "empty constraint username",
+            "",
+            "anyone",
+            Some("server2.example.com"),
+        ),
+    ];
+    for (label, constraint_username, requested, expected) in rows {
+        let result = permitted_by_dest_constraints(
+            SessionHop::IntermediateHop {
+                origin: origin_key,
+                destination: dest_key,
+                final_hop: false,
             },
-        }],
-        Some("alice"),
-    );
-    assert!(result.is_ok(), "Matching username should succeed");
-    assert_eq!(result.unwrap(), "server2.example.com");
-}
-
-#[test]
-fn username_mismatch() {
-    let origin_key = &TEST_RSA_KEY;
-    let dest_key = &TEST_ED25519_KEY;
-
-    let result = permitted_by_dest_constraints(
-        SessionHop::IntermediateHop {
-            origin: origin_key,
-            destination: dest_key,
-            final_hop: false,
-        },
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", origin_key),
-            to: HostTuple {
-                username: "alice".to_string(),
-                hostname: "server2.example.com".to_string(),
-                keys: vec![KeySpec {
-                    keyblob: (*dest_key).clone(),
-                    is_ca: false,
-                }],
-            },
-        }],
-        Some("bob"),
-    );
-    assert!(result.is_err(), "Mismatching username should fail");
-}
-
-#[test]
-fn username_ignored_when_empty() {
-    let origin_key = &TEST_RSA_KEY;
-    let dest_key = &TEST_ED25519_KEY;
-
-    let result = permitted_by_dest_constraints(
-        SessionHop::IntermediateHop {
-            origin: origin_key,
-            destination: dest_key,
-            final_hop: false,
-        },
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", origin_key),
-            to: HostTuple {
-                username: "".to_string(), // empty username matches any
-                hostname: "server2.example.com".to_string(),
-                keys: vec![KeySpec {
-                    keyblob: (*dest_key).clone(),
-                    is_ca: false,
-                }],
-            },
-        }],
-        Some("anyone"),
-    );
-    assert!(result.is_ok());
+            &[DestinationConstraint {
+                from: host_tuple("server1.example.com", origin_key),
+                to: HostTuple {
+                    username: constraint_username.to_string(),
+                    hostname: "server2.example.com".to_string(),
+                    keys: vec![KeySpec {
+                        keyblob: (*dest_key).clone(),
+                        is_ca: false,
+                    }],
+                },
+            }],
+            Some(requested),
+        );
+        assert_eq!(result.ok().as_deref(), expected, "{label}");
+    }
 }
 
 #[test]
@@ -228,51 +187,41 @@ fn multiple_constraints_first_match_wins() {
 }
 
 #[test]
-fn origin_only_matches_any_destination() {
-    // origin-only is mainly for non-signing use case
+fn origin_only_checks_origin_and_ignores_destination() {
+    // Origin-only is mainly for the non-signing use case.
     let origin_key = &TEST_RSA_KEY;
     let dest_key = &TEST_ED25519_KEY;
-
-    let result = permitted_by_dest_constraints(
-        SessionHop::OriginOnly(origin_key),
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", origin_key),
-            to: host_tuple("server2.example.com", dest_key),
-        }],
-        None,
-    );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "server2.example.com");
-}
-
-#[test]
-fn origin_only_matches_no_destination() {
-    // origin-only is mainly for non-signing use case
-    let origin_key = &TEST_RSA_KEY;
-    let result = permitted_by_dest_constraints(
-        SessionHop::OriginOnly(origin_key),
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", origin_key),
-            to: empty_host_tuple(),
-        }],
-        None,
-    );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "*");
-}
-
-#[test]
-fn origin_only_rejects_invalid_origin() {
-    // origin-only is mainly for non-signing use case
-    let origin_key = &TEST_RSA_KEY;
     let wrong_origin_key = &TEST_ED25519_KEY;
-    let result = permitted_by_dest_constraints(
-        SessionHop::OriginOnly(origin_key),
-        &[DestinationConstraint {
-            from: host_tuple("server1.example.com", wrong_origin_key),
-            to: empty_host_tuple(),
-        }],
-        None,
-    );
-    assert!(result.is_err(), "Mismatching origin key should fail");
+    // Label, constraint, and the permitted hostname if the hop is permitted.
+    let rows = [
+        (
+            "any destination",
+            DestinationConstraint {
+                from: host_tuple("server1.example.com", origin_key),
+                to: host_tuple("server2.example.com", dest_key),
+            },
+            Some("server2.example.com"),
+        ),
+        (
+            "no destination",
+            DestinationConstraint {
+                from: host_tuple("server1.example.com", origin_key),
+                to: empty_host_tuple(),
+            },
+            Some("*"),
+        ),
+        (
+            "invalid origin",
+            DestinationConstraint {
+                from: host_tuple("server1.example.com", wrong_origin_key),
+                to: empty_host_tuple(),
+            },
+            None,
+        ),
+    ];
+    for (label, constraint, expected) in rows {
+        let result =
+            permitted_by_dest_constraints(SessionHop::OriginOnly(origin_key), &[constraint], None);
+        assert_eq!(result.ok().as_deref(), expected, "{label}");
+    }
 }
