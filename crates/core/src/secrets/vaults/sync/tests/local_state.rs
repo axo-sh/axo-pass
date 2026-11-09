@@ -250,52 +250,43 @@ fn local_sync_state_cannot_be_read_as_peer_state_file() {
 }
 
 #[test]
-fn header_with_unknown_field_fails() {
-    let state_json = raw_state(&contents()).replacen('{', "{\n  \"unknown_field\": 1,", 1);
-
-    let error = parse(&signed(&state_json)).unwrap_err();
-
-    assert!(
-        matches!(&error, LocalStateError::Malformed(message) if message.contains("unknown field")),
-        "{error}"
-    );
-}
-
-#[test]
-fn header_with_newer_format_version_is_version_skew() {
-    let state_json = replaced(
-        &raw_state(&contents()),
+fn damaged_header_or_envelope_fails_with_its_error() {
+    let state_json = raw_state(&contents());
+    let unknown_field = state_json.replacen('{', "{\n  \"unknown_field\": 1,", 1);
+    let newer_version = replaced(
+        &state_json,
         "\"format_version\": 1,",
         "\"format_version\": 2, \"field_of_format_2\": 1,",
     );
-
-    assert!(matches!(
-        parse(&signed(&state_json)),
-        Err(LocalStateError::VersionSkew(_))
-    ));
-}
-
-#[test]
-fn file_signed_by_random_signer_fails_under_device_signer() {
-    let contents = local().0.to_file_contents(&TestSigner::random()).unwrap();
-
-    assert!(matches!(
-        parse(&contents),
-        Err(LocalStateError::SignatureInvalid)
-    ));
-}
-
-#[test]
-fn envelope_without_signature_or_with_unknown_field_fails() {
-    let state_json = raw_state(&contents());
+    let random_signer = local().0.to_file_contents(&TestSigner::random()).unwrap();
     let unsigned = format!("{{\"state\": {state_json}}}");
     let extra = replaced(&signed(&state_json), "{", "{\"unknown_field\": 1, ");
 
-    for contents in [unsigned, extra] {
-        assert!(matches!(
-            parse(&contents),
-            Err(LocalStateError::Envelope(_))
-        ));
+    type Expected = fn(&LocalStateError) -> bool;
+    let cases: [(&str, String, Expected); 5] = [
+        (
+            "header with unknown field",
+            signed(&unknown_field),
+            |e| matches!(e, LocalStateError::Malformed(message) if message.contains("unknown field")),
+        ),
+        (
+            "header with newer format version",
+            signed(&newer_version),
+            |e| matches!(e, LocalStateError::VersionSkew(_)),
+        ),
+        ("signed by random signer", random_signer, |e| {
+            matches!(e, LocalStateError::SignatureInvalid)
+        }),
+        ("envelope without signature", unsigned, |e| {
+            matches!(e, LocalStateError::Envelope(_))
+        }),
+        ("envelope with unknown field", extra, |e| {
+            matches!(e, LocalStateError::Envelope(_))
+        }),
+    ];
+    for (case, contents, expected) in cases {
+        let error = parse(&contents).unwrap_err();
+        assert!(expected(&error), "{case}: {error}");
     }
 }
 

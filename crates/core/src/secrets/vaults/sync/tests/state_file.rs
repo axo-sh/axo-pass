@@ -465,8 +465,16 @@ fn padded_body_with_invalid_layout_fails() {
 
     let cases = [
         ("nonzero padding", nonzero, PaddingError::NonzeroPadding),
-        ("length prefix past end", past_end, PaddingError::LengthPrefix),
-        ("shorter than length prefix", short, PaddingError::LengthPrefix),
+        (
+            "length prefix past end",
+            past_end,
+            PaddingError::LengthPrefix,
+        ),
+        (
+            "shorter than length prefix",
+            short,
+            PaddingError::LengthPrefix,
+        ),
     ];
     for (case, padded, error) in cases {
         assert_eq!(
