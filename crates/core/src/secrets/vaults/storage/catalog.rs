@@ -31,7 +31,7 @@ use crate::secrets::vaults::storage::resign::{Resign, Resigned};
 #[cfg(test)]
 use crate::secrets::vaults::storage::test_keys::TestKeys;
 use crate::secrets::vaults::storage::txn::{
-    Committed, RetainedVersion, Target, Unlock, VaultWriter,
+    Committed, Disabled, RetainedVersion, Target, Unlock, VaultWriter,
 };
 use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinInto, JoinKey, PairingImport};
@@ -617,10 +617,62 @@ impl VaultCatalog {
     }
 
     /// Move a vault file to the Trash under the vault locks, so a save in
-    /// progress cannot recreate it.
+    /// progress cannot recreate it. A vault that holds a replica id is
+    /// disabled first with the shared context, so the delete of a synced
+    /// vault needs the app unlocked (C10 of doc 18). See
+    /// [`Self::delete_with`].
     pub fn delete(&self, key: &str) -> Result<(), Error> {
+        self.delete_with(key, Unlock::App, Self::move_to_trash)
+    }
+
+    /// [`Self::delete`] with the keys of the disable from `unlock`, and the
+    /// file removed with `remove`. The replica id is read from the vault
+    /// file without a key, so the delete of a vault that is not synced reads
+    /// no key. A synced vault is disabled with [`VaultWriter::disable_sync`]
+    /// before the file is removed. A final file that waits for the synced
+    /// folder stays in its `leaving` sync state, and the `SyncManager`
+    /// copies it.
+    pub(crate) fn delete_with(
+        &self,
+        key: &str,
+        unlock: Unlock<'_>,
+        remove: impl FnOnce(&Path) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let vw = self.load(key)?;
-        self.files.delete(&vw.path, Self::move_to_trash)
+        // A file whose replica id fails to parse is deleted as before.
+        if VaultHeader::peek_replica_id(&vw.path)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            let target = Target::new(key, vw.path.clone());
+            self.files.disable_sync(&target, unlock)?;
+        }
+        self.files.delete(&vw.path, remove)
+    }
+
+    /// Disable sync of vault `key` (D8 and D9 of doc 18). See
+    /// [`VaultWriter::disable_sync`]. The caller then calls
+    /// `SyncManager::refresh`, so a final file that waits is copied when the
+    /// synced folder can be reached.
+    pub fn disable_sync(
+        &self,
+        key: &str,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<Disabled>, Error> {
+        let vw = self.load(key)?;
+        self.files
+            .disable_sync(&Target::new(key, vw.path.clone()), unlock)
+    }
+
+    /// Disable sync of vault `id`, whose vault file is missing (D9 of doc
+    /// 18). A vault id that a vault file on this Mac holds is refused with
+    /// `VaultIdExists`. See [`VaultWriter::disable_missing`].
+    pub fn disable_missing(&self, id: Uuid, unlock: Unlock<'_>) -> Result<Disabled, Error> {
+        if !self.existing_ids([id]).is_empty() {
+            return Err(Error::VaultIdExists(ShortId::encode_uuid(id)));
+        }
+        self.files.disable_missing(id, unlock)
     }
 
     /// Unlock each of `keys` on `context` and export them into one bundle file

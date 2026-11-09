@@ -4,6 +4,7 @@ use super::crdt::{ReplicaId, Session};
 
 mod apply;
 mod diff;
+mod disable;
 mod edit_rule;
 mod failures;
 mod faults;

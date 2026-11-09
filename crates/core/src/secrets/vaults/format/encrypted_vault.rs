@@ -216,6 +216,25 @@ impl VaultHeader {
         EncryptedVault::check_key(&header.key)?;
         Ok(header)
     }
+
+    /// Replica id of the vault file at `vault_path`, read without checking
+    /// its signature. `None` if the vault is not synced. It only picks a
+    /// vault whose sync is disabled before a delete, and the disable
+    /// verifies the file.
+    pub(crate) fn peek_replica_id(vault_path: &Path) -> Result<Option<Uuid>, Error> {
+        #[serde_as]
+        #[derive(Deserialize)]
+        struct Synced {
+            #[serde_as(as = "Option<ShortId>")]
+            #[serde(default)]
+            replica_id: Option<Uuid>,
+        }
+        let contents = EncryptedVault::read_file(vault_path)?;
+        let envelope = VaultEnvelope::read(&contents)?;
+        let synced: Synced =
+            serde_json::from_str(envelope.vault.get()).map_err(Error::VaultDeserializationError)?;
+        Ok(synced.replica_id)
+    }
 }
 
 impl EncryptedVault {

@@ -48,6 +48,11 @@ pub enum SyncLoad {
     VersionSkew(String),
     /// Vault names no replica id, and a sync state exists.
     DisableInProgress,
+    /// Vault holds a replica id, and its trusted sync state is `leaving`. A
+    /// disable stopped between the sync state save and the vault save. The
+    /// vault loads, and the next transaction saves it without the replica id
+    /// (D8 of doc 18).
+    Leaving,
 }
 
 /// Sync state field that differs from the vault.
@@ -119,6 +124,9 @@ impl fmt::Display for SyncLoad {
             Self::KeyMissing(key_id) => write!(f, "keyring lacks sync key {}", key_id.0),
             Self::VersionSkew(message) => write!(f, "sync state is from a newer format: {message}"),
             Self::DisableInProgress => f.write_str("disable sync in progress"),
+            Self::Leaving => {
+                f.write_str("sync state is leaving and the vault holds its replica id")
+            },
         }
     }
 }
@@ -142,7 +150,9 @@ impl SyncLoad {
 
     /// [`Self::classify`], with the trusted sync state if the case compares
     /// the vault with one: `Current`, `OlderVault`, `StoppedOlderVault`,
-    /// `NewerVault`, and `Mismatch`.
+    /// `NewerVault`, and `Mismatch`. A trusted `leaving` sync state of the
+    /// vault id is `Leaving`, whatever its replica id and generation, so it
+    /// is never rebuilt.
     pub(crate) fn classify_trusted(
         vault: &VerifiedVault,
         local: Result<LocalSyncState, LocalStateError>,
@@ -167,6 +177,8 @@ impl SyncLoad {
         let local = &trusted.local;
         let case = if local.vault_id != vault.id {
             Self::Mismatch(Mismatch::VaultId(local.vault_id))
+        } else if local.leaving {
+            return Ok((Self::Leaving, None));
         } else if local.replica_id.0 != replica_id {
             Self::Mismatch(Mismatch::ReplicaId(local.replica_id))
         } else {
@@ -254,7 +266,8 @@ impl SyncLoad {
             | Self::StateMissing
             | Self::SignatureFailed(_)
             | Self::KeyMissing(_)
-            | Self::DisableInProgress => Ok(()),
+            | Self::DisableInProgress
+            | Self::Leaving => Ok(()),
             Self::OlderVault { .. } | Self::NewerVault { .. } | Self::Mismatch(_) => {
                 Err(Error::SyncRepairNeeded(self.to_string()))
             },

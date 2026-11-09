@@ -43,7 +43,15 @@
 //!
 //! [`VaultWriter::copy_staged`] copies a staged file that a transaction
 //! failed to publish, under the locks and with no key, for the
-//! `SyncManager` (`sync/manager.rs`).
+//! `SyncManager` (`sync/manager.rs`). For a `leaving` sync state it copies
+//! the final file and then deletes the sync state, the staged file, and the
+//! sidecar.
+//!
+//! [`VaultWriter::disable_sync`] records the own `left` entry, marks the
+//! sync state `leaving`, stages the final file, and saves the sync state and
+//! then the vault without its replica id, under the locks. A vault saved
+//! before its `leaving` sync state loads as `SyncLoad::Leaving`, and the
+//! next transaction saves it without the replica id.
 //!
 //! [`VaultWriter::enable_sync`] writes `meta.json`, the first sync state, the
 //! vault, and `key.json` of a vault at its sync setup, under the locks
@@ -96,7 +104,7 @@ use crate::secrets::vaults::sync::keys::TestKeyWrapper;
 use crate::secrets::vaults::sync::keys::{SyncKeyring, WrappedSyncKey};
 use crate::secrets::vaults::sync::listing::PeerListing;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
-use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::local_state::{LocalStateError, LocalSyncState};
 use crate::secrets::vaults::sync::meta::MetaFile;
 use crate::secrets::vaults::sync::model::{ItemId, PublicKey, ReplicaKeys};
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
@@ -514,6 +522,33 @@ impl Unlock<'_> {
         }
     }
 
+    /// Keyring of the local sync state of vault `id` under the app data
+    /// directory `root`, for a disable of a vault with no vault file. `None`
+    /// if it fails to unwrap. A vault unlocked in memory holds no vault
+    /// encryption key, so `Unlocked` fails with `VaultLocked`.
+    fn keyring_of(
+        &self,
+        root: &Path,
+        id: Uuid,
+        signer: &dyn VaultSigner,
+    ) -> Result<Option<SyncKeyring>, Error> {
+        match self {
+            Unlock::App => {
+                check_vault_auth_still_valid()?;
+                let managed_key = get_vault_encryption_key_on(AuthContext::SharedThreadLocal)?;
+                Ok(SyncLoad::keyring_of(root, id, signer, &managed_key))
+            },
+            Unlock::Context(context) => {
+                let managed_key = get_vault_encryption_key_on(context.clone())?;
+                Ok(SyncLoad::keyring_of(root, id, signer, &managed_key))
+            },
+            Unlock::Key(managed_key) => Ok(SyncLoad::keyring_of(root, id, signer, *managed_key)),
+            Unlock::Unlocked(_) => Err(Error::VaultLocked),
+            #[cfg(test)]
+            Unlock::Test(_) => Ok(SyncLoad::keyring_of(root, id, signer, &TestKeyWrapper)),
+        }
+    }
+
     /// Keys of a sync setup or join of the vault file `file`, with the sync
     /// files under the app data directory `root`: the vault id, the file key,
     /// `keyring` wrapped to `vault-encryption-key`, the public key of
@@ -725,6 +760,27 @@ pub enum StagedCopy {
     /// The staged file does not hash to the staged hash, so it is not copied
     /// (D14). The next transaction rewrites it.
     Refused,
+    /// The final file of a `leaving` sync state was copied, or was already
+    /// listed, and the sync state, the staged file, and the sidecar were
+    /// deleted. The vault is no longer synced on this Mac.
+    Left,
+}
+
+/// Outcome of [`VaultWriter::disable_sync`] and
+/// [`VaultWriter::disable_missing`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disabled {
+    /// The final file was copied, and the sync state, the staged file, and
+    /// the sidecar were deleted.
+    Left,
+    /// The final file waits in the `leaving` sync state until the synced
+    /// folder can be reached. The `SyncManager` copies it.
+    Waiting,
+    /// The sync state is missing, fails its signature, or is under a key
+    /// the unlock lacks, so no final file was written. The sync state, the
+    /// staged file, and the sidecar were deleted, and peers see the replica
+    /// as inactive (D9 of doc 18).
+    Deleted,
 }
 
 /// Outcome of one attempt of [`VaultWriter::write`].
@@ -1123,13 +1179,20 @@ impl VaultWriter {
             // path. After a second miss of the sync state key, a changed
             // vault takes the next generation and the sync state is left as
             // it is. The next load with the key is `v > s`, whose repair
-            // adds the change.
+            // adds the change. A vault saved before its `leaving` sync state
+            // finishes the disable. It is saved without the replica id, and
+            // the `SyncManager` copies the final file (D8 of doc 18).
             _ => {
                 if matches!(case, SyncLoad::KeyMissing(_))
                     && vault_file::is_changed(&contents, &vh)?
                 {
                     let vault = vh.get_unlocked_vault_mut()?;
                     vault.set_sync(vault.generation() + 1, vault.replica_id());
+                }
+                if case == SyncLoad::Leaving {
+                    let vault = vh.get_unlocked_vault_mut()?;
+                    vault.set_sync(vault.generation(), None);
+                    log::info!("Vault {id} finishes the disable of sync stopped before its save");
                 }
                 vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
                     self.retain(id, old);
@@ -1337,11 +1400,15 @@ impl VaultWriter {
 
     /// Copy the staged file of vault `id`, found at `path`, to the synced
     /// folder, for a publish that failed (D12). Runs under the per-vault
-    /// mutex and the lock file, with no key and no unlock.
+    /// mutex and the lock file, with no key and no unlock. `path` is `None`
+    /// for a `leaving` sync state with no vault file, and the lock entry
+    /// then starts at the sync state path.
     ///
     /// The local sync state is verified under `device-signing-key`, which
-    /// never prompts. Nothing is copied unless the sync state verifies, is of
-    /// vault `id`, is neither stopped nor `leaving`, and names a staged hash
+    /// never prompts. Nothing is copied unless the sync state verifies and is
+    /// of vault `id`. A `leaving` sync state copies its final file and then
+    /// deletes the sync files ([`Self::copy_left`]). Otherwise nothing is
+    /// copied unless the sync state is not stopped and holds a staged hash
     /// that the sidecar does not record as the last publish, and unless the
     /// sidecar gives a transport. A staged file whose bytes do not hash to
     /// the staged hash is refused (D14). A file already listed under the
@@ -1349,8 +1416,9 @@ impl VaultWriter {
     /// the last publish and as joined, and drops a `PublishFailed` cause. No
     /// file is decrypted and no own file is deleted. The next transaction
     /// moves `staged_context` to `published_context`.
-    pub fn copy_staged(&self, id: Uuid, path: &Path) -> Result<StagedCopy, Error> {
-        let entry = self.locks.entry(id, path);
+    pub fn copy_staged(&self, id: Uuid, path: Option<&Path>) -> Result<StagedCopy, Error> {
+        let state_path = LocalSyncState::path(&self.root, id);
+        let entry = self.locks.entry(id, path.unwrap_or(&state_path));
         let _locked = self.lock_entry(&entry, id)?;
         let local = match LocalSyncState::load(&self.root, id, &*self.signer) {
             Ok(local) => local,
@@ -1359,7 +1427,13 @@ impl VaultWriter {
                 return Ok(StagedCopy::NotStaged);
             },
         };
-        if local.vault_id != id || local.leaving || local.stopped_build.is_some() {
+        if local.vault_id != id {
+            return Ok(StagedCopy::NotStaged);
+        }
+        if local.leaving {
+            return self.copy_left(&local);
+        }
+        if local.stopped_build.is_some() {
             return Ok(StagedCopy::NotStaged);
         }
         let Some(hash) = local.staged_hash else {
@@ -1389,6 +1463,354 @@ impl VaultWriter {
         sidecar.save(&self.root, id)?;
         log::info!("Copied the staged file {hash} of vault {id} to the synced folder");
         Ok(StagedCopy::Copied)
+    }
+
+    /// Copy the final file of the verified `leaving` sync state `local`, for
+    /// [`Self::copy_staged`] under the vault locks, then delete the sync
+    /// state, the staged file, and the sidecar (D8 of doc 18).
+    ///
+    /// The staged file is copied if the sidecar does not record it as the
+    /// last publish and the folder does not list it. The sidecar then
+    /// records the hash, and the three files are deleted. A sync state with
+    /// no staged hash has no final file to copy. A sidecar with no root
+    /// gives no folder, so the final file cannot be copied, and the files
+    /// are deleted. A staged file that does not hash to the staged hash is
+    /// refused and kept. A copy that fails returns its error, and the files
+    /// are kept for the next copy.
+    fn copy_left(&self, local: &LocalSyncState) -> Result<StagedCopy, Error> {
+        let id = local.vault_id;
+        let replica = local.replica_id;
+        let mut sidecar = Sidecar::read(&self.root, id)?;
+        if let Some(hash) = local.staged_hash
+            && sidecar.last_publish != Some(hash)
+        {
+            let Some(staged) = Staged::existing(&self.root, id, hash) else {
+                log::warn!("Final file of vault {id} does not hash to {hash}, so it is not copied");
+                return Ok(StagedCopy::Refused);
+            };
+            match self.transports.resolve(sidecar.transport.as_ref())? {
+                Some(transport) => {
+                    let listed = transport.list_states(id, replica).unwrap_or_default();
+                    if !listed.contains(&hash) {
+                        staged.copy(&*transport, id, replica, &[])?;
+                    }
+                    sidecar.last_publish = Some(hash);
+                    sidecar.save(&self.root, id)?;
+                    log::info!("Copied the final file {hash} of vault {id} to the synced folder");
+                },
+                None => log::warn!("Vault {id} has no synced folder for its final file"),
+            }
+        }
+        self.delete_sync_files(id)?;
+        let replica = replica.0;
+        log::info!("Vault {id} left sync as replica {replica}");
+        Ok(StagedCopy::Left)
+    }
+
+    /// Delete the sync state, the staged file, and the sidecar of vault `id`,
+    /// in that order, under the vault locks the caller holds. A file that is
+    /// missing is skipped.
+    fn delete_sync_files(&self, id: Uuid) -> Result<(), Error> {
+        let paths = [
+            LocalSyncState::path(&self.root, id),
+            LocalSyncState::staged_path(&self.root, id),
+            Sidecar::path(&self.root, id),
+        ];
+        for path in paths {
+            match fs::remove_file(&path) {
+                Ok(()) => {},
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+                Err(e) => return Err(Error::SyncStateWriteError(e)),
+            }
+        }
+        Ok(())
+    }
+
+    /// Disable sync of the vault `target` (D8 and D9 of doc 18). Returns the
+    /// vault as saved, without the replica id, and the outcome.
+    ///
+    /// The file key and the sync keyring are unwrapped before the locks, as
+    /// in [`Self::write`]. A sync state under a key id the unlock did not
+    /// unwrap is unlocked once more. Under the locks the vault is reloaded
+    /// and verified. A vault that holds no replica id fails with
+    /// `SyncDisableInProgress` if its sync state is `leaving`, and with
+    /// `SyncNotEnabled` otherwise.
+    ///
+    /// A trusted sync state that syncs, pauses, or is stopped by drift
+    /// records only `true` in the own `left` register, under one write id,
+    /// and diffs nothing. The sync state is marked `leaving`, the final file
+    /// is staged, the sync state is saved, and the vault is saved without
+    /// the replica id, both at the next generation. A `v < s` vault is
+    /// rebuilt from the sync state first, as a transaction rebuilds it. After
+    /// the locks the final file is copied ([`Self::copy_staged`]), which
+    /// deletes the sync files. A copy that fails leaves the `leaving` sync
+    /// state for the `SyncManager`.
+    ///
+    /// A vault saved before its `leaving` sync state is saved without the
+    /// replica id, and the final file is copied. A sync state that is
+    /// missing, fails its signature, is under a key the unlock lacks after
+    /// the second unlock, or holds another vault id or replica id writes no
+    /// final file. The vault is saved without the replica id, then the sync
+    /// state, the staged file, and the sidecar are deleted. A sync state of
+    /// a newer format is refused and nothing is written.
+    pub fn disable_sync(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<Disabled>, Error> {
+        let mut retry_key_missing = true;
+        for _ in 0..MAX_ATTEMPTS {
+            match self.disable_attempt(target, &unlock, retry_key_missing)? {
+                Attempt::Done(mut committed) => {
+                    if committed.value == Disabled::Waiting {
+                        let path = committed.vault.path.clone();
+                        committed.value = self.copy_final(committed.vault_id, Some(&path));
+                    }
+                    return Ok(committed);
+                },
+                Attempt::Retry(()) => {},
+                Attempt::KeyMissing(()) => retry_key_missing = false,
+            }
+        }
+        Err(Error::VaultFileKeyChanged)
+    }
+
+    /// One attempt of [`Self::disable_sync`], under the vault locks. Returns
+    /// `Waiting` if a final file waits for its copy.
+    fn disable_attempt(
+        &self,
+        target: &Target,
+        unlock: &Unlock<'_>,
+        retry_key_missing: bool,
+    ) -> Result<Attempt<Disabled, ()>, Error> {
+        let UnlockedKeys {
+            id,
+            file_key,
+            keyring,
+        } = unlock.keys(&self.root, &target.path, &*self.signer)?;
+
+        let vault_lock = self.locks.entry(id, &target.path);
+        let mut locked = self.lock_entry(&vault_lock, id)?;
+        let path = locked.state.resolve(id, &target.path)?;
+        let contents = EncryptedVault::read_file(&path)?;
+        let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
+        if enc_vault.id != id {
+            return Err(Error::VaultNotFound(path.display().to_string()));
+        }
+        let loaded = LocalSyncState::load_hashed(&self.root, id, &*self.signer);
+        if enc_vault.replica_id.is_none() {
+            return Err(match loaded {
+                Ok((local, _)) if local.leaving => Error::SyncDisableInProgress,
+                _ => Error::SyncNotEnabled,
+            });
+        }
+        let loaded_hash = loaded.as_ref().ok().map(|(_, hash)| *hash);
+        let local = loaded.map(|(local, _)| local);
+        let (case, trusted) =
+            SyncLoad::classify_trusted(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
+        if retry_key_missing && matches!(case, SyncLoad::KeyMissing(_)) {
+            log::info!("Vault {id} sync state is under a key the unlock lacks, unlocking again");
+            return Ok(Attempt::KeyMissing(()));
+        }
+        let writes_final = matches!(
+            case,
+            SyncLoad::Current
+                | SyncLoad::OlderVault { .. }
+                | SyncLoad::StoppedOlderVault { .. }
+                | SyncLoad::NewerVault { .. }
+        );
+        let mut sync = match (trusted, keyring, loaded_hash) {
+            (Some(trusted), Some(keyring), Some(hash)) if writes_final => {
+                let sidecar = Sidecar::read(&self.root, id)?;
+                let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                if let SyncLoad::NewerVault { vault, .. } = case {
+                    sync.set_newer_vault(vault);
+                }
+                Some(sync)
+            },
+            // A sync state of a newer format is kept for the build that wrote
+            // it.
+            _ => {
+                if let SyncLoad::VersionSkew(message) = &case {
+                    return Err(Error::SyncStateVersionSkew(message.clone()));
+                }
+                None
+            },
+        };
+
+        let mut vault = match Vault::from_unlocked_key(&file_key, enc_vault) {
+            Err(Error::VaultFileKeyChanged) => {
+                log::warn!("Vault {id} file key changed after it was unwrapped, unwrapping again");
+                return Ok(Attempt::Retry(()));
+            },
+            other => other?,
+        };
+        let disabled = match &mut sync {
+            Some(sync) => {
+                if matches!(case, SyncLoad::OlderVault { .. }) {
+                    vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
+                }
+                let now = Timestamp::now().as_second() + self.clock_offset;
+                let session = locked.state.session(sync.replica(), sync.loaded());
+                sync.leave(session, now)?;
+                vault.set_sync(sync.next_generation(), None);
+                sync.stage(&self.root)?;
+                Disabled::Waiting
+            },
+            None if case == SyncLoad::Leaving => {
+                vault.set_sync(vault.generation(), None);
+                Disabled::Waiting
+            },
+            None => {
+                vault.set_sync(vault.generation(), None);
+                Disabled::Deleted
+            },
+        };
+        let vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, SyncKeyring::default());
+
+        // The `leaving` sync state is saved before the vault, so a vault
+        // that still holds the replica id loads as `Leaving`.
+        let mut saved = false;
+        let result = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
+            self.retain(id, old);
+            if let Some(sync) = &mut sync {
+                sync.save(&self.root, &*self.signer, true)?;
+                saved = true;
+            }
+            Ok(())
+        });
+        if result.is_err()
+            && !saved
+            && let Some(sync) = &mut sync
+        {
+            sync.discard_staged(&self.root);
+        }
+        // No write id of this replica is minted after a disable.
+        locked.state.end_actor();
+        let changed = result?;
+        if disabled == Disabled::Deleted {
+            self.delete_sync_files(id)?;
+        }
+        let save_count = if changed {
+            vault_lock.record_save()
+        } else {
+            vault_lock.save_count()
+        };
+        log::info!("Disabled sync of vault {id}: {disabled:?}");
+        Ok(Attempt::Done(Committed {
+            value: disabled,
+            vault: vh,
+            vault_id: id,
+            previous_key: target.key.clone(),
+            changed,
+            save_count,
+            sync_status: None,
+            recovery_kit_missing: false,
+        }))
+    }
+
+    /// Disable sync of vault `id`, whose vault file is missing (D9 of doc
+    /// 18). The caller checks that no vault file holds the id.
+    ///
+    /// The keyring is unwrapped before the locks with
+    /// [`SyncLoad::keyring_of`]. Under the locks, a trusted sync state of the
+    /// vault records only `true` in the own `left` register, is marked
+    /// `leaving`, stages the final file, and is saved at the next generation.
+    /// No vault is saved. After the locks the final file is copied. A
+    /// `leaving` sync state is copied only. A sync state that fails its
+    /// signature, is under a key the keyring lacks, or belongs to another
+    /// vault is deleted with the staged file and the sidecar. A missing sync
+    /// state fails with `SyncNotEnabled`, and one of a newer format with
+    /// `SyncStateVersionSkew`.
+    pub fn disable_missing(&self, id: Uuid, unlock: Unlock<'_>) -> Result<Disabled, Error> {
+        let keyring = unlock.keyring_of(&self.root, id, &*self.signer)?;
+        let state_path = LocalSyncState::path(&self.root, id);
+        let entry = self.locks.entry(id, &state_path);
+        let mut locked = self.lock_entry(&entry, id)?;
+        vault_file::check_create_path(locked.state.path(), id, &state_path)?;
+
+        let loaded = LocalSyncState::load_hashed(&self.root, id, &*self.signer);
+        let loaded_hash = loaded.as_ref().ok().map(|(_, hash)| *hash);
+        let local = loaded.map(|(local, _)| local);
+        let trust = SyncLoad::trust(local, keyring.as_ref(), &*self.signer)?;
+        let disabled = match (trust, keyring, loaded_hash) {
+            (Err(SyncLoad::StateMissing), ..) => return Err(Error::SyncNotEnabled),
+            (Err(SyncLoad::VersionSkew(message)), ..) => {
+                return Err(Error::SyncStateVersionSkew(message));
+            },
+            (Ok(trusted), ..) if trusted.local.vault_id == id && trusted.local.leaving => {
+                Disabled::Waiting
+            },
+            (Ok(trusted), Some(keyring), Some(hash)) if trusted.local.vault_id == id => {
+                let sidecar = Sidecar::read(&self.root, id)?;
+                let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                let now = Timestamp::now().as_second() + self.clock_offset;
+                let session = locked.state.session(sync.replica(), sync.loaded());
+                sync.leave(session, now)?;
+                sync.stage(&self.root)?;
+                let saved = sync.save(&self.root, &*self.signer, true);
+                if saved.is_err() {
+                    sync.discard_staged(&self.root);
+                }
+                locked.state.end_actor();
+                saved?;
+                Disabled::Waiting
+            },
+            _ => Disabled::Deleted,
+        };
+        if disabled == Disabled::Deleted {
+            self.delete_sync_files(id)?;
+        }
+        drop(locked);
+        log::info!("Disabled sync of vault {id} with no vault file: {disabled:?}");
+        Ok(match disabled {
+            Disabled::Waiting => self.copy_final(id, None),
+            other => other,
+        })
+    }
+
+    /// Copy the final file of vault `id`, found at `path`, after a disable.
+    /// `Left` if the copy deleted the sync files. Otherwise the failure is
+    /// logged, and the `SyncManager` copies the final file later.
+    fn copy_final(&self, id: Uuid, path: Option<&Path>) -> Disabled {
+        match self.copy_staged(id, path) {
+            Ok(StagedCopy::Left) => Disabled::Left,
+            Ok(copy) => {
+                log::warn!("Final file of vault {id} was not copied: {copy:?}");
+                Disabled::Waiting
+            },
+            Err(e) => {
+                log::warn!("Failed to copy the final file of vault {id}, it waits: {e}");
+                Disabled::Waiting
+            },
+        }
+    }
+
+    /// Delete the sync state, the staged file, and the sidecar of vault `id`
+    /// at `path` if the vault holds no replica id and the sync state is not
+    /// `leaving`, such as a sync state restored after a disable finished (D8
+    /// of doc 18). Runs under the vault locks, with no key. The vault file is
+    /// verified first. A sync state that is missing or of a newer format is
+    /// kept, and a vault or sync state that cannot be read fails. Returns
+    /// whether the files were deleted.
+    pub(crate) fn delete_disabled_sync(&self, id: Uuid, path: &Path) -> Result<bool, Error> {
+        let entry = self.locks.entry(id, path);
+        let mut locked = self.lock_entry(&entry, id)?;
+        let path = locked.state.resolve(id, path)?;
+        let vault = EncryptedVault::load(&path, &*self.signer)?;
+        if vault.id != id || vault.replica_id.is_some() {
+            return Ok(false);
+        }
+        match LocalSyncState::load(&self.root, id, &*self.signer) {
+            Ok(local) if local.leaving => return Ok(false),
+            Err(LocalStateError::Missing | LocalStateError::VersionSkew(_)) => return Ok(false),
+            Err(LocalStateError::Read(e)) => return Err(Error::SyncStateReadError(e)),
+            Err(LocalStateError::SigningKey(e)) => return Err(e),
+            _ => {},
+        }
+        self.delete_sync_files(id)?;
+        log::info!("Deleted the sync files of vault {id}, whose vault holds no replica id");
+        Ok(true)
     }
 
     /// Number of differences the recovery merge would add to the vault of

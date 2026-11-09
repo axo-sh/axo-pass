@@ -11,7 +11,7 @@ use crate::secrets::vaults::storage::catalog::{
 };
 use crate::secrets::vaults::storage::device_keys::KeyState;
 use crate::secrets::vaults::storage::handle::VaultHandle;
-use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
+use crate::secrets::vaults::storage::txn::{Committed, Disabled, Target, Unlock};
 
 /// The app's copies of its vaults, by key. A copy stays unlocked between
 /// edits, so reading items does not decrypt the file again. Every change to a
@@ -332,6 +332,29 @@ impl VaultsManager {
         m.missing.retain(|missing| missing.id != id);
         m.install(committed);
         Ok(key)
+    }
+
+    /// Disable sync of vault `vault_key` of a shared manager on the shared
+    /// context, as [`VaultCatalog::disable_sync`] does, and keep the saved
+    /// copy, which holds no replica id. The caller then calls
+    /// `SyncManager::refresh`.
+    pub fn disable_sync(manager: &Mutex<Self>, vault_key: &str) -> Result<Disabled, Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().disable_sync(&target, Unlock::App)?;
+        Ok(VaultsManager::lock(manager).install(committed))
+    }
+
+    /// Disable sync of vault `id` of a shared manager, whose vault file is
+    /// missing, as [`VaultCatalog::disable_missing`] does. The vault is no
+    /// longer listed as missing. The caller then calls
+    /// `SyncManager::refresh`.
+    pub fn disable_missing_vault(manager: &Mutex<Self>, id: Uuid) -> Result<Disabled, Error> {
+        let store = VaultsManager::lock(manager).store.clone();
+        let disabled = store.disable_missing(id, Unlock::App)?;
+        VaultsManager::lock(manager)
+            .missing
+            .retain(|missing| missing.id != id);
+        Ok(disabled)
     }
 
     /// Store and target of a vault of a shared manager, loading the vault if

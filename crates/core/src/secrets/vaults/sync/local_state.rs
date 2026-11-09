@@ -94,6 +94,15 @@ pub struct LocalSyncState {
     body: Vec<u8>,
 }
 
+/// Fields of a local sync state read by [`LocalSyncState::peek`], not
+/// verified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct PeekedState {
+    pub vault_id: Uuid,
+    pub replica_id: ReplicaId,
+    pub leaving: bool,
+}
+
 /// Pinned public keys of one peer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -196,19 +205,14 @@ impl LocalSyncState {
         found
     }
 
-    /// Vault id and replica id of the local sync state file `contents`,
-    /// without checking its signature. Other fields are ignored. `None` if the
-    /// file does not parse. The ids are not verified, so they only pick a
-    /// vault directory.
-    pub fn peek(contents: &str) -> Option<(Uuid, ReplicaId)> {
-        #[derive(Deserialize)]
-        struct Ids {
-            vault_id: Uuid,
-            replica_id: ReplicaId,
-        }
+    /// Vault id, replica id, and `leaving` of the local sync state file
+    /// `contents`, without checking its signature. Other fields are ignored.
+    /// `None` if the file does not parse. The fields are not verified, so
+    /// they only pick a vault directory, or a vault whose staged file
+    /// `VaultWriter::copy_staged` copies after it verifies the file.
+    pub fn peek(contents: &str) -> Option<PeekedState> {
         let envelope: LocalStateEnvelope = serde_json::from_str(contents).ok()?;
-        let ids: Ids = serde_json::from_str(envelope.state.get()).ok()?;
-        Some((ids.vault_id, ids.replica_id))
+        serde_json::from_str(envelope.state.get()).ok()
     }
 
     /// Staged file of vault `vault_id` under the app data directory `root`.

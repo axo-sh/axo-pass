@@ -382,6 +382,18 @@ fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
     fx.put_state(GENERATION);
     cases.push(("disable in progress", fx, SyncLoad::DisableInProgress));
 
+    // A disable that stopped after the `leaving` save and before the vault
+    // save.
+    let fx = Fixture::synced();
+    let mut local = state(fx.id(), REPLICA, GENERATION + 1);
+    local.leaving = true;
+    fx.put(&local, &device);
+    cases.push((
+        "vault saved before its leaving sync state",
+        fx,
+        SyncLoad::Leaving,
+    ));
+
     cases
 }
 
@@ -419,6 +431,12 @@ fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
                 before,
                 "{name}: refused transaction writes nothing"
             );
+        }
+        // A transaction finishes the disable: the vault holds no replica id
+        // and the `leaving` sync state is kept for its copy (D8 of doc 18).
+        if expected == SyncLoad::Leaving {
+            assert_eq!(fx.read_case(), SyncLoad::DisableInProgress, "{name}");
+            assert_eq!(fx.on_disk().1, before.1, "{name}: sync state is kept");
         }
     }
 }

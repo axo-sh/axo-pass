@@ -75,10 +75,10 @@ impl Unreadable {
             .into_iter()
             .filter_map(|(_, path)| {
                 let contents = fs::read_to_string(path).ok()?;
-                let (vault_id, replica_id) = LocalSyncState::peek(&contents)?;
+                let peeked = LocalSyncState::peek(&contents)?;
                 Some(SyncedVault {
-                    vault_id,
-                    replica_id,
+                    vault_id: peeked.vault_id,
+                    replica_id: peeked.replica_id,
                 })
             })
             .collect()

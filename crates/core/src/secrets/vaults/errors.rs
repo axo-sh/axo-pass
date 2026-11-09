@@ -96,6 +96,9 @@ pub enum Error {
     #[error("Sync was turned off for this vault and the change has not reached the synced folder")]
     SyncDisableInProgress,
 
+    #[error("Sync is not enabled for this vault")]
+    SyncNotEnabled,
+
     #[error("Synced folder already holds this vault")]
     SyncFolderHasVault,
 

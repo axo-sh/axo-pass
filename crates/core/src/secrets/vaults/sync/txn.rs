@@ -678,7 +678,8 @@ impl SyncTxn {
     }
 
     /// Whether the user disabled sync and the final state file is not yet
-    /// copied.
+    /// copied. A transaction is never built on a `leaving` state, except by
+    /// a disable.
     pub(crate) fn is_leaving(&self) -> bool {
         self.local.leaving
     }
@@ -892,6 +893,20 @@ impl SyncTxn {
         let mut edits = LocalEdits::default();
         edits.add_own(self.replica(), name, keys);
         self.record_own_edits(edits, session, now)
+    }
+
+    /// Record `true` in the `left` register of this replica under one write
+    /// id of `session` minted at `now`, in Unix seconds, and mark the sync
+    /// state `leaving`, for a disable of sync (D9 of doc 18). Diffs nothing,
+    /// and records the edit even if sync is stopped by drift. Returns the
+    /// write id.
+    pub(crate) fn leave(&mut self, session: &mut Session, now: i64) -> Result<WriteId, Error> {
+        let mut edits = LocalEdits::default();
+        edits.add_left(self.replica());
+        let write_id = self.record_own_edits(edits, session, now)?;
+        self.local.leaving = true;
+        self.header_changed = true;
+        Ok(write_id)
     }
 
     /// Record `edits`, which hold the own registers of this replica, under

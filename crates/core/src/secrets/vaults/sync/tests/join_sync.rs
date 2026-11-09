@@ -74,7 +74,7 @@ pub(super) fn enable(fx: &Fixture, root: TransportRoot) -> SyncSetup {
 }
 
 /// Key opened with the kit of `setup` from the folder `transport`.
-fn recovered(setup: &SyncSetup, transport: &dyn SyncTransport) -> JoinKey {
+pub(super) fn recovered(setup: &SyncSetup, transport: &dyn SyncTransport) -> JoinKey {
     match RecoveryImport::check(setup.kit(), transport).unwrap() {
         RecoveryCheck::Recovered(key) => JoinKey::recovered(key),
         other => panic!("kit did not open the key: {other:?}"),

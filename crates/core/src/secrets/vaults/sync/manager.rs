@@ -8,6 +8,14 @@
 //! reads them, since they only pick the vaults to watch. The manager holds no
 //! key and decrypts nothing.
 //!
+//! Disable (10.4, D8 of doc 18). A `leaving` sync state, with or without a
+//! vault file, is copy-only. It is not watched or scanned, runs no
+//! transaction, and gives no pairing watch of its root. Its final file is
+//! copied at each refresh and each retry, and the copy deletes its sync
+//! files, after which the manager drops it. A refresh deletes the sync files
+//! of a vault that holds no replica id and whose sync state is not
+//! `leaving`, so an unlock stays read-only.
+//!
 //! A scan lists the peer state files of a vault ([`PeerListing::changed`]).
 //! A local file with a hash not reported before is a peer change. If the
 //! app is unlocked, the manager runs a transaction with no requested change
@@ -68,6 +76,7 @@ use super::state_file::StateHash;
 use super::transport::{FileName, SyncTransport, TransportRoot, WatchHandle};
 use super::wrapping::{DeviceUnwrap, PairingKeys};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
 use crate::secrets::vaults::storage::catalog::VaultCatalog;
 use crate::secrets::vaults::storage::handle::check_vault_auth_still_valid;
 use crate::secrets::vaults::storage::txn::{Committed, StagedCopy, Target, Unlock, VaultWriter};
@@ -395,21 +404,28 @@ impl Drop for SyncManager {
 /// Synced vault found by a refresh.
 struct SyncedVault {
     id: Uuid,
-    target: Target,
+    target: Option<Target>,
     replica: ReplicaId,
     root: Option<TransportRoot>,
+    leaving: bool,
 }
 
 /// One synced vault of the manager.
 struct ManagedVault {
     id: Uuid,
-    /// Key and path of the vault file, from the catalog scan.
-    target: Target,
+    /// Key and path of the vault file, from the catalog scan. `None` for a
+    /// `leaving` sync state with no vault file.
+    target: Option<Target>,
     /// Replica id of the local sync state, read unverified. It only picks
     /// the directory that the listing skips.
     replica: ReplicaId,
     /// Root of the transport in the sidecar.
     root: Option<TransportRoot>,
+    /// Whether the sync state is `leaving`, read unverified. A `leaving`
+    /// vault is copy-only: it has no transport and no watch, is not
+    /// scanned, runs no transaction, and its final file is copied at each
+    /// refresh and each retry (D8 of doc 18).
+    leaving: bool,
     transport: Option<Arc<dyn SyncTransport>>,
     watch: Option<WatchHandle>,
     /// Peer state files already reported, of those still listed and not
@@ -807,7 +823,13 @@ impl Worker {
     }
 
     /// Synced vaults: each local sync state with a vault file in the catalog
-    /// scan. The scan tracks each vault in the vault locks.
+    /// scan, and each `leaving` sync state, with or without a vault file.
+    /// The scan tracks each vault in the vault locks.
+    ///
+    /// A sync state that is not `leaving`, of a vault file that holds no
+    /// replica id, is left from a disable, such as a sync state restored
+    /// after a disable finished. Its sync state, staged file, and sidecar are
+    /// deleted under the vault locks (D8 of doc 18), and it is not listed.
     fn synced(&self) -> Vec<SyncedVault> {
         let root = self.files().root().to_path_buf();
         let listed: BTreeMap<Uuid, Target> = self
@@ -823,10 +845,16 @@ impl Worker {
         LocalSyncState::list(&root)
             .into_iter()
             .filter_map(|(id, path)| {
-                let target = listed.get(&id)?.clone();
+                let target = listed.get(&id).cloned();
                 let contents = fs::read_to_string(&path).ok()?;
-                let (vault_id, replica) = LocalSyncState::peek(&contents)?;
-                if vault_id != id {
+                let peeked = LocalSyncState::peek(&contents)?;
+                if peeked.vault_id != id || (target.is_none() && !peeked.leaving) {
+                    return None;
+                }
+                if let Some(target) = &target
+                    && !peeked.leaving
+                    && self.delete_disabled(id, target)
+                {
                     return None;
                 }
                 let root = match Sidecar::read(&root, id) {
@@ -839,25 +867,46 @@ impl Worker {
                 Some(SyncedVault {
                     id,
                     target,
-                    replica,
+                    replica: peeked.replica_id,
                     root,
+                    leaving: peeked.leaving,
                 })
             })
             .collect()
     }
 
+    /// Delete the sync files of vault `id` if its vault file at `target`
+    /// holds no replica id ([`VaultWriter::delete_disabled_sync`]). The
+    /// replica id is read first without verifying the file, so a synced
+    /// vault takes no lock. Returns whether the files were deleted.
+    fn delete_disabled(&self, id: Uuid, target: &Target) -> bool {
+        if !matches!(VaultHeader::peek_replica_id(&target.path), Ok(None)) {
+            return false;
+        }
+        match self.files().delete_disabled_sync(id, &target.path) {
+            Ok(deleted) => deleted,
+            Err(e) => {
+                log::warn!("Failed to delete the sync files left by a disable of vault {id}: {e}");
+                false
+            },
+        }
+    }
+
     /// Find the synced vaults again. A vault no longer synced, or whose
-    /// root or replica changed, ends its watch. Returns the vaults added,
-    /// which are watched and not yet scanned.
+    /// root, replica, or `leaving` changed, ends its watch. Returns the
+    /// vaults added, which are watched and not yet scanned, and every
+    /// `leaving` vault, whose scan is a copy of its final file.
     fn refresh(&mut self) -> Vec<Uuid> {
         let synced = self.synced();
         let locks = self.files().locks().clone();
         let kept: BTreeSet<Uuid> = synced
             .iter()
             .filter(|found| {
-                self.vaults
-                    .get(&found.id)
-                    .is_some_and(|vault| vault.root == found.root && vault.replica == found.replica)
+                self.vaults.get(&found.id).is_some_and(|vault| {
+                    vault.root == found.root
+                        && vault.replica == found.replica
+                        && vault.leaving == found.leaving
+                })
             })
             .map(|found| found.id)
             .collect();
@@ -868,10 +917,13 @@ impl Worker {
             }
             keep
         });
-        let mut added = Vec::new();
+        let mut scanned = Vec::new();
         for found in synced {
             if let Some(vault) = self.vaults.get_mut(&found.id) {
                 vault.target = found.target;
+                if vault.leaving {
+                    scanned.push(found.id);
+                }
                 continue;
             }
             let id = found.id;
@@ -880,17 +932,20 @@ impl Worker {
                 target: found.target,
                 replica: found.replica,
                 root: found.root,
+                leaving: found.leaving,
                 transport: None,
                 watch: None,
                 reported: BTreeSet::new(),
                 copy_pending: false,
                 retry_at: None,
             };
-            self.connect(&mut vault);
+            if !vault.leaving {
+                self.connect(&mut vault);
+            }
             self.vaults.insert(id, vault);
-            added.push(id);
+            scanned.push(id);
         }
-        added
+        scanned
     }
 
     /// Resolve the transport of `vault` and watch it, for whichever is
@@ -920,7 +975,8 @@ impl Worker {
     }
 
     /// Scan vault `vault_id` for peer changes and react to them, then copy
-    /// its staged file if a publish failed.
+    /// its staged file if a publish failed. A `leaving` vault has no
+    /// transport, so its scan only copies.
     fn scan(&mut self, vault_id: Uuid) {
         let now = self.now();
         let Some(mut vault) = self.vaults.remove(&vault_id) else {
@@ -929,23 +985,28 @@ impl Worker {
         if vault.changes(self.files()) {
             self.react(&mut vault);
         }
-        self.copy(&mut vault, now);
-        self.vaults.insert(vault_id, vault);
+        if self.copy(&mut vault, now) {
+            self.vaults.insert(vault_id, vault);
+        }
     }
 
     /// Run a transaction for a peer change of `vault` if the app is
-    /// unlocked, and otherwise set the pending flag (D5).
+    /// unlocked, and otherwise set the pending flag (D5). A vault with no
+    /// vault file runs none.
     fn react(&self, vault: &mut ManagedVault) {
         let id = vault.id;
+        let Some(target) = &vault.target else {
+            return;
+        };
         let locks = self.files().locks();
         if !self.unlock.unlocked() {
             locks.set_pending(id);
             self.events.peer_changed(id);
             return;
         }
-        match self.unlock.transaction(self.files(), &vault.target) {
+        match self.unlock.transaction(self.files(), target) {
             Ok(committed) => {
-                vault.target = Target::of(&committed.vault);
+                vault.target = Some(Target::of(&committed.vault));
                 self.events.vault_synced(id);
             },
             Err(e) => {
@@ -955,11 +1016,18 @@ impl Worker {
         }
     }
 
-    /// Copy the staged file of `vault` if a publish failed, and schedule the
-    /// next retry at `now`.
-    fn copy(&self, vault: &mut ManagedVault, now: Instant) {
+    /// Copy the staged file of `vault` if a publish failed, or the final
+    /// file of a `leaving` vault, and schedule the next retry at `now`.
+    /// Returns false if the copy deleted the sync files of a `leaving`
+    /// vault, which the manager then drops.
+    fn copy(&self, vault: &mut ManagedVault, now: Instant) -> bool {
         let id = vault.id;
-        vault.copy_pending = match self.files().copy_staged(id, &vault.target.path) {
+        let path = vault.target.as_ref().map(|target| target.path.as_path());
+        vault.copy_pending = match self.files().copy_staged(id, path) {
+            Ok(StagedCopy::Left) => {
+                log::info!("Vault {id} left sync, the manager drops it");
+                return false;
+            },
             Ok(StagedCopy::Copied | StagedCopy::NotStaged) => false,
             Ok(StagedCopy::Refused) => true,
             Err(e) => {
@@ -968,11 +1036,12 @@ impl Worker {
             },
         };
         vault.schedule(now);
+        true
     }
 
     /// Retry each vault whose retry is due: watch again a vault with no
     /// watch, and scan it if the watch starts, and copy a staged file whose
-    /// copy failed.
+    /// copy failed. A `leaving` vault is never watched, and copies only.
     fn retry_due(&mut self) {
         let now = self.now();
         let due: Vec<Uuid> = self
@@ -986,25 +1055,29 @@ impl Worker {
                 continue;
             };
             vault.retry_at = None;
-            let watched = vault.watch.is_none() && self.connect(&mut vault);
+            let watched = !vault.leaving && vault.watch.is_none() && self.connect(&mut vault);
             if watched && vault.changes(self.files()) {
                 self.react(&mut vault);
             }
-            if watched || vault.copy_pending {
-                self.copy(&mut vault, now);
+            let kept = if watched || vault.copy_pending {
+                self.copy(&mut vault, now)
             } else {
                 vault.schedule(now);
+                true
+            };
+            if kept {
+                self.vaults.insert(vault_id, vault);
             }
-            self.vaults.insert(vault_id, vault);
         }
     }
 }
 
 impl ManagedVault {
-    /// Schedule the next retry after `now` if the vault has no watch or a
-    /// copy is pending.
+    /// Schedule the next retry after `now` if a copy is pending, or if the
+    /// vault has no watch and is not `leaving`.
     fn schedule(&mut self, now: Instant) {
-        self.retry_at = (self.watch.is_none() || self.copy_pending).then(|| now + RETRY_INTERVAL);
+        let unwatched = self.watch.is_none() && !self.leaving;
+        self.retry_at = (unwatched || self.copy_pending).then(|| now + RETRY_INTERVAL);
     }
 
     /// Whether the listing finds a local peer state file not reported

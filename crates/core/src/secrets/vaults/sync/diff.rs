@@ -103,6 +103,10 @@ pub(crate) enum Edit {
     /// Write of the public keys of this replica. The vault holds no replica
     /// keys, so the diff never finds it.
     ReplicaKeys(ReplicaId, ReplicaKeys),
+    /// Write of `true` into the `left` register of this replica, at the
+    /// disable of sync. The vault holds no `left` map, so the diff never
+    /// finds it.
+    Left(ReplicaId),
 }
 
 /// Write to one register of an item.
@@ -270,6 +274,12 @@ impl LocalEdits {
         self.edits.push(Edit::ReplicaKeys(replica, keys));
     }
 
+    /// Add a write of `true` into the `left` register of `replica`, which
+    /// must be this replica. It supersedes every value of the register.
+    pub(crate) fn add_left(&mut self, replica: ReplicaId) {
+        self.edits.push(Edit::Left(replica));
+    }
+
     /// Record the edits in `state` at `now`, in Unix seconds.
     ///
     /// Mints one write id if the edits are not empty, and writes every changed
@@ -411,7 +421,8 @@ impl Edit {
             | Self::RemoveHistory(..)
             | Self::Recovery(..)
             | Self::ReplicaName(..)
-            | Self::ReplicaKeys(..) => false,
+            | Self::ReplicaKeys(..)
+            | Self::Left(_) => false,
         }
     }
 
@@ -480,6 +491,7 @@ impl Edit {
             Self::ReplicaKeys(replica, keys) => {
                 store.replica_keys.entry(replica).put(mint, keys, kind)
             },
+            Self::Left(replica) => store.left.entry(replica).put(mint, true, kind),
         }
     }
 }

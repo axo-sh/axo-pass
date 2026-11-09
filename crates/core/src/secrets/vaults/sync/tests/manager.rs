@@ -219,7 +219,7 @@ type LockChecks = Arc<Mutex<Vec<(bool, bool)>>>;
 
 /// Check the locks of the vault at each write of `transport` to the
 /// directory of a vault of `fx`.
-fn check_locks_on_write(transport: &FakeTransport, fx: &Fixture) -> LockChecks {
+pub(super) fn check_locks_on_write(transport: &FakeTransport, fx: &Fixture) -> LockChecks {
     let checks = LockChecks::default();
     let found = checks.clone();
     let locks = fx.catalog.files().locks().clone();
@@ -239,7 +239,7 @@ fn check_locks_on_write(transport: &FakeTransport, fx: &Fixture) -> LockChecks {
 
 /// Assert that each write checked by `checks` held both locks, and that at
 /// least `count` writes were checked.
-fn assert_locked_writes(checks: &LockChecks, count: usize) {
+pub(super) fn assert_locked_writes(checks: &LockChecks, count: usize) {
     let checks = checks.lock().unwrap();
     assert!(checks.len() >= count, "{} writes checked", checks.len());
     for (n, (flocked, held)) in checks.iter().enumerate() {
@@ -331,7 +331,7 @@ fn replaced_staged_file_is_not_copied_and_next_transaction_rewrites_it() {
     assert_eq!(
         fx.catalog
             .files()
-            .copy_staged(fx.id(), &fx.vault.path)
+            .copy_staged(fx.id(), Some(&fx.vault.path))
             .unwrap(),
         StagedCopy::Refused
     );
@@ -520,7 +520,7 @@ fn sync_state_that_fails_its_signature_or_sidecar_that_already_records_staged_ha
     managed.run();
 
     assert_eq!(
-        files.copy_staged(fx.id(), &fx.vault.path).unwrap(),
+        files.copy_staged(fx.id(), Some(&fx.vault.path)).unwrap(),
         StagedCopy::NotStaged
     );
     assert!(published(&transport, &fx).is_empty());
@@ -534,7 +534,7 @@ fn sync_state_that_fails_its_signature_or_sidecar_that_already_records_staged_ha
     let writes = transport.writes();
 
     assert_eq!(
-        files.copy_staged(fx.id(), &fx.vault.path).unwrap(),
+        files.copy_staged(fx.id(), Some(&fx.vault.path)).unwrap(),
         StagedCopy::NotStaged
     );
     assert_eq!(transport.writes(), writes);
