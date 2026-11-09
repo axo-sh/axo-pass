@@ -193,14 +193,37 @@ private struct GeneralSettingsView: View {
   }
 }
 
-/// Export vaults to an encrypted bundle file, or import them from one.
+/// Synced folder of the vaults, and export of vaults to an encrypted bundle
+/// file or import from one.
 private struct VaultsSettingsView: View {
   @Environment(VaultsModel.self) private var model
+  @Environment(SyncModel.self) private var sync
   @State private var showingExport = false
   @State private var showingImport = false
 
   var body: some View {
     Form {
+      LabeledContent("Synced folder:") {
+        VStack(alignment: .leading) {
+          HStack(spacing: 8) {
+            Text(sync.folder.map(rootDescription) ?? "None")
+              .foregroundStyle(sync.folder == nil ? .secondary : .primary)
+              .lineLimit(1)
+              .truncationMode(.middle)
+              .help(sync.folder.map(rootDescription) ?? "")
+            Button("Choose…") { chooseSyncFolder() }
+          }
+          Text(
+            "Vaults sync here when you turn on sync. A change applies only to vaults turned on later. Use a folder that a sync service or shared drive copies to each Mac. The path can differ on each Mac."
+          )
+          .captionStyle()
+          if !syncIcloudAvailable() {
+            Text("iCloud Drive is not available yet.")
+              .captionStyle()
+          }
+        }
+      }
+
       LabeledContent("Backups:") {
         VStack(alignment: .leading) {
           Button("Export…") { showingExport = true }
@@ -226,6 +249,17 @@ private struct VaultsSettingsView: View {
     .sheet(isPresented: $showingImport) {
       VaultImportSheet(model: model)
     }
+  }
+
+  private func chooseSyncFolder() {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Choose"
+    panel.message = "Choose the synced folder for your vaults."
+    if panel.runModal() == .OK, let url = panel.url { sync.setFolder(url) }
   }
 }
 

@@ -27,6 +27,9 @@ enum Preferences {
     /// Whether the banner about turning on the AutoFill provider has been
     /// shown or dismissed.
     static let autofillSetupBannerSeen = "autofill.setupBannerSeen"
+    /// Path of the synced folder of the app. Vaults turned on later sync with
+    /// it. Unset until the user chooses one.
+    static let syncFolder = "sync.folder"
   }
 
   static let defaultAutoLockMinutes = 5

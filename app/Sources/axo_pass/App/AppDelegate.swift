@@ -15,6 +15,8 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
   let model = VaultsModel()
+  /// Sync of the vaults. One instance for the app, on the core of `model`.
+  private(set) lazy var sync = SyncModel(vaults: model)
   let windows = WindowRequests()
 
   /// Auto-update against GitHub Releases. An update installs only if it is
@@ -54,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     Preferences.registerDefaults()
+    // The sync manager started with the core of `model`. Events sent before
+    // this are only logged, except the pairing counts, which are replayed.
+    sync.register()
     observeWindowClose()
     statusItem = StatusItemController(model: model, windows: windows) { [weak self] in
       guard let self else { return }

@@ -4,7 +4,9 @@ import SwiftUI
 
 struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
+  @Environment(SyncModel.self) private var sync
   @State private var showingNewVaultSheet = false
+  @State private var deletingSyncedVault: SyncVaultRef? = nil
   @State private var showingDuplicates = false
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
@@ -88,6 +90,22 @@ struct VaultsSidebar: View {
       DuplicateVaultsSheet(
         duplicates: model.duplicateVaults, duplicateKeys: model.duplicateVaultKeys)
     }
+    .syncSheets()
+    .confirmationDialog(
+      "Delete \(deletingSyncedVault?.name ?? "this vault") from this Mac?",
+      isPresented: Binding(
+        get: { deletingSyncedVault != nil }, set: { if !$0 { deletingSyncedVault = nil } }),
+      presenting: deletingSyncedVault
+    ) { vault in
+      Button("Delete", role: .destructive) {
+        Task { await model.deleteVault(vault.key) }
+      }
+    } message: { _ in
+      Text(syncedVaultDeleteMessage)
+    }
+    // Read the sync state of each vault after the unlock and when the list
+    // changes.
+    .task(id: model.vaults) { await sync.reloadAll() }
   }
 
   @ViewBuilder
@@ -128,6 +146,7 @@ struct VaultsSidebar: View {
             Image(systemName: "circle.fill").hidden()
           }
           Spacer(minLength: 0)
+          VaultSyncSymbol(vaultKey: vault.key)
           if model.isPendingSelection(.vault(vault.key)) {
             DelayedProgressView(size: .mini, expands: false)
           }
@@ -137,8 +156,13 @@ struct VaultsSidebar: View {
           Button("Rename…") { renamingVaultKey = vault.key }
           Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("Previous Versions…") { versionsVaultKey = vault.key }
+          syncMenuItem(vault)
           Button("Delete", role: .destructive) {
-            Task { await model.deleteVault(vault.key) }
+            if sync.state(vault.key)?.isOn == true {
+              deletingSyncedVault = syncRef(vault)
+            } else {
+              Task { await model.deleteVault(vault.key) }
+            }
           }
         }
       }
@@ -155,6 +179,27 @@ struct VaultsSidebar: View {
       }
       .buttonStyle(.plain)
       .listRowSeparator(.hidden)
+    }
+  }
+
+  private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
+    SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
+  }
+
+  /// Turn sync on or off for `vault`. Disabled while its state is not read,
+  /// failed to read, or an earlier turn-off waits for the synced folder.
+  @ViewBuilder
+  private func syncMenuItem(_ vault: VaultInfo) -> some View {
+    switch sync.state(vault.key) {
+    case .on:
+      Button("Turn Off Sync…") {
+        sync.clearDisableError()
+        sync.disableRequest = syncRef(vault)
+      }
+    case .off:
+      Button("Turn On Sync…") { sync.enableRequest = syncRef(vault) }
+    default:
+      Button("Turn On Sync…") {}.disabled(true)
     }
   }
 }

@@ -105,7 +105,9 @@ extension UndoManager {
 @Observable
 @MainActor
 final class VaultsModel {
-  private let core = AxoPass()
+  /// Core of the vault panes. `SyncModel` calls it too, so the vault copies a
+  /// sync call saves are the copies this model reads.
+  let core = AxoPass()
 
   // Sidebar navigation
   private(set) var sidebarSelection: SidebarDestination? = nil
@@ -763,6 +765,8 @@ final class VaultsModel {
     }
   }
 
+  /// Move a vault file to the Trash. A synced vault is deleted on this Mac only.
+  /// Its sync is turned off first, which needs the app unlocked.
   @discardableResult
   func deleteVault(_ vaultKey: String) async -> Bool {
     actionError = nil
@@ -774,10 +778,40 @@ final class VaultsModel {
       if selectedVaultKey == vaultKey { selectSidebarDestination(nil) }
       reload()
       return true
+    } catch FfiError.AuthExpired, FfiError.AuthCancelled {
+      lock()
+      return false
     } catch {
       actionError = String(describing: error)
       return false
     }
+  }
+
+  // MARK: - Sync
+
+  /// Key of the listed vault with the short vault id `id`.
+  func vaultKey(id: String) -> String? {
+    vaults.first { $0.id == id }?.key
+  }
+
+  /// Reload vault `vaultKey` after a sync call or a sync transaction saved it.
+  func syncedVaultChanged(_ vaultKey: String) async {
+    folderCache.removeValue(forKey: vaultKey)
+    await brokerVaultsChanged([vaultKey])
+  }
+
+  /// Titles of the items `ids` of vault `vaultKey`, live items first, then
+  /// deleted items. An id of no item is left out.
+  func itemTitles(ids: [String], vaultKey: String) async -> [String] {
+    guard !ids.isEmpty else { return [] }
+    let live = Dictionary(
+      cachedItems(in: vaultKey).map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+    let missing = ids.filter { live[$0] == nil }
+    var deleted: [String: String] = [:]
+    if !missing.isEmpty, let items = try? await deletedItems(vaultKey: vaultKey) {
+      deleted = Dictionary(items.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+    }
+    return ids.compactMap { live[$0] ?? deleted[$0] }
   }
 
   // MARK: - Previous versions
