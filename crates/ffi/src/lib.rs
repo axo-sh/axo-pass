@@ -7,6 +7,7 @@ mod error;
 mod gpg;
 mod shell;
 mod ssh;
+mod sync;
 mod vault;
 mod vault_prompt;
 
@@ -19,6 +20,7 @@ pub use error::*;
 pub use gpg::*;
 pub use shell::*;
 pub use ssh::*;
+pub use sync::*;
 pub use vault::*;
 pub use vault_prompt::*;
 

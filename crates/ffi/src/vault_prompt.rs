@@ -123,6 +123,7 @@ impl From<app_broker::PasskeyChoices> for PasskeyChoicesInfo {
                 .map(|v| VaultInfo {
                     key: v.key,
                     name: v.name,
+                    id: None,
                 })
                 .collect(),
             logins: choices

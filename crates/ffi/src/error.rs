@@ -57,6 +57,23 @@ impl From<VaultError> for FfiError {
             | VaultError::DuplicateItemKey(_)
             | VaultError::InvalidSectionOrder(_)
             | VaultError::InvalidCredentialOrder(_)) => FfiError::InvalidInput(other.to_string()),
+            // Sync, pairing, recovery kit, and re-sign requests refused by the
+            // state of the vault, the synced folder, or the kit. Nothing was
+            // written.
+            other @ (VaultError::SyncAlreadyEnabled
+            | VaultError::SyncDisableInProgress
+            | VaultError::SyncNotEnabled
+            | VaultError::SyncFolderHasVault
+            | VaultError::SyncFolderLacksVault
+            | VaultError::SyncRootNotSet(_)
+            | VaultError::SyncMetaFileError(_)
+            | VaultError::SyncOverrideNotOffered
+            | VaultError::PairingNoVaults
+            | VaultError::PairingVaultNotOffered(_)
+            | VaultError::RecoveryKitMalformed(_)
+            | VaultError::RecoveryKitNotAdded(_)
+            | VaultError::VaultIdExists(_)
+            | VaultError::ResignNotOffered) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),
         }
     }

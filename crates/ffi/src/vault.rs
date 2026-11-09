@@ -21,6 +21,10 @@ use crate::*;
 pub struct VaultInfo {
     pub key: String,
     pub name: Option<String>,
+    /// Vault id as a short id, read from the file header without verifying
+    /// it. Sync events name vaults by id. `None` if the header fails to
+    /// read.
+    pub id: Option<String>,
 }
 
 /// Vault id held by more than one file, with the path of each file.
@@ -462,7 +466,7 @@ impl AxoPass {
 
     /// The vault files on disk, for an operation that keeps no copy in the
     /// manager.
-    fn store(&self) -> Result<VaultCatalog, FfiError> {
+    pub(crate) fn store(&self) -> Result<VaultCatalog, FfiError> {
         Ok(self
             .manager
             .lock()
@@ -549,7 +553,7 @@ fn item_display_order(
 
 /// Read an id passed from Swift. The short form and the hex forms are
 /// accepted.
-fn parse_id(id: &str) -> Result<Uuid, FfiError> {
+pub(crate) fn parse_id(id: &str) -> Result<Uuid, FfiError> {
     ShortId::parse_uuid(id).map_err(|_| FfiError::InvalidInput(format!("Invalid id: {id}")))
 }
 
@@ -672,6 +676,7 @@ impl AxoPass {
             .map(|(key, vw)| VaultInfo {
                 key: key.clone(),
                 name: vw.vault_name().map(|s| s.to_string()),
+                id: vw.peek_vault_id().ok().map(ShortId::encode_uuid),
             })
             .collect();
         vaults.sort_by(|a, b| a.key.cmp(&b.key));
@@ -1109,11 +1114,13 @@ impl AxoPass {
         let info = tokio::task::spawn_blocking(move || {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vw = m.add_vault(name, &vault_key).map_err(FfiError::from)?;
+            let vault_id = vw.vault_id()?;
             let info = VaultInfo {
                 key: vw.key.clone(),
                 name: vw.vault_name().map(|s| s.to_string()),
+                id: Some(ShortId::encode_uuid(vault_id)),
             };
-            Ok::<_, FfiError>((info, audit::SubjectIds::vault(vw.vault_id()?)))
+            Ok::<_, FfiError>((info, audit::SubjectIds::vault(vault_id)))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
@@ -1223,6 +1230,35 @@ impl AxoPass {
         Ok(())
     }
 
+    /// Replace a vault file that fails to load with its retained version
+    /// `name`, as `restore_vault_version` does for a vault that loads. A
+    /// synced vault records the differences as edits on every Mac (D16).
+    /// Needs the app unlocked. Records `vault.version_restored`.
+    pub async fn restore_refused_vault_version(
+        &self,
+        vault_key: String,
+        name: String,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        let version = name.clone();
+        let (key, vault_name, vault_id) = tokio::task::spawn_blocking(move || {
+            VaultsManager::restore_refused(&manager, &vault_key, &version)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        change_event(
+            audit::Action::VaultVersionRestored,
+            &key,
+            vault_subject(&key).maybe_label(vault_name),
+            audit::SubjectIds::vault(vault_id),
+        )
+        .detail("version", name)
+        .detail("refused", "true")
+        .record_async()
+        .await;
+        Ok(())
+    }
+
     /// Delete every retained version of a vault. The vault itself is
     /// unchanged. Records `vault.versions_erased`. Returns the number of
     /// versions deleted.
@@ -1246,19 +1282,25 @@ impl AxoPass {
 
     /// Delete a vault (moved to Trash, not permanently deleted). Mirrors
     /// `delete_vault` in the Tauri app.
+    ///
+    /// A synced vault is disabled first, which needs the app unlocked, and
+    /// is deleted on this Mac only. A final file that waits for the synced
+    /// folder is copied by the sync manager.
     pub async fn delete_vault(&self, vault_key: String) -> Result<(), FfiError> {
         let manager = Arc::clone(&self.manager);
         let key = vault_key.clone();
         let (name, vault_id) = tokio::task::spawn_blocking(move || {
-            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
-            let vw = m.get_or_create_vault_mut(&vault_key)?;
-            let name = vw.vault_name().map(str::to_string);
-            let vault_id = vw.peek_vault_id()?;
-            m.delete_vault(&vault_key).map_err(FfiError::from)?;
+            let (name, vault_id) = {
+                let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+                let vw = m.get_or_create_vault_mut(&vault_key)?;
+                (vw.vault_name().map(str::to_string), vw.peek_vault_id()?)
+            };
+            VaultsManager::delete_vault(&manager, &vault_key)?;
             Ok::<_, FfiError>((name, vault_id))
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))??;
+        AxoPass::refresh_sync();
         change_event(
             audit::Action::VaultDeleted,
             &key,

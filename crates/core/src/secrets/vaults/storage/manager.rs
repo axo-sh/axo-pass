@@ -184,11 +184,16 @@ impl VaultsManager {
         Ok(&self.vaults[&key])
     }
 
-    /// Move a vault file to the Trash and drop its copy.
-    pub fn delete_vault(&mut self, key: &str) -> Result<(), Error> {
-        self.store.delete(key)?;
-        self.vaults.remove(key);
-        self.saves.remove(key);
+    /// Move the file of vault `key` of a shared manager to the Trash, as
+    /// [`VaultCatalog::delete`] does, and drop its copy. The manager mutex is
+    /// released while the delete runs, since the delete of a synced vault
+    /// first disables sync in a transaction.
+    pub fn delete_vault(manager: &Mutex<Self>, key: &str) -> Result<(), Error> {
+        let store = VaultsManager::lock(manager).store.clone();
+        store.delete(key)?;
+        let mut m = VaultsManager::lock(manager);
+        m.vaults.remove(key);
+        m.saves.remove(key);
         Ok(())
     }
 
@@ -357,6 +362,21 @@ impl VaultsManager {
         Ok(disabled)
     }
 
+    /// Run `f` on the store and the target of vault `vault_key` of a shared
+    /// manager, then keep the copy that the transaction of `f` saved. For
+    /// entries that return their own [`Committed`], such as the confirm of a
+    /// sync setup or a sync override. The manager mutex is released while `f`
+    /// runs.
+    pub fn transact<R>(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        f: impl FnOnce(&VaultCatalog, &Target) -> Result<Committed<R>, Error>,
+    ) -> Result<R, Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = f(&store, &target)?;
+        Ok(VaultsManager::lock(manager).install(committed))
+    }
+
     /// Store and target of a vault of a shared manager, loading the vault if
     /// the manager has not yet. The manager mutex is released on return.
     fn locate(manager: &Mutex<Self>, vault_key: &str) -> Result<(VaultCatalog, Target), Error> {
@@ -498,6 +518,28 @@ mod tests {
             fx.manager.get_vault("renamed").unwrap().path,
             fx.original.path
         );
+    }
+
+    #[test]
+    fn transact_holds_copy_saved_by_its_transaction_unlocked() {
+        let fx = Fixture::new();
+        let original = &fx.original;
+        let manager = Mutex::new(fx.manager);
+
+        VaultsManager::transact(&manager, "personal", |store, target| {
+            // The manager is free while the transaction runs.
+            assert!(manager.try_lock().is_ok());
+            store
+                .files()
+                .write::<_, Error>(target, Unlock::Unlocked(original), |vw| {
+                    vw.add_item("alpha", "Alpha").map(|_| ())
+                })
+        })
+        .unwrap();
+
+        let m = VaultsManager::lock(&manager);
+        let vw = m.get_vault("personal").unwrap();
+        assert!(vw.get_item_overview("alpha").unwrap().is_some());
     }
 
     #[test]

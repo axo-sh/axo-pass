@@ -225,7 +225,7 @@ impl SyncSetup {
 
     /// Transport of the synced folder `root`. Fails if the folder cannot be
     /// reached.
-    pub(crate) fn transport(
+    pub fn transport(
         writer: &VaultWriter,
         root: &TransportRoot,
     ) -> Result<Arc<dyn SyncTransport>, Error> {

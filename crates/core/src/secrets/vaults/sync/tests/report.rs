@@ -384,10 +384,7 @@ fn set_sync_root_with_folder_that_lacks_vault_refuses_and_writes_nothing_and_wit
     let committed = fx.write(|_| Ok(())).unwrap();
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
     assert!(folder.names(fx.id(), replica).len() > published.len());
-    assert_eq!(
-        Sidecar::load(&fx.root, fx.id()).last_publish,
-        Some(staged)
-    );
+    assert_eq!(Sidecar::load(&fx.root, fx.id()).last_publish, Some(staged));
 }
 
 #[test]

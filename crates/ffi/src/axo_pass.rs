@@ -7,7 +7,7 @@ use axo_pass_core::core::auth::{
     run_on_auth_thread,
 };
 use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
-use axo_pass_core::secrets::vaults::sync::manager::{AppUnlock, LogEvents, SyncManager};
+use axo_pass_core::secrets::vaults::sync::manager::{AppUnlock, SyncManager};
 use axo_pass_core::secrets::vaults::{VaultCatalog, VaultsManager};
 
 use crate::*;
@@ -42,11 +42,12 @@ impl AxoPass {
             std::thread::spawn(|| VaultWriter::app().prune_all());
         });
         // One sync manager per process, for the same reason. It runs on its
-        // own thread and logs its events until the app registers its own.
+        // own thread. Its events are logged, and forwarded to the delegate
+        // once `set_sync_events` sets it (D12).
         SYNC_MANAGER.get_or_init(|| {
             SyncManager::start(
                 VaultCatalog::app(),
-                Arc::new(LogEvents),
+                ForwardEvents::shared(),
                 Arc::new(AppUnlock),
             )
         });
@@ -149,6 +150,24 @@ impl AxoPass {
             audit::Outcome::Succeeded,
         ));
         Ok(())
+    }
+}
+
+impl AxoPass {
+    /// Sync manager of the process. Every `AxoPass` starts it in `new`.
+    pub(crate) fn sync_manager() -> Result<&'static SyncManager, FfiError> {
+        SYNC_MANAGER
+            .get()
+            .ok_or_else(|| FfiError::Internal("sync manager did not start".into()))
+    }
+
+    /// Find the synced vaults again, after an enable, a join, a disable, a
+    /// delete, a rebuild, or a root change. Does nothing if no manager
+    /// started.
+    pub(crate) fn refresh_sync() {
+        if let Some(manager) = SYNC_MANAGER.get() {
+            manager.refresh();
+        }
     }
 }
 

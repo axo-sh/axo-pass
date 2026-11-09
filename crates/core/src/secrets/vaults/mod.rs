@@ -26,4 +26,4 @@ pub use storage::device_keys::KeyState;
 pub use storage::handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use storage::manager::VaultsManager;
 pub use storage::resign::Resigned;
-pub use storage::unreadable::{MovedFiles, SyncedVault};
+pub use storage::unreadable::{MovedFiles, MovedVault, SyncedVault};
