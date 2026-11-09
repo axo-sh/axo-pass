@@ -158,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_the_key_grip_out_of_keyinfo() {
+    fn reads_key_grip_out_of_keyinfo() {
         assert_eq!(
             key_id_from_keyinfo(Some("n/1234ABCD")),
             Some("1234ABCD".to_string())

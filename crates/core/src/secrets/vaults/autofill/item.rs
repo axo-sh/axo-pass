@@ -219,13 +219,13 @@ mod tests {
     }
 
     #[test]
-    fn default_serializes_to_an_empty_object() {
+    fn default_serializes_to_empty_object() {
         let json = serde_json::to_string(&ItemAutofill::default()).unwrap();
         assert_eq!(json, "{}");
     }
 
     #[test]
-    fn default_match_kind_is_omitted() {
+    fn default_match_kind_omitted() {
         let site = Website::new("github.com", MatchKind::Domain);
         assert_eq!(
             serde_json::to_value(&site).unwrap(),
@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn website_with_unknown_field_is_refused() {
+    fn website_with_unknown_field_refused() {
         let autofill = serde_json::json!({"websites": [{"url": "github.com"}]});
         assert!(serde_json::from_value::<ItemAutofill>(autofill).is_ok());
 
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_wrong_kind_credential_reads_as_empty() {
+    fn missing_or_wrong_kind_credential_reads_as_empty() {
         let (item, ids) = item_with(&[("code", FieldKind::Totp), ("key", FieldKind::Passkey)]);
         let autofill = ItemAutofill {
             username: Some(ids[0]),

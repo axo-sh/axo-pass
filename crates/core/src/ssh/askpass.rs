@@ -56,7 +56,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_the_key_path_from_common_prompt_shapes() {
+    fn extracts_key_path_from_common_prompt_shapes() {
         let test_keys = [
             "/Users/example/.ssh/id_ed25519",
             r#"/Users/foo bar/.ssh/id ed25519"#,
@@ -79,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_mistake_a_password_prompt_for_a_key() {
+    fn does_not_mistake_password_prompt_for_key() {
         assert_eq!(extract_key_path("user@host's password:"), None);
     }
 }

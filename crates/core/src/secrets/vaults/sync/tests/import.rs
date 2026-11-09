@@ -275,7 +275,7 @@ fn torn_state_file_of_paired_mac_does_not_end_wait_and_good_later_file_does() {
 }
 
 #[test]
-fn finished_or_expired_pairing_still_imports_vault_whose_key_arrived_before_finish() {
+fn finished_pairing_imports_vault_with_earlier_key() {
     for finish in [true, false] {
         let transport = Arc::new(FakeTransport::default());
         let (a, setup) = enabled(&transport);
@@ -312,7 +312,7 @@ fn finished_or_expired_pairing_still_imports_vault_whose_key_arrived_before_fini
 }
 
 #[test]
-fn wait_with_no_event_is_checked_every_poll_interval_after_pairing_finishes() {
+fn wait_without_event_polls_every_interval() {
     let transport = Arc::new(FakeTransport::default());
     let (a, setup) = enabled(&transport);
     let (b, managed, _) = waiting_import(&transport, &a, &setup);
@@ -354,7 +354,7 @@ fn shutdown_ends_wait_and_writes_nothing() {
 }
 
 #[test]
-fn pairing_import_of_vault_id_that_local_vault_holds_joins_that_vault() {
+fn pairing_import_joins_existing_local_vault() {
     let transport = Arc::new(FakeTransport::default());
     let a = Fixture::with_transport(0, None, transport.clone());
     a.add_item().unwrap();
@@ -403,7 +403,7 @@ fn pairing_import_of_vault_id_that_local_vault_holds_joins_that_vault() {
 type BuildCase = fn(&Arc<FakeTransport>) -> Fixture;
 
 #[test]
-fn vault_stopped_by_failed_signature_is_in_request_map_and_vault_that_syncs_is_not() {
+fn vault_stopped_by_failed_signature_is_in_request_map_and_vault_that_syncs_not() {
     // Each case with whether the request map holds the vault.
     let cases: Vec<(&str, BuildCase, bool)> = vec![
         ("syncs", |transport| synced(transport), false),

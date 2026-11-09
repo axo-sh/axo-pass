@@ -266,7 +266,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_empty_constraints_rejects() {
+        fn empty_constraints_rejects() {
             // note: identity_permitted() allows empty constraints to always pass
             let result = permitted_by_dest_constraints(
                 SessionHop::IntermediateHop {
@@ -281,7 +281,7 @@ mod tests {
         }
 
         #[test]
-        fn test_first_hop_with_empty_from() {
+        fn first_hop_with_empty_from() {
             let dest_key = &TEST_ED25519_KEY;
             // First hop (origin is None) with destination key matching constraint (to)
             let result = permitted_by_dest_constraints(
@@ -297,7 +297,7 @@ mod tests {
         }
 
         #[test]
-        fn test_subsequent_hop_rejects_with_origin_constraint() {
+        fn subsequent_hop_rejects_with_origin_constraint() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
 
@@ -319,7 +319,7 @@ mod tests {
         }
 
         #[test]
-        fn test_valid_subsequent_hop() {
+        fn valid_subsequent_hop() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
             let result = permitted_by_dest_constraints(
@@ -339,7 +339,7 @@ mod tests {
         }
 
         #[test]
-        fn test_destination_key_mismatch() {
+        fn destination_key_mismatch() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
             let wrong_dest_key = &TEST_RSA_KEY;
@@ -359,7 +359,7 @@ mod tests {
         }
 
         #[test]
-        fn test_username_match() {
+        fn username_match() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
 
@@ -387,7 +387,7 @@ mod tests {
         }
 
         #[test]
-        fn test_username_mismatch() {
+        fn username_mismatch() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
 
@@ -414,7 +414,7 @@ mod tests {
         }
 
         #[test]
-        fn test_username_ignored_when_empty() {
+        fn username_ignored_when_empty() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
 
@@ -441,7 +441,7 @@ mod tests {
         }
 
         #[test]
-        fn test_empty_hostname_returns_wildcard() {
+        fn empty_hostname_returns_wildcard() {
             // not sure how this would happen with ssh-add, but test the wildcard behavior
             // anyway
             let origin_key = &TEST_RSA_KEY;
@@ -463,7 +463,7 @@ mod tests {
         }
 
         #[test]
-        fn test_multiple_constraints_first_match_wins() {
+        fn multiple_constraints_first_match_wins() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
             let wrong_dest_key = &TEST_RSA_KEY;
@@ -490,7 +490,7 @@ mod tests {
         }
 
         #[test]
-        fn test_origin_only_matches_any_destination() {
+        fn origin_only_matches_any_destination() {
             // origin-only is mainly for non-signing use case
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
@@ -508,7 +508,7 @@ mod tests {
         }
 
         #[test]
-        fn test_origin_only_matches_no_destination() {
+        fn origin_only_matches_no_destination() {
             // origin-only is mainly for non-signing use case
             let origin_key = &TEST_RSA_KEY;
             let result = permitted_by_dest_constraints(
@@ -524,7 +524,7 @@ mod tests {
         }
 
         #[test]
-        fn test_origin_only_rejects_invalid_origin() {
+        fn origin_only_rejects_invalid_origin() {
             // origin-only is mainly for non-signing use case
             let origin_key = &TEST_RSA_KEY;
             let wrong_origin_key = &TEST_ED25519_KEY;
@@ -544,7 +544,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_validate_session_hop_valid_single_hop_no_origin() {
+        fn validate_session_hop_valid_single_hop_no_origin() {
             // single hop has no origin (being the first hop)
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
@@ -561,7 +561,7 @@ mod tests {
         }
 
         #[test]
-        fn test_validate_session_hop_single_hop_signing_on_forwarding_fails() {
+        fn validate_session_hop_single_hop_signing_on_forwarding_fails() {
             // single hop has no origin (being the first hop)
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
@@ -584,7 +584,7 @@ mod tests {
         }
 
         #[test]
-        fn test_validate_session_hop_valid_intermediate_hop() {
+        fn validate_session_hop_valid_intermediate_hop() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
             let result = validate_session_hop(
@@ -605,7 +605,7 @@ mod tests {
         }
 
         #[test]
-        fn test_validate_session_hop_intermediate_hop_not_forwarding_fails() {
+        fn validate_session_hop_intermediate_hop_not_forwarding_fails() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
 
@@ -633,7 +633,7 @@ mod tests {
         }
 
         #[test]
-        fn test_validate_session_hop_constraint_not_matched() {
+        fn validate_session_hop_constraint_not_matched() {
             let origin_key = &TEST_RSA_KEY;
             let dest_key = &TEST_ED25519_KEY;
             let wrong_dest_key = &TEST_RSA_KEY;

@@ -153,7 +153,7 @@ fn derived_history_id_depends_only_on_credential_and_write_id() {
 }
 
 #[test]
-fn two_macs_that_replace_same_value_write_one_history_entry_with_derived_id() {
+fn concurrent_replace_writes_one_derived_history_entry() {
     let mut a = Mac::first(filled());
     let mut b = Mac::joined(&a, 2);
     let alpha = a.credential_id("kept", "alpha");
@@ -234,7 +234,7 @@ fn replaced_value_with_no_write_id_in_view_retains_random_id() {
 }
 
 #[test]
-fn resolving_credential_value_conflict_writes_each_value_not_chosen_to_history() {
+fn resolve_writes_unchosen_values_to_history() {
     let (mut a, mut b, alpha) = value_conflict();
     let read = a.value_ids(alpha);
     let four = *read
@@ -287,7 +287,7 @@ fn choosing_shown_value_leaves_vault_unchanged_and_supersedes_every_value() {
 }
 
 #[test]
-fn two_macs_that_resolve_same_value_conflict_concurrently_converge_on_one_entry() {
+fn concurrent_resolves_converge_on_one_entry() {
     let (mut a, mut b, alpha) = value_conflict();
     for mac in [&mut a, &mut b] {
         let request = Resolve {
@@ -305,7 +305,7 @@ fn two_macs_that_resolve_same_value_conflict_concurrently_converge_on_one_entry(
 }
 
 #[test]
-fn resolve_request_whose_read_write_ids_differ_is_refused() {
+fn resolve_request_whose_read_write_ids_differ_refused() {
     let (a, _, alpha) = value_conflict();
     let mut read = a.value_ids(alpha);
     read.pop_first();
@@ -364,7 +364,7 @@ fn keeping_suffixed_key_of_invalid_key_writes_shown_key_and_notice_clears() {
 }
 
 #[test]
-fn kept_suffixed_key_stays_after_holder_of_bare_key_is_trashed() {
+fn kept_suffixed_key_stays_after_holder_of_bare_key_trashed() {
     let mut a = Mac::first(Vault::new_for_test());
     let mut b = Mac::joined(&a, 2);
     a.edit(|v| {

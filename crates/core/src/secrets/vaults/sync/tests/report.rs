@@ -299,7 +299,7 @@ fn report_uses_trusted_sync_state_only_where_transaction_builds_on_it_and_writes
 }
 
 #[test]
-fn report_of_synced_vault_with_no_sidecar_root_states_that_folder_must_be_chosen_again() {
+fn report_without_sidecar_root_asks_to_choose_folder() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     fx.add_item().unwrap();
@@ -388,7 +388,7 @@ fn set_sync_root_with_folder_that_lacks_vault_refuses_and_writes_nothing_and_wit
 }
 
 #[test]
-fn set_sync_root_refuses_vault_that_is_not_synced_or_is_leaving_or_has_no_valid_sync_state_and_writes_nothing()
+fn set_sync_root_refuses_vault_not_synced_or_is_leaving_or_has_no_valid_sync_state_and_writes_nothing()
  {
     let device = TestSigner::device();
     let mut cases = Vec::new();
@@ -495,7 +495,7 @@ fn set_sync_root_replaces_root_already_set_and_sidecar_that_fails_to_parse() {
 }
 
 #[test]
-fn degraded_vault_clears_recovery_kit_missing_after_new_kit_is_confirmed() {
+fn new_kit_confirmation_clears_kit_missing() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     assert!(read_report(&fx).unwrap().recovery_kit_missing);
@@ -524,7 +524,7 @@ fn degraded_vault_clears_recovery_kit_missing_after_new_kit_is_confirmed() {
 }
 
 #[test]
-fn kit_is_refused_where_confirm_saved_refuses_its_recipient_and_writes_nothing() {
+fn kit_refused_where_confirm_saved_refuses_its_recipient_and_writes_nothing() {
     let device = TestSigner::device();
     let mut refused = Vec::new();
     refused.push(("not synced", Fixture::new(GENERATION, None)));

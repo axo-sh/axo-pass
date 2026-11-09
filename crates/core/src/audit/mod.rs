@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_writes_are_not_torn() {
+    fn concurrent_writes_not_torn() {
         let _t = test_dir();
         std::thread::scope(|scope| {
             for _ in 0..8 {
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_narrow_the_results() {
+    fn filters_narrow_results() {
         let _t = test_dir();
         record(
             event(Action::SshSign, Outcome::Succeeded)
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn entity_ids_are_recorded_in_detail_and_found_by_the_detail_id_filter() {
+    fn entity_ids_recorded_in_detail_and_found_by_detail_id_filter() {
         let _t = test_dir();
         let (vault_id, item_id) = (Uuid::new_v4(), Uuid::new_v4());
         let named = event(Action::ItemUpdated, Outcome::Succeeded)
@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn a_detail_id_filter_matches_a_single_id_or_an_id_in_a_list() {
+    fn detail_id_filter_matches_single_id_or_id_in_list() {
         let _t = test_dir();
         record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", "a"));
         record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", "ab"));
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn requester_is_derived_from_source_actor_and_subject() {
+    fn requester_derived_from_source_actor_and_subject() {
         let actor = |executable: &str| Actor {
             executable: Some(executable.to_string()),
             ..Default::default()
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn all_actions_are_listed_once_with_a_description() {
+    fn all_actions_listed_once_with_description() {
         let mut seen = std::collections::HashSet::new();
         for action in Action::ALL {
             assert!(
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn category_matches_the_action_namespace() {
+    fn category_matches_action_namespace() {
         let cases = [
             (Action::SshSign, Category::Ssh, "ssh"),
             (Action::GpgMessage, Category::Gpg, "gpg"),
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_event_stays_within_the_schema() {
+    fn serialized_event_stays_within_schema() {
         let mut ev = AuditEvent::new(Source::Agent, Action::SshSign, Outcome::Succeeded)
             .actor(Actor {
                 caller: Some("VS Code (git)".into()),
@@ -501,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_lines_are_skipped_and_counted() {
+    fn malformed_lines_skipped_and_counted() {
         let _t = test_dir();
         record(event(Action::SshSign, Outcome::Succeeded));
         let path = audit_log_path();

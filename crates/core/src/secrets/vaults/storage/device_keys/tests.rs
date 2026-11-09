@@ -109,7 +109,7 @@ fn import_one(catalog: &VaultCatalog) -> Result<Vec<VaultHandle>, Error> {
 }
 
 #[test]
-fn each_state_is_classified_from_keys_and_files() {
+fn each_state_classified_from_keys_and_files() {
     use KeyProbe::{Missing, Present};
 
     let empty = Mac::new();
@@ -227,7 +227,7 @@ fn mac_with_only_external_vault_has_vault_files() {
 }
 
 #[test]
-fn listed_external_vault_that_does_not_exist_is_not_a_vault_file() {
+fn listed_missing_external_vault_not_file() {
     let mac = Mac::new();
     let files = mac.files_with(vec![mac.root().join("external").join("work.json")]);
     let keys = TestKeys::neither();
@@ -239,7 +239,7 @@ fn listed_external_vault_that_does_not_exist_is_not_a_vault_file() {
 }
 
 #[test]
-fn empty_directories_and_other_files_are_not_vault_files() {
+fn empty_directories_and_other_files_not_vault_files() {
     let mac = Mac::new();
     fs::create_dir_all(mac.root().join("vaults")).unwrap();
     fs::create_dir_all(mac.root().join("versions").join("abc")).unwrap();
@@ -260,7 +260,7 @@ fn key_gated_by_authentication_is_present() {
 }
 
 #[test]
-fn keychain_error_other_than_item_not_found_is_a_probe_error() {
+fn keychain_error_other_than_item_not_found_is_probe_error() {
     for error in [
         KeychainError::UserCancelled,
         KeychainError::AuthenticationExpired,
@@ -411,7 +411,7 @@ fn import_on_mac_with_no_vault_files_and_no_keys_creates_both_keys() {
 }
 
 #[test]
-fn only_the_missing_key_is_created_if_no_vault_files_exist() {
+fn only_missing_key_created_if_no_vault_files_exist() {
     let mac = Mac::new();
     let keys = TestKeys::new(KeyProbe::Present, KeyProbe::Missing);
 

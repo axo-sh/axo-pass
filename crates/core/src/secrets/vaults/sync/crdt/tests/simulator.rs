@@ -556,7 +556,7 @@ proptest! {
     }
 
     #[test]
-    fn replica_whose_clock_is_behind_does_not_win_order_register_against_joined_value(
+    fn lagging_clock_loses_to_joined_value(
         history in History::strategy(),
         slow in any::<Index>(),
         behind in 1..=NOW,

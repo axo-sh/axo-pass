@@ -228,13 +228,13 @@ mod tests {
     }
 
     #[test]
-    fn test_signatures_of_one_message_differ() {
+    fn signatures_of_one_message_differ() {
         let signer = TestSigner::device();
         assert_ne!(signer.sign(MESSAGE).unwrap(), signer.sign(MESSAGE).unwrap());
     }
 
     #[test]
-    fn signature_that_is_not_der_fails() {
+    fn signature_not_der_fails() {
         let signer = TestSigner::random();
         let key = signer.verifying_key().unwrap();
         assert!(matches!(

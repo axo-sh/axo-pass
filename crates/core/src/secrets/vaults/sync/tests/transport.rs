@@ -734,7 +734,7 @@ pub(super) fn returns_remote_for_file_not_yet_local(folder: &dyn SyncedFolder) {
 }
 
 #[test]
-fn fake_tells_local_file_from_one_not_local_or_missing_without_read() {
+fn fake_tells_local_remote_missing_without_read() {
     tells_local_file_from_one_not_local_or_missing_without_read(&FakeTransport::default());
 }
 
@@ -963,7 +963,7 @@ fn fake_lists_pairing_requests_with_set_times_and_sizes() {
 }
 
 #[test]
-fn fake_watch_is_called_when_fired_and_ends_when_handle_drops() {
+fn fake_watch_called_when_fired_and_ends_when_handle_drops() {
     let transport = FakeTransport::default();
     let vault_calls = Arc::new(AtomicUsize::new(0));
     let pairing_calls = Arc::new(AtomicUsize::new(0));

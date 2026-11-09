@@ -142,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn known_hosts_fixture_has_the_expected_fingerprint() {
+    fn known_hosts_fixture_has_expected_fingerprint() {
         let key: PublicKey =
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
                 .parse()
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_recorded_host_and_leaves_unknown_hosts_empty() {
+    fn prefers_recorded_host_and_leaves_unknown_hosts_empty() {
         let events = vec![
             sign_event(1, KEY_FP, Some(GITHUB_HOSTKEY_FP), Some("git"), None),
             sign_event(

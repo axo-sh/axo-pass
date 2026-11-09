@@ -58,7 +58,7 @@ fn sidecar(fx: &Fixture) -> Sidecar {
 }
 
 #[test]
-fn transaction_that_only_joins_publishes_if_join_advanced_local_context_past_published_context() {
+fn join_only_transaction_publishes_if_context_advanced() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     fx.add_item().unwrap();
@@ -104,7 +104,7 @@ fn transaction_that_only_joins_publishes_if_join_advanced_local_context_past_pub
 }
 
 #[test]
-fn edit_saved_in_transaction_that_also_joins_local_peer_file_orders_after_every_value_it_joined() {
+fn edit_with_join_orders_after_joined_values() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let peer = peer_state(&fx, PEER, "joined");
@@ -134,7 +134,7 @@ fn edit_saved_in_transaction_that_also_joins_local_peer_file_orders_after_every_
 }
 
 #[test]
-fn file_that_fails_hash_or_decryption_or_names_another_vault_or_replica_is_quarantined() {
+fn invalid_peer_file_quarantined() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let peer = peer_state(&fx, PEER, "joined");
@@ -182,7 +182,7 @@ fn file_that_fails_hash_or_decryption_or_names_another_vault_or_replica_is_quara
 }
 
 #[test]
-fn torn_peer_file_is_quarantined_and_good_later_file_joins() {
+fn torn_peer_file_quarantined_and_good_later_file_joins() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let good = state_file(&fx, PEER, &peer_state(&fx, PEER, "joined"));
@@ -208,7 +208,7 @@ fn torn_peer_file_is_quarantined_and_good_later_file_joins() {
 }
 
 #[test]
-fn refused_state_is_retried_in_next_transaction_and_quarantined_state_is_not() {
+fn refused_state_retried_in_next_transaction_and_quarantined_state_not() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let (_, before) = saved(&fx);
@@ -250,7 +250,7 @@ fn refused_state_is_retried_in_next_transaction_and_quarantined_state_is_not() {
 }
 
 #[test]
-fn file_under_other_fingerprint_or_of_newer_format_is_left_and_other_peer_joins() {
+fn file_under_other_fingerprint_or_of_newer_format_left_and_other_peer_joins() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let peer = peer_state(&fx, PEER, "joined");
@@ -289,7 +289,7 @@ fn file_under_other_fingerprint_or_of_newer_format_is_left_and_other_peer_joins(
 }
 
 #[test]
-fn remote_peer_file_is_not_joined_and_not_quarantined() {
+fn remote_peer_file_not_joined_and_not_quarantined() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let bytes = state_file(&fx, PEER, &peer_state(&fx, PEER, "joined"));
@@ -310,7 +310,7 @@ fn remote_peer_file_is_not_joined_and_not_quarantined() {
 }
 
 #[test]
-fn every_local_peer_file_is_read_and_each_joined_file_is_read_once() {
+fn every_local_peer_file_read_and_each_joined_file_read_once() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     // Two concurrent files of one peer. Neither covers the other.
@@ -337,7 +337,7 @@ fn every_local_peer_file_is_read_and_each_joined_file_is_read_once() {
 }
 
 #[test]
-fn folder_or_peer_directory_that_cannot_be_listed_stops_no_other_peer_and_edit_is_saved() {
+fn folder_or_peer_directory_that_cannot_be_listed_stops_no_other_peer_and_edit_saved() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let peer = transport.put_state(
@@ -387,7 +387,7 @@ fn folder_or_peer_directory_that_cannot_be_listed_stops_no_other_peer_and_edit_i
 }
 
 #[test]
-fn joined_hashes_of_peer_whose_directory_is_gone_are_dropped() {
+fn joined_hashes_of_peer_whose_directory_is_gone_dropped() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let hash = transport.put_state(

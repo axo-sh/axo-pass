@@ -903,7 +903,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn audit_ids_name_the_vault_item_and_credential_that_exist() {
+    fn audit_ids_name_vault_item_and_credential_that_exist() {
         let mut vw = VaultHandle::new_for_test("personal");
         vw.add_item("item", "Item").unwrap();
         vw.add_secret(

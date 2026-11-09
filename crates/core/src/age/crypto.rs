@@ -62,7 +62,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn round_trips_through_a_generated_identity() {
+    async fn round_trips_through_generated_identity() {
         let identity = age::x25519::Identity::generate();
         let recipient = identity.to_public();
 

@@ -193,8 +193,7 @@ fn transaction_that_lists_remote_file_requests_one_download_and_one_with_none_re
 }
 
 #[test]
-fn peer_directory_deleted_after_other_macs_joined_it_leaves_its_writes_to_third_mac_through_second_mac()
- {
+fn deleted_peer_dir_writes_reach_third_mac_via_second() {
     let macs = Macs::new(3);
     let [a, b, c] = &macs.macs[..] else {
         panic!("three Macs");
@@ -257,7 +256,7 @@ fn own_directory_deleted_with_delete_replica_republishes_state_file_and_writes_a
 }
 
 #[test]
-fn newer_own_state_file_that_is_remote_at_publish_is_kept_joined_once_local_and_deleted_after_next_publish()
+fn newer_own_state_file_that_is_remote_at_publish_kept_joined_once_local_and_deleted_after_next_publish()
  {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);

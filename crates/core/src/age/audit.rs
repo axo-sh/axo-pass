@@ -62,7 +62,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypt_records_a_succeeded_event() {
+    fn encrypt_records_succeeded_event() {
         let _t = test_dir();
         record_encrypt(2, Some("/tmp/x"), &Ok(()));
 
@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_records_a_cancelled_event() {
+    fn decrypt_records_cancelled_event() {
         let _t = test_dir();
         record_decrypt("demo", None, &Err(AgeError::Cancelled));
 
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_records_a_failed_event() {
+    fn decrypt_records_failed_event() {
         let _t = test_dir();
         record_decrypt(
             "demo",

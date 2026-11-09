@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_ids_are_refused() {
+    fn malformed_ids_refused() {
         let inputs = [
             "",
             "1",

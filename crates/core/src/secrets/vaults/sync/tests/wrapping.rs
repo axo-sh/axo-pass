@@ -96,7 +96,7 @@ const UNKNOWN_WRAPPING: &str =
     r#"{"kind":"Passkey",  "key_id": 1, "credential":"abc",  "nested": {"z": 1, "a": [2, 1]}}"#;
 
 #[test]
-fn unknown_wrapping_kind_is_skipped() {
+fn unknown_wrapping_kind_skipped() {
     let file = KeyFile::parse(MIXED_KEY_FILE.as_bytes()).unwrap();
 
     assert_eq!(file.wrappings.len(), 3);
@@ -116,7 +116,7 @@ fn unknown_wrapping_kind_is_skipped() {
 }
 
 #[test]
-fn unknown_kind_is_written_back_unchanged() {
+fn unknown_kind_written_back_unchanged() {
     let file = KeyFile::parse(MIXED_KEY_FILE.as_bytes()).unwrap();
     let written = String::from_utf8(file.to_bytes()).unwrap();
 
@@ -264,7 +264,7 @@ fn wrapping_with_no_kind_or_missing_field_fails_that_wrapping() {
 }
 
 #[test]
-fn key_wrapped_to_software_public_key_unwraps_with_its_private_key() {
+fn software_key_unwraps_with_private_key() {
     let key = SyncKey::generate();
     let to = software_key();
     let wrapping = wrap_to(&key, &to);
@@ -285,7 +285,7 @@ fn key_wrapped_to_software_public_key_unwraps_with_its_private_key() {
 }
 
 #[test]
-fn key_wrapped_to_software_public_key_fails_with_another_private_key() {
+fn software_key_fails_with_wrong_private_key() {
     let key = SyncKey::generate();
     let wrapping = wrap_to(&key, &software_key());
 
@@ -378,7 +378,7 @@ fn age_wrapping_unwraps_with_its_identity_and_fails_with_another() {
 }
 
 #[test]
-fn age_wrapping_that_is_not_32_bytes_or_has_bad_recipient_fails() {
+fn age_wrapping_not_32_bytes_or_has_bad_recipient_fails() {
     let identity = age::x25519::Identity::generate();
     let recipient = identity.to_public().to_string();
     let key = SyncKey::generate();

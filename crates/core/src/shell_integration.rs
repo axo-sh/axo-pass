@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn block_puts_local_bin_on_path_without_an_alias() {
+    fn block_puts_local_bin_on_path_without_alias() {
         let block = build_block().unwrap();
         assert!(!block.contains("alias ap="));
         assert!(block.contains("$HOME/.local/bin"));
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_content_around_the_block() {
+    fn preserves_content_around_block() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".zshrc");
         std::fs::write(&path, "export PATH=/usr/local/bin:$PATH\n").unwrap();
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn replaces_an_outdated_block_in_place() {
+    fn replaces_outdated_block_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".zshrc");
         std::fs::write(
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn separates_the_block_when_the_file_has_no_trailing_newline() {
+    fn separates_block_when_file_has_no_trailing_newline() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".zshrc");
         std::fs::write(&path, "export PATH=/usr/local/bin:$PATH").unwrap();

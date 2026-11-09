@@ -134,7 +134,7 @@ fn key_that_fails_to_unwrap_or_has_wrong_length_fails_keyring() {
 }
 
 #[test]
-fn two_keys_with_one_key_id_are_refused() {
+fn two_keys_with_one_key_id_refused() {
     let keys = vec![
         (KeyId(1), SyncKey::generate()),
         (KeyId(1), SyncKey::generate()),
@@ -168,7 +168,7 @@ fn sync_key_debug_shows_no_bytes() {
 }
 
 #[test]
-fn fingerprint_that_matches_in_first_8_bytes_only_is_different_key() {
+fn fingerprint_matching_first_8_bytes_is_other_key() {
     let keyring = keyring(&[1]);
     let key = keyring.get(KeyId(1)).unwrap();
     let fingerprint = key.fingerprint();

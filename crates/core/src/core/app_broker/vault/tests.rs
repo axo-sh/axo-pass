@@ -293,7 +293,7 @@ fn assertion() -> (VaultAction, VaultPayload) {
 }
 
 #[test]
-fn a_broker_write_and_an_app_write_to_one_vault_both_land() {
+fn broker_write_and_app_write_to_one_vault_both_land() {
     let fx = Fixture::new();
     thread::scope(|s| {
         for i in 0..4 {
@@ -315,7 +315,7 @@ fn a_broker_write_and_an_app_write_to_one_vault_both_land() {
 }
 
 #[test]
-fn a_broker_read_and_write_reach_an_external_vault() {
+fn broker_read_and_write_reach_external_vault() {
     let fx = Fixture::new();
     fx.broker_write("shared", "token", "secret");
 
@@ -347,7 +347,7 @@ fn a_broker_read_and_write_reach_an_external_vault() {
 }
 
 #[test]
-fn an_app_edit_made_during_an_update_confirmation_is_kept() {
+fn app_edit_made_during_update_confirmation_kept() {
     let fx = Fixture::new();
     let page = LoginPage::parse(
         "https://example.com/login",
@@ -391,7 +391,7 @@ fn an_app_edit_made_during_an_update_confirmation_is_kept() {
 }
 
 #[test]
-fn a_denied_prompt_records_no_ids_and_an_approved_read_records_its_credential() {
+fn denied_prompt_records_no_ids_and_approved_read_records_its_credential() {
     let _audit = test_dir();
     let fx = Fixture::new();
     fx.broker_write("personal", "token", "secret");
@@ -409,7 +409,7 @@ fn a_denied_prompt_records_no_ids_and_an_approved_read_records_its_credential() 
 }
 
 #[test]
-fn a_listing_and_a_write_record_the_ids_of_their_subject() {
+fn listing_and_write_record_ids_of_their_subject() {
     let fx = Fixture::new();
     let created = fx.serve_event(
         "personal",
@@ -438,7 +438,7 @@ fn a_listing_and_a_write_record_the_ids_of_their_subject() {
 }
 
 #[test]
-fn a_resolve_across_vaults_lists_the_credentials_it_resolved() {
+fn resolve_across_vaults_lists_credentials_it_resolved() {
     let fx = Fixture::new();
     fx.broker_write("personal", "token", "a");
     fx.broker_write("shared", "token", "b");
@@ -476,7 +476,7 @@ fn a_resolve_across_vaults_lists_the_credentials_it_resolved() {
 }
 
 #[test]
-fn an_export_lists_the_vaults_it_exported() {
+fn export_lists_vaults_it_exported() {
     let fx = Fixture::new();
     let dest = fx._dir.path().join("export.axovault");
     let recipient = age::x25519::Identity::generate().to_public().to_string();
@@ -644,7 +644,7 @@ fn broker_import_applies_action_to_existing_id_only() {
 }
 
 #[test]
-fn a_login_listing_records_no_ids_and_a_fill_and_a_code_record_the_login() {
+fn login_listing_records_no_ids_and_fill_and_code_record_login() {
     let fx = Fixture::new();
     // The login is in the second vault, so the request unlocks both.
     fx.app_write("shared", |vw| {
@@ -713,7 +713,7 @@ fn a_login_listing_records_no_ids_and_a_fill_and_a_code_record_the_login() {
 }
 
 #[test]
-fn a_saved_login_and_a_password_update_record_the_ids_of_the_login() {
+fn saved_login_and_password_update_record_ids_of_login() {
     let fx = Fixture::new();
     let page = example_page();
     let saved = save_login(
@@ -761,7 +761,7 @@ fn a_saved_login_and_a_password_update_record_the_ids_of_the_login() {
 }
 
 #[test]
-fn a_passkey_assertion_records_the_passkey_that_signed_from_the_vault_that_held_it() {
+fn assertion_records_signing_passkey() {
     let _audit = test_dir();
     let fx = Fixture::new();
     let (action, payload) = assertion();
@@ -806,7 +806,7 @@ fn a_passkey_assertion_records_the_passkey_that_signed_from_the_vault_that_held_
 }
 
 #[test]
-fn a_registration_and_an_assertion_record_the_same_passkey_credential_id() {
+fn register_and_assert_share_credential_id() {
     let _audit = test_dir();
     let fx = Fixture::new();
     let (action, payload) = assertion();
@@ -865,7 +865,7 @@ fn a_registration_and_an_assertion_record_the_same_passkey_credential_id() {
 }
 
 #[test]
-fn a_passkey_report_records_the_passkey_credential_ids_it_names() {
+fn passkey_report_records_passkey_credential_ids_it_names() {
     let _audit = test_dir();
     let fx = Fixture::new();
     // A relying party no other test uses, since pending reports are shared by

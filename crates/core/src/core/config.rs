@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_save_leaves_the_previous_config() {
+    fn failed_save_leaves_previous_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CONFIG_FILENAME);
         let config = AppConfig::default();
@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn external_vaults_are_written_as_paths_without_keys() {
+    fn external_vaults_written_as_paths_without_keys() {
         let mut config = AppConfig::default();
         let path = PathBuf::from("/Users/me/Vaults/shared.json");
         config
@@ -226,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn external_vaults_keyed_by_vault_key_are_read_as_paths() {
+    fn external_vaults_keyed_by_vault_key_read_as_paths() {
         let text = indoc! {r#"
             id = "6f1c2b7e-8a43-4c1d-9b55-0d2f3e4a5b6c"
 

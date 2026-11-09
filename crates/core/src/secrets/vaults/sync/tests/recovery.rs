@@ -284,7 +284,7 @@ fn kit_text_reads_back_to_identity_vault_id_key_id_and_fingerprint() {
 }
 
 #[test]
-fn kit_parser_refuses_missing_extra_reordered_or_malformed_lines() {
+fn kit_parser_rejects_malformed_lines() {
     let kit = RecoveryKit::create(Uuid::from_u128(1), KeyId(1), &key());
     let text = kit.text();
     let lines: Vec<String> = text.lines().map(str::to_string).collect();
@@ -333,7 +333,7 @@ fn creating_kit_without_confirmation_writes_no_recipient_and_no_wrapping() {
 }
 
 #[test]
-fn every_replica_writes_age_wrapping_for_each_recipient_of_current_key_and_kit_opens_after_kit_maker_directory_is_deleted()
+fn every_replica_writes_age_wrapping_for_each_recipient_of_current_key_and_kit_opens_after_kit_maker_directory_deleted()
  {
     let macs = Macs::new(3);
     let kit = macs.kit();
@@ -361,7 +361,7 @@ fn every_replica_writes_age_wrapping_for_each_recipient_of_current_key_and_kit_o
 }
 
 #[test]
-fn confirmed_kit_clears_degraded_state_on_every_mac_once_each_has_joined_recipient() {
+fn confirmed_kit_clears_degraded_on_all_macs() {
     let macs = Macs::new(3);
     for mac in &macs.macs {
         assert!(mac.sync().recovery_kit_missing);
@@ -438,7 +438,7 @@ fn recipient_for_older_key_id_receives_no_wrapping() {
 }
 
 #[test]
-fn age_wrapping_with_planted_fingerprint_is_rejected() {
+fn age_wrapping_with_planted_fingerprint_rejected() {
     let vault_id = Uuid::from_u128(0x100);
     let kit = RecoveryKit::create(vault_id, KeyId(1), &key());
     let transport = FakeTransport::default();
@@ -465,7 +465,7 @@ fn age_wrapping_with_planted_fingerprint_is_rejected() {
 }
 
 #[test]
-fn key_whose_fingerprint_matches_kit_in_first_8_bytes_but_not_in_all_16_is_rejected() {
+fn key_with_partial_fingerprint_match_rejected() {
     let vault_id = Uuid::from_u128(0x100);
     let mut kit = RecoveryKit::create(vault_id, KeyId(1), &key());
     kit.fingerprint.0[15] ^= 1;
@@ -487,7 +487,7 @@ fn key_whose_fingerprint_matches_kit_in_first_8_bytes_but_not_in_all_16_is_rejec
 }
 
 #[test]
-fn kit_whose_key_id_is_below_highest_key_id_in_any_peer_header_is_refused() {
+fn kit_below_peer_header_key_id_refused() {
     let vault_id = Uuid::from_u128(0x100);
     let kit = RecoveryKit::create(vault_id, KeyId(1), &key());
     let transport = FakeTransport::default();
@@ -519,8 +519,7 @@ fn kit_whose_key_id_is_below_highest_key_id_in_any_peer_header_is_refused() {
 }
 
 #[test]
-fn import_waits_while_any_peer_state_file_is_remote_showing_macs_still_downloading_until_user_cancels()
- {
+fn import_waits_for_remote_peer_state_files() {
     let vault_id = Uuid::from_u128(0x100);
     let kit = RecoveryKit::create(vault_id, KeyId(1), &key());
     let transport = FakeTransport::default();
@@ -572,7 +571,7 @@ fn import_waits_while_any_peer_state_file_is_remote_showing_macs_still_downloadi
 }
 
 #[test]
-fn remote_state_file_is_requested_for_download() {
+fn remote_state_file_requested_for_download() {
     let vault_id = Uuid::from_u128(0x100);
     let kit = RecoveryKit::create(vault_id, KeyId(1), &key());
     let transport = FakeTransport::default();
@@ -589,7 +588,7 @@ fn remote_state_file_is_requested_for_download() {
 }
 
 #[test]
-fn planted_header_with_higher_key_id_refuses_kit_and_no_state_is_accepted_from_it() {
+fn planted_header_with_higher_key_id_refuses_kit_and_no_state_accepted_from_it() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let kit = kit_of(&fx);
@@ -650,7 +649,7 @@ fn each_import_takes_new_replica_id() {
 }
 
 #[test]
-fn deleted_own_key_json_is_written_again_with_device_wrappings_lost_and_age_wrappings_back() {
+fn deleted_own_key_json_written_again_with_device_wrappings_lost_and_age_wrappings_back() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let kit = kit_of(&fx);
@@ -688,7 +687,7 @@ fn deleted_own_key_json_is_written_again_with_device_wrappings_lost_and_age_wrap
 }
 
 #[test]
-fn pairing_grant_and_age_wrappings_are_written_in_one_key_json_write() {
+fn pairing_grant_and_age_wrappings_written_in_one_key_json_write() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let root = TransportRoot::Folder {
@@ -818,7 +817,7 @@ fn vault_with_no_sync_state_reports_no_missing_kit_and_refuses_confirmation() {
 }
 
 #[test]
-fn state_file_key_id_is_read_from_header_without_decryption() {
+fn state_file_key_id_read_from_header_without_decryption() {
     let state = body(REPLICA, &[device_key()]);
     let bytes = state_file_under(Uuid::from_u128(0x100), REPLICA, &state, KeyId(4), &key());
     assert_eq!(StateFile::peek_key_id(&bytes).unwrap(), KeyId(4));

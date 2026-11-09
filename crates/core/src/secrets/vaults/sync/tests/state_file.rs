@@ -165,7 +165,7 @@ pub(super) fn full_state() -> State {
 }
 
 #[test]
-fn register_from_values_equals_register_written_with_same_values() {
+fn register_from_values_matches_writes() {
     let mut one = session(1);
     let mut state = State::default();
     let first = one.mint(&mut state, NOW);
@@ -236,7 +236,7 @@ fn ids_in_body_are_16_byte_strings() {
 }
 
 #[test]
-fn state_with_context_actor_without_info_fails_to_encode_and_decode() {
+fn actor_without_info_fails_encode_decode() {
     let actor = ActorId(id(5));
     let mut state = State::default();
     state.context.record(WriteId { actor, seq: 1 });
@@ -616,7 +616,7 @@ fn with_header(bytes: &[u8], edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u
 }
 
 #[test]
-fn state_file_round_trips_and_is_named_by_hash_of_its_bytes() {
+fn state_file_round_trips_and_named_by_hash_of_its_bytes() {
     let state = full_state();
     let bytes = file(&state);
 
@@ -710,7 +710,7 @@ fn changed_header_field_fails_aad_check() {
 }
 
 #[test]
-fn file_under_other_fingerprint_for_its_key_id_is_ignored_not_quarantined() {
+fn fingerprint_mismatch_ignored() {
     let bytes = file(&full_state());
     let other = SyncKeyring::new(vec![(KeyId(1), SyncKey::from_bytes([2; 32]))]).unwrap();
 
@@ -721,7 +721,7 @@ fn file_under_other_fingerprint_for_its_key_id_is_ignored_not_quarantined() {
 }
 
 #[test]
-fn file_under_key_id_keyring_lacks_is_waiting_for_key_not_damaged() {
+fn unknown_key_id_waits_for_key() {
     let bytes = file(&full_state());
     let later = SyncKeyring::new(vec![(KeyId(2), key())]).unwrap();
 
@@ -733,7 +733,7 @@ fn file_under_key_id_keyring_lacks_is_waiting_for_key_not_damaged() {
 }
 
 #[test]
-fn file_whose_vault_or_replica_does_not_match_names_it_is_read_under_fails() {
+fn vault_or_replica_mismatch_fails() {
     let bytes = file(&full_state());
     let other_vault = Uuid::from_u128(0x200);
     let other_replica = ReplicaId(Uuid::from_u128(2));
@@ -839,7 +839,7 @@ fn body_with_unknown_field_in_file_is_version_skew() {
 }
 
 #[test]
-fn malformed_body_in_file_is_quarantined() {
+fn malformed_body_in_file_quarantined() {
     let body = edited(|v| {
         let Value::Map(fields) = v else {
             panic!("not a map");
@@ -940,7 +940,7 @@ fn truncated_stream_or_bytes_after_stream_fail() {
 }
 
 #[test]
-fn bodies_of_nearby_sizes_encrypt_to_same_file_size_within_bucket() {
+fn nearby_sizes_share_file_size() {
     let named = |name: &str| {
         let mut one = session(1);
         let mut state = State::default();

@@ -405,7 +405,7 @@ fn set_first(macs: usize) -> (Sim, Uuid, WriteId) {
 }
 
 #[test]
-fn two_macs_that_replace_one_shown_value_concurrently_write_one_entry_under_derived_id() {
+fn concurrent_replace_writes_one_derived_id_entry() {
     let (mut sim, credential, first) = set_first(3);
     let derived = HistoryIds::derive(credential, first);
 
@@ -439,7 +439,7 @@ fn two_macs_that_replace_one_shown_value_concurrently_write_one_entry_under_deri
 }
 
 #[test]
-fn entry_added_by_change_for_value_other_than_shown_value_keeps_random_id() {
+fn entry_for_unshown_value_keeps_random_id() {
     let (mut sim, credential, first) = set_first(2);
 
     // One change replaces `first` with `two`, then `two` with `three`. The

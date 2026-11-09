@@ -288,7 +288,7 @@ proptest! {
     }
 
     #[test]
-    fn random_view_applied_to_vault_built_from_another_finds_no_edits(
+    fn view_applied_to_other_vault_finds_no_edits(
         first in Script::strategy(),
         second in Script::strategy(),
     ) {
@@ -310,7 +310,7 @@ proptest! {
     }
 
     #[test]
-    fn vault_recorded_against_empty_state_and_applied_again_is_unchanged(
+    fn vault_recorded_against_empty_state_and_applied_again_unchanged(
         script in Script::strategy(),
     ) {
         let mut vault = built(&script.play());

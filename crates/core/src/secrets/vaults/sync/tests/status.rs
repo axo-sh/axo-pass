@@ -28,7 +28,7 @@ fn paused(fx: &Fixture) -> Vec<PausedCause> {
 }
 
 #[test]
-fn deleted_sync_state_of_vault_that_names_replica_id_stops_sync_with_sync_state_missing() {
+fn deleted_sync_state_stops_sync_as_missing() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let committed = fx.add_item().unwrap();
@@ -115,7 +115,7 @@ fn unreachable_folder_and_failed_publish_pause_sync_and_clear_with_no_recovery_m
 }
 
 #[test]
-fn failed_publish_pauses_sync_until_staged_file_is_copied() {
+fn failed_publish_pauses_sync_until_staged_file_copied() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     transport.set_failing_writes(true);
@@ -135,7 +135,7 @@ fn failed_publish_pauses_sync_until_staged_file_is_copied() {
 }
 
 #[test]
-fn quarantined_file_pauses_sync_while_listed_and_its_entry_is_kept() {
+fn quarantined_file_pauses_sync_while_listed_and_its_entry_kept() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let mut torn = state_file(&fx, PEER, &body(PEER, &[device_key()]));
@@ -175,7 +175,7 @@ fn second_miss_of_sync_state_key_pauses_sync_with_key_missing() {
 }
 
 #[test]
-fn vault_that_is_not_synced_has_no_sync_status() {
+fn vault_not_synced_has_no_sync_status() {
     let fx = Fixture::new(0, None);
 
     let committed = fx.add_item().unwrap();

@@ -194,7 +194,7 @@ fn apply_failure_after_recorded_edit_keeps_edit_and_saves_vault_as_change_left_i
 }
 
 #[test]
-fn apply_failure_in_rebuild_at_v_less_than_s_rebuilds_from_sync_state_as_loaded() {
+fn apply_failure_in_rebuild_uses_loaded_sync_state() {
     let transport = Arc::new(FakeTransport::default());
     let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
     fx.put_state(GENERATION + 1);
@@ -321,8 +321,7 @@ fn diff_failure_saves_change_in_vault_only_and_v_greater_than_s_repair_records_i
 }
 
 #[test]
-fn while_peer_file_has_newer_format_local_edits_are_recorded_other_peers_join_and_replica_publishes()
- {
+fn while_peer_file_has_newer_format_local_edits_recorded_other_peers_join_and_replica_publishes() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let (_, loaded) = saved(&fx);
@@ -375,7 +374,7 @@ fn while_peer_file_has_newer_format_local_edits_are_recorded_other_peers_join_an
 }
 
 #[test]
-fn own_file_of_newer_format_pauses_sync_and_is_not_deleted() {
+fn own_file_of_newer_format_pauses_sync_and_not_deleted() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));

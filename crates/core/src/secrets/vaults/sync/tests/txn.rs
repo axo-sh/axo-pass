@@ -199,7 +199,7 @@ fn vault_key_rename_advances_s_and_saves_sync_state_first() {
 }
 
 #[test]
-fn own_files_are_joined_before_any_write_id_is_minted() {
+fn own_files_joined_before_any_write_id_minted() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let mut earlier = Session::new(REPLICA);
@@ -266,7 +266,7 @@ fn transaction_that_only_joins_applies_view_and_saves_with_next_generation() {
 }
 
 #[test]
-fn own_file_is_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_only() {
+fn own_file_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_only() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));
@@ -296,7 +296,7 @@ fn own_file_is_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_onl
 }
 
 #[test]
-fn own_file_that_is_remote_damaged_or_unreachable_is_not_joined_and_edit_is_saved() {
+fn own_file_that_is_remote_damaged_or_unreachable_not_joined_and_edit_saved() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));
@@ -348,7 +348,7 @@ fn two_transactions_in_one_process_continue_one_actor() {
 }
 
 #[test]
-fn sync_state_file_replaced_while_app_runs_starts_new_actor_at_next_write_id() {
+fn replaced_state_file_starts_new_actor() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let (_, before) = saved(&fx);
@@ -419,7 +419,7 @@ pub(super) fn removals() -> [(&'static str, Removal); 3] {
 }
 
 #[test]
-fn only_edit_that_is_purge_history_purge_or_signal_trim_mints_write_id_only_context_holds() {
+fn purge_or_trim_only_edit_mints_context_only_write_id() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     add_entries(&fx);
@@ -535,7 +535,7 @@ fn second_miss_of_sync_state_key_completes_as_local_save() {
 }
 
 #[test]
-fn many_joins_in_short_time_leave_versions_only_as_time_policy_allows() {
+fn many_joins_keep_versions_per_time_policy() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let mut earlier = Session::new(REPLICA);
@@ -562,7 +562,7 @@ fn many_joins_in_short_time_leave_versions_only_as_time_policy_allows() {
 /// Each case where the transaction leaves the sync state as it is: a
 /// missing or failed sync state saves the vault without a generation check.
 #[test]
-fn untrusted_sync_state_completes_as_local_save_with_generation_unchanged() {
+fn untrusted_sync_state_saves_locally_same_generation() {
     let transport = Arc::new(FakeTransport::default());
     for name in ["missing", "signed by another key"] {
         let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());

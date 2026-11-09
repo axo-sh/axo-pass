@@ -1,5 +1,5 @@
 #[test]
-fn a_frame_on_another_site_is_cross_site() {
+fn frame_on_another_site_is_cross_site() {
     let page = vault::LoginPage::parse("https://evil.com", "https://example.com", None).unwrap();
     assert!(page.cross_site);
     assert_eq!(page.top_host.as_deref(), Some("evil.com"));
@@ -7,7 +7,7 @@ fn a_frame_on_another_site_is_cross_site() {
 }
 
 #[test]
-fn a_frame_on_a_sibling_subdomain_is_not_cross_site() {
+fn frame_on_sibling_subdomain_not_cross_site() {
     let page = vault::LoginPage::parse(
         "https://example.com",
         "https://accounts.example.com/login",
@@ -20,7 +20,7 @@ fn a_frame_on_a_sibling_subdomain_is_not_cross_site() {
 }
 
 #[test]
-fn a_top_level_page_is_not_cross_site() {
+fn top_level_page_not_cross_site() {
     let page = vault::LoginPage::parse("https://example.com", "https://example.com", None).unwrap();
     assert!(!page.cross_site);
     assert!(page.require_same_site().is_ok());
@@ -308,7 +308,7 @@ fn rejecting_policy() -> PeerPolicy {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn serves_a_request_from_an_accepted_peer() {
+async fn serves_request_from_accepted_peer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker
@@ -332,7 +332,7 @@ async fn serves_a_request_from_an_accepted_peer() {
 /// Abandoning a request runs its `abandon` step and then still waits for
 /// the prompt to finish, rather than dropping it.
 #[tokio::test]
-async fn abandoning_dismisses_the_prompt_and_waits_for_it() {
+async fn abandoning_dismisses_prompt_and_waits_for_it() {
     let in_flight = Arc::new(InFlightRequest::default());
     let (dismiss, dismissed) = tokio::sync::oneshot::channel::<()>();
 
@@ -362,7 +362,7 @@ async fn abandoning_dismisses_the_prompt_and_waits_for_it() {
 /// The agent stops waiting on the broker once the client it is serving
 /// disconnects.
 #[test]
-fn stops_waiting_when_the_requester_disconnects() {
+fn stops_waiting_when_requester_disconnects() {
     use std::os::fd::AsFd;
     use std::os::unix::net::UnixStream;
 
@@ -380,7 +380,7 @@ fn stops_waiting_when_the_requester_disconnects() {
 /// Data from the requester is not a disconnect: the wait goes on until the
 /// broker answers.
 #[test]
-fn keeps_waiting_when_the_requester_sends_data() {
+fn keeps_waiting_when_requester_sends_data() {
     use std::os::fd::AsFd;
     use std::os::unix::net::UnixStream;
 
@@ -400,7 +400,7 @@ fn keeps_waiting_when_the_requester_sends_data() {
 /// A client that disconnects while its prompt is waiting gets the prompt
 /// dropped, and the broker moves on to the next connection.
 #[tokio::test(flavor = "multi_thread")]
-async fn drops_the_prompt_of_a_disconnected_client() {
+async fn drops_prompt_of_disconnected_client() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let stream = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
@@ -421,7 +421,7 @@ async fn drops_the_prompt_of_a_disconnected_client() {
 /// A client that gives up while its connection waits behind another is
 /// never served: its request reaches no authorizer.
 #[tokio::test(flavor = "multi_thread")]
-async fn skips_a_client_that_disconnected_while_queued() {
+async fn skips_client_that_disconnected_while_queued() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     // Holds the broker on a prompt nobody answers.
@@ -457,7 +457,7 @@ async fn skips_a_client_that_disconnected_while_queued() {
 /// The authorizer is told who asked: the process on the other end of the
 /// socket, named by the caller that process delegated.
 #[tokio::test(flavor = "multi_thread")]
-async fn hands_the_verified_peer_to_the_authorizer() {
+async fn hands_verified_peer_to_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     broker.request(r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#);
@@ -479,7 +479,7 @@ async fn hands_the_verified_peer_to_the_authorizer() {
 /// A request that delegates no caller still names the peer, falling back to
 /// the root of its own process chain.
 #[tokio::test(flavor = "multi_thread")]
-async fn names_the_peer_when_no_caller_is_delegated() {
+async fn names_peer_when_no_caller_delegated() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
@@ -492,7 +492,7 @@ async fn names_the_peer_when_no_caller_is_delegated() {
 /// A delegated caller chain reaches the prompt verbatim, so the app can let
 /// the user expand it.
 #[tokio::test(flavor = "multi_thread")]
-async fn delegates_the_caller_chain_to_the_prompt() {
+async fn delegates_caller_chain_to_prompt() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     broker.request(
@@ -512,7 +512,7 @@ async fn delegates_the_caller_chain_to_the_prompt() {
 /// With no delegated chain, the prompt still gets one: the broker resolves
 /// it from its own verified peer.
 #[tokio::test(flavor = "multi_thread")]
-async fn falls_back_to_the_peer_chain_for_the_prompt() {
+async fn falls_back_to_peer_chain_for_prompt() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
@@ -528,7 +528,7 @@ async fn falls_back_to_the_peer_chain_for_the_prompt() {
 /// A confirm-on-use request reaches the sign authorizer, worded for a key
 /// the agent holds rather than a managed one.
 #[tokio::test(flavor = "multi_thread")]
-async fn routes_a_key_use_authorization_to_the_sign_authorizer() {
+async fn routes_key_use_authorization_to_sign_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker.request(
@@ -556,7 +556,7 @@ async fn routes_a_key_use_authorization_to_the_sign_authorizer() {
 /// With no key id there is nothing to unlock, so the request goes straight
 /// to the app's text field and comes back with what the user typed.
 #[tokio::test(flavor = "multi_thread")]
-async fn collects_a_passphrase_for_a_key_with_nothing_saved() {
+async fn collects_passphrase_for_key_with_nothing_saved() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker.request(
@@ -598,7 +598,7 @@ async fn answers_confirm_and_message() {
 /// A batch resolve reaches the vault authorizer, carrying the delegated
 /// caller and spanning whatever vaults its refs name.
 #[tokio::test(flavor = "multi_thread")]
-async fn routes_a_batch_resolve_to_the_vault_authorizer() {
+async fn routes_batch_resolve_to_vault_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker.request(
@@ -621,7 +621,7 @@ async fn routes_a_batch_resolve_to_the_vault_authorizer() {
 /// delegated caller. The stub declines the context, so the request is
 /// answered rather than served.
 #[tokio::test(flavor = "multi_thread")]
-async fn routes_vault_management_to_the_vault_authorizer() {
+async fn routes_vault_management_to_vault_authorizer() {
     for line in [
         r#"{"request":"export_vaults","vault_keys":["v1"],"dest_path":"/tmp/x.axovault","mode":{"kind":"passphrase","passphrase":"pw","work_factor":18},"caller":"zsh"}"#,
         r#"{"request":"import_vaults","import_path":"/tmp/x.axovault","identity":{"kind":"passphrase","passphrase":"pw"},"selection":[["00000000-0000-0000-0000-000000000000","v2"]],"caller":"zsh"}"#,
@@ -645,7 +645,7 @@ async fn routes_vault_management_to_the_vault_authorizer() {
 /// `get_identity` checks the entry first, so a synthetic key never reaches
 /// the authorizer.
 #[tokio::test(flavor = "multi_thread")]
-async fn answers_an_age_identity_request_for_an_unknown_key() {
+async fn answers_age_identity_request_for_unknown_key() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response =
@@ -662,7 +662,7 @@ async fn answers_an_age_identity_request_for_an_unknown_key() {
 /// A keychain password listing is framed, parsed and routed to the
 /// configured lister, and its entries come back on the wire.
 #[tokio::test(flavor = "multi_thread")]
-async fn routes_a_keychain_password_listing() {
+async fn routes_keychain_password_listing() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
@@ -678,7 +678,7 @@ async fn routes_a_keychain_password_listing() {
 
 /// A rejected peer cannot list the saved passwords.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
+async fn hangs_up_on_rejected_peer_listing_keychain_passwords() {
     let broker = TestBroker::start(rejecting_policy()).await;
 
     let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"evil"}"#);
@@ -689,7 +689,7 @@ async fn hangs_up_on_a_rejected_peer_listing_keychain_passwords() {
 /// Deleting a managed key that does not exist answers `Failed` rather than
 /// panicking.
 #[tokio::test(flavor = "multi_thread")]
-async fn answers_a_managed_key_deletion_for_an_unknown_label() {
+async fn answers_managed_key_deletion_for_unknown_label() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker
@@ -704,7 +704,7 @@ async fn answers_a_managed_key_deletion_for_an_unknown_label() {
 
 /// A rejected peer cannot ask for an age identity.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_a_rejected_peer_asking_for_an_age_identity() {
+async fn hangs_up_on_rejected_peer_asking_for_age_identity() {
     let broker = TestBroker::start(rejecting_policy()).await;
 
     let response =
@@ -716,7 +716,7 @@ async fn hangs_up_on_a_rejected_peer_asking_for_an_age_identity() {
 
 /// A rejected peer cannot ask for a passphrase either.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_a_rejected_peer_asking_for_a_passphrase() {
+async fn hangs_up_on_rejected_peer_asking_for_passphrase() {
     let broker = TestBroker::start(rejecting_policy()).await;
 
     let response = broker.request(
@@ -737,7 +737,7 @@ async fn hangs_up_on_a_rejected_peer_asking_for_a_passphrase() {
 /// A process that is not the agent is hung up on and never reaches the
 /// authorizer.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_a_peer_the_policy_rejects() {
+async fn hangs_up_on_peer_policy_rejects() {
     let broker = TestBroker::start(rejecting_policy()).await;
 
     let response =
@@ -750,7 +750,7 @@ async fn hangs_up_on_a_peer_the_policy_rejects() {
 /// Listing is gated on the same check as signing, so a rejected peer cannot
 /// read the public keys either.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_a_rejected_peer_listing_identities() {
+async fn hangs_up_on_rejected_peer_listing_identities() {
     let broker = TestBroker::start(rejecting_policy()).await;
     assert!(
         broker
@@ -763,7 +763,7 @@ async fn hangs_up_on_a_rejected_peer_listing_identities() {
 /// answers a keychain listing on any other socket, so `Failed` means the
 /// request never reached it.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_autofill_scope_refuses_other_requests() {
+async fn autofill_scope_refuses_other_requests() {
     let broker =
         TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
 
@@ -777,7 +777,7 @@ async fn the_autofill_scope_refuses_other_requests() {
 }
 
 #[test]
-fn the_autofill_scope_allows_only_autofill_requests() {
+fn autofill_scope_allows_only_autofill_requests() {
     let allowed = [
         r#"{"request":"list_logins","url":"https://example.com","frame_url":"https://example.com"}"#,
         r#"{"request":"fill_login","url":"https://example.com","frame_url":"https://example.com","record_id":"r"}"#,
@@ -817,7 +817,7 @@ fn the_autofill_scope_allows_only_autofill_requests() {
 /// The AutoFill scope names the caller itself, so a request cannot pick
 /// the name its prompt, grant, and audit event carry.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_autofill_scope_names_its_own_caller() {
+async fn autofill_scope_names_its_own_caller() {
     for line in [
         r#"{"request":"list_logins","url":"https://example.com","frame_url":"https://example.com/login","caller":"Chrome"}"#,
         r#"{"request":"fill_login","url":"https://example.com","frame_url":"https://example.com/login","record_id":"r","caller":"Chrome"}"#,
@@ -840,7 +840,7 @@ async fn the_autofill_scope_names_its_own_caller() {
 /// A page the broker cannot match, and a relying party id that is not a
 /// registrable domain, are refused before any prompt is raised.
 #[tokio::test(flavor = "multi_thread")]
-async fn refuses_unmatchable_pages_and_public_suffix_rp_ids_before_prompting() {
+async fn refuses_unmatchable_rp_ids_early() {
     for (line, expected) in [
         (
             r#"{"request":"list_logins","url":"https://example.com","frame_url":"ftp://example.com"}"#,
@@ -886,7 +886,7 @@ fn parse(line: &str) -> WireRequest {
 }
 
 #[test]
-fn the_browser_host_scope_adds_generation_and_saving_to_the_autofill_requests() {
+fn browser_host_scope_extends_requests() {
     let autofill = [
         format!(r#"{{"request":"list_logins",{PAGE}}}"#),
         format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#),
@@ -941,7 +941,7 @@ fn the_browser_host_scope_adds_generation_and_saving_to_the_autofill_requests() 
 /// The browser host names the caller from the browser it verified, and
 /// the request's own `caller` and `requester` cannot change that.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_browser_host_scope_names_the_verified_browser() {
+async fn browser_host_scope_names_verified_browser() {
     let broker = browser_host_broker().await;
     let line = format!(
         r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"Safari","requester":"Notes",{CHROME}}}"#
@@ -969,7 +969,7 @@ async fn the_browser_host_scope_names_the_verified_browser() {
 /// A host with no verified browser is "Unknown process" and is never
 /// identified, so no approval is reused for it.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_unverified_browser_host_is_unknown_and_never_identified() {
+async fn unverified_browser_host_is_unknown_and_never_identified() {
     for client in [
         r#""client":{"extension":"chrome-extension://abc/"}"#,
         r#""client":{}"#,
@@ -995,7 +995,7 @@ async fn an_unverified_browser_host_is_unknown_and_never_identified() {
 /// Only a verified browser host may report a browser. The same report
 /// from `ap` or the AutoFill extension is ignored.
 #[tokio::test(flavor = "multi_thread")]
-async fn other_scopes_ignore_a_browser_report() {
+async fn other_scopes_ignore_browser_report() {
     for scope in [RequestScope::Agent, RequestScope::AutofillExtension] {
         let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
         broker.request(&format!(
@@ -1010,7 +1010,7 @@ async fn other_scopes_ignore_a_browser_report() {
 /// Only the AutoFill extension names the app a request is for. A browser
 /// host and `ap` are always a browser.
 #[test]
-fn only_the_autofill_extension_names_a_requesting_app() {
+fn only_autofill_extension_names_requesting_app() {
     let app = || Some("Notes".to_string());
     assert_eq!(requester_for(RequestScope::AutofillExtension, app()), app());
     assert_eq!(requester_for(RequestScope::BrowserHost, app()), None);
@@ -1018,7 +1018,7 @@ fn only_the_autofill_extension_names_a_requesting_app() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn locked_listing_is_refused_to_the_agent_and_an_unverified_host() {
+async fn locked_listing_refused_to_untrusted() {
     let line = format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#);
     let verified = format!(r#"{{"request":"list_logins_locked",{PAGE},{CHROME}}}"#);
     let refused = [
@@ -1037,7 +1037,7 @@ async fn locked_listing_is_refused_to_the_agent_and_an_unverified_host() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn locked_listing_answers_from_the_index_without_a_prompt() {
+async fn locked_listing_answers_from_index_without_prompt() {
     use crate::secrets::vaults::autofill::AutofillItem;
     use crate::secrets::vaults::{MatchKind, Website};
 
@@ -1085,7 +1085,7 @@ async fn locked_listing_answers_from_the_index_without_a_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn passkey_listing_answers_from_the_index_without_a_prompt() {
+async fn passkey_listing_answers_from_index_without_prompt() {
     use super::IndexedPasskey;
 
     let broker =
@@ -1125,7 +1125,7 @@ async fn passkey_listing_answers_from_the_index_without_a_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn passkey_listing_refuses_a_public_suffix() {
+async fn passkey_listing_refuses_public_suffix() {
     let broker =
         TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
     broker.logins.replace_passkeys(Vec::new());
@@ -1137,7 +1137,7 @@ async fn passkey_listing_refuses_a_public_suffix() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn generates_a_password_without_a_prompt() {
+async fn generates_password_without_prompt() {
     let broker = browser_host_broker().await;
 
     let response: WireResponse =
@@ -1167,7 +1167,7 @@ async fn generates_a_password_without_a_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_autofill_scope_cannot_generate_or_save() {
+async fn autofill_scope_cannot_generate_or_save() {
     let broker =
         TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
     for line in [
@@ -1187,7 +1187,7 @@ async fn the_autofill_scope_cannot_generate_or_save() {
 /// A registration prompt carries the logins the index holds for the
 /// relying party, and suggests the one with the account's username.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_registration_prompt_carries_the_placement_choices() {
+async fn registration_prompt_carries_placement_choices() {
     use crate::secrets::vaults::{LoginPlace, MatchKind, Website};
 
     let broker = browser_host_broker().await;
@@ -1227,7 +1227,7 @@ async fn a_registration_prompt_carries_the_placement_choices() {
 /// A save names the site and the account in its prompt, and always
 /// reaches the prompt. The password is not in what the app sees.
 #[tokio::test(flavor = "multi_thread")]
-async fn saving_a_login_always_prompts_and_keeps_the_password_out_of_it() {
+async fn saving_login_always_prompts_and_keeps_password_out_of_it() {
     let broker = browser_host_broker().await;
     broker.request(&format!(
         r#"{{"request":"save_login",{PAGE},"username":"tp@example.com","password":"s3cret",{CHROME}}}"#
@@ -1254,7 +1254,7 @@ async fn saving_a_login_always_prompts_and_keeps_the_password_out_of_it() {
 
 /// Nothing without a password or an http(s) page reaches the prompt.
 #[tokio::test(flavor = "multi_thread")]
-async fn refuses_a_save_with_no_password_or_page_before_prompting() {
+async fn refuses_save_with_no_password_or_page_before_prompting() {
     let broker = browser_host_broker().await;
     for line in [
         format!(r#"{{"request":"save_login",{PAGE},"password":""}}"#),
@@ -1270,7 +1270,7 @@ async fn refuses_a_save_with_no_password_or_page_before_prompting() {
 /// A peer is matched against each client's policy in turn, and the first
 /// it satisfies gives the scope.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_policy_a_peer_satisfies_gives_its_scope() {
+async fn policy_peer_satisfies_gives_its_scope() {
     let broker = TestBroker::start_with_clients(vec![
         Client {
             policy: rejecting_policy(),
@@ -1295,7 +1295,7 @@ async fn the_policy_a_peer_satisfies_gives_its_scope() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_peer_no_client_accepts_is_refused() {
+async fn peer_no_client_accepts_refused() {
     let broker = TestBroker::start_with_clients(vec![
         Client {
             policy: rejecting_policy(),
@@ -1360,7 +1360,7 @@ fn empty_vaults() -> crate::secrets::vaults::VaultCatalog {
 /// A request over the Mach service is verified from its audit token,
 /// served, and answered.
 #[tokio::test(flavor = "multi_thread")]
-async fn serves_a_request_over_the_mach_service() {
+async fn serves_request_over_mach_service() {
     let _audit_dir = test_dir();
     let (name, service) = start_mach_service(accepting_policy());
 
@@ -1378,7 +1378,7 @@ async fn serves_a_request_over_the_mach_service() {
 
 /// A sender that fails the policy gets no reply.
 #[tokio::test(flavor = "multi_thread")]
-async fn drops_a_mach_request_from_a_rejected_sender() {
+async fn drops_mach_request_from_rejected_sender() {
     let _audit_dir = test_dir();
     let (name, service) = start_mach_service(rejecting_policy());
 
@@ -1440,7 +1440,7 @@ async fn drops_malformed_mach_messages() {
 
 /// A body that is not a request is dropped without a reply.
 #[tokio::test(flavor = "multi_thread")]
-async fn drops_a_mach_request_with_an_unreadable_body() {
+async fn drops_mach_request_with_unreadable_body() {
     let _audit_dir = test_dir();
     let (name, service) = start_mach_service(accepting_policy());
 
@@ -1460,7 +1460,7 @@ async fn drops_a_mach_request_with_an_unreadable_body() {
 
 /// A request outside the service's scope is refused with an answer.
 #[tokio::test(flavor = "multi_thread")]
-async fn refuses_a_mach_request_outside_the_scope() {
+async fn refuses_mach_request_outside_scope() {
     let _audit_dir = test_dir();
     let (name, service, authorizer) =
         start_mach_service_with(accepting_policy(), RequestScope::AutofillExtension);
@@ -1484,7 +1484,7 @@ async fn refuses_a_mach_request_outside_the_scope() {
 /// A client that goes away while its prompt is waiting gets the prompt
 /// dropped, and the service moves on to the next request.
 #[tokio::test(flavor = "multi_thread")]
-async fn drops_the_prompt_of_a_disconnected_mach_client() {
+async fn drops_prompt_of_disconnected_mach_client() {
     let _audit_dir = test_dir();
     let (name, service, authorizer) =
         start_mach_service_with(accepting_policy(), RequestScope::Agent);
@@ -1514,7 +1514,7 @@ async fn drops_the_prompt_of_a_disconnected_mach_client() {
 /// A client that gives up while its request waits behind another is never
 /// served: its request reaches no authorizer.
 #[tokio::test(flavor = "multi_thread")]
-async fn skips_a_mach_client_that_went_away_while_queued() {
+async fn skips_mach_client_that_went_away_while_queued() {
     let _audit_dir = test_dir();
     let (name, service, authorizer) =
         start_mach_service_with(accepting_policy(), RequestScope::Agent);
@@ -1554,7 +1554,7 @@ async fn skips_a_mach_client_that_went_away_while_queued() {
 /// A second app registering the same name fails and leaves the first
 /// service serving.
 #[tokio::test(flavor = "multi_thread")]
-async fn refuses_a_name_that_is_already_registered() {
+async fn refuses_name_that_is_already_registered() {
     let _audit_dir = test_dir();
     let (name, service) = start_mach_service(accepting_policy());
 
@@ -1578,7 +1578,7 @@ async fn refuses_a_name_that_is_already_registered() {
 
 /// Stopping the service frees its name for the next one.
 #[tokio::test(flavor = "multi_thread")]
-async fn frees_the_name_when_stopped() {
+async fn frees_name_when_stopped() {
     let _audit_dir = test_dir();
     let (name, service) = start_mach_service(accepting_policy());
     service.stop();
@@ -1608,7 +1608,7 @@ async fn frees_the_name_when_stopped() {
 
 /// A socket left behind by a crashed app must not keep the broker offline.
 #[tokio::test(flavor = "multi_thread")]
-async fn replaces_a_stale_socket() {
+async fn replaces_stale_socket() {
     let dir = tempfile::tempdir().unwrap();
     let socket_path = dir.path().join("app-broker.sock");
     // What a crashed app leaves behind: a socket file nothing is listening
@@ -1638,7 +1638,7 @@ async fn replaces_a_stale_socket() {
 
 /// The policy the app actually runs with never accepts a stray process.
 #[test]
-fn the_agent_policy_rejects_this_process() {
+fn agent_policy_rejects_this_process() {
     let policy = agent_policy();
     let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
     assert!(

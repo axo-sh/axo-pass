@@ -705,7 +705,7 @@ fn three_macs_with_partial_views_that_create_one_key_show_same_keys_and_mint_not
 }
 
 #[test]
-fn join_that_produces_duplicate_key_writes_nothing_publishes_nothing_and_is_not_drift() {
+fn join_that_produces_duplicate_key_writes_nothing_publishes_nothing_and_not_drift() {
     let mut sim = Sim::new(2, None);
     sim.transaction(0, Some(&MAIL));
     sim.transaction(1, Some(&MAIL));
@@ -772,7 +772,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(8))]
 
     #[test]
-    fn macs_that_create_one_key_concurrently_show_same_keys_once_states_are_equal(
+    fn concurrent_key_creation_shows_same_keys(
         steps in Step::steps(3),
     ) {
         // Each transaction checks that the vault shows the view of its state

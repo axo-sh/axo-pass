@@ -53,7 +53,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_west_of_utc_gives_the_previous_date_before_its_midnight() {
+    fn zone_west_of_utc_gives_previous_date() {
         let zone = fixed(-7 * HOUR);
         // 2026-10-22 23:59:59 at UTC-7.
         let before = OCT_23_UTC + 7 * 3600 - 1;
@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_east_of_utc_gives_the_next_date_after_its_midnight() {
+    fn zone_east_of_utc_gives_next_date_after_its_midnight() {
         let offset = 9 * HOUR + 30 * 60;
         let zone = fixed(offset);
         // 2026-10-23 23:59:59 at UTC+9:30.
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_zone_follows_daylight_saving_time() {
+    fn named_zone_follows_daylight_saving_time() {
         let zone = TimeZone::get("America/New_York").unwrap();
         // 2026-07-01 03:59:59 UTC is 23:59:59 on June 30 at UTC-4 (EDT).
         let july = 1_782_878_400 - 1;
@@ -100,12 +100,12 @@ mod tests {
     }
 
     #[test]
-    fn a_time_out_of_range_gives_no_date() {
+    fn time_out_of_range_gives_no_date() {
         assert_eq!(date_in_zone(i64::MAX, TimeZone::UTC), None);
     }
 
     #[test]
-    fn a_use_with_no_stored_use_is_a_later_day() {
+    fn use_with_no_stored_use_is_later_day() {
         assert!(is_later_day(None, OCT_23_UTC, &TimeZone::UTC));
         assert!(is_later_day(Some(i64::MAX), OCT_23_UTC, &TimeZone::UTC));
         assert!(!is_later_day(None, i64::MAX, &TimeZone::UTC));
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn uses_either_side_of_utc_midnight_on_one_local_day_are_on_one_day() {
+    fn utc_midnight_inside_local_day_is_same_day() {
         let zone = fixed(-7 * HOUR);
         // 2026-10-22 16:30 and 17:30 at UTC-7, either side of UTC midnight.
         let before = OCT_23_UTC - 1800;
@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn a_use_on_an_earlier_day_is_not_a_later_day() {
+    fn use_on_earlier_day_not_later_day() {
         let zone = fixed(9 * HOUR);
         assert!(!is_later_day(Some(OCT_23_UTC + 86_400), OCT_23_UTC, &zone));
         assert!(is_later_day(Some(OCT_23_UTC), OCT_23_UTC + 86_400, &zone));

@@ -162,7 +162,7 @@ fn each_row_of_generation_table_takes_stated_action() {
 }
 
 #[test]
-fn requested_change_is_applied_to_rebuilt_vault() {
+fn requested_change_applied_to_rebuilt_vault() {
     let fx = Fixture::synced();
     fx.put(
         &state_of(
@@ -249,8 +249,7 @@ fn vault_of_another_replica_id_is_rebuilt_and_kept_as_invalid_file() {
 }
 
 #[test]
-fn signed_vault_file_copied_over_another_synced_vault_path_is_refused_and_rebuilt_from_sync_state()
-{
+fn signed_vault_file_copied_over_another_synced_vault_path_refused_and_rebuilt_from_sync_state() {
     let device = TestSigner::device();
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
@@ -407,7 +406,7 @@ fn rebuild_over_refused_file_takes_new_file_key_and_keeps_refused_file() {
 }
 
 #[test]
-fn rebuild_on_request_refuses_file_that_verifies_and_sync_state_that_is_not_trusted_or_leaving() {
+fn rebuild_on_request_refuses_file_that_verifies_and_sync_state_not_trusted_or_leaving() {
     let device = TestSigner::device();
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
@@ -459,7 +458,7 @@ fn rebuild_on_request_refuses_file_that_verifies_and_sync_state_that_is_not_trus
 }
 
 #[test]
-fn restore_over_refused_file_of_synced_vault_takes_sync_state_generation() {
+fn restore_over_refused_file_takes_state_generation() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     fx.add_item().unwrap();

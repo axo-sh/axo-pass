@@ -337,7 +337,7 @@ fn every_row_of_mapping_table_round_trips() {
 }
 
 #[test]
-fn placement_folder_and_slot_naming_purged_entry_resolve_and_nothing_is_written_back() {
+fn placement_folder_and_slot_naming_purged_entry_resolve_and_nothing_written_back() {
     let mut vault = Vault::new_for_test();
     let folder = vault.create_folder("Folder").id;
     let item = add_item(&mut vault, "item");
@@ -678,7 +678,7 @@ fn view_of_two_full_signal_stores_applies_every_entry_and_next_report_trims() {
 }
 
 #[test]
-fn key_that_needs_normalizing_is_written_normalized() {
+fn key_that_needs_normalizing_written_normalized() {
     let mut vault = Vault::new_for_test();
     let item = add_item(&mut vault, "item");
     let mut mac = Mac::first(vault);
@@ -697,7 +697,7 @@ fn key_that_needs_normalizing_is_written_normalized() {
 }
 
 #[test]
-fn key_that_fails_validation_is_shown_suffixed_with_notice_and_nothing_written() {
+fn key_that_fails_validation_shown_suffixed_with_notice_and_nothing_written() {
     let mut vault = Vault::new_for_test();
     let item = add_item(&mut vault, "item");
     let mut mac = Mac::first(vault);
@@ -713,7 +713,7 @@ fn key_that_fails_validation_is_shown_suffixed_with_notice_and_nothing_written()
 }
 
 #[test]
-fn restoring_trashed_credential_on_another_mac_fills_slot_on_both() {
+fn restoring_credential_fills_slot_on_both_macs() {
     let mut vault = Vault::new_for_test();
     add_item(&mut vault, "item");
     let pass = add_credential(&mut vault, "item", "pass", "secret");
@@ -790,7 +790,7 @@ fn applying_same_view_twice_changes_nothing_and_reports_nothing() {
 }
 
 #[test]
-fn key_changed_because_peer_claimed_it_first_is_reported_and_local_rename_is_not() {
+fn key_changed_because_peer_claimed_it_first_reported_and_local_rename_not() {
     let mut a = Mac::first(Vault::new_for_test());
     let mut b = Mac::joined(&a, 2);
     let mut x = Uuid::nil();

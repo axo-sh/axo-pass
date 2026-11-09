@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn report_entries_with_unknown_field_are_refused() {
+    fn report_entries_with_unknown_field_refused() {
         let entries = [
             (
                 "unknown",
@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_report_rejects_only_that_passkey() {
+    fn unknown_report_rejects_only_that_passkey() {
         let mut store = SignalStore::default();
         store.record(
             Report::Unknown {
@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn an_account_listing_rejects_unlisted_passkeys_of_that_account() {
+    fn account_listing_rejects_unlisted_passkeys_of_that_account() {
         let mut store = SignalStore::default();
         store.record(
             Report::AllAccepted {
@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn a_later_listing_that_includes_the_passkey_clears_an_unknown_report() {
+    fn later_listing_clears_unknown_report() {
         let mut store = SignalStore::default();
         let (a, user) = (id(&[1]), id(&[9]));
         store.record(
@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dismissal_lasts_until_the_next_report() {
+    fn dismissal_lasts_until_next_report() {
         let mut store = SignalStore::default();
         let (a, user) = (id(&[1]), id(&[9]));
         store.record(
@@ -728,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rename_is_suggested_until_applied_or_dismissed() {
+    fn rename_suggested_until_applied_or_dismissed() {
         let mut store = SignalStore::default();
         let (a, user) = (id(&[1]), id(&[9]));
         store.record(
@@ -755,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_the_newer_entry() {
+    fn merge_keeps_newer_entry() {
         let unknown = |at| {
             let mut store = SignalStore::default();
             store.record(
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn retain_rp_keeps_only_the_named_sites() {
+    fn retain_rp_keeps_only_named_sites() {
         let mut store = SignalStore::default();
         for rp_id in [RP, "other.com"] {
             store.record(
@@ -825,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn report_lists_are_bounded() {
+    fn report_lists_bounded() {
         let mut store = SignalStore::default();
         for n in 0..(MAX_ENTRIES + 10) {
             store.record(

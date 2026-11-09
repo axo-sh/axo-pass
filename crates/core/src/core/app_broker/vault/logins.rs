@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fill_on_the_matching_site_needs_no_question() {
+    fn fill_on_matching_site_needs_no_question() {
         let (vh, record_id) = vault_with_github();
         let served = serve_record(&vh, &fill(&record_id, "https://gist.github.com", false))
             .unwrap()
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fill_on_another_site_is_refused_unless_the_client_asks_for_it() {
+    fn cross_site_fill_needs_client_opt_in() {
         let (vh, record_id) = vault_with_github();
         let page = "https://example.org";
         assert!(
@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unmatched_fill_still_needs_a_record_that_exists() {
+    fn unmatched_fill_still_needs_record_that_exists() {
         let (vh, _) = vault_with_github();
         let missing = format!(
             "{}/{}/{}",
@@ -437,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn a_one_time_code_is_never_served_for_another_site() {
+    fn one_time_code_is_never_served_for_another_site() {
         let (vh, record_id) = vault_with_github();
         let action = VaultAction::GenerateTotp {
             page: LoginPage::parse("https://example.org", "https://example.org", None).unwrap(),

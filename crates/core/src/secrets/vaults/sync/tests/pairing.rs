@@ -214,7 +214,7 @@ fn vector_code() -> PairingCode {
 }
 
 #[test]
-fn code_is_shown_in_four_groups_of_four_crockford_characters() {
+fn code_shown_in_four_groups_of_four_crockford_characters() {
     // Bits of 00 01 .. 09 in groups of 5, read by hand with `xxd -b`.
     assert_eq!(vector_code().shown().as_str(), "000G-40R4-0M30-E209");
     let first = PairingCode::generate();
@@ -237,7 +237,7 @@ fn code_is_shown_in_four_groups_of_four_crockford_characters() {
 }
 
 #[test]
-fn code_reads_back_from_its_shown_form_lowercase_and_with_confusable_letters() {
+fn code_parses_from_shown_form() {
     let code = PairingCode::generate();
     let key = code.pair_key();
     let shown = code.shown();
@@ -262,7 +262,7 @@ fn code_reads_back_from_its_shown_form_lowercase_and_with_confusable_letters() {
 }
 
 #[test]
-fn code_of_other_length_or_outside_alphabet_is_refused() {
+fn code_of_other_length_or_outside_alphabet_refused() {
     for text in [
         "",
         "000G-40R4-0M30-E20",
@@ -396,7 +396,7 @@ fn pairing_request_round_trips_and_refuses_unknown_field() {
 }
 
 #[test]
-fn planted_public_key_and_device_wrapping_without_valid_hmac_are_rejected() {
+fn planted_keys_without_hmac_rejected() {
     let key = vector_code().pair_key();
     let request = PairingRequest::new(
         RequestId(Uuid::from_u128(1)),
@@ -447,7 +447,7 @@ fn planted_public_key_and_device_wrapping_without_valid_hmac_are_rejected() {
 }
 
 #[test]
-fn pairing_wrapping_whose_sender_keys_differ_from_the_ones_the_hmac_covers_is_rejected() {
+fn wrapping_with_other_sender_keys_rejected() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -470,7 +470,7 @@ fn pairing_wrapping_whose_sender_keys_differ_from_the_ones_the_hmac_covers_is_re
 }
 
 #[test]
-fn pairing_wrapping_whose_to_replica_is_not_in_the_request_map_is_rejected() {
+fn wrapping_to_unknown_replica_rejected() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1), vault(2)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -488,7 +488,7 @@ fn pairing_wrapping_whose_to_replica_is_not_in_the_request_map_is_rejected() {
 }
 
 #[test]
-fn request_or_wrapping_whose_field_boundaries_are_shifted_fails_its_hmac() {
+fn shifted_field_boundaries_fail_hmac() {
     let key = vector_code().pair_key();
     let request = PairingRequest::new(
         RequestId(Uuid::from_u128(1)),
@@ -534,7 +534,7 @@ fn request_or_wrapping_whose_field_boundaries_are_shifted_fails_its_hmac() {
 }
 
 #[test]
-fn wrapping_with_changed_key_id_or_key_fingerprint_fails_its_hmac() {
+fn changed_key_id_or_fingerprint_fails_hmac() {
     let key = vector_code().pair_key();
     let keys = sender_keys();
     let sync_key = SyncKey::generate();
@@ -554,7 +554,7 @@ fn wrapping_with_changed_key_id_or_key_fingerprint_fails_its_hmac() {
 }
 
 #[test]
-fn wrapping_whose_unwrapped_key_has_another_fingerprint_is_refused() {
+fn wrong_fingerprint_wrapping_refused() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -583,7 +583,7 @@ fn wrapping_whose_unwrapped_key_has_another_fingerprint_is_refused() {
 }
 
 #[test]
-fn valid_wrapping_gives_paired_vault_with_pairing_pin_of_sender_keys() {
+fn valid_wrapping_pins_sender_keys() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1), vault(2)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -619,7 +619,7 @@ fn valid_wrapping_gives_paired_vault_with_pairing_pin_of_sender_keys() {
 }
 
 #[test]
-fn accepted_vault_is_skipped_in_later_polls() {
+fn accepted_vault_skipped_in_later_polls() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1), vault(2)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -654,7 +654,7 @@ fn accepted_vault_is_skipped_in_later_polls() {
 }
 
 #[test]
-fn remote_key_json_is_read_again_in_the_next_poll() {
+fn remote_key_json_read_again_in_next_poll() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -671,7 +671,7 @@ fn remote_key_json_is_read_again_in_the_next_poll() {
 }
 
 #[test]
-fn invalid_key_files_and_wrappings_of_other_kinds_are_skipped() {
+fn invalid_key_files_and_wrappings_of_other_kinds_skipped() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1)]);
     let mut pending = mac.start(&transport, &[]).unwrap();
@@ -721,7 +721,7 @@ fn key_wrapped_to_software_key_of_new_mac_unwraps_through_poll() {
 }
 
 #[test]
-fn start_writes_request_that_verifies_under_the_code_with_keys_and_name_of_new_mac() {
+fn start_writes_verifiable_request() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1), vault(2)]);
     let pending = mac.start(&transport, &[]).unwrap();
@@ -738,7 +738,7 @@ fn start_writes_request_that_verifies_under_the_code_with_keys_and_name_of_new_m
 }
 
 #[test]
-fn start_on_mac_with_no_keys_and_no_vault_files_creates_both_keys() {
+fn start_without_keys_creates_both_keys() {
     let mut mac = NewMac::new();
     mac.keys = TestKeys::neither();
     let transport = folder(&[vault(1)]);
@@ -749,7 +749,7 @@ fn start_on_mac_with_no_keys_and_no_vault_files_creates_both_keys() {
 }
 
 #[test]
-fn start_on_new_hardware_moves_files_first_and_leaves_out_no_vault() {
+fn new_hardware_start_moves_files_first() {
     let _audit = test_dir();
     let mut mac = NewMac::new();
     mac.keys = TestKeys::neither();
@@ -781,7 +781,7 @@ fn start_with_signing_key_lost_fails_and_writes_no_request() {
 }
 
 #[test]
-fn vault_this_mac_syncs_is_not_in_the_request_map() {
+fn vault_this_mac_syncs_not_in_request_map() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1), vault(2), vault(3)]);
     let pending = mac.start(&transport, &[vault(2)]).unwrap();
@@ -829,7 +829,7 @@ fn request_holds_one_new_replica_id_per_vault_and_two_requests_hold_different_id
 }
 
 #[test]
-fn finish_deletes_the_request() {
+fn finish_deletes_request() {
     let mac = NewMac::new();
     let transport = folder(&[vault(1)]);
     let pending = mac.start(&transport, &[]).unwrap();
@@ -1034,7 +1034,7 @@ impl UnlockedMac {
 }
 
 #[test]
-fn one_request_with_one_code_adds_new_mac_to_every_picked_vault_with_one_prompt() {
+fn one_request_pairs_every_picked_vault() {
     let transport = Arc::new(FakeTransport::default());
     transport.set_now(written_at());
     let unlocked = UnlockedMac::new(&transport, 3);
@@ -1141,7 +1141,7 @@ fn one_request_with_one_code_adds_new_mac_to_every_picked_vault_with_one_prompt(
 }
 
 #[test]
-fn request_whose_signing_key_or_replica_map_differs_from_the_one_the_hmac_covers_is_rejected() {
+fn changed_signing_key_or_map_rejected() {
     let transport = FakeTransport::default();
     let code = PairingCode::generate();
     let request = request_of(&code, &[vault(1), vault(2)]);
@@ -1196,7 +1196,7 @@ fn prompt_shows_count_and_no_name_and_name_shows_only_for_request_that_verifies_
 }
 
 #[test]
-fn real_request_matches_its_code_with_200_planted_requests_newer_than_it() {
+fn real_request_found_among_200_decoys() {
     let transport = FakeTransport::default();
     transport.set_now(written_at());
     let code = PairingCode::generate();
@@ -1226,7 +1226,7 @@ fn real_request_matches_its_code_with_200_planted_requests_newer_than_it() {
 }
 
 #[test]
-fn request_that_fails_the_hmac_is_never_shown_and_is_not_deleted() {
+fn request_that_fails_hmac_is_never_shown_and_not_deleted() {
     let transport = FakeTransport::default();
     let code = PairingCode::generate();
     let planted = request_of(&PairingCode::generate(), &[vault(1)]);
@@ -1303,7 +1303,7 @@ fn dismissed_request_does_not_prompt_again_new_id_does_and_request_older_than_24
 }
 
 #[test]
-fn request_file_larger_than_16_kb_is_not_read() {
+fn request_file_larger_than_16_kb_not_read() {
     let transport = FakeTransport::default();
     transport.set_now(written_at());
     let code = PairingCode::generate();
@@ -1332,7 +1332,7 @@ fn request_file_larger_than_16_kb_is_not_read() {
 }
 
 #[test]
-fn request_whose_request_id_differs_from_its_file_name_is_refused() {
+fn mismatched_request_id_refused() {
     let transport = FakeTransport::default();
     let code = PairingCode::generate();
     let request = request_of(&code, &[vault(1)]);
@@ -1348,7 +1348,7 @@ fn request_whose_request_id_differs_from_its_file_name_is_refused() {
 }
 
 #[test]
-fn dismissed_ids_are_kept_by_root_and_unreadable_file_reads_as_empty() {
+fn dismissed_ids_kept_by_root_and_unreadable_file_reads_as_empty() {
     let app = tempfile::tempdir().unwrap();
     let first = RequestId::generate();
     let second = RequestId::generate();
@@ -1385,7 +1385,7 @@ fn dismissed_ids_are_kept_by_root_and_unreadable_file_reads_as_empty() {
 }
 
 #[test]
-fn dismissal_file_alone_is_not_a_vault_file() {
+fn dismissal_file_alone_not_vault_file() {
     let app = tempfile::tempdir().unwrap();
     let mut dismissed = DismissedRequests::default();
     dismissed.set(&grant_root(), BTreeSet::from([RequestId::generate()]));
@@ -1403,7 +1403,7 @@ fn dismissal_file_alone_is_not_a_vault_file() {
 }
 
 #[test]
-fn vault_list_holds_synced_vaults_of_this_root_in_the_request_map() {
+fn vault_list_has_synced_vaults_in_map() {
     let transport = Arc::new(FakeTransport::default());
     let unlocked = UnlockedMac::new(&transport, 3);
     put_root(&unlocked.root, unlocked.id(3), &other_root());
@@ -1431,7 +1431,7 @@ fn vault_list_holds_synced_vaults_of_this_root_in_the_request_map() {
 }
 
 #[test]
-fn wrapping_is_under_current_key_id_and_other_wrappings_are_written_back_unchanged() {
+fn wrapping_is_under_current_key_id_and_other_wrappings_written_back_unchanged() {
     let transport = Arc::new(FakeTransport::default());
     let fx = granting(&transport);
     fx.put_text(&under_key_2(
@@ -1511,7 +1511,7 @@ fn failed_sync_state_save_writes_no_wrapping() {
 type PutState = fn(&Fixture);
 
 #[test]
-fn vault_whose_sync_state_is_not_trusted_receives_no_wrapping() {
+fn vault_whose_sync_state_not_trusted_receives_no_wrapping() {
     let code = PairingCode::generate();
     let (_, keys) = new_mac_keys();
     let cases: [(&str, PutState); 4] = [
@@ -1553,7 +1553,7 @@ fn vault_whose_sync_state_is_not_trusted_receives_no_wrapping() {
 }
 
 #[test]
-fn request_whose_replica_id_is_pinned_with_other_keys_is_refused_for_that_vault() {
+fn replica_pinned_to_other_keys_refused() {
     let transport = Arc::new(FakeTransport::default());
     let fx = granting(&transport);
     let code = PairingCode::generate();
@@ -1674,7 +1674,7 @@ fn failed_key_json_write_keeps_pin_and_later_grant_writes_one_wrapping() {
 }
 
 #[test]
-fn vault_of_another_root_or_not_in_request_map_receives_no_wrapping() {
+fn vault_outside_root_or_map_gets_no_wrapping() {
     let code = PairingCode::generate();
     let (_, keys) = new_mac_keys();
     for (name, root, in_map) in [
@@ -1783,7 +1783,7 @@ fn new_mac_manager() -> (Fixture, Managed) {
 }
 
 #[test]
-fn wrapping_written_after_start_is_accepted_at_next_event_with_one_unwrap_key() {
+fn late_wrapping_accepted_on_next_event() {
     let mac = NewMac::new();
     let transport = Arc::new(folder(&[vault(1), vault(2)]));
     let pending = mac.start(&transport, &[]).unwrap();
@@ -1830,7 +1830,7 @@ fn wrapping_written_after_start_is_accepted_at_next_event_with_one_unwrap_key() 
 }
 
 #[test]
-fn pairing_request_is_deleted_when_app_quits_or_after_15_minutes() {
+fn request_deleted_on_quit_or_timeout() {
     for quit in [true, false] {
         let mac = NewMac::new();
         let transport = Arc::new(folder(&[vault(1)]));
@@ -1962,7 +1962,7 @@ fn only_pairing_watcher_writes_pairing_requests_and_manager_writes_none() {
 }
 
 #[test]
-fn wrapping_whose_unwrap_fails_is_not_unwrapped_again_and_new_wrapping_is() {
+fn wrapping_whose_unwrap_fails_not_unwrapped_again_and_new_wrapping_is() {
     let mac = NewMac::new();
     let transport = Arc::new(folder(&[vault(1)]));
     let pending = mac.start(&transport, &[]).unwrap();

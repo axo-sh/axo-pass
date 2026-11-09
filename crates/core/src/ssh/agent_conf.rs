@@ -208,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_only_the_identity_agent_option_case_insensitively() {
+    fn parses_only_identity_agent_option_case_insensitively() {
         assert_eq!(
             parse_option("IdentityAgent /path/to/agent.sock"),
             Some("/path/to/agent.sock")
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_comments_out_an_existing_identity_agent() {
+    fn rewrite_comments_out_existing_identity_agent() {
         let out = rewrite_config("IdentityAgent /other/agent.sock\n", "/tmp/axo/agent.sock");
         assert!(out.contains(&format!(
             "{DISABLED_NOTE}\n# IdentityAgent /other/agent.sock"
@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_app_block_removes_only_the_block() {
+    fn strip_app_block_removes_only_block() {
         let content =
             format!("# keep\n{BLOCK_START}\nHost *\n  IdentityAgent \"x\"\n{BLOCK_END}\n# tail\n");
         assert_eq!(strip_app_block(&content), "# keep\n# tail\n");

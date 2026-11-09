@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn known_kind_with_extra_field_is_kept_as_unknown() {
+    fn known_kind_with_extra_field_kept_as_unknown() {
         for src in [
             r#"{"type":"email","x":1}"#,
             r#"{"type":"passkey","x":1}"#,

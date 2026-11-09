@@ -144,7 +144,7 @@ fn stopped_vault_saves_locally_joins_no_file_and_publishes_nothing() {
 }
 
 #[test]
-fn while_stopped_by_drift_each_save_advances_s_and_older_vault_copy_is_not_rebuilt() {
+fn while_stopped_by_drift_each_save_advances_s_and_older_vault_copy_not_rebuilt() {
     let transport = Arc::new(FakeTransport::default());
     let fx = published_vault(&transport);
     drift(&fx, "item");

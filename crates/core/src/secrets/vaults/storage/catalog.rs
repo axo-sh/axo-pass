@@ -1206,7 +1206,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_with_unparsable_items_is_listed_by_name() {
+    fn vault_with_unparsable_items_listed_by_name() {
         let fx = Fixture::new();
         fx.break_items();
 
@@ -1234,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn file_without_id_is_not_listed() {
+    fn file_without_id_not_listed() {
         let fx = Fixture::new();
         fx.write_edited("missing-id", |vault| {
             vault.as_object_mut().unwrap().remove("id");
@@ -1246,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn file_whose_id_is_not_a_uuid_is_not_listed() {
+    fn file_whose_id_not_uuid_not_listed() {
         let fx = Fixture::new();
         fx.write_edited("bad-id", |vault| vault["id"] = json!("not-a-uuid"));
 
@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn files_in_vaults_dir_with_one_id_are_both_reported() {
+    fn files_in_vaults_dir_with_one_id_both_reported() {
         let fx = Fixture::new();
         fx.write_edited("copy", |_| {});
 
@@ -1272,7 +1272,7 @@ mod tests {
     }
 
     #[test]
-    fn files_whose_ids_differ_only_in_case_are_both_reported() {
+    fn files_whose_ids_differ_only_in_case_both_reported() {
         let fx = Fixture::new();
         let lower = "bhRFe93MKwHktZwXKG599a";
         let upper = "bhRFe93MKwHktZwXKG599A";
@@ -1297,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn hyphenated_and_short_forms_of_one_id_are_both_reported() {
+    fn hyphenated_and_short_forms_of_one_id_both_reported() {
         let fx = Fixture::new();
         let short = ShortId::encode_uuid(fx.personal_id());
         fx.write_edited("short", |vault| vault["id"] = json!(short));
@@ -1321,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn format1_file_is_not_listed() {
+    fn format1_file_not_listed() {
         let fx = Fixture::new();
         fx.write_without_envelope("legacy");
 
@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn external_vault_is_signed_and_verified() {
+    fn external_vault_signed_and_verified() {
         let fx = Fixture::with_external(&["outside"]);
         let path = fx.external_path("outside");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1392,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_and_external_files_with_one_id_are_both_reported() {
+    fn internal_and_external_files_with_one_id_both_reported() {
         let fx = Fixture::with_external(&["outside"]);
         fx.write_copy(&fx.external_path("outside"), |_| {});
 
@@ -1410,7 +1410,7 @@ mod tests {
     }
 
     #[test]
-    fn files_with_one_id_are_neither_listed_nor_tracked() {
+    fn files_with_one_id_neither_listed_nor_tracked() {
         let fx = Fixture::new();
         fx.write_edited("copy", |_| {});
 
@@ -1421,7 +1421,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_with_another_id_is_listed_beside_duplicates() {
+    fn vault_with_another_id_listed_beside_duplicates() {
         let fx = Fixture::new();
         fx.write_edited("copy", |_| {});
         let work_id = Uuid::new_v4();
@@ -1436,7 +1436,7 @@ mod tests {
     }
 
     #[test]
-    fn external_link_to_listed_file_is_not_a_duplicate() {
+    fn external_link_to_listed_file_not_duplicate() {
         let fx = Fixture::with_external(&["alias"]);
         let link = fx.external_path("alias");
         fs::create_dir_all(link.parent().unwrap()).unwrap();
@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_key_is_read_from_file_and_not_from_file_name() {
+    fn vault_key_read_from_file_and_not_from_file_name() {
         let fx = Fixture::new();
         fx.write_edited("misnamed", other_vault("work"));
 
@@ -1461,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn file_without_key_is_not_listed() {
+    fn file_without_key_not_listed() {
         let fx = Fixture::new();
         fx.write_edited("keyless", |vault| {
             vault["id"] = json!(ShortId::encode_uuid(Uuid::new_v4()));
@@ -1475,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn files_that_claim_one_key_are_both_reported() {
+    fn files_that_claim_one_key_both_reported() {
         let fx = Fixture::new();
         fx.write_edited("other", other_vault("personal"));
         let other_id = VaultHeader::peek(&fx.vault_path("other")).unwrap().id;
@@ -1496,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_and_external_files_that_claim_one_key_are_both_reported() {
+    fn internal_and_external_files_that_claim_one_key_both_reported() {
         let fx = Fixture::with_external(&["outside"]);
         fx.write_copy(&fx.external_path("outside"), other_vault("personal"));
 
@@ -1514,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    fn file_with_duplicate_id_and_key_is_reported_for_each() {
+    fn file_with_duplicate_id_and_key_reported_for_each() {
         let fx = Fixture::new();
         fx.write_edited("copy", |vault| vault["key"] = json!("personal"));
         let paths = vec![fx.vault_path("copy"), fx.vault_path("personal")];
@@ -1539,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn file_whose_key_differs_only_in_case_is_not_listed() {
+    fn file_whose_key_differs_only_in_case_not_listed() {
         let fx = Fixture::new();
         fx.write_edited("upper", other_vault("Personal"));
 
@@ -1552,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn load_refuses_key_whose_id_is_held_by_two_files() {
+    fn load_refuses_key_whose_id_held_by_two_files() {
         let fx = Fixture::new();
         fx.write_edited("copy", |_| {});
 
@@ -1627,7 +1627,7 @@ mod tests {
     }
 
     #[test]
-    fn created_vault_is_named_by_id_and_holds_its_key() {
+    fn created_vault_named_by_id_and_holds_its_key() {
         let fx = Fixture::new();
         let key = fx.catalog.unclaimed_key("Work Vault", None).unwrap();
         let mut vault = Vault::new_for_test();
@@ -1673,7 +1673,7 @@ mod tests {
     }
 
     #[test]
-    fn key_of_another_vault_is_claimed_and_own_key_is_not() {
+    fn key_of_another_vault_claimed_and_own_key_not() {
         let fx = Fixture::new();
         fx.write_edited("work", other_vault("work"));
         let own = fx.vault_path("personal");
@@ -1912,7 +1912,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_is_refused_under_key_of_its_source() {
+    fn copy_refused_under_key_of_its_source() {
         let fx = Fixture::new();
         let selection = BTreeMap::from([(
             fx.personal_id(),
@@ -1970,7 +1970,7 @@ mod tests {
     }
 
     #[test]
-    fn id_check_finds_external_vault_that_is_not_tracked() {
+    fn id_check_finds_external_vault_not_tracked() {
         let fx = Fixture::with_external(&["outside"]);
         fx.write_copy(&fx.external_path("outside"), other_vault("outside"));
         let id = VaultHeader::peek(&fx.external_path("outside")).unwrap().id;
@@ -2015,7 +2015,7 @@ mod tests {
     }
 
     #[test]
-    fn collision_report_lists_selected_ids_that_exist_without_keychain() {
+    fn collision_report_lists_ids_without_keychain() {
         let fx = Fixture::new();
         // A file refused for a duplicate id and an unsigned file still hold
         // their ids.

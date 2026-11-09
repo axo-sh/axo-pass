@@ -631,7 +631,7 @@ mod tests {
     /// The layouts must match the kernel's, or every request is dropped as
     /// malformed.
     #[test]
-    fn message_layouts_match_the_kernel() {
+    fn message_layouts_match_kernel() {
         assert_eq!(size_of::<Header>(), 24);
         assert_eq!(size_of::<OolDescriptor>(), 16);
         assert_eq!(size_of::<OolMessage>(), 44);

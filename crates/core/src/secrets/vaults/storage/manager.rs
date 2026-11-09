@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn the_saved_copy_of_the_newest_save_is_kept_unlocked() {
+    fn saved_copy_of_newest_save_kept_unlocked() {
         let mut fx = Fixture::new();
         let target = fx.target();
         let committed = fx.add_item(&target, "alpha");
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_replaced_by_a_later_save_is_kept_locked() {
+    fn copy_replaced_by_later_save_kept_locked() {
         let mut fx = Fixture::new();
         let target = fx.target();
         let earlier = fx.add_item(&target, "alpha");
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn a_renamed_vault_is_kept_under_its_new_key_only() {
+    fn renamed_vault_kept_under_its_new_key_only() {
         let mut fx = Fixture::new();
         let target = fx.target();
         let committed = fx
@@ -543,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn a_writer_waiting_for_a_vault_does_not_hold_the_manager() {
+    fn writer_waiting_for_vault_does_not_hold_manager() {
         let fx = Fixture::new();
         let id = fx.original.vault_id().unwrap();
         let path = fx.original.path.clone();

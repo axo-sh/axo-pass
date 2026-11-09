@@ -387,7 +387,7 @@ fn edits_to_trashed_entries_leave_deleted_info_unchanged() {
 }
 
 #[test]
-fn credentials_moved_into_or_out_of_trash_decrypt_after_reload_with_history() {
+fn trash_moves_decrypt_after_reload() {
     let (mut vault, ids) = filled();
     let deleted_at = |vault: &Vault, id| credential_entry(vault, id).1;
     let beta_deleted_at = deleted_at(&vault, ids.beta);
@@ -574,7 +574,7 @@ fn no_mutation_trims_title_or_adds_history_entry() {
 }
 
 #[test]
-fn entries_are_added_and_purged_by_id() {
+fn entries_added_and_purged_by_id() {
     let (mut vault, ids) = filled();
     let added_item = Uuid::from_u128(1);
     let [in_trashed, in_added] = [2, 3].map(Uuid::from_u128);
@@ -646,7 +646,7 @@ fn entries_are_added_and_purged_by_id() {
 }
 
 #[test]
-fn vault_changed_through_mutations_finds_no_edits_against_view_with_same_values() {
+fn mutations_leave_view_edits_empty() {
     let mut local = test_vault();
     local.fill_for_test();
     let mut applied = reload(&local);

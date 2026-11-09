@@ -56,7 +56,7 @@ pub(super) fn decode(transport: &FakeTransport, fx: &Fixture, hash: StateHash) -
 }
 
 #[test]
-fn only_edit_that_is_purge_history_purge_or_signal_trim_publishes() {
+fn purge_or_signal_trim_only_edit_publishes() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     add_entries(&fx);
@@ -120,7 +120,7 @@ fn directory_that_lacks_file_of_last_publish_republishes_and_remote_own_file_cou
 }
 
 #[test]
-fn local_edits_while_synced_folder_is_missing_are_published_with_no_conflicts_when_it_returns() {
+fn edits_during_missing_folder_publish_without_conflicts() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let (_, before) = saved(&fx);
@@ -226,7 +226,7 @@ fn vault_and_sync_state_restored_from_same_backup_recover_lost_writes_from_own_f
 }
 
 #[test]
-fn older_staged_file_put_in_place_of_current_one_does_not_move_published_context() {
+fn older_staged_file_keeps_published_context() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     fx.add_item().unwrap();
@@ -252,7 +252,7 @@ fn older_staged_file_put_in_place_of_current_one_does_not_move_published_context
 }
 
 #[test]
-fn transaction_that_copies_staged_file_saves_no_sync_state_after_vault() {
+fn staged_copy_saves_no_sync_state_after_vault() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
 

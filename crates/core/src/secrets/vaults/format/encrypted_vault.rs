@@ -802,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_and_replica_id_are_written_if_set() {
+    fn generation_and_replica_id_written_if_set() {
         let mut vault = filled_vault();
         let replica_id = Uuid::new_v4();
         vault.generation = 7;
@@ -933,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_format2_file_is_refused() {
+    fn unsigned_format2_file_refused() {
         let mut file = filled_file();
         file.as_object_mut().unwrap().remove("signature");
         let contents = file.to_string();
@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn signature_that_is_not_der_fails_verification() {
+    fn signature_not_der_fails_verification() {
         let contents = with_signature(&contents_of(&filled_vault()), b"sig");
         assert_signature_invalid(parse(&contents), "signature that is not DER");
     }
@@ -1063,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn format2_file_key_with_members_shape_is_refused() {
+    fn format2_file_key_with_members_shape_refused() {
         let shapes = [
             json!([{ "public_key": "key", "wrapped_key": [1, 2, 3] }]),
             json!({ "path": "/tmp/members.json" }),
@@ -1080,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn file_without_envelope_is_refused_as_format_1() {
+    fn file_without_envelope_refused_as_format_1() {
         // A format 1 file is the vault object without an envelope.
         let contents = serde_json::to_string_pretty(&filled_vault()).unwrap();
         assert!(matches!(
@@ -1094,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_in_deleted_item_is_refused() {
+    fn unknown_field_in_deleted_item_refused() {
         let file = filled_file();
         let deleted_item = only_entry(&file, "/vault/deleted");
         let deleted_credential = only_entry(&file, &format!("{deleted_item}/item/deleted"));
@@ -1110,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_in_deleted_credential_is_refused() {
+    fn unknown_field_in_deleted_credential_refused() {
         let file = filled_file();
         let item = only_entry(&file, "/vault/items");
         let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
@@ -1123,7 +1123,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_in_any_outer_struct_is_refused() {
+    fn unknown_field_in_any_outer_struct_refused() {
         let file = filled_file();
         parse(&signed(&file)).unwrap();
 
@@ -1148,7 +1148,7 @@ mod tests {
     }
 
     #[test]
-    fn header_is_read_from_vault_file() {
+    fn header_read_from_vault_file() {
         let dir = tempfile::tempdir().unwrap();
         let vault = filled_vault();
         let path = dir.path().join("filled.json");
@@ -1171,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn file_without_key_is_refused() {
+    fn file_without_key_refused() {
         let mut file = filled_file();
         file["vault"].as_object_mut().unwrap().remove("key");
         let contents = file.to_string();
@@ -1187,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn file_with_key_that_is_not_normalized_is_refused() {
+    fn file_with_key_not_normalized_refused() {
         for key in ["Personal", "my vault", "", "1password"] {
             let mut file = filled_file();
             file["vault"]["key"] = json!(key);
@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_multiple_items() {
+    fn add_multiple_items() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let item_a = VaultItemOverview::try_new("Item A", "item-a").unwrap();
@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_and_get_credential() {
+    fn added_credential_decrypts() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
@@ -1283,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_position_is_persisted_in_metadata() {
+    fn credential_position_persisted_in_metadata() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
@@ -1314,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_metadata_is_encrypted_and_bound_to_its_vault() {
+    fn vault_metadata_encrypted_and_bound_to_its_vault() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let metadata = VaultMetadata {
@@ -1333,7 +1333,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_without_metadata_omits_the_field() {
+    fn vault_without_metadata_omits_field() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         vault
@@ -1347,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_credential_to_nonexistent_item_returns_error() {
+    fn credential_for_missing_item_refused() {
         let mut vault = make_vault();
         let cipher = VaultCipher::new(vault.id);
         let cred =

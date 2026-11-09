@@ -132,7 +132,7 @@ fn references_to_purged_entries_resolve_as_stated() {
 }
 
 #[test]
-fn username_slot_and_totp_slot_changed_on_two_macs_show_no_conflict() {
+fn different_slots_edited_show_no_conflict() {
     let (item, user, code) = (id(1), id(11), id(12));
     let start = base(|s, m| {
         add_item(s, m, item);
@@ -214,7 +214,7 @@ fn key_change_concurrent_with_title_edit_shows_no_conflict() {
 }
 
 #[test]
-fn title_edit_concurrent_with_category_or_kind_edit_shows_no_conflict() {
+fn title_vs_category_edit_no_conflict() {
     let (item, credential) = (id(1), id(11));
     let start = base(|s, m| {
         add_item(s, m, item);
@@ -312,7 +312,7 @@ fn concurrent_trashes_and_trash_concurrent_with_restore_leave_entry_trashed() {
 }
 
 #[test]
-fn folders_sections_and_credentials_placed_at_same_position_show_same_order() {
+fn same_position_inserts_order_equally() {
     let item = id(1);
     let (first, a_new, b_new, unplaced) = (id(20), id(22), id(21), id(23));
     let start = base(|s, m| {
@@ -376,7 +376,7 @@ fn folders_sections_and_credentials_placed_at_same_position_show_same_order() {
 }
 
 #[test]
-fn credentials_are_listed_by_section_order_with_default_section_first() {
+fn credentials_ordered_by_section_default_first() {
     let item = id(1);
     let (early, late) = (id(2), id(3));
     let (in_late, in_early, in_default) = (id(11), id(12), id(13));
@@ -413,7 +413,7 @@ fn credentials_are_listed_by_section_order_with_default_section_first() {
 }
 
 #[test]
-fn concurrent_moves_leave_credential_in_item_with_higher_order_key() {
+fn concurrent_moves_pick_higher_order_key() {
     let (from, to_a, to_b, credential) = (id(1), id(2), id(3), id(11));
     let start = base(|s, m| {
         for item in [from, to_a, to_b] {
@@ -440,7 +440,7 @@ fn concurrent_moves_leave_credential_in_item_with_higher_order_key() {
 }
 
 #[test]
-fn conflicts_of_other_policies_are_not_listed() {
+fn conflicts_of_other_policies_not_listed() {
     let (item, credential, folder) = (id(1), id(11), id(2));
     let (other_folder, section, replica) = (id(3), id(4), ReplicaId(id(1)));
     let start = base(|s, m| {
@@ -554,7 +554,7 @@ fn conflicts_of_other_policies_are_not_listed() {
 }
 
 #[test]
-fn concurrent_ask_values_that_differ_are_listed_by_entity_and_register() {
+fn differing_ask_values_listed() {
     let (item, credential) = (id(1), id(11));
     let start = base(|s, m| {
         add_item(s, m, item);
@@ -630,7 +630,7 @@ fn view_of_two_full_signal_stores_holds_every_entry() {
 }
 
 #[test]
-fn signal_lists_are_ordered_by_time_then_report_id() {
+fn signal_lists_ordered_by_time_then_report_id() {
     let rename_of = |user_handle: &str, at| {
         SignalEntry::Rename(RenameEntry {
             rp_id: "example.com".to_string(),
@@ -657,7 +657,7 @@ fn signal_lists_are_ordered_by_time_then_report_id() {
 }
 
 #[test]
-fn slot_holding_trashed_credential_and_empty_value_shows_no_conflict() {
+fn trashed_credential_slot_no_conflict() {
     let (item, credential) = (id(1), id(11));
     let start = base(|s, m| {
         add_item(s, m, item);
@@ -678,7 +678,7 @@ fn slot_holding_trashed_credential_and_empty_value_shows_no_conflict() {
 }
 
 #[test]
-fn history_entries_from_two_macs_are_ordered_by_time_then_id() {
+fn history_entries_from_two_macs_ordered_by_time_then_id() {
     let (item, credential) = (id(1), id(11));
     let start = base(|s, m| {
         add_item(s, m, item);
@@ -707,7 +707,7 @@ fn history_entries_from_two_macs_are_ordered_by_time_then_id() {
 }
 
 #[test]
-fn equal_values_and_values_equal_after_resolution_show_no_conflict() {
+fn equal_resolved_values_show_no_conflict() {
     let item = id(1);
     let start = base(|s, m| add_item(s, m, item));
     let (_, view) = concurrent(
@@ -806,7 +806,7 @@ fn merge_view_of_one_report_is_same_for_every_order_of_joins() {
 }
 
 #[test]
-fn username_and_password_set_to_one_credential_show_it_in_one_slot() {
+fn username_password_share_one_slot() {
     let (item, credential) = (id(1), id(11));
     let start = base(|s, m| {
         add_item(s, m, item);

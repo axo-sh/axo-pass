@@ -84,7 +84,7 @@ mod tests {
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
     #[test]
-    fn a_bare_secret_gives_six_digits() {
+    fn bare_secret_gives_six_digits() {
         let code = current_code(RFC_SECRET).unwrap();
         assert_eq!(code.code.len(), 6);
         assert!(code.code.chars().all(|c| c.is_ascii_digit()));
@@ -92,14 +92,14 @@ mod tests {
     }
 
     #[test]
-    fn grouped_lowercase_secrets_match_the_compact_form() {
+    fn grouped_lowercase_secrets_match_compact_form() {
         let totp = parse("gezd gnbv gy3t qojq gezd gnbv gy3t qojq").unwrap();
         let compact = parse(RFC_SECRET).unwrap();
         assert_eq!(totp.generate(59), compact.generate(59));
     }
 
     #[test]
-    fn matches_the_rfc_6238_vector() {
+    fn matches_rfc_6238_vector() {
         // RFC 6238 appendix B, SHA-1 at T=59 is 94287082 with 8 digits, so the
         // 6 digit code is its last six digits.
         let totp = parse(RFC_SECRET).unwrap();
@@ -107,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn an_otpauth_uri_sets_its_own_parameters() {
+    fn otpauth_uri_sets_its_own_parameters() {
         let uri = format!("otpauth://totp/Example:tp?secret={RFC_SECRET}&digits=8&period=60");
         let totp = parse(&uri).unwrap();
         assert_eq!(totp.digits, 8);
@@ -118,19 +118,19 @@ mod tests {
     }
 
     #[test]
-    fn an_otpauth_uri_with_a_lowercase_secret_parses() {
+    fn otpauth_uri_with_lowercase_secret_parses() {
         let uri = "otpauth://totp/octavore?issuer=GitHub&secret=abcd";
         assert!(parse(uri).is_ok());
     }
 
     #[test]
-    fn an_otpauth_uri_with_a_slash_in_its_label_parses() {
+    fn otpauth_uri_with_slash_in_its_label_parses() {
         let uri = "otpauth://totp/github.com/octavore?issuer=GitHub&secret=ABCD";
         assert!(parse(uri).is_ok());
     }
 
     #[test]
-    fn rejects_values_that_are_not_secrets() {
+    fn rejects_values_not_secrets() {
         assert!(current_code("").is_err());
         assert!(current_code("not base32 !!").is_err());
         assert!(current_code("otpauth://totp/x").is_err());

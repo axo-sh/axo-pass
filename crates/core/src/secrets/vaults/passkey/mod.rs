@@ -1172,7 +1172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_survives_a_round_trip() {
+    async fn record_survives_round_trip() {
         let passkey = sample_passkey().await;
 
         let encoded = encode(&passkey, None).unwrap();
@@ -1282,7 +1282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_login_target_creates_a_login_item() {
+    async fn new_login_target_creates_login_item() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
 
@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_item_target_stores_the_passkey_beside_the_login() {
+    async fn item_target_stores_passkey_beside_login() {
         let mut vw = VaultHandle::new_for_test("personal");
         autofill::write_login(
             &mut vw,
@@ -1327,7 +1327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_passkey_moves_to_another_vault_with_its_record_intact() {
+    async fn passkey_moves_to_another_vault_with_its_record_intact() {
         let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
@@ -1357,7 +1357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_moved_passkey_is_not_kept_in_the_source_deleted_credentials() {
+    async fn moved_passkey_leaves_no_source_tombstone() {
         let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
@@ -1372,7 +1372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_move_within_a_vault_keeps_the_credential() {
+    async fn move_within_vault_keeps_credential() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1413,7 +1413,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_move_within_a_vault_to_a_new_login_gives_the_same_item_as_a_copy() {
+    async fn move_in_vault_to_new_login_matches_copy() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1460,7 +1460,7 @@ mod tests {
     /// credential with the same key is the same passkey. It takes the source
     /// record and keeps its own id.
     #[tokio::test]
-    async fn a_move_within_a_vault_onto_the_same_passkey_replaces_it() {
+    async fn move_within_vault_onto_same_passkey_replaces_it() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1503,7 +1503,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_move_within_a_vault_to_the_source_item_changes_nothing() {
+    async fn move_within_vault_to_source_item_changes_nothing() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1537,7 +1537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_move_onto_the_same_passkey_keeps_the_later_last_used_time() {
+    async fn move_onto_same_passkey_keeps_later_last_used_time() {
         for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
             let mut vw = VaultHandle::new_for_test("personal");
             register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_copy_onto_the_same_passkey_in_another_vault_keeps_the_later_last_used_time() {
+    async fn copy_across_vaults_keeps_later_last_used() {
         for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
             let mut source = VaultHandle::new_for_test("personal");
             register(&mut source, PasskeyTarget::NewLogin, "ada").await;
@@ -1658,7 +1658,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_second_sign_in_on_the_same_day_runs_no_transaction() {
+    async fn second_sign_in_on_same_day_runs_no_transaction() {
         let disk = OnDisk::new().await;
         let zone = fixed_zone(-7);
         // 2026-10-22 08:00 at UTC-7.
@@ -1681,7 +1681,7 @@ mod tests {
     /// The vault the passkey signed from was loaded before another sign-in
     /// recorded today. The transaction reloads the vault and saves nothing.
     #[tokio::test]
-    async fn a_sign_in_from_a_stale_vault_on_the_same_day_saves_nothing() {
+    async fn sign_in_from_stale_vault_on_same_day_saves_nothing() {
         let disk = OnDisk::new().await;
         let zone = fixed_zone(-7);
         let first = OCT_23_UTC - 9 * HOUR;
@@ -1695,7 +1695,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sign_in_on_a_later_day_writes_the_new_time() {
+    async fn sign_in_on_later_day_writes_new_time() {
         let disk = OnDisk::new().await;
         let zone = fixed_zone(-7);
         let first = OCT_23_UTC - 9 * HOUR;
@@ -1710,7 +1710,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sign_in_after_local_midnight_writes() {
+    async fn sign_in_after_local_midnight_writes() {
         let disk = OnDisk::new().await;
         let zone = fixed_zone(-7);
         // 2026-10-22 23:30 and 2026-10-23 00:30 at UTC-7. Both are on
@@ -1725,7 +1725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sign_in_after_utc_midnight_on_the_same_local_day_does_not_write() {
+    async fn sign_in_after_utc_midnight_skips_write() {
         let disk = OnDisk::new().await;
         let zone = fixed_zone(-7);
         // 2026-10-22 16:30 and 17:30 at UTC-7, either side of UTC midnight.
@@ -1744,7 +1744,7 @@ mod tests {
     /// is 23:00 on 2026-10-22 in UTC. This Mac is at UTC+2, where that use is
     /// at 01:00 on 2026-10-23.
     #[tokio::test]
-    async fn a_use_from_another_zone_that_is_today_here_is_not_overwritten() {
+    async fn use_from_other_zone_not_overwritten() {
         let disk = OnDisk::new().await;
         let other_mac = OCT_23_UTC - HOUR;
         assert!(disk.sign_in(&disk.vault, other_mac, &fixed_zone(9)));
@@ -1762,7 +1762,7 @@ mod tests {
     /// is kept, since the last used write reloads the vault in its own
     /// transaction.
     #[tokio::test]
-    async fn the_last_used_write_keeps_an_edit_saved_after_the_vault_was_loaded() {
+    async fn last_used_write_keeps_concurrent_edit() {
         let disk = OnDisk::new().await;
         let signed_from = disk.load();
         disk.files
@@ -1808,7 +1808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_passkey_moved_within_a_vault_keeps_its_passkey_credential_id() {
+    async fn move_in_vault_keeps_credential_id() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -1831,7 +1831,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_passkey_moved_to_another_vault_keeps_its_passkey_credential_id() {
+    async fn move_across_vaults_keeps_credential_id() {
         let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&source).unwrap().remove(0);
@@ -1889,7 +1889,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_ins_are_the_assertions_of_one_passkey_newest_first() {
+    async fn sign_ins_are_assertions_of_one_passkey_newest_first() {
         let _audit = test_dir();
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
@@ -1935,7 +1935,7 @@ mod tests {
     /// The detail view reads the id from the passkey where it is now, so its
     /// history survives renames and moves.
     #[tokio::test]
-    async fn sign_in_history_is_unchanged_after_a_rename_and_moves() {
+    async fn sign_in_history_unchanged_after_rename_and_moves() {
         let _audit = test_dir();
         let mut source = VaultHandle::new_for_test("personal");
         register(&mut source, PasskeyTarget::NewLogin, "ada").await;
@@ -1985,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn only_passkeys_can_be_removed_after_a_move() {
+    fn only_passkeys_can_be_removed_after_move() {
         let mut vw = VaultHandle::new_for_test("personal");
         vw.add_item("site", "Site").unwrap();
         vw.add_secret(
@@ -2001,7 +2001,7 @@ mod tests {
     }
 
     #[test]
-    fn only_passkeys_can_be_read_for_a_move() {
+    fn only_passkeys_can_be_read_for_move() {
         let mut vw = VaultHandle::new_for_test("personal");
         vw.add_item("site", "Site").unwrap();
         vw.add_secret(
@@ -2016,7 +2016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_item_target_is_an_error() {
+    async fn missing_item_target_is_error() {
         let mut vw = VaultHandle::new_for_test("personal");
         let mut authenticator = Authenticator::new(
             AAGUID,
@@ -2032,7 +2032,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_assertion_leaves_the_stored_record_unchanged() {
+    async fn assertion_leaves_stored_record_unchanged() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let before = list(&vw).unwrap();
@@ -2143,7 +2143,7 @@ mod tests {
     }
 
     #[test]
-    fn prf_salts_are_hashed_with_the_webauthn_context() {
+    fn prf_salts_hashed_with_webauthn_context() {
         let mut data = b"WebAuthn PRF\0".to_vec();
         data.extend_from_slice(b"hello");
         assert_eq!(prf_salt(b"hello"), passkey_types::crypto::sha256(&data));
@@ -2269,7 +2269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_passkey_without_a_prf_secret_returns_no_prf_results() {
+    async fn passkey_without_prf_secret_returns_no_prf_results() {
         let mut vw = VaultHandle::new_for_test("personal");
         // Registered without PRF, as passkeys were before PRF support.
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
@@ -2296,7 +2296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renaming_an_account_keeps_the_key_and_adds_no_history() {
+    async fn renaming_account_keeps_key_and_adds_no_history() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -2334,7 +2334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_registration_records_when_it_was_created() {
+    async fn registration_records_when_it_was_created() {
         let mut vw = VaultHandle::new_for_test("personal");
         register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
         let stored = list(&vw).unwrap().remove(0);
@@ -2350,14 +2350,14 @@ mod tests {
     }
 
     #[test]
-    fn a_record_without_a_creation_time_still_summarizes() {
+    fn record_without_creation_time_still_summarizes() {
         let summary = summary(r#"{"rp_id":"example.com","credential_id":"AA","key":"x"}"#).unwrap();
         assert_eq!(summary.created_at, None);
         assert!(super::summary("not json").is_none());
     }
 
     #[test]
-    fn unreadable_records_are_rejected_not_panicked_on() {
+    fn unreadable_records_rejected_not_panicked_on() {
         assert!(decode("not json").is_err());
         assert!(decode(r#"{"rp_id":"example.com"}"#).is_err());
     }

@@ -418,7 +418,7 @@ pub(super) fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
 }
 
 #[test]
-fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
+fn each_case_classified_and_served_or_refused_at_each_load_path() {
     for (name, fx, expected) in cases() {
         assert_eq!(fx.read_case(), expected, "{name}: case at unlock");
         assert_eq!(fx.write_case(), expected, "{name}: case at transaction");
@@ -462,7 +462,7 @@ fn each_case_is_classified_and_served_or_refused_at_each_load_path() {
 }
 
 #[test]
-fn only_repair_cases_and_newer_format_are_refused() {
+fn only_repair_cases_and_newer_format_refused() {
     for (name, _, case) in cases() {
         let result = case.check();
         match case {
@@ -504,7 +504,7 @@ fn read_path_on_vault_with_v_other_than_s_runs_repair_transaction_and_serves_rep
 }
 
 #[test]
-fn vault_that_is_not_synced_loads_with_no_sync_state() {
+fn vault_not_synced_loads_with_no_sync_state() {
     let fx = Fixture::new(0, None);
 
     assert_eq!(fx.read_case(), SyncLoad::NotSynced);
@@ -552,7 +552,7 @@ fn sync_state_with_planted_sync_keys_entry_fails_verification_and_vault_loads() 
 }
 
 #[test]
-fn sync_state_whose_own_replica_keys_entry_lacks_current_device_key_is_failed_signature() {
+fn missing_device_key_failed_signature() {
     let without_entry = body(REPLICA, &[]);
     let other_replica = body(ReplicaId(Uuid::from_u128(2)), &[device_key()]);
     let another_key = body(REPLICA, &[other_key()]);
@@ -576,7 +576,7 @@ fn sync_state_whose_own_replica_keys_entry_lacks_current_device_key_is_failed_si
 }
 
 #[test]
-fn second_value_in_own_replica_keys_register_does_not_fail_check() {
+fn second_replica_keys_value_passes_check() {
     for signing in [[other_key(), device_key()], [device_key(), other_key()]] {
         let fx = Fixture::synced();
         let own = body(REPLICA, &signing);
@@ -593,7 +593,7 @@ fn second_value_in_own_replica_keys_register_does_not_fail_check() {
 }
 
 #[test]
-fn keyring_wrapped_and_unwrapped_through_test_unlock_gives_same_keys() {
+fn keyring_wrapped_and_unwrapped_through_unlock_gives_same_keys() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     let expected = fingerprints(&keyring());
@@ -643,7 +643,7 @@ fn renaming_vault_key_leaves_sync_state_in_place_and_next_transaction_finds_it()
 }
 
 #[test]
-fn signed_vault_file_copied_over_another_synced_vault_path_is_refused() {
+fn vault_file_copied_to_other_path_refused() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     let work_replica = ReplicaId(Uuid::from_u128(2));
@@ -682,7 +682,7 @@ fn signed_vault_file_copied_over_another_synced_vault_path_is_refused() {
 }
 
 #[test]
-fn sync_state_with_no_vault_file_is_listed_as_missing_vault() {
+fn sync_state_with_no_vault_file_listed_as_missing_vault() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     let device = TestSigner::device();
@@ -729,7 +729,7 @@ fn restore_takes_next_generation_of_sync_state_and_keeps_replica_id() {
 }
 
 #[test]
-fn retained_version_of_another_replica_id_is_not_restored() {
+fn retained_version_of_another_replica_id_not_restored() {
     let fx = Fixture::new(GENERATION, None);
     fx.write(|vh| vh.set_sync_for_test(GENERATION, Some(REPLICA.0)))
         .unwrap();

@@ -1236,7 +1236,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_hosts_follow_the_match_kind() {
+    fn identity_hosts_follow_match_kind() {
         let websites = [
             site("https://login.example.com/x", MatchKind::Domain),
             site("https://www.other.org/app", MatchKind::Host),
@@ -1256,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn domain_matches_the_same_host() {
+    fn domain_matches_same_host() {
         assert!(matches(&domain("https://example.com/login"), "example.com"));
         assert!(matches(
             &domain("example.com"),
@@ -1265,7 +1265,7 @@ mod tests {
     }
 
     #[test]
-    fn domain_matches_across_subdomains_of_a_registrable_domain() {
+    fn domain_matches_across_subdomains_of_registrable_domain() {
         assert!(matches(
             &domain("https://accounts.example.com"),
             "example.com"
@@ -1299,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn www_is_ignored() {
+    fn www_ignored() {
         assert!(matches(&domain("https://www.example.com"), "example.com"));
         assert!(matches(
             &[site("www.example.com", MatchKind::Host)],
@@ -1343,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_domain_names_no_port() {
+    fn bare_domain_names_no_port() {
         assert!(matches(
             &[site("https://example.com:8443", MatchKind::Host)],
             "example.com"
@@ -1370,7 +1370,7 @@ mod tests {
     }
 
     #[test]
-    fn never_does_not_block_another_website_on_the_same_login() {
+    fn never_does_not_block_another_website_on_same_login() {
         let websites = [
             site("https://example.com/admin", MatchKind::Never),
             site("https://example.com", MatchKind::Domain),
@@ -1379,7 +1379,7 @@ mod tests {
     }
 
     #[test]
-    fn an_https_login_does_not_match_an_http_page() {
+    fn https_login_does_not_match_http_page() {
         for kind in [MatchKind::Domain, MatchKind::Host, MatchKind::StartsWith] {
             let websites = [site("https://example.com", kind)];
             assert!(matches(&websites, "https://example.com"));
@@ -1389,13 +1389,13 @@ mod tests {
     }
 
     #[test]
-    fn an_http_or_bare_login_matches_an_http_page() {
+    fn http_or_bare_login_matches_http_page() {
         assert!(matches(&domain("http://example.com"), "http://example.com"));
         assert!(matches(&domain("example.com"), "http://example.com"));
     }
 
     #[test]
-    fn starts_with_compares_pages_on_the_same_host() {
+    fn starts_with_compares_pages_on_same_host() {
         let websites = [site("https://example.com/app", MatchKind::StartsWith)];
         assert!(matches(&websites, "https://example.com/app/login"));
         assert!(matches(&websites, "https://example.com/app"));
@@ -1424,7 +1424,7 @@ mod tests {
     }
 
     #[test]
-    fn starts_with_requires_an_equal_stored_query() {
+    fn starts_with_requires_equal_stored_query() {
         let websites = [site(
             "https://example.com/app?tenant=a",
             MatchKind::StartsWith,
@@ -1435,14 +1435,14 @@ mod tests {
     }
 
     #[test]
-    fn starts_with_does_not_match_a_longer_host() {
+    fn starts_with_does_not_match_longer_host() {
         let websites = [site("https://example.com", MatchKind::StartsWith)];
         assert!(!matches(&websites, "https://example.com.evil.com/login"));
         assert!(matches(&websites, "https://example.com/login"));
     }
 
     #[test]
-    fn starts_with_treats_a_bare_domain_as_a_host_match() {
+    fn starts_with_treats_bare_domain_as_host_match() {
         let websites = [site("https://example.com/app", MatchKind::StartsWith)];
         assert!(matches(&websites, "example.com"));
         assert!(!matches(&websites, "other.com"));
@@ -1480,7 +1480,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_the_stored_host_that_matched() {
+    fn reports_stored_host_that_matched() {
         let websites = vec![
             site("https://www.other.com", MatchKind::Domain),
             site("https://accounts.example.com", MatchKind::Domain),
@@ -1492,7 +1492,7 @@ mod tests {
     }
 
     #[test]
-    fn an_exact_host_match_beats_a_domain_match() {
+    fn exact_host_match_beats_domain_match() {
         let websites = vec![
             site("https://accounts.example.com", MatchKind::Domain),
             site("https://example.com", MatchKind::Domain),
@@ -1542,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn write_login_creates_the_item_credentials_roles_and_websites() {
+    fn write_login_creates_item_credentials_roles_and_websites() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn write_login_stores_an_email_username_as_email() {
+    fn write_login_stores_email_username_as_email() {
         let mut vw = VaultHandle::new_for_test("personal");
         write_login(&mut vw, login(&[], Some("tp@example.com"))).unwrap();
         let cred = vw
@@ -1603,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    fn names_come_from_the_registrable_domain() {
+    fn names_come_from_registrable_domain() {
         let pair = |key: &str, title: &str| (key.to_string(), title.to_string());
         assert_eq!(
             names("https://accounts.github.com/login"),
@@ -1616,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    fn names_fall_back_when_the_first_label_is_not_a_key() {
+    fn names_fall_back_when_first_label_not_key() {
         let pair = |key: &str, title: &str| (key.to_string(), title.to_string());
         // Keys start with a letter and have at least three characters.
         assert_eq!(names("https://x.com"), pair("x-com", "X.com"));
@@ -1625,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn save_login_stores_a_host_website_and_the_conventional_keys() {
+    fn save_login_stores_host_website_and_conventional_keys() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -1667,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    fn save_login_leaves_an_existing_item_alone() {
+    fn save_login_leaves_existing_item_alone() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -1691,7 +1691,7 @@ mod tests {
     }
 
     #[test]
-    fn save_login_without_a_username_has_no_username_role() {
+    fn save_login_without_username_has_no_username_role() {
         let mut vw = VaultHandle::new_for_test("personal");
         let item = save_login(
             &mut vw,
@@ -1706,13 +1706,13 @@ mod tests {
     }
 
     #[test]
-    fn save_login_refuses_a_page_that_is_not_http() {
+    fn save_login_refuses_page_not_http() {
         let mut vw = VaultHandle::new_for_test("personal");
         assert!(save_login(&mut vw, "ftp://example.com", None, SecretString::from("pw")).is_err());
     }
 
     #[test]
-    fn update_login_password_changes_only_the_value() {
+    fn update_login_password_changes_only_value() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -1739,7 +1739,7 @@ mod tests {
     }
 
     #[test]
-    fn find_login_record_ignores_the_page_but_not_the_id() {
+    fn find_login_record_ignores_page_but_not_id() {
         let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
@@ -1780,7 +1780,7 @@ mod tests {
     }
 
     #[test]
-    fn a_login_is_stored_for_a_page_only_through_a_listed_website() {
+    fn login_stored_for_page_only_through_listed_website() {
         let mut vw = VaultHandle::new_for_test("personal");
         let websites = vec!["github.com".to_string()];
         write_login(&mut vw, login(&websites, Some("tp"))).unwrap();
@@ -1809,7 +1809,7 @@ mod tests {
     }
 
     #[test]
-    fn an_item_without_autofill_data_is_not_offered() {
+    fn item_without_autofill_data_not_offered() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
@@ -1825,7 +1825,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_assigns_roles_and_websites_from_the_credentials() {
+    fn conversion_assigns_roles_and_websites_from_credentials() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
@@ -1866,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_is_limited_to_http_sites() {
+    fn conversion_limited_to_http_sites() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
@@ -1882,7 +1882,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_needs_a_confidential_credential() {
+    fn conversion_needs_confidential_credential() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
@@ -1893,7 +1893,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_leaves_an_item_with_roles_alone() {
+    fn conversion_leaves_item_with_roles_alone() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         vw.add_secret(
@@ -1923,7 +1923,7 @@ mod tests {
     }
 
     #[test]
-    fn roles_decide_the_credentials_to_fill() {
+    fn roles_decide_credentials_to_fill() {
         let mut item = overview(&[
             ("password", FieldKind::default()),
             ("pin", FieldKind::default()),
@@ -1939,7 +1939,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dangling_password_role_is_not_a_login() {
+    fn dangling_password_role_not_login() {
         let mut item = overview(&[("password", FieldKind::default())]);
         item.autofill.password = Some(uuid::Uuid::new_v4());
         assert!(item.autofill.password_credential(&item).is_none());
@@ -1954,7 +1954,7 @@ mod tests {
     }
 
     #[test]
-    fn a_totp_credential_with_no_slot_gives_no_code() {
+    fn totp_credential_with_no_slot_gives_no_code() {
         let item = overview(&[
             ("password", FieldKind::default()),
             ("code", FieldKind::Totp),
@@ -1963,14 +1963,14 @@ mod tests {
     }
 
     #[test]
-    fn the_totp_slot_decides_which_credential_makes_the_code() {
+    fn totp_slot_decides_which_credential_makes_code() {
         let mut item = overview(&[("first", FieldKind::Totp), ("second", FieldKind::Totp)]);
         item.autofill.totp = Some(key_of(&item, "second"));
         assert_eq!(item.autofill.totp_credential(&item).unwrap().key, "second");
     }
 
     #[test]
-    fn a_totp_slot_that_points_at_nothing_usable_means_no_code() {
+    fn totp_slot_that_points_at_nothing_usable_means_no_code() {
         let mut item = overview(&[
             ("password", FieldKind::default()),
             ("code", FieldKind::Totp),
@@ -1986,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    fn has_totp_follows_the_totp_slot() {
+    fn has_totp_follows_totp_slot() {
         let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
         let has_totp = |vw: &VaultHandle| collect_items(vw, None).unwrap()[0].has_totp;
@@ -2030,7 +2030,7 @@ mod tests {
     }
 
     #[test]
-    fn find_login_requires_a_website_that_matches_the_frame() {
+    fn find_login_requires_website_that_matches_frame() {
         let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
 
@@ -2084,7 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn read_login_returns_only_the_role_credentials() {
+    fn read_login_returns_only_role_credentials() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -2105,7 +2105,7 @@ mod tests {
     }
 
     #[test]
-    fn a_login_listing_summary_carries_no_secret_or_key() {
+    fn login_listing_summary_carries_no_secret_or_key() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         let found = collect_items(&vw, Some("github.com")).unwrap();
@@ -2120,7 +2120,7 @@ mod tests {
     }
 
     #[test]
-    fn login_totp_uses_the_credential_in_the_totp_slot() {
+    fn login_totp_uses_credential_in_totp_slot() {
         let mut vw = VaultHandle::new_for_test("personal");
         let record_id = github_login(&mut vw);
         let item = find_login(&vw, &record_id, "github.com").unwrap().unwrap();
@@ -2158,7 +2158,7 @@ mod tests {
     }
 
     #[test]
-    fn site_reports_the_host_domain_and_scheme() {
+    fn site_reports_host_domain_and_scheme() {
         let site = Site::parse("http://www.accounts.example.co.uk:8080/x").unwrap();
         assert_eq!(site.host, "accounts.example.co.uk");
         assert_eq!(site.domain, "example.co.uk");
@@ -2171,7 +2171,7 @@ mod tests {
     }
 
     #[test]
-    fn rp_ids_must_be_valid_for_the_origin() {
+    fn rp_ids_must_be_valid_for_origin() {
         let ok = |rp: &str, origin: &str| check_rp_id(rp, Some(origin)).is_ok();
         assert!(ok("example.com", "https://login.example.com"));
         assert!(ok("example.com", "https://example.com"));
@@ -2190,7 +2190,7 @@ mod tests {
     }
 
     #[test]
-    fn rp_ids_are_checked_without_an_origin() {
+    fn rp_ids_checked_without_origin() {
         assert!(check_rp_id("example.com", None).is_ok());
         assert!(check_rp_id("login.example.co.uk", None).is_ok());
         for invalid in [
@@ -2211,7 +2211,7 @@ mod tests {
     }
 
     #[test]
-    fn create_login_derives_the_key_and_title_from_the_website() {
+    fn create_login_derives_key_and_title_from_website() {
         let mut vw = VaultHandle::new_for_test("personal");
         let key = create_login(
             &mut vw,
@@ -2248,7 +2248,7 @@ mod tests {
     }
 
     #[test]
-    fn create_login_rejects_a_bad_website_or_key() {
+    fn create_login_rejects_bad_website_or_key() {
         let mut vw = VaultHandle::new_for_test("personal");
         let create = |vw: &mut VaultHandle, website: &str, key: Option<&str>| {
             create_login(vw, website, None, SecretString::from("pw"), key, None)
@@ -2260,7 +2260,7 @@ mod tests {
     }
 
     #[test]
-    fn set_role_moves_a_credential_between_roles() {
+    fn set_role_moves_credential_between_roles() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         set_role(&mut vw, "github", Role::Password, Some("username")).unwrap();
@@ -2278,7 +2278,7 @@ mod tests {
     }
 
     #[test]
-    fn set_role_rejects_a_credential_of_the_wrong_kind() {
+    fn set_role_rejects_credential_of_wrong_kind() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         vw.add_secret(
@@ -2297,7 +2297,7 @@ mod tests {
     }
 
     #[test]
-    fn set_role_makes_an_uncategorized_item_a_login() {
+    fn set_role_makes_uncategorized_item_login() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(&mut vw, "blog", &[("secret", FieldKind::default(), "pw")]);
         set_role(&mut vw, "blog", Role::Password, Some("secret")).unwrap();
@@ -2306,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    fn set_websites_replaces_the_list_and_checks_each_url() {
+    fn set_websites_replaces_list_and_checks_each_url() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         set_websites(
@@ -2339,7 +2339,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_prefers_the_credential_named_password_and_an_email_username() {
+    fn conversion_prefers_credential_named_password_and_email_username() {
         let item = overview(&[
             ("api-token", FieldKind::default()),
             ("password", FieldKind::default()),
@@ -2352,7 +2352,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_falls_back_to_a_conventional_username_key() {
+    fn conversion_falls_back_to_conventional_username_key() {
         let item = overview(&[
             ("pass", FieldKind::default()),
             ("account", FieldKind::Text(Default::default())),
@@ -2363,7 +2363,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_moves_credentials_and_deletes_the_source() {
+    fn merge_moves_credentials_and_deletes_source() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -2431,7 +2431,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_renames_a_differing_credential_and_fills_missing_roles() {
+    fn merge_renames_differing_credential_and_fills_missing_roles() {
         let mut vw = VaultHandle::new_for_test("personal");
         legacy_item(
             &mut vw,
@@ -2467,7 +2467,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_keeps_history_and_sections_and_purges_an_emptied_source() {
+    fn merge_keeps_history_and_sections_and_purges_emptied_source() {
         use secrecy::ExposeSecret;
 
         let mut vw = VaultHandle::new_for_test("personal");
@@ -2515,7 +2515,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_into_itself_is_an_error() {
+    fn merge_into_itself_is_error() {
         let mut vw = VaultHandle::new_for_test("personal");
         github_login(&mut vw);
         assert!(merge_items(&mut vw, "github", "github").is_err());

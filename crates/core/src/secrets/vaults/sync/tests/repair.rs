@@ -224,7 +224,7 @@ fn v_greater_than_s_row_of_generation_table_takes_stated_action() {
 }
 
 #[test]
-fn at_v_greater_than_s_unpublished_edit_is_conflict_and_peer_change_after_backup_is_not() {
+fn at_v_greater_than_s_unpublished_edit_is_conflict_and_peer_change_after_backup_not() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     fx.write(|vh| {
@@ -296,7 +296,7 @@ fn at_v_greater_than_s_unpublished_edit_is_conflict_and_peer_change_after_backup
 }
 
 #[test]
-fn order_register_keeps_joined_value_and_trash_is_added_while_restore_is_not() {
+fn order_register_keeps_joined_value_and_trash_added_while_restore_not() {
     for merge in Merge::ALL {
         let transport = Arc::new(FakeTransport::default());
         let fx = synced(&transport);
@@ -425,7 +425,7 @@ fn after_guard_stops_sync_it_stays_stopped_on_same_build_and_new_build_merges_an
 }
 
 #[test]
-fn user_override_runs_recovery_merge_after_confirmation_with_number_of_differences() {
+fn confirmed_override_runs_recovery_merge() {
     let transport = Arc::new(FakeTransport::default());
     let fx = stopped_by_drift(&transport);
     add(&fx, "second").unwrap();
@@ -463,7 +463,7 @@ fn user_override_runs_recovery_merge_after_confirmation_with_number_of_differenc
 }
 
 #[test]
-fn override_is_not_offered_again_on_build_of_override_build_and_is_offered_on_new_build() {
+fn override_not_offered_again_on_build_of_override_build_and_offered_on_new_build() {
     let transport = Arc::new(FakeTransport::default());
     let fx = stopped_by_drift(&transport);
     confirm(&fx).unwrap();
@@ -525,7 +525,7 @@ fn without_confirmation_override_does_nothing_and_sync_stays_stopped() {
 }
 
 #[test]
-fn purged_entry_that_vault_still_holds_reappears_after_recovery_merge() {
+fn purged_entry_reappears_after_recovery_merge() {
     let transport = Arc::new(FakeTransport::default());
     let fx = published_vault(&transport);
     let held = saved_vault(&fx);
@@ -557,7 +557,7 @@ fn purged_entry_that_vault_still_holds_reappears_after_recovery_merge() {
 }
 
 #[test]
-fn repair_adds_no_value_equal_to_shown_value_or_to_value_its_register_holds() {
+fn repair_adds_no_value_equal_to_existing_value() {
     let mut vault = Vault::new_for_test();
     vault.add_or_update_item("item", "Item").unwrap();
     let field = vault
@@ -674,7 +674,7 @@ fn restoring_retained_version_of_synced_vault_records_differences_and_trashes_en
 }
 
 #[test]
-fn second_miss_of_sync_state_key_is_added_by_v_greater_than_s_repair_once_key_arrives() {
+fn repair_adds_second_missed_key_once_it_arrives() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let own = body(REPLICA, &[device_key()]);

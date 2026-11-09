@@ -88,7 +88,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_interpolate_secrets() {
+    fn interpolates_secrets() {
         let cases: &[(&str, &str)] = &[
             ("hello world", "hello world"),
             ("", ""),

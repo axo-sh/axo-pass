@@ -48,7 +48,7 @@ fn refused_state_leaves_local_state_unchanged() {
 }
 
 #[test]
-fn state_with_counter_above_max_counter_is_refused() {
+fn state_with_counter_above_max_counter_refused() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, m_a) = local(&mut a);
     let mut peer = State::default();
@@ -71,7 +71,7 @@ fn state_with_counter_above_max_counter_is_refused() {
 }
 
 #[test]
-fn state_with_counter_at_max_counter_is_joined() {
+fn state_with_counter_at_max_counter_joined() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, _) = local(&mut a);
     let mut peer = State::default();
@@ -90,7 +90,7 @@ fn state_with_counter_at_max_counter_is_joined() {
 }
 
 #[test]
-fn context_entry_claim_on_session_actor_is_refused_and_session_starts_new_actor() {
+fn context_entry_claim_on_session_actor_refused_and_session_starts_new_actor() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, m_a) = local(&mut a);
     let mut peer = state.clone();
@@ -121,7 +121,7 @@ fn context_entry_claim_on_session_actor_is_refused_and_session_starts_new_actor(
 }
 
 #[test]
-fn write_id_claim_on_session_actor_is_refused_and_session_starts_new_actor() {
+fn write_id_claim_on_session_actor_refused_and_session_starts_new_actor() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, m_a) = local(&mut a);
     let mut peer = state.clone();
@@ -142,7 +142,7 @@ fn write_id_claim_on_session_actor_is_refused_and_session_starts_new_actor() {
 }
 
 #[test]
-fn claim_on_session_actor_is_refused_before_closure_check() {
+fn claim_on_session_actor_refused_before_closure_check() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, _) = local(&mut a);
     let mut peer = state.clone();
@@ -158,7 +158,7 @@ fn claim_on_session_actor_is_refused_before_closure_check() {
 }
 
 #[test]
-fn state_at_session_sequence_number_is_joined() {
+fn state_at_session_sequence_number_joined() {
     let mut a = session(1);
     let (mut state, _) = local(&mut a);
     let backup = state.clone();
@@ -186,7 +186,7 @@ fn state_at_session_sequence_number_is_joined() {
 }
 
 #[test]
-fn write_ids_of_earlier_actor_of_this_replica_above_local_context_are_joined() {
+fn earlier_actor_write_ids_above_context_joined() {
     let mut a = session(1);
     let (mut state, _) = local(&mut a);
     let backup = state.clone();
@@ -211,7 +211,7 @@ fn write_ids_of_earlier_actor_of_this_replica_above_local_context_are_joined() {
 }
 
 #[test]
-fn one_write_id_with_two_values_quarantines_state_that_brings_second() {
+fn second_value_for_write_id_quarantines_state() {
     let (mut a, mut b, mut c) = (session(1), session(2), session(3));
     let (first, m) = local(&mut a);
     // Peer with a second value at the write id of the first.
@@ -243,7 +243,7 @@ fn one_write_id_with_two_values_quarantines_state_that_brings_second() {
 }
 
 #[test]
-fn one_write_id_with_two_counters_is_quarantined() {
+fn one_write_id_with_two_counters_quarantined() {
     let (mut a, mut b) = (session(1), session(2));
     let (first, m) = local(&mut a);
     let mut second = first.clone();
@@ -261,7 +261,7 @@ fn one_write_id_with_two_counters_is_quarantined() {
 }
 
 #[test]
-fn actor_with_different_info_is_quarantined() {
+fn actor_with_different_info_quarantined() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, _) = local(&mut a);
     let mut peer = state.clone();
@@ -282,7 +282,7 @@ fn actor_with_different_info_is_quarantined() {
 }
 
 #[test]
-fn state_not_covered_by_own_context_is_quarantined() {
+fn state_not_covered_by_own_context_quarantined() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, _) = local(&mut a);
     let mut peer = State::default();
@@ -303,7 +303,7 @@ fn state_not_covered_by_own_context_is_quarantined() {
 }
 
 #[test]
-fn covered_state_is_skipped() {
+fn covered_state_skipped() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, _) = local(&mut a);
     let mut peer = state.clone();

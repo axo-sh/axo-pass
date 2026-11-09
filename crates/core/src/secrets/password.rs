@@ -114,7 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_policy_makes_a_twenty_character_password() {
+    fn default_policy_makes_twenty_character_password() {
         let password = PasswordPolicy::default().generate().unwrap();
         assert_eq!(password.expose_secret().len(), DEFAULT_LENGTH);
     }

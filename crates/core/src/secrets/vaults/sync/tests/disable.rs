@@ -225,7 +225,7 @@ fn disabling_sync_while_folder_is_missing_holds_final_file_in_leaving_state_and_
 }
 
 #[test]
-fn deleting_synced_vault_while_folder_is_missing_delivers_final_file_when_folder_returns_and_vault_is_not_listed_as_missing()
+fn deleting_synced_vault_while_folder_is_missing_delivers_final_file_when_folder_returns_and_vault_not_listed_as_missing()
  {
     let transport = Arc::new(FakeTransport::default());
     let pair = Pair::new(&transport);
@@ -260,7 +260,7 @@ fn deleting_synced_vault_while_folder_is_missing_delivers_final_file_when_folder
 }
 
 #[test]
-fn age_import_with_kit_succeeds_after_kit_maker_disables_sync_and_its_directory_is_deleted() {
+fn age_import_with_kit_succeeds_after_kit_maker_disables_sync_and_its_directory_deleted() {
     let transport = Arc::new(FakeTransport::default());
     let pair = Pair::new(&transport);
     let replica = pair.replica();
@@ -358,7 +358,7 @@ fn disabling_and_enabling_sync_again_takes_new_replica_id() {
 }
 
 #[test]
-fn disable_interrupted_after_vault_save_leaves_no_sync_state_after_next_launch() {
+fn interrupted_disable_leaves_no_sync_state() {
     // A disable whose copy did not run, as when the app quits before it.
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
@@ -552,7 +552,7 @@ fn crash_after_leaving_save_loads_as_leaving_and_next_transaction_finishes_disab
 }
 
 #[test]
-fn leaving_sync_state_with_no_vault_file_is_copied_and_deleted_by_manager() {
+fn leaving_sync_state_with_no_vault_file_copied_and_deleted_by_manager() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     transport.set_unavailable(true);
@@ -671,7 +671,7 @@ fn enable_join_and_disable_refuse_while_sync_state_is_leaving() {
 }
 
 #[test]
-fn delete_of_vault_that_is_not_synced_reads_no_key() {
+fn delete_of_vault_not_synced_reads_no_key() {
     let fx = Fixture::new(0, None);
 
     fx.catalog

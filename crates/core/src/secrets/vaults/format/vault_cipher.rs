@@ -657,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn aad_layout_is_unchanged() {
+    fn aad_layout_unchanged() {
         let vault_id = Uuid::new_v4();
         let item_id = Uuid::new_v4();
         let cred_id = Uuid::new_v4();

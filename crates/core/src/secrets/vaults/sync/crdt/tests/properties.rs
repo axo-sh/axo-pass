@@ -211,7 +211,7 @@ proptest! {
     }
 
     #[test]
-    fn state_holding_counter_above_max_counter_is_refused(
+    fn state_holding_counter_above_max_counter_refused(
         history in History::strategy(),
         replica in any::<Index>(),
         version in any::<Index>(),
@@ -236,7 +236,7 @@ proptest! {
     }
 
     #[test]
-    fn value_at_max_counter_is_joined_and_no_replica_refuses_another_afterwards(
+    fn value_at_max_counter_joined_and_no_replica_refuses_another_afterwards(
         history in History::strategy(),
         at in any::<Index>(),
         holder in any::<Index>(),

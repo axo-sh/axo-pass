@@ -231,8 +231,7 @@ fn peer_change_while_vault_is_locked_sets_flag_and_next_read_joins_it_before_ser
 }
 
 #[test]
-fn with_no_change_notifications_read_lists_peer_files_at_most_once_a_minute_and_joins_changed_one()
-{
+fn with_no_change_notifications_read_lists_peer_files_at_most_once_minute_and_joins_changed_one() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let reader = Reader::of(&fx);
@@ -389,7 +388,7 @@ fn sync_state_of_another_vault_id_is_still_refused_at_read() {
 }
 
 #[test]
-fn flag_set_during_transaction_after_its_peer_listing_is_not_cleared_by_it() {
+fn flag_set_after_peer_listing_not_cleared() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_peer(&fx, &transport, PEER, "joined");
@@ -453,7 +452,7 @@ fn read_transaction_that_fails_serves_vault_as_unlocked_before_and_repair_that_f
 }
 
 #[test]
-fn app_read_through_unlock_vault_takes_no_per_vault_mutex_while_it_holds_manager_mutex() {
+fn app_read_takes_no_vault_mutex_under_manager_mutex() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_peer(&fx, &transport, PEER, "joined");

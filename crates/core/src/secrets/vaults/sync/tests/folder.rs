@@ -268,7 +268,7 @@ fn coordinated_io_reads_only_exact_state_file_names() {
 }
 
 #[test]
-fn plain_io_tells_local_file_from_one_not_local_or_missing_without_read() {
+fn plain_io_classifies_without_reading() {
     transport::tells_local_file_from_one_not_local_or_missing_without_read(&Folder::plain());
 }
 
@@ -313,7 +313,7 @@ fn plain_io_records_download_requests_and_makes_remote_files_local() {
 }
 
 #[test]
-fn directory_that_is_not_short_id_is_not_listed() {
+fn directory_not_short_id_not_listed() {
     for folder in Folder::each() {
         let transport = &folder.transport;
         transport.write_meta(VAULT, b"meta").unwrap();
@@ -349,7 +349,7 @@ fn directory_that_is_not_short_id_is_not_listed() {
 }
 
 #[test]
-fn only_exact_file_forms_are_read() {
+fn only_exact_file_forms_read() {
     for folder in Folder::each() {
         let transport = &folder.transport;
         transport.write_meta(VAULT, b"meta").unwrap();
@@ -414,7 +414,7 @@ fn only_exact_file_forms_are_read() {
 }
 
 #[test]
-fn pairing_request_larger_than_16_kb_is_listed_with_its_size_and_not_read() {
+fn pairing_request_larger_than_16_kb_listed_with_its_size_and_not_read() {
     for folder in Folder::each() {
         let transport = &folder.transport;
         let largest = vec![b'a'; MAX_PAIRING_SIZE as usize];
@@ -528,7 +528,7 @@ fn write_leaves_no_file_in_synced_folder_other_than_target() {
 }
 
 #[test]
-fn file_marked_as_not_local_is_remote_and_is_not_read() {
+fn file_marked_as_not_local_is_remote_and_not_read() {
     let folder = Folder::plain();
     let transport = &folder.transport;
     let io = folder.plain_io();
@@ -561,7 +561,7 @@ fn file_marked_as_not_local_is_remote_and_is_not_read() {
 }
 
 #[test]
-fn missing_root_fails_every_call_and_is_not_created() {
+fn missing_root_fails_every_call_and_not_created() {
     for folder in Folder::each() {
         let missing = folder.dir.path().join("Missing");
         let transport = folder.transport_at(&missing);
@@ -774,7 +774,7 @@ fn watch_matches_paths_under_directory_and_its_ancestors() {
 }
 
 #[test]
-fn symlink_is_not_read_and_no_write_or_delete_reaches_its_target() {
+fn symlink_not_read_and_no_write_or_delete_reaches_its_target() {
     for folder in Folder::each() {
         let transport = &folder.transport;
         let outside = folder.dir.path().join("outside");

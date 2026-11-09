@@ -124,7 +124,7 @@ fn write_ids(store: &impl CausalStore) -> Vec<WriteId> {
 }
 
 #[test]
-fn value_whose_write_id_is_in_both_sides_is_kept() {
+fn value_whose_write_id_is_in_both_sides_kept() {
     let (mut a, mut b) = (session(1), session(2));
     let mut left = State::default();
     let m = a.mint(&mut left, NOW);
@@ -140,7 +140,7 @@ fn value_whose_write_id_is_in_both_sides_is_kept() {
 }
 
 #[test]
-fn value_not_covered_by_other_context_is_kept() {
+fn value_not_covered_by_other_context_kept() {
     let (mut a, mut b) = (session(1), session(2));
     let mut left = State::default();
     let m = a.mint(&mut left, NOW);
@@ -157,7 +157,7 @@ fn value_not_covered_by_other_context_is_kept() {
 }
 
 #[test]
-fn value_covered_by_other_context_is_dropped() {
+fn value_covered_by_other_context_dropped() {
     let (mut a, mut b) = (session(1), session(2));
     let mut left = State::default();
     let m = a.mint(&mut left, NOW);
@@ -173,7 +173,7 @@ fn value_covered_by_other_context_is_dropped() {
 }
 
 #[test]
-fn write_concurrent_with_remove_of_its_entry_is_kept() {
+fn write_concurrent_with_remove_of_its_entry_kept() {
     let (mut a, mut b) = (session(1), session(2));
     let mut base = State::default();
     let m = a.mint(&mut base, NOW);
@@ -511,7 +511,7 @@ fn removal_only_transaction_mints_write_id_only_context_holds() {
 }
 
 #[test]
-fn one_mint_is_written_into_every_changed_register() {
+fn one_mint_written_into_every_changed_register() {
     let mut a = session(1);
     let mut state = State::default();
 

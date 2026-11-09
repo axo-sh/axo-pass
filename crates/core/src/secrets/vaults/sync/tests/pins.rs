@@ -61,7 +61,7 @@ fn pins(fx: &Fixture) -> Vec<(ReplicaId, PinnedKeys)> {
 }
 
 #[test]
-fn first_join_of_peer_file_pins_keys_of_its_writer_with_first_use() {
+fn first_join_pins_writer_keys() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let first = with_keys(saved(&fx).1, PEER, PEER, keys(1));
@@ -87,7 +87,7 @@ fn first_join_of_peer_file_pins_keys_of_its_writer_with_first_use() {
 }
 
 #[test]
-fn value_written_by_another_replica_actor_is_not_pinned_for_register_owner() {
+fn other_actor_value_not_pinned_for_owner() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let base = saved(&fx).1;
@@ -122,7 +122,7 @@ fn value_written_by_another_replica_actor_is_not_pinned_for_register_owner() {
 }
 
 #[test]
-fn register_with_two_values_of_its_owner_pins_nothing_until_one_remains() {
+fn two_owner_values_pin_nothing_until_one_remains() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let base = saved(&fx).1;

@@ -479,7 +479,7 @@ impl ItemCommand {
 mod tests {
     use super::*;
     #[test]
-    fn test_item_reference_from_str() {
+    fn item_reference_from_str() {
         let test_cases = vec![
             (
                 "axo://my_vault/my_item/my_credential",

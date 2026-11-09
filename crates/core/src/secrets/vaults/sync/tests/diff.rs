@@ -224,7 +224,7 @@ fn signal_lists_in_other_order_find_no_edits() {
 }
 
 #[test]
-fn slot_empty_while_view_slot_names_trashed_or_moved_credential_finds_no_edits() {
+fn empty_slot_for_trashed_credential_finds_no_edits() {
     let mut vault = Vault::new_for_test();
     let item = add_item(&mut vault, "item");
     add_item(&mut vault, "other");
@@ -283,7 +283,7 @@ fn history_in_other_list_order_finds_no_edits() {
 }
 
 #[test]
-fn different_last_used_times_converge_on_later_time_without_conflict() {
+fn last_used_times_converge_on_later_time() {
     let mut vault = Vault::new_for_test();
     add_item(&mut vault, "item");
     let passkey = vault
@@ -334,7 +334,7 @@ fn different_last_used_times_converge_on_later_time_without_conflict() {
 }
 
 #[test]
-fn each_local_change_is_found_and_recorded_in_its_register() {
+fn each_local_change_found_and_recorded_in_its_register() {
     let mut vault = Vault::new_for_test();
     let mut mac = Mac::new(1);
     let utc = TimeZone::UTC;
@@ -598,7 +598,7 @@ fn removal_only_diff_records_under_write_id_only_context_holds() {
 }
 
 #[test]
-fn mutations_that_clear_stored_references_record_no_edit_for_them() {
+fn cleared_references_record_no_edit() {
     let mut vault = Vault::new_for_test();
     let folder = vault.create_folder("Folder").id;
     let item = add_item(&mut vault, "item");
@@ -659,7 +659,7 @@ fn mutations_that_clear_stored_references_record_no_edit_for_them() {
 }
 
 #[test]
-fn suffixed_key_in_vault_is_not_edit_and_rename_writes_new_key() {
+fn suffixed_key_in_vault_not_edit_and_rename_writes_new_key() {
     let mut vault = Vault::new_for_test();
     let item = add_item(&mut vault, "item");
     add_credential(&mut vault, "item", "xxx", "1");
@@ -698,7 +698,7 @@ fn suffixed_key_in_vault_is_not_edit_and_rename_writes_new_key() {
 }
 
 #[test]
-fn earlier_last_used_time_in_vault_is_not_edit() {
+fn earlier_last_used_time_in_vault_not_edit() {
     let mut vault = Vault::new_for_test();
     add_item(&mut vault, "item");
     let field = add_credential(&mut vault, "item", "field", "value");

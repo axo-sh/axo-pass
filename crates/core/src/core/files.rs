@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn write_atomic_keeps_the_old_file_if_the_write_fails() {
+    fn write_atomic_keeps_old_file_if_write_fails() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.json");
         fs::write(&path, "old").unwrap();
@@ -92,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn write_atomic_new_refuses_an_existing_file_and_leaves_no_temp_file() {
+    fn write_atomic_new_refuses_existing_file_and_leaves_no_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.json");
         write_atomic_new(&path, b"first").unwrap();
@@ -108,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn write_new_synced_refuses_an_existing_file() {
+    fn write_new_synced_refuses_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("version.json");
         write_new_synced(&path, b"first").unwrap();

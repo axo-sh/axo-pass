@@ -270,7 +270,7 @@ mod tests {
     /// Both ends of a socket pair are this process, so identification should
     /// come back describing the test binary itself.
     #[test]
-    fn identifies_the_peer_of_a_socket_pair() {
+    fn identifies_peer_of_socket_pair() {
         let (ours, _theirs) = UnixStream::pair().unwrap();
         let peer = PeerIdentity::identify(ours.as_raw_fd()).unwrap();
         assert_eq!(peer.pid(), std::process::id());
@@ -279,7 +279,7 @@ mod tests {
     /// The same-user check passes against ourselves, and the executable check
     /// resolves to this test binary.
     #[test]
-    fn accepts_a_peer_matching_the_policy() {
+    fn accepts_peer_matching_policy() {
         let (ours, _theirs) = UnixStream::pair().unwrap();
         let policy = PeerPolicy {
             same_user: true,
@@ -290,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_peer_running_a_different_executable() {
+    fn rejects_peer_running_different_executable() {
         let (ours, _theirs) = UnixStream::pair().unwrap();
         let policy = PeerPolicy {
             executable: Some(PathBuf::from("/usr/bin/true")),
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_peer_failing_the_code_requirement() {
+    fn rejects_peer_failing_code_requirement() {
         let (ours, _theirs) = UnixStream::pair().unwrap();
         let policy = PeerPolicy {
             requirement: Some("identifier \"com.apple.finder\"".to_string()),

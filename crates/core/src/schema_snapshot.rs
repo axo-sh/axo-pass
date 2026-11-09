@@ -235,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_snapshot_fails_and_is_written_once() {
+    fn missing_snapshot_fails_and_written_once() {
         let root = TempDir::new().unwrap();
         assert!(snapshot(root.path(), 1, "a").compare().is_err());
 
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_sample_without_version_bump_fails_and_file_is_kept() {
+    fn changed_sample_without_version_bump_fails_and_file_kept() {
         let root = TempDir::new().unwrap();
         snapshot(root.path(), 1, "a").write_if_missing().unwrap();
         let path = root.path().join("test-1/strict.json");
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "parses with an unknown field at \"\"")]
-    fn struct_that_accepts_unknown_fields_is_refused() {
+    fn struct_that_accepts_unknown_fields_refused() {
         let root = TempDir::new().unwrap();
         let mut snapshot = SchemaSnapshot::in_dir(root.path(), "test", 1);
         let loose = Loose {
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_is_checked_in_nested_objects_except_open_keys() {
+    fn unknown_field_checked_in_nested_objects_except_open_keys() {
         let json = serde_json::json!({
             "a": {"b": [{"c": 1}]},
             "kind": {"d": {}},

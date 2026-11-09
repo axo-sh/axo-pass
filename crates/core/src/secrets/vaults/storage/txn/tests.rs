@@ -101,7 +101,7 @@ fn raw(contents: &str) -> String {
 }
 
 #[test]
-fn saved_vault_is_signed_and_reloads_unchanged() {
+fn saved_vault_signed_and_reloads_unchanged() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
 
@@ -114,7 +114,7 @@ fn saved_vault_is_signed_and_reloads_unchanged() {
 }
 
 #[test]
-fn unchanged_save_writes_nothing_although_each_signature_differs() {
+fn unchanged_save_writes_nothing() {
     let fx = Fixture::new();
     let signer = fx.files.signer().as_ref();
     assert_ne!(
@@ -134,7 +134,7 @@ fn unchanged_save_writes_nothing_although_each_signature_differs() {
 }
 
 #[test]
-fn reload_verifies_before_file_key_is_compared() {
+fn reload_verifies_before_file_key_compared() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
     let file: serde_json::Value = serde_json::from_str(&before).unwrap();
@@ -160,7 +160,7 @@ fn reload_verifies_before_file_key_is_compared() {
 }
 
 #[test]
-fn unsigned_file_is_refused_and_not_modified() {
+fn unsigned_file_refused_and_not_modified() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
     let mut fields: BTreeMap<String, Box<RawValue>> = serde_json::from_str(&before).unwrap();
@@ -178,7 +178,7 @@ fn unsigned_file_is_refused_and_not_modified() {
 }
 
 #[test]
-fn file_signed_by_another_key_is_refused_and_not_modified() {
+fn file_signed_by_another_key_refused_and_not_modified() {
     let fx = Fixture::new();
     let other_mac =
         VaultWriter::isolated_with_signer(fx.dir.path().join("other"), TestSigner::random());
@@ -197,7 +197,7 @@ fn file_signed_by_another_key_is_refused_and_not_modified() {
 }
 
 #[test]
-fn retained_version_whose_signature_fails_is_not_restored() {
+fn retained_version_whose_signature_fails_not_restored() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
     fx.add(&fx.target(), "alpha", "two");
@@ -218,7 +218,7 @@ fn retained_version_whose_signature_fails_is_not_restored() {
 }
 
 #[test]
-fn creating_a_vault_writes_once_and_retains_nothing() {
+fn creating_vault_writes_once_and_retains_nothing() {
     let fx = Fixture::new();
     assert!(fx.vault.path.exists());
     assert!(fx.versions().is_empty());
@@ -227,7 +227,7 @@ fn creating_a_vault_writes_once_and_retains_nothing() {
 }
 
 #[test]
-fn creating_a_vault_over_an_existing_file_fails() {
+fn creating_vault_over_existing_file_fails() {
     let fx = Fixture::new();
     let other = VaultHandle::new_for_test_at(fx.vault.path.clone());
     assert!(matches!(
@@ -238,7 +238,7 @@ fn creating_a_vault_over_an_existing_file_fails() {
 }
 
 #[test]
-fn a_write_saves_and_retains_the_replaced_file() {
+fn write_saves_and_retains_replaced_file() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
 
@@ -253,7 +253,7 @@ fn a_write_saves_and_retains_the_replaced_file() {
 }
 
 #[test]
-fn a_write_that_changes_nothing_saves_nothing() {
+fn write_that_changes_nothing_saves_nothing() {
     let fx = Fixture::new();
     let committed = fx
         .files
@@ -275,7 +275,7 @@ fn filled_vault(dir: &TempDir, files: &VaultWriter) -> VaultHandle {
 }
 
 #[test]
-fn vault_with_every_entry_kind_is_saved_and_reloaded() {
+fn vault_with_every_entry_kind_saved_and_reloaded() {
     let dir = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(dir.path().join("data"));
     let vh = filled_vault(&dir, &files);
@@ -403,7 +403,7 @@ fn vault_with_hyphenated_ids_loads_and_next_save_writes_short_ids() {
 }
 
 #[test]
-fn a_failed_change_writes_nothing() {
+fn failed_change_writes_nothing() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
     let result = fx
@@ -437,7 +437,7 @@ fn concurrent_writers_both_land() {
 }
 
 #[test]
-fn a_writer_waits_for_the_cross_process_lock() {
+fn writer_waits_for_cross_process_lock() {
     let fx = Fixture::new();
     // Another process holding the lock file. flock locks belong to the open
     // file, so a second open in this process conflicts with it.
@@ -458,7 +458,7 @@ fn a_writer_waits_for_the_cross_process_lock() {
 }
 
 #[test]
-fn a_closed_lock_file_releases_the_lock() {
+fn closed_lock_file_releases_lock() {
     let fx = Fixture::new();
     let held = fx.files.lock_file(fx.id()).unwrap();
     drop(held);
@@ -538,7 +538,7 @@ fn restoring_version_from_before_key_change_keeps_current_key() {
 }
 
 #[test]
-fn a_writer_that_found_the_old_path_lands_after_a_rename() {
+fn writer_that_found_old_path_lands_after_rename() {
     let fx = Fixture::new();
     let old_target = fx.target();
     let entry = fx.files.locks().entry(fx.id(), &fx.vault.path);
@@ -562,7 +562,7 @@ fn a_writer_that_found_the_old_path_lands_after_a_rename() {
 }
 
 #[test]
-fn a_rename_concurrent_with_a_write_keeps_both_changes() {
+fn rename_concurrent_with_write_keeps_both_changes() {
     let fx = Fixture::new();
     let target = fx.target();
     thread::scope(|s| {
@@ -580,7 +580,7 @@ fn a_rename_concurrent_with_a_write_keeps_both_changes() {
 }
 
 #[test]
-fn a_changed_file_key_is_not_used_and_the_key_is_unwrapped_again() {
+fn changed_file_key_not_used_and_key_unwrapped_again() {
     let fx = Fixture::new();
     // A key whose wrapped form differs from the file's fails the check and
     // is never used to decrypt. The second attempt gets the current key.
@@ -605,7 +605,7 @@ fn a_changed_file_key_is_not_used_and_the_key_is_unwrapped_again() {
 }
 
 #[test]
-fn a_file_key_that_keeps_changing_fails() {
+fn file_key_that_keeps_changing_fails() {
     let fx = Fixture::new();
     let key = || {
         UnlockedKey::for_test(
@@ -625,7 +625,7 @@ fn a_file_key_that_keeps_changing_fails() {
 }
 
 #[test]
-fn a_deleted_vault_is_not_recreated_by_a_waiting_writer() {
+fn deleted_vault_not_recreated_by_waiting_writer() {
     let fx = Fixture::new();
     let entry = fx.files.locks().entry(fx.id(), &fx.vault.path);
     let barrier = Barrier::new(2);
@@ -658,7 +658,7 @@ fn a_deleted_vault_is_not_recreated_by_a_waiting_writer() {
 }
 
 #[test]
-fn a_writer_waiting_on_a_deleted_entry_fails() {
+fn writer_waiting_on_deleted_entry_fails() {
     let fx = Fixture::new();
     let entry = fx.files.locks().entry(fx.id(), &fx.vault.path);
     let barrier = Barrier::new(2);
@@ -683,7 +683,7 @@ fn a_writer_waiting_on_a_deleted_entry_fails() {
 }
 
 #[test]
-fn two_files_with_one_vault_id_are_refused() {
+fn two_files_with_one_vault_id_refused() {
     let fx = Fixture::new();
     let copy = fx.dir.path().join("vaults/copy.json");
     fs::copy(&fx.vault.path, &copy).unwrap();
@@ -696,7 +696,7 @@ fn two_files_with_one_vault_id_are_refused() {
 }
 
 #[test]
-fn a_read_during_saves_sees_a_whole_vault() {
+fn read_during_saves_sees_whole_vault() {
     let fx = Fixture::new();
     let done = AtomicBool::new(false);
     thread::scope(|s| {
@@ -714,7 +714,7 @@ fn a_read_during_saves_sees_a_whole_vault() {
 }
 
 #[test]
-fn restoring_a_version_replaces_the_vault_and_retains_the_replaced_file() {
+fn restoring_version_replaces_vault_and_retains_replaced_file() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
     fx.add(&fx.target(), "alpha", "two");
@@ -737,7 +737,7 @@ fn restoring_a_version_replaces_the_vault_and_retains_the_replaced_file() {
 }
 
 #[test]
-fn restoring_a_missing_version_fails() {
+fn restoring_missing_version_fails() {
     let fx = Fixture::new();
     for name in ["1-0.json", "../personal.json", "nonsense"] {
         assert!(matches!(
@@ -748,7 +748,7 @@ fn restoring_a_missing_version_fails() {
 }
 
 #[test]
-fn restoring_a_version_with_another_file_key_fails() {
+fn restoring_version_with_another_file_key_fails() {
     let fx = Fixture::new();
     let signer = fx.files.signer().as_ref();
     let mut enc_vault = EncryptedVault::load(&fx.vault.path, signer)
@@ -780,7 +780,7 @@ fn refuse(path: &Path) -> String {
 }
 
 #[test]
-fn restore_over_refused_file_copies_it_to_invalid_file_with_bytes_unchanged() {
+fn restore_over_refused_file_keeps_bytes() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
     fx.add(&fx.target(), "alpha", "two");
@@ -863,7 +863,7 @@ fn failed_unlock_or_forged_version_writes_no_invalid_file() {
 }
 
 #[test]
-fn invalid_files_are_kept_up_to_newest_20_and_not_pruned_by_time() {
+fn invalid_files_kept_up_to_newest_20_and_not_pruned_by_time() {
     let tmp = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(tmp.path());
     let dir = files.versions(Uuid::new_v4());
@@ -941,7 +941,7 @@ fn pruning_all_vaults_removes_expired_versions_and_empty_directories() {
 }
 
 #[test]
-fn deleting_a_vault_keeps_its_versions_until_they_expire() {
+fn deleting_vault_keeps_its_versions_until_they_expire() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
     let dir = fx.files.versions(fx.id());
@@ -959,7 +959,7 @@ fn deleting_a_vault_keeps_its_versions_until_they_expire() {
 }
 
 #[test]
-fn erasing_versions_deletes_them_and_leaves_the_vault() {
+fn erasing_versions_deletes_them_and_leaves_vault() {
     let fx = Fixture::new();
     fx.add(&fx.target(), "alpha", "one");
     fx.add(&fx.target(), "alpha", "two");
@@ -984,7 +984,7 @@ fn versions_in_one_millisecond_get_distinct_names() {
 }
 
 #[test]
-fn retention_keeps_the_last_hour_and_the_last_version_of_each_day() {
+fn retention_keeps_last_hour_and_last_version_of_each_day() {
     let now = 100 * DAY_MS + 12 * HOUR_MS;
     let mut versions = Vec::new();
     // A burst of 150 saves in the last ten minutes.

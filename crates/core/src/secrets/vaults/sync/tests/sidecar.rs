@@ -54,7 +54,7 @@ fn sidecar_round_trips_at_its_path() {
 }
 
 #[test]
-fn sidecar_that_is_missing_or_fails_to_parse_is_read_as_empty() {
+fn sidecar_that_is_missing_or_fails_to_parse_read_as_empty() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(Sidecar::load(dir.path(), VAULT), Sidecar::default());
 
@@ -76,7 +76,7 @@ fn sidecar_that_is_missing_or_fails_to_parse_is_read_as_empty() {
 }
 
 #[test]
-fn joined_hashes_are_kept_only_while_listed() {
+fn joined_hashes_kept_only_while_listed() {
     let mut sidecar = filled();
     let own = StateHash::of(b"own");
     let newer = StateHash::of(b"newer");
@@ -152,7 +152,7 @@ fn sidecar_with_no_transport_field_parses_with_no_root() {
 }
 
 #[test]
-fn sidecar_that_fails_to_parse_keeps_root_if_its_transport_field_parses() {
+fn unparsable_sidecar_keeps_root_with_valid_transport() {
     let dir = tempfile::tempdir().unwrap();
     let path = Sidecar::path(dir.path(), VAULT);
     fs::create_dir_all(path.parent().unwrap()).unwrap();

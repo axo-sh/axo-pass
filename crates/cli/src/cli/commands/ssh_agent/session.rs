@@ -552,7 +552,7 @@ mod tests {
     static AUDIT_DIR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
-    async fn test_session_sign() {
+    async fn session_sign() {
         let _guard = AUDIT_DIR_LOCK.lock().await;
         let audit_dir = std::env::temp_dir().join(format!("axo-audit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&audit_dir);
@@ -606,7 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_autoload_key_requires_confirm() {
+    async fn autoload_key_requires_confirm() {
         let _guard = AUDIT_DIR_LOCK.lock().await;
         let audit_dir =
             std::env::temp_dir().join(format!("axo-audit-autoload-{}", std::process::id()));

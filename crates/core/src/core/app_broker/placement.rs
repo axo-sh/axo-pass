@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn suggests_the_one_login_with_the_same_username() {
+    fn suggests_one_login_with_same_username() {
         let places = [
             place("personal", "a", Some("ada"), "example.com"),
             place("work", "b", Some("grace"), "login.example.com"),
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn a_login_for_another_site_is_not_offered() {
+    fn login_for_another_site_not_offered() {
         let places = [place("personal", "a", Some("ada"), "evil.com")];
         assert!(build("ada", &places).logins.is_empty());
     }

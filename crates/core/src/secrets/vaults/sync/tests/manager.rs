@@ -264,7 +264,7 @@ fn failed_publish(transport: &FakeTransport, fx: &Fixture) -> StateHash {
 }
 
 #[test]
-fn only_files_manager_writes_are_staged_file_copy_and_sidecar_hash_under_both_locks() {
+fn only_files_manager_writes_staged_file_copy_and_sidecar_hash_under_both_locks() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let hash = failed_publish(&transport, &fx);
@@ -315,7 +315,7 @@ fn only_files_manager_writes_are_staged_file_copy_and_sidecar_hash_under_both_lo
 }
 
 #[test]
-fn replaced_staged_file_is_not_copied_and_next_transaction_rewrites_it() {
+fn replaced_staged_file_not_copied_and_next_transaction_rewrites_it() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let hash = failed_publish(&transport, &fx);
@@ -408,7 +408,7 @@ fn peer_change_while_vault_is_locked_sets_flag_and_next_read_joins_it_before_ser
 }
 
 #[test]
-fn peer_file_changed_while_app_was_not_running_sets_flag_when_manager_starts() {
+fn peer_change_before_start_sets_flag() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_peer(&fx, &transport, PEER, "joined");
@@ -426,7 +426,7 @@ fn peer_file_changed_while_app_was_not_running_sets_flag_when_manager_starts() {
 }
 
 #[test]
-fn publish_that_fails_while_vault_is_unlocked_completes_from_staged_file_after_vault_locks() {
+fn failed_publish_completes_after_vault_locks() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let hash = failed_publish(&transport, &fx);
@@ -506,7 +506,7 @@ fn unlock_with_peer_files_not_yet_downloaded_joins_rest_by_transaction_if_unlock
 }
 
 #[test]
-fn sync_state_that_fails_its_signature_or_sidecar_that_already_records_staged_hash_gets_no_copy() {
+fn bad_signature_or_staged_hash_gets_no_copy() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let hash = failed_publish(&transport, &fx);
@@ -542,7 +542,7 @@ fn sync_state_that_fails_its_signature_or_sidecar_that_already_records_staged_ha
 }
 
 #[test]
-fn hash_reported_once_does_not_set_flag_again_after_transaction_cleared_it() {
+fn repeated_hash_does_not_set_flag_again() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     // A file of a newer format is listed and never joins.
@@ -596,7 +596,7 @@ fn watch_event_while_unlocked_runs_one_transaction_and_calls_vault_synced() {
 }
 
 #[test]
-fn vaults_manager_copy_replaced_by_background_transaction_is_read_again_at_next_use() {
+fn background_copy_read_again_on_next_use() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let manager = Mutex::new(VaultsManager::with(fx.catalog.clone()));

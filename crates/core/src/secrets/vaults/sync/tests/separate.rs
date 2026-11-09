@@ -198,7 +198,7 @@ fn two_macs_that_enable_sync_at_once_show_separate_key_and_converge_after_one_tu
 }
 
 #[test]
-fn file_of_pinned_replica_under_other_fingerprint_is_not_counted() {
+fn other_fingerprint_file_not_counted() {
     let transport = Arc::new(FakeTransport::default());
     let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
     // KNOWN is in `replica_keys` with no pin, and PEER is pinned.
@@ -240,7 +240,7 @@ fn file_of_pinned_replica_under_other_fingerprint_is_not_counted() {
 }
 
 #[test]
-fn file_under_key_id_keyring_lacks_is_not_counted() {
+fn file_under_key_id_keyring_lacks_not_counted() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_under(&fx, &transport, SEPARATE, KeyId(2), &other_key(), "waiting");
@@ -255,7 +255,7 @@ fn file_under_key_id_keyring_lacks_is_not_counted() {
 }
 
 #[test]
-fn separate_disable_while_folder_cannot_be_reached_is_refused_and_writes_nothing() {
+fn separate_disable_while_folder_cannot_be_reached_refused_and_writes_nothing() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_under(
@@ -298,7 +298,7 @@ fn separate_disable_while_folder_cannot_be_reached_is_refused_and_writes_nothing
 }
 
 #[test]
-fn separate_disable_with_other_replica_in_replica_keys_writes_final_file() {
+fn disable_with_other_replica_key_writes_final_file() {
     let transport = Arc::new(FakeTransport::default());
     let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
     let mut initial = body(REPLICA, &[device_key()]);

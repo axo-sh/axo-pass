@@ -59,7 +59,7 @@ fn suffix_is_lowercase_rfc_4648_base32_without_padding() {
 }
 
 #[test]
-fn purge_concurrent_with_restore_shows_one_recovered_item_with_remaining_credentials() {
+fn purge_concurrent_with_restore_shows_one_item() {
     let (item, removed_a, removed_b) = (wide(1), wide(11), wide(12));
     let (kept_a, kept_b) = (wide(13), wide(14));
     let start = base(|s, m| {
@@ -145,7 +145,7 @@ fn duplicate_keys_show_bare_key_on_lowest_order_key_and_suffix_on_others() {
 }
 
 #[test]
-fn established_key_is_kept_when_newer_duplicate_arrives() {
+fn established_key_kept_when_newer_duplicate_arrives() {
     let (established, newer) = (wide(2), wide(1));
     // Replica 3 has the higher actor id. The newer write orders above it by
     // counter.
@@ -159,7 +159,7 @@ fn established_key_is_kept_when_newer_duplicate_arrives() {
 }
 
 #[test]
-fn suffix_equal_to_stored_or_assigned_key_grows_to_6_then_8_characters() {
+fn suffix_grows_to_6_then_8_characters() {
     let (bare, duplicate, holds_4, holds_6) = (wide(1), wide(2), wide(3), wide(4));
     let start = base(|s, m| {
         add_item(s, m, bare, "login");
@@ -208,7 +208,7 @@ fn suffix_equal_to_stored_or_assigned_key_grows_to_6_then_8_characters() {
 }
 
 #[test]
-fn trashed_entries_are_left_out_of_duplicate_key_rule() {
+fn trashed_entries_left_out_of_duplicate_key_rule() {
     let (holder, trashed, live) = (wide(1), wide(2), wide(3));
     let (trashed_field, live_field) = (wide(11), wide(12));
     let start = base(|s, m| {
@@ -231,7 +231,7 @@ fn trashed_entries_are_left_out_of_duplicate_key_rule() {
 }
 
 #[test]
-fn key_that_needs_normalizing_is_shown_normalized() {
+fn key_that_needs_normalizing_shown_normalized() {
     let (item, credential) = (wide(1), wide(11));
     let state = edited(&State::default(), 2, |s, m| {
         add_item(s, m, item, "  My Login ");
@@ -245,7 +245,7 @@ fn key_that_needs_normalizing_is_shown_normalized() {
 }
 
 #[test]
-fn key_that_fails_validation_is_shown_suffixed_and_marked_for_notice() {
+fn key_that_fails_validation_shown_suffixed_and_marked_for_notice() {
     let (item, credential) = (wide(1), wide(11));
     let state = edited(&State::default(), 2, |s, m| {
         add_item(s, m, item, "!!");
@@ -266,7 +266,7 @@ fn key_that_fails_validation_is_shown_suffixed_and_marked_for_notice() {
 }
 
 #[test]
-fn rename_to_stored_key_of_suffixed_entry_is_refused_naming_that_entry() {
+fn rename_to_suffixed_entry_key_refused() {
     let (holder, bare, suffixed, other) = (wide(1), wide(2), wide(3), wide(4));
     let (bare_field, suffixed_field, other_field) = (wide(11), wide(12), wide(13));
     let (trashed, trashed_field) = (wide(5), wide(14));
@@ -397,7 +397,7 @@ fn every_shown_key_is_valid_and_unique_among_live_entries_of_its_group() {
 }
 
 #[test]
-fn next_entry_shows_bare_key_if_holder_is_renamed_or_trashed() {
+fn next_entry_shows_bare_key_if_holder_renamed_or_trashed() {
     let (bare, next) = (wide(1), wide(2));
     let start = base(|s, m| add_item(s, m, bare, "login"));
     let start = edited(&start, 2, |s, m| add_item(s, m, next, "login"));
@@ -422,7 +422,7 @@ fn next_entry_shows_bare_key_if_holder_is_renamed_or_trashed() {
 }
 
 #[test]
-fn of_two_concurrent_creates_lower_lamport_counter_is_shown_bare() {
+fn lower_lamport_create_shows_bare_key() {
     let (holder, higher, lower) = (wide(1), wide(2), wide(3));
     let start = base(|s, m| add_item(s, m, holder, "holder"));
     // Replica 2 writes once more first, so its create has the higher counter.
@@ -462,7 +462,7 @@ fn key_register_with_conflict_takes_part_with_chosen_value() {
 }
 
 #[test]
-fn recovered_entry_with_some_registers_shows_them_and_defaults_for_the_rest() {
+fn recovered_entry_with_some_registers_shows_them_and_defaults_for_rest() {
     let (item, positioned, recovered) = (wide(1), wide(11), wide(12));
     let state = base(|s, m| {
         s.items.entry(item).title.write(m, "Partial".to_string());
@@ -500,7 +500,7 @@ fn recovered_entry_with_some_registers_shows_them_and_defaults_for_the_rest() {
 }
 
 #[test]
-fn credentials_of_trashed_item_that_share_key_are_suffixed() {
+fn credentials_of_trashed_item_that_share_key_suffixed() {
     let item = wide(1);
     let (first, second) = (wide(11), wide(12));
     let start = base(|s, m| {

@@ -293,7 +293,7 @@ proptest! {
     }
 
     #[test]
-    fn states_are_equal_after_failures_once_every_replica_has_every_file(
+    fn states_converge_after_failures(
         scenario in Scenario::strategy(),
     ) {
         let mut sim = Sim::play_scenario(&scenario);
@@ -316,7 +316,7 @@ proptest! {
     }
 
     #[test]
-    fn remote_own_file_is_joined_when_it_arrives_and_not_deleted_before(
+    fn remote_own_file_joined_when_it_arrives_and_not_deleted_before(
         history in History::strategy(),
         mac in any::<Index>(),
         others in vec((any::<Index>(), any::<Index>()), 0..8),
@@ -349,7 +349,7 @@ proptest! {
     }
 
     #[test]
-    fn earlier_actor_writes_above_local_context_are_joined_after_restore(
+    fn earlier_actor_writes_joined_after_restore(
         history in History::strategy(),
         mac in any::<Index>(),
         peer in any::<Index>(),
@@ -377,7 +377,7 @@ proptest! {
     }
 
     #[test]
-    fn relinked_replica_restored_to_old_sync_state_publishes_under_old_id(
+    fn relinked_restore_publishes_under_old_id(
         history in History::strategy(),
         mac in any::<Index>(),
         backup in any::<Index>(),
@@ -413,7 +413,7 @@ proptest! {
     }
 
     #[test]
-    fn live_replica_whose_directory_was_deleted_republishes_without_local_edit(
+    fn deleted_directory_triggers_republish(
         scenario in Scenario::strategy(),
         mac in any::<Index>(),
     ) {
@@ -451,7 +451,7 @@ proptest! {
     }
 
     #[test]
-    fn state_claiming_session_actor_is_refused_and_no_later_write_is_lost(
+    fn state_claiming_session_actor_refused_and_no_later_write_is_lost(
         history in History::strategy(),
         target in any::<Index>(),
         forger in any::<Index>(),
@@ -487,7 +487,7 @@ proptest! {
     }
 
     #[test]
-    fn one_write_id_with_two_values_quarantines_state_that_brings_second_on_every_replica(
+    fn second_value_quarantines_on_every_replica(
         history in History::strategy(),
         writer in any::<Index>(),
         forger in any::<Index>(),

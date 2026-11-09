@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_indexed_before_the_first_replace() {
+    fn nothing_indexed_before_first_replace() {
         let index = LoginIndex::default();
         assert!(index.lookup("https://github.com").is_none());
 
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_returns_only_the_logins_for_the_page() {
+    fn lookup_returns_only_logins_for_page() {
         let index = LoginIndex::default();
         index.replace(vec![
             login("a", "GitHub", "github.com"),
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn upsert_replaces_a_login_with_the_same_record_id() {
+    fn upsert_replaces_login_with_same_record_id() {
         let index = LoginIndex::default();
         index.replace(vec![login("a", "GitHub", "github.com")]);
 
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn passkeys_for_returns_the_relying_party_passkeys_by_name() {
+    fn passkeys_for_returns_relying_party_passkeys_by_name() {
         let index = LoginIndex::default();
         assert!(index.passkeys_for("example.com").is_none());
 
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn passkey_user_name_names_only_a_single_match() {
+    fn passkey_user_name_names_only_single_match() {
         let index = LoginIndex::default();
         assert_eq!(index.passkey_user_name("example.com", &[]), None);
 

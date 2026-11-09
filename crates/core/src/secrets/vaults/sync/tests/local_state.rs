@@ -113,7 +113,7 @@ fn local_state_round_trips_and_its_body_equals_staged_file_body() {
 }
 
 #[test]
-fn local_files_are_named_by_short_vault_id_under_sync() {
+fn local_files_named_by_short_vault_id_under_sync() {
     let root = std::path::Path::new("/app");
     let vault_id = ShortId::encode_uuid(VAULT);
 

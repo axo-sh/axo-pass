@@ -282,7 +282,7 @@ fn prepare_without_confirm_writes_nothing() {
 }
 
 #[test]
-fn vault_with_replica_id_sync_state_or_leaving_sync_state_is_refused() {
+fn replica_or_leaving_state_vault_refused() {
     let transport = Arc::new(FakeTransport::default());
     let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
     assert!(matches!(
@@ -317,7 +317,7 @@ fn vault_with_replica_id_sync_state_or_leaving_sync_state_is_refused() {
 }
 
 #[test]
-fn sync_state_written_after_prepare_is_refused_at_confirm_and_nothing_is_written() {
+fn sync_state_written_after_prepare_refused_at_confirm_and_nothing_written() {
     let transport = Arc::new(FakeTransport::default());
     let fx = unsynced(transport.clone());
     let setup = prepared(&fx);
@@ -335,7 +335,7 @@ fn sync_state_written_after_prepare_is_refused_at_confirm_and_nothing_is_written
 }
 
 #[test]
-fn folder_that_holds_vault_gives_join_offer_and_one_that_gains_it_after_prepare_is_refused() {
+fn folder_that_holds_vault_gives_join_offer_and_one_that_gains_it_after_prepare_refused() {
     let transport = Arc::new(FakeTransport::default());
     let fx = unsynced(transport.clone());
     let setup = prepared(&fx);
@@ -433,7 +433,7 @@ fn failed_key_json_write_and_copy_after_saves_pause_sync_and_next_transaction_co
 }
 
 #[test]
-fn websites_with_one_url_are_removed_at_enable_as_local_edit_with_notice() {
+fn single_url_websites_removed_at_enable() {
     let transport = Arc::new(FakeTransport::default());
     let fx = unsynced(transport);
     let duplicated = websites(&[
@@ -587,7 +587,7 @@ fn setup_through_folder_transport_with_plain_io_writes_meta_key_json_and_one_sta
 }
 
 #[test]
-fn conflict_copy_of_meta_json_is_not_read_at_setup_and_gives_kit() {
+fn conflict_copy_of_meta_json_not_read_at_setup_and_gives_kit() {
     let folder = Folder::new();
     fs::create_dir(folder.vault_dir()).unwrap();
     fs::write(

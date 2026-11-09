@@ -205,7 +205,7 @@ fn launch_with_vault_files_and_both_keys_missing_creates_no_key_or_resign_and_mo
 }
 
 #[test]
-fn missing_encryption_key_with_signing_key_present_behaves_as_both_keys_missing() {
+fn encryption_key_missing_with_signing_key() {
     let _audit = test_dir();
     for signing in [KeyProbe::Missing, KeyProbe::Present] {
         let (mac, _) = Mac::restored();
@@ -314,7 +314,7 @@ fn locks_and_config_do_not_move() {
 }
 
 #[test]
-fn external_vault_file_is_not_moved_or_changed() {
+fn external_vault_file_not_moved_or_changed() {
     let _audit = test_dir();
     let (mut mac, _) = Mac::restored();
     let external = mac.add_external("shared");
@@ -444,7 +444,7 @@ fn move_records_one_audit_event_with_number_of_files() {
 }
 
 #[test]
-fn new_hardware_lists_synced_vaults_by_unverified_sync_state_before_move() {
+fn new_hardware_lists_synced_vaults() {
     let _audit = test_dir();
     let (mac, id) = Mac::restored();
     let other = Uuid::new_v4();

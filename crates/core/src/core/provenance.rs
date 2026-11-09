@@ -299,7 +299,7 @@ mod tests {
     /// The test binary is at least linker-signed, so it passes the validity
     /// check and gets a cdhash identity.
     #[test]
-    fn current_process_has_a_verified_code_id() {
+    fn current_process_has_verified_code_id() {
         let info = ProcInfo::lookup(std::process::id()).unwrap();
         let code_id = info.code_id().unwrap();
         assert!(code_id.starts_with("cdhash:"), "{code_id}");
@@ -310,7 +310,7 @@ mod tests {
     /// Xcode's git claims a team identifier but is signed by Apple's own
     /// certificate, which has no matching subject OU.
     #[test]
-    fn apple_signed_xcode_git_is_verified() {
+    fn apple_signed_xcode_git_verified() {
         use std::process::{Command, Stdio};
 
         let path = "/Applications/Xcode.app/Contents/Developer/usr/bin/git";

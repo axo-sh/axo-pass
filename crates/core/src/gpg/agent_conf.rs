@@ -179,7 +179,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_only_the_pinentry_option() {
+    fn parses_only_pinentry_option() {
         assert_eq!(
             parse_option("pinentry-program /usr/bin/pe"),
             Some("/usr/bin/pe")

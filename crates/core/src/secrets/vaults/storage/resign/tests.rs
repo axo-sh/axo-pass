@@ -225,7 +225,7 @@ fn confirmed_resign_verifies_every_vault_and_retained_version_under_new_key() {
 }
 
 #[test]
-fn retained_version_from_before_key_loss_can_be_restored_after_resign() {
+fn pre_loss_version_restores_after_resign() {
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add("personal");
@@ -271,7 +271,7 @@ fn resign_leaves_raw_vault_bytes_unchanged() {
 }
 
 #[test]
-fn external_vault_is_signed_again() {
+fn external_vault_signed_again() {
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add_external("shared");
@@ -283,7 +283,7 @@ fn external_vault_is_signed_again() {
 }
 
 #[test]
-fn invalid_files_are_not_signed_again() {
+fn invalid_files_not_signed_again() {
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add("personal");
@@ -303,7 +303,7 @@ fn invalid_files_are_not_signed_again() {
 }
 
 #[test]
-fn file_that_does_not_hold_its_vault_is_skipped_and_others_are_signed() {
+fn file_that_does_not_hold_its_vault_skipped_and_others_signed() {
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add("personal");
@@ -321,7 +321,7 @@ fn file_that_does_not_hold_its_vault_is_skipped_and_others_are_signed() {
 }
 
 #[test]
-fn retained_versions_of_vault_with_no_file_are_signed_again() {
+fn retained_versions_of_vault_with_no_file_signed_again() {
     let _audit = test_dir();
     let mut mac = Mac::new();
     mac.add("personal");

@@ -31,7 +31,7 @@ use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
 #[test]
-fn test_passphrase_round_trip() {
+fn passphrase_round_trip() {
     let raw_key: Vec<u8> = (0..32).collect();
     let export_mode = ExportMode::passphrase("test-password-123");
     let wrapped = export_mode.encrypt(&raw_key).unwrap();
@@ -43,7 +43,7 @@ fn test_passphrase_round_trip() {
 }
 
 #[test]
-fn test_passphrase_wrong_password() {
+fn passphrase_wrong_password() {
     let raw_key: Vec<u8> = (0..32).collect();
     let export_mode = ExportMode::passphrase("correct-password");
     let wrapped = export_mode.encrypt(&raw_key).unwrap();
@@ -54,7 +54,7 @@ fn test_passphrase_wrong_password() {
 }
 
 #[test]
-fn test_recipient_round_trip() {
+fn recipient_round_trip() {
     let raw_key: Vec<u8> = (0..32).collect();
     let identity = age::x25519::Identity::generate();
     let pubkey = identity.to_public().to_string();
@@ -68,7 +68,7 @@ fn test_recipient_round_trip() {
 }
 
 #[test]
-fn test_work_factor_parse() {
+fn work_factor_parse() {
     assert_eq!(WorkFactor::parse("fast").unwrap(), WorkFactor::Fast);
     assert_eq!(WorkFactor::parse("PARANOID").unwrap(), WorkFactor::Paranoid);
     assert_eq!(WorkFactor::parse("18").unwrap(), WorkFactor::Custom(18));
@@ -78,7 +78,7 @@ fn test_work_factor_parse() {
 }
 
 #[test]
-fn test_custom_work_factor_round_trip() {
+fn custom_work_factor_round_trip() {
     let raw_key: Vec<u8> = (0..32).collect();
     let export_mode = ExportMode::Passphrase {
         passphrase: "pw".into(),
@@ -164,13 +164,13 @@ fn unwrap_bundle_file_keys(json: &str) -> Vec<Vec<u8>> {
 }
 
 #[test]
-fn test_bundle_single_vault_round_trip() {
+fn single_vault_round_trip() {
     let (json, _id, file_keys) = make_bundle_json(1);
     assert_eq!(unwrap_bundle_file_keys(&json), file_keys);
 }
 
 #[test]
-fn test_bundle_two_vault_round_trip() {
+fn two_vault_round_trip() {
     let (json, _id, file_keys) = make_bundle_json(2);
     assert_eq!(unwrap_bundle_file_keys(&json), file_keys);
 }
@@ -287,7 +287,7 @@ fn bundle_exported_before_vault_format_2_imports() {
 }
 
 #[test]
-fn bundle_is_written_with_short_ids() {
+fn bundle_written_with_short_ids() {
     let bundle_id = Uuid::new_v4();
     let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
     let bundle_cipher = Aes256Gcm::new(&bundle_key);
@@ -347,7 +347,7 @@ fn bundle_is_written_with_short_ids() {
 }
 
 #[test]
-fn imported_vault_holds_selected_key_and_is_named_by_id() {
+fn imported_vault_holds_selected_key_and_named_by_id() {
     // Import records an audit event.
     let _audit_dir = test_dir();
     let dir = tempfile::tempdir().unwrap();
@@ -383,7 +383,7 @@ fn imported_vault_holds_selected_key_and_is_named_by_id() {
 }
 
 #[test]
-fn imported_vault_is_signed_by_writer() {
+fn imported_vault_signed_by_writer() {
     let _audit_dir = test_dir();
     let dir = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(dir.path().join("data"));
@@ -481,7 +481,7 @@ fn export_cipher(prepared: &PreparedVault) -> VaultCipher {
 }
 
 #[test]
-fn export_file_key_differs_from_source_and_source_is_unchanged() {
+fn export_file_key_differs_from_source_and_source_unchanged() {
     let vault = filled_vault();
     let source_key = file_key_of(&vault);
     let before = vault.to_encrypted(true).unwrap().to_vault_json().unwrap();
@@ -776,7 +776,7 @@ struct LooseMetadata {
 }
 
 #[test]
-fn stale_last_used_at_in_bundle_fails_import_before_anything_is_written() {
+fn stale_last_used_at_fails_import() {
     let _audit_dir = test_dir();
     let mut vault = Vault::new_for_test();
     vault.add_or_update_item("site", "Site").unwrap();
@@ -815,7 +815,7 @@ fn stale_last_used_at_in_bundle_fails_import_before_anything_is_written() {
 }
 
 #[test]
-fn vault_that_fails_to_decrypt_fails_import_before_anything_is_written() {
+fn undecryptable_vault_fails_import() {
     let _audit_dir = test_dir();
     let intact = filled_vault();
     let mut broken = Vault::new_for_test();
@@ -921,7 +921,7 @@ fn copy_keeps_name_and_passkeys_under_new_id_and_file_key() {
 }
 
 #[test]
-fn test_bundle_wrong_bundle_id_fails_aad() {
+fn wrong_bundle_id_fails_aad() {
     let (json, _id, _file_keys) = make_bundle_json(1);
     let mut bundle: ExportedBundle = serde_json::from_str(&json).unwrap();
     bundle.id = Uuid::new_v4();

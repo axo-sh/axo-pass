@@ -354,7 +354,7 @@ fn joining_folder_from_vault_imported_from_export_adds_local_entries_and_shows_t
 }
 
 #[test]
-fn relink_after_failed_sync_state_signature_shows_edits_saved_while_stopped_as_conflicts() {
+fn relink_after_bad_signature_shows_edits_as_conflicts() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_meta(&transport, &fx);
@@ -426,7 +426,7 @@ fn relink_of_vault_whose_sync_state_is_missing_takes_new_replica_id_and_merges()
 }
 
 #[test]
-fn join_of_vault_whose_sync_runs_is_stopped_or_is_leaving_is_refused_and_writes_nothing() {
+fn join_of_vault_whose_sync_runs_stopped_or_is_leaving_refused_and_writes_nothing() {
     let transport = Arc::new(FakeTransport::default());
 
     let fx = synced(&transport);
@@ -456,7 +456,7 @@ fn join_of_vault_whose_sync_runs_is_stopped_or_is_leaving_is_refused_and_writes_
 }
 
 #[test]
-fn import_of_vault_id_held_on_this_mac_or_with_leaving_sync_state_is_refused() {
+fn import_of_held_or_leaving_vault_refused() {
     let transport = Arc::new(FakeTransport::default());
     let a = Fixture::with_transport(0, None, transport.clone());
     let setup = enable(&a, root());
@@ -645,7 +645,7 @@ fn next_transaction_after_join_finds_no_drift_and_publishes_nothing_and_macs_con
 }
 
 #[test]
-fn peer_file_that_is_remote_at_join_is_requested_and_joined_by_later_transaction() {
+fn peer_file_that_is_remote_at_join_requested_and_joined_by_later_transaction() {
     let transport = Arc::new(FakeTransport::default());
     let a = Fixture::with_transport(0, None, transport.clone());
     a.write(|vh| vh.add_item("item", "Item").map(|_| ()))
@@ -773,7 +773,7 @@ fn join_through_folder_transport_with_plain_io_writes_own_state_file_and_key_jso
 }
 
 #[test]
-fn conflict_copy_of_meta_json_is_not_read_at_import() {
+fn conflict_copy_of_meta_json_not_read_at_import() {
     let folder = Folder::new();
     let vault_id = Uuid::new_v4();
     let vault_dir = folder.root.join(ShortId::encode_uuid(vault_id));

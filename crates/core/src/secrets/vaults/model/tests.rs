@@ -123,7 +123,7 @@ fn populate_caches(vault: &mut Vault) {
 }
 
 #[test]
-fn reorder_assigns_positions_in_the_given_order() {
+fn reorder_assigns_positions_in_given_order() {
     let keys = ["alpha", "beta", "gamma"];
     let mut vault = vault_with_credentials("item", &keys);
     assert_eq!(positions(&vault, "item", &keys), vec![None, None, None]);
@@ -139,7 +139,7 @@ fn reorder_assigns_positions_in_the_given_order() {
 }
 
 #[test]
-fn reorder_invalidates_cached_metadata_so_positions_are_persisted() {
+fn reorder_invalidates_metadata_cache() {
     let keys = ["alpha", "beta"];
     let mut vault = vault_with_credentials("item", &keys);
     populate_caches(&mut vault);
@@ -153,7 +153,7 @@ fn reorder_invalidates_cached_metadata_so_positions_are_persisted() {
 }
 
 #[test]
-fn reorder_rejects_a_partial_list() {
+fn reorder_rejects_partial_list() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta", "gamma"]);
     let err = vault
         .reorder_item_credentials("item", &unsectioned(&["beta", "alpha"]))
@@ -166,7 +166,7 @@ fn reorder_rejects_a_partial_list() {
 }
 
 #[test]
-fn reorder_rejects_a_duplicated_key() {
+fn reorder_rejects_duplicated_key() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let err = vault
         .reorder_item_credentials("item", &unsectioned(&["alpha", "alpha"]))
@@ -175,7 +175,7 @@ fn reorder_rejects_a_duplicated_key() {
 }
 
 #[test]
-fn reorder_rejects_an_unknown_key() {
+fn reorder_rejects_unknown_key() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let err = vault
         .reorder_item_credentials("item", &unsectioned(&["alpha", "nope"]))
@@ -184,7 +184,7 @@ fn reorder_rejects_an_unknown_key() {
 }
 
 #[test]
-fn reorder_rejects_a_key_from_another_item() {
+fn reorder_rejects_key_from_another_item() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let err = vault
         .reorder_item_credentials("item", &unsectioned(&["alpha", "elsewhere"]))
@@ -193,7 +193,7 @@ fn reorder_rejects_a_key_from_another_item() {
 }
 
 #[test]
-fn reorder_rejects_an_unknown_item() {
+fn reorder_rejects_unknown_item() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let err = vault
         .reorder_item_credentials("nope", &unsectioned(&["alpha"]))
@@ -202,7 +202,7 @@ fn reorder_rejects_an_unknown_item() {
 }
 
 #[test]
-fn reordered_positions_survive_a_save_and_load() {
+fn reordered_positions_survive_save_and_load() {
     let keys = ["alpha", "beta", "gamma"];
     let mut vault = vault_with_credentials("item", &keys);
     vault
@@ -217,7 +217,7 @@ fn reordered_positions_survive_a_save_and_load() {
 }
 
 #[test]
-fn updating_a_credential_kind_persists_through_a_save() {
+fn updating_credential_kind_persists_through_save() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     assert_eq!(
         vault.get_item_credential("item", "alpha").unwrap().kind,
@@ -254,7 +254,7 @@ fn cred_id(vault: &Vault, item_key: &str, cred_key: &str) -> Uuid {
 }
 
 #[test]
-fn autofill_survives_a_save_and_decrypts_with_its_own_aad() {
+fn autofill_survives_save_and_decrypts_with_its_own_aad() {
     use crate::secrets::vaults::autofill::item::{MatchKind, Website};
 
     let mut vault = vault_with_credentials("item", &["username", "password", "totp"]);
@@ -323,7 +323,7 @@ fn autofill_and_category_survive_delete_and_restore() {
 }
 
 #[test]
-fn deleting_a_credential_clears_its_role_slot() {
+fn deleting_credential_clears_its_role_slot() {
     let mut vault = vault_with_credentials("item", &["username", "password"]);
     vault
         .set_item_autofill(
@@ -344,7 +344,7 @@ fn deleting_a_credential_clears_its_role_slot() {
 }
 
 #[test]
-fn transferring_a_credential_keeps_its_value_history_and_id() {
+fn transferring_credential_keeps_its_value_history_and_id() {
     let mut vault = vault_with_credentials("item", &["password"]);
     vault
         .add_or_update_item_credential(
@@ -391,7 +391,7 @@ fn transferring_a_credential_keeps_its_value_history_and_id() {
 }
 
 #[test]
-fn transferring_a_credential_rejects_a_taken_key() {
+fn transferring_credential_rejects_taken_key() {
     let mut vault = vault_with_credentials("item", &["password"]);
     let err = vault
         .transfer_item_credential("item", "password", "other-item", "elsewhere", None)
@@ -401,7 +401,7 @@ fn transferring_a_credential_rejects_a_taken_key() {
 }
 
 #[test]
-fn restoring_a_credential_gives_back_its_role() {
+fn restoring_credential_gives_back_its_role() {
     let mut vault = vault_with_credentials("item", &["username", "password"]);
     let password = cred_id(&vault, "item", "password");
     vault
@@ -428,7 +428,7 @@ fn restoring_a_credential_gives_back_its_role() {
 }
 
 #[test]
-fn restoring_a_credential_leaves_a_role_another_credential_took() {
+fn restoring_credential_leaves_role_another_credential_took() {
     let mut vault = vault_with_credentials("item", &["password", "new-password"]);
     let old = cred_id(&vault, "item", "password");
     let new = cred_id(&vault, "item", "new-password");
@@ -477,7 +477,7 @@ fn one_credential_cannot_fill_both_roles() {
 }
 
 #[test]
-fn two_websites_with_one_url_are_refused() {
+fn two_websites_with_one_url_refused() {
     use crate::secrets::vaults::autofill::item::{MatchKind, Website};
 
     let mut vault = vault_with_credentials("item", &["password"]);
@@ -494,7 +494,7 @@ fn two_websites_with_one_url_are_refused() {
 }
 
 #[test]
-fn a_role_slot_must_point_into_the_item() {
+fn role_slot_must_point_into_item() {
     let mut vault = vault_with_credentials("item", &["password"]);
     let elsewhere = cred_id(&vault, "other-item", "elsewhere");
     let err = vault
@@ -510,7 +510,7 @@ fn a_role_slot_must_point_into_the_item() {
 }
 
 #[test]
-fn records_resolve_by_id_after_a_credential_is_renamed() {
+fn records_resolve_by_id_after_credential_renamed() {
     let mut vault = vault_with_credentials("item", &["password"]);
     let item_id = *vault.get_item_id("item").unwrap();
     let id = cred_id(&vault, "item", "password");
@@ -551,7 +551,7 @@ fn legacy_item_metadata_without_category_loads() {
 }
 
 #[test]
-fn default_kind_is_omitted_from_json() {
+fn default_kind_omitted_from_json() {
     let meta = cred_metadata("Password", "password", FieldKind::default());
     let json = serde_json::to_value(&meta).unwrap();
     assert!(json.get("kind").is_none());
@@ -565,7 +565,7 @@ fn legacy_metadata_without_kind_loads_as_default() {
 }
 
 #[test]
-fn position_is_omitted_when_unset_and_roundtrips_when_set() {
+fn position_omitted_when_unset_and_roundtrips_when_set() {
     let meta = cred_metadata("Password", "password", FieldKind::default());
     let json = serde_json::to_value(&meta).unwrap();
     assert!(json.get("position").is_none());
@@ -612,7 +612,7 @@ fn legacy_item_metadata_loads_unfiled_without_sections() {
 }
 
 #[test]
-fn folders_and_filing_survive_a_save_and_load() {
+fn folders_and_filing_survive_save_and_load() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let folder_id = vault.create_folder(" Work ").id;
     vault.move_item("item", Some(folder_id)).unwrap();
@@ -624,7 +624,7 @@ fn folders_and_filing_survive_a_save_and_load() {
 }
 
 #[test]
-fn moving_an_item_invalidates_its_cached_metadata() {
+fn moving_item_invalidates_its_cached_metadata() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let folder_id = vault.create_folder("Work").id;
     populate_caches(&mut vault);
@@ -635,7 +635,7 @@ fn moving_an_item_invalidates_its_cached_metadata() {
 }
 
 #[test]
-fn moving_an_item_to_an_unknown_folder_fails() {
+fn moving_item_to_unknown_folder_fails() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let err = vault.move_item("item", Some(Uuid::new_v4())).unwrap_err();
     assert!(matches!(err, Error::InvalidFolder(_)));
@@ -643,7 +643,7 @@ fn moving_an_item_to_an_unknown_folder_fails() {
 }
 
 #[test]
-fn renaming_a_folder_persists() {
+fn renaming_folder_persists() {
     let mut vault = test_vault();
     let folder_id = vault.create_folder("Work").id;
     populate_caches(&mut vault);
@@ -654,7 +654,7 @@ fn renaming_a_folder_persists() {
 }
 
 #[test]
-fn deleting_a_folder_unfiles_its_items() {
+fn deleting_folder_unfiles_its_items() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let folder_id = vault.create_folder("Work").id;
     vault.move_item("item", Some(folder_id)).unwrap();
@@ -670,7 +670,7 @@ fn deleting_a_folder_unfiles_its_items() {
 }
 
 #[test]
-fn passkey_reports_persist_in_the_vault_metadata() {
+fn passkey_reports_persist_in_vault_metadata() {
     use crate::secrets::vaults::passkey::signals::Report;
 
     let mut vault = test_vault();
@@ -692,7 +692,7 @@ fn passkey_reports_persist_in_the_vault_metadata() {
 }
 
 #[test]
-fn an_item_in_a_missing_folder_loads_unfiled() {
+fn item_in_missing_folder_loads_unfiled() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let folder_id = vault.create_folder("Work").id;
     vault.move_item("item", Some(folder_id)).unwrap();
@@ -737,7 +737,7 @@ fn reorder_folders_requires_every_folder_once() {
 }
 
 #[test]
-fn sections_and_placement_survive_a_save_and_load() {
+fn sections_and_placement_survive_save_and_load() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let section_id = vault.create_item_section("item", "Login").unwrap().id;
     vault
@@ -758,7 +758,7 @@ fn sections_and_placement_survive_a_save_and_load() {
 }
 
 #[test]
-fn moving_a_credential_to_another_items_section_fails() {
+fn moving_credential_to_another_items_section_fails() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let other_section = vault.create_item_section("other-item", "S").unwrap().id;
     let err = vault
@@ -768,7 +768,7 @@ fn moving_a_credential_to_another_items_section_fails() {
 }
 
 #[test]
-fn deleting_a_section_keeps_its_credentials() {
+fn deleting_section_keeps_its_credentials() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let section_id = vault.create_item_section("item", "Login").unwrap().id;
     vault
@@ -787,7 +787,7 @@ fn deleting_a_section_keeps_its_credentials() {
 }
 
 #[test]
-fn updating_a_credential_keeps_its_value_and_persists() {
+fn updating_credential_keeps_its_value_and_persists() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     populate_caches(&mut vault);
 
@@ -822,7 +822,7 @@ fn updating_a_credential_keeps_its_value_and_persists() {
 }
 
 #[test]
-fn marking_a_credential_used_persists_without_history() {
+fn marking_credential_used_persists_without_history() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);
     let marked = vault
@@ -842,7 +842,7 @@ fn marking_a_credential_used_persists_without_history() {
 }
 
 #[test]
-fn a_use_on_the_same_local_day_is_not_written() {
+fn use_on_same_local_day_not_written() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let zone = TimeZone::fixed(jiff::tz::Offset::from_seconds(-7 * 3600).unwrap());
     // 2026-10-22 08:00 at UTC-7.
@@ -875,7 +875,7 @@ fn a_use_on_the_same_local_day_is_not_written() {
 }
 
 #[test]
-fn adding_a_credential_with_a_taken_key_fails() {
+fn adding_credential_with_taken_key_fails() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let err = vault
         .add_item_credential(
@@ -904,7 +904,7 @@ fn adding_a_credential_with_a_taken_key_fails() {
 }
 
 #[test]
-fn updating_a_credential_to_a_taken_key_fails() {
+fn updating_credential_to_taken_key_fails() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let err = vault
         .update_item_credential(
@@ -1011,7 +1011,7 @@ fn reorder_sets_sections_and_positions() {
 }
 
 #[test]
-fn reorder_rejects_an_unknown_section_without_changes() {
+fn reorder_rejects_unknown_section_without_changes() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let placements = vec![CredentialPlacement {
         key: "alpha".to_string(),
@@ -1025,7 +1025,7 @@ fn reorder_rejects_an_unknown_section_without_changes() {
 }
 
 #[test]
-fn a_credential_in_a_missing_section_loads_unsectioned() {
+fn credential_in_missing_section_loads_unsectioned() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let section_id = vault.create_item_section("item", "Login").unwrap().id;
     vault
@@ -1046,7 +1046,7 @@ fn a_credential_in_a_missing_section_loads_unsectioned() {
 }
 
 #[test]
-fn deleting_an_item_drops_its_cached_credential_metadata() {
+fn deleting_item_drops_its_cached_credential_metadata() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);
     let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1074,7 +1074,7 @@ fn secret_of(vault: &Vault, item_key: &str, cred_key: &str) -> String {
 }
 
 #[test]
-fn deleted_credentials_survive_a_save_and_load_as_deleted() {
+fn deleted_credentials_survive_save_and_load_as_deleted() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     populate_caches(&mut vault);
     let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1095,7 +1095,7 @@ fn deleted_credentials_survive_a_save_and_load_as_deleted() {
 }
 
 #[test]
-fn deleting_a_credential_frees_its_key() {
+fn deleting_credential_frees_its_key() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     vault.delete_item_credential("item", "alpha").unwrap();
     vault
@@ -1145,7 +1145,7 @@ fn restoring_keeps_id_value_position_and_section() {
 }
 
 #[test]
-fn restoring_into_a_deleted_section_drops_the_section() {
+fn restoring_into_deleted_section_drops_section() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let section_id = vault.create_item_section("item", "Login").unwrap().id;
     vault
@@ -1168,7 +1168,7 @@ fn restoring_into_a_deleted_section_drops_the_section() {
 }
 
 #[test]
-fn restoring_with_a_taken_key_fails_unless_a_new_key_is_given() {
+fn restoring_with_taken_key_fails_unless_new_key_given() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);
     let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1207,7 +1207,7 @@ fn restoring_with_a_taken_key_fails_unless_a_new_key_is_given() {
 }
 
 #[test]
-fn restoring_with_an_invalid_new_key_fails() {
+fn restoring_with_invalid_new_key_fails() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
     vault.delete_item_credential("item", "alpha").unwrap();
@@ -1235,7 +1235,7 @@ fn restoring_through_another_item_fails() {
 }
 
 #[test]
-fn purging_removes_a_deleted_credential_for_good() {
+fn purging_removes_deleted_credential_for_good() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let alpha = vault.get_item_credential("item", "alpha").unwrap().id;
     vault.delete_item_credential("item", "alpha").unwrap();
@@ -1256,7 +1256,7 @@ fn purging_removes_a_deleted_credential_for_good() {
 }
 
 #[test]
-fn purge_deleted_removes_entries_older_than_the_cutoff() {
+fn purge_deleted_removes_entries_older_than_cutoff() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     vault.delete_item_credential("item", "alpha").unwrap();
     vault.delete_item_credential("item", "beta").unwrap();
@@ -1273,7 +1273,7 @@ fn item_id_of(vault: &Vault, item_key: &str) -> Uuid {
 }
 
 #[test]
-fn a_deleted_item_survives_a_save_and_load_and_frees_its_key() {
+fn deleted_item_survives_save_and_load_and_frees_its_key() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     populate_caches(&mut vault);
     let item_id = item_id_of(&vault, "item");
@@ -1298,7 +1298,7 @@ fn a_deleted_item_survives_a_save_and_load_and_frees_its_key() {
 }
 
 #[test]
-fn restoring_an_item_brings_back_credentials_values_and_layout() {
+fn restoring_item_brings_back_credentials_values_and_layout() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let folder_id = vault.create_folder("Work").id;
     vault.move_item("item", Some(folder_id)).unwrap();
@@ -1333,7 +1333,7 @@ fn restoring_an_item_brings_back_credentials_values_and_layout() {
 }
 
 #[test]
-fn a_deleted_item_keeps_its_own_deleted_credentials() {
+fn deleted_item_keeps_its_own_deleted_credentials() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     populate_caches(&mut vault);
     let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1357,7 +1357,7 @@ fn a_deleted_item_keeps_its_own_deleted_credentials() {
 }
 
 #[test]
-fn restoring_an_item_with_a_taken_key_fails_unless_a_new_key_is_given() {
+fn restoring_item_needs_new_key_if_taken() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let item_id = item_id_of(&vault, "item");
     vault.delete_item("item").unwrap();
@@ -1386,7 +1386,7 @@ fn restoring_an_item_with_a_taken_key_fails_unless_a_new_key_is_given() {
 }
 
 #[test]
-fn restoring_an_item_into_a_deleted_folder_unfiles_it() {
+fn restoring_item_into_deleted_folder_unfiles_it() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let folder_id = vault.create_folder("Work").id;
     vault.move_item("item", Some(folder_id)).unwrap();
@@ -1410,7 +1410,7 @@ fn deleted_secret_of(vault: &Vault, item_id: Uuid, cred_id: Uuid) -> String {
 }
 
 #[test]
-fn list_all_deleted_lists_credentials_of_live_items_with_their_item() {
+fn list_all_deleted_groups_by_live_item() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
     let elsewhere_id = vault
@@ -1474,7 +1474,7 @@ fn deleted_secrets_can_be_read_in_every_deleted_location() {
 }
 
 #[test]
-fn a_live_credential_has_no_deleted_secret() {
+fn live_credential_has_no_deleted_secret() {
     let vault = vault_with_credentials("item", &["alpha"]);
     let item_id = item_id_of(&vault, "item");
     let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1512,7 +1512,7 @@ fn history_values(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<String> 
 }
 
 #[test]
-fn changing_a_value_keeps_the_old_value_in_the_history() {
+fn changing_value_keeps_old_value_in_history() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     assert!(vault.list_history("item", "alpha").unwrap().is_empty());
 
@@ -1535,7 +1535,7 @@ fn changing_a_value_keeps_the_old_value_in_the_history() {
 }
 
 #[test]
-fn saving_the_same_or_a_first_or_an_empty_value_adds_no_history() {
+fn saving_same_or_first_or_empty_value_adds_no_history() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "secret");
     assert!(vault.list_history("item", "alpha").unwrap().is_empty());
@@ -1557,7 +1557,7 @@ fn saving_the_same_or_a_first_or_an_empty_value_adds_no_history() {
 }
 
 #[test]
-fn history_survives_a_save_and_load() {
+fn history_survives_save_and_load() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
@@ -1571,7 +1571,7 @@ fn history_survives_a_save_and_load() {
 }
 
 #[test]
-fn restoring_a_previous_value_swaps_it_with_the_current_value() {
+fn restoring_previous_value_swaps_it_with_current_value() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     let first = vault.list_history("item", "alpha").unwrap()[0].id;
@@ -1586,7 +1586,7 @@ fn restoring_a_previous_value_swaps_it_with_the_current_value() {
 }
 
 #[test]
-fn restoring_the_only_previous_value_over_an_empty_value_clears_the_history() {
+fn restoring_only_previous_value_clears_history() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "");
     let first = vault.list_history("item", "alpha").unwrap()[0].id;
@@ -1598,7 +1598,7 @@ fn restoring_the_only_previous_value_over_an_empty_value_clears_the_history() {
 }
 
 #[test]
-fn history_info_that_fails_to_decrypt_fails_the_load() {
+fn history_info_that_fails_to_decrypt_fails_load() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
@@ -1622,7 +1622,7 @@ fn history_info_that_fails_to_decrypt_fails_the_load() {
 }
 
 #[test]
-fn restoring_an_unknown_previous_value_fails() {
+fn restoring_unknown_previous_value_fails() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     assert!(matches!(
@@ -1641,7 +1641,7 @@ fn restoring_an_unknown_previous_value_fails() {
 }
 
 #[test]
-fn purging_a_previous_value_removes_it_for_good() {
+fn purging_previous_value_removes_it_for_good() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
@@ -1656,7 +1656,7 @@ fn purging_a_previous_value_removes_it_for_good() {
 }
 
 #[test]
-fn history_follows_a_credential_through_delete_and_restore() {
+fn history_follows_credential_through_delete_and_restore() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
@@ -1673,7 +1673,7 @@ fn history_follows_a_credential_through_delete_and_restore() {
 }
 
 #[test]
-fn history_follows_a_credential_through_item_delete_and_restore() {
+fn history_follows_credential_through_item_delete_and_restore() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     let item_id = item_id_of(&vault, "item");
@@ -1691,7 +1691,7 @@ fn history_follows_a_credential_through_item_delete_and_restore() {
 }
 
 #[test]
-fn history_is_exported_and_omitted_from_the_file_when_empty() {
+fn history_exported_and_omitted_from_file_when_empty() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     set_value(&mut vault, "item", "alpha", "second");
 
@@ -1709,7 +1709,7 @@ fn history_is_exported_and_omitted_from_the_file_when_empty() {
 }
 
 #[test]
-fn a_previous_value_cannot_be_swapped_into_another_place() {
+fn previous_value_cannot_be_swapped_into_another_place() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
@@ -1761,7 +1761,7 @@ fn a_previous_value_cannot_be_swapped_into_another_place() {
 }
 
 #[test]
-fn purging_an_item_removes_it_and_its_deleted_credentials() {
+fn purging_item_removes_it_and_its_deleted_credentials() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     vault.delete_item_credential("item", "alpha").unwrap();
     let item_id = item_id_of(&vault, "item");
@@ -1804,7 +1804,7 @@ fn purge_deleted_includes_deleted_credentials_of_deleted_items() {
 }
 
 #[test]
-fn purge_deleted_items_removes_entries_older_than_the_cutoff() {
+fn purge_deleted_items_removes_entries_older_than_cutoff() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     vault.delete_item("item").unwrap();
     vault.delete_item("other-item").unwrap();
@@ -1856,7 +1856,7 @@ fn deleted_item_info_is_bound_to_its_item() {
 }
 
 #[test]
-fn bundled_export_leaves_out_the_deleted() {
+fn bundled_export_leaves_out_deleted() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     vault.delete_item_credential("item", "alpha").unwrap();
 
@@ -1877,7 +1877,7 @@ fn bundled_export_leaves_out_the_deleted() {
 }
 
 #[test]
-fn vault_file_without_item_deleted_field_loads_with_empty_deleted() {
+fn old_item_file_without_deleted_loads() {
     let vault = vault_with_credentials("item", &["alpha"]);
     let json = serde_json::to_value(vault.to_encrypted(true).unwrap()).unwrap();
     for item in json["items"].as_object().unwrap().values() {
@@ -1994,7 +1994,7 @@ fn stored_cred_metadata(
 }
 
 #[test]
-fn every_blob_kind_decrypts_under_new_key_and_fails_under_old_key() {
+fn rekey_blobs_need_new_key() {
     let source = filled_test_vault();
     assert_blobs_decrypt(&source.cipher, &source.to_encrypted(true).unwrap(), true);
 
@@ -2007,7 +2007,7 @@ fn every_blob_kind_decrypts_under_new_key_and_fails_under_old_key() {
 }
 
 #[test]
-fn copy_decrypts_under_new_vault_id_and_fails_under_old_vault_id() {
+fn copy_blobs_need_new_vault_id() {
     let source = filled_test_vault();
     let new_id = Uuid::new_v4();
 
@@ -2037,7 +2037,7 @@ fn rekeyed_vault_holds_every_entry_of_source() {
 }
 
 #[test]
-fn copy_keeps_key_and_name_and_is_not_synced() {
+fn copy_keeps_key_and_name_and_not_synced() {
     let mut source = filled_test_vault();
     source.generation = 5;
     source.replica_id = Some(Uuid::new_v4());
@@ -2059,7 +2059,7 @@ fn copy_keeps_key_and_name_and_is_not_synced() {
 }
 
 #[test]
-fn source_is_unchanged_and_its_file_key_still_decrypts_it() {
+fn source_unchanged_and_its_file_key_still_decrypts_it() {
     let source = filled_test_vault();
     let before = source.to_encrypted(true).unwrap().to_vault_json().unwrap();
 
@@ -2133,7 +2133,7 @@ fn folder_and_section_metadata_refuse_unknown_fields() {
 }
 
 #[test]
-fn blob_with_unknown_field_fails_the_load() {
+fn blob_with_unknown_field_fails_load() {
     let source = filled_test_vault();
     let mut edited = BTreeSet::new();
     for n in 0.. {
@@ -2160,7 +2160,7 @@ fn blob_with_unknown_field_fails_the_load() {
 }
 
 #[test]
-fn credential_with_unknown_field_kind_loads_and_saves_kind_unchanged() {
+fn unknown_kind_survives_round_trip() {
     let kind = serde_json::json!({"band": 5, "ssid": "home", "type": "wifi"});
     let vault = vault_with_credentials("net", &["wifi"]);
     let (item_id, cred_id) = vault.get_credential_ids("net", "wifi").unwrap();
@@ -2197,7 +2197,7 @@ fn credential_with_unknown_field_kind_loads_and_saves_kind_unchanged() {
 }
 
 #[test]
-fn stale_credential_metadata_field_fails_the_load() {
+fn stale_credential_metadata_field_fails_load() {
     let vault = vault_with_credentials("site", &["password"]);
     let (item_id, cred_id) = vault.get_credential_ids("site", "password").unwrap();
     let mut encrypted = vault.to_encrypted(true).unwrap();
@@ -2271,7 +2271,7 @@ fn left_out_passkey_that_fails_to_decrypt_does_not_fail_export() {
 }
 
 #[test]
-fn unknown_field_kind_is_kept_by_rekey() {
+fn unknown_field_kind_kept_by_rekey() {
     let kind = serde_json::json!({"type": "wifi", "ssid": "home", "band": 5});
     let mut vault = test_vault();
     vault.add_or_update_item("net", "Net").unwrap();

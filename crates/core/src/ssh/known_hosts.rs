@@ -90,7 +90,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_known_hosts() {
+    fn parses_known_hosts() {
         let parser = KnownHosts::load_from_str(
             r#"
 # Comment line
