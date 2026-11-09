@@ -1,4 +1,4 @@
-use super::support::{TEST_FILE_KEY, populate_caches, reload, test_vault, vault_with_credentials};
+use super::support::{load_encrypted, populate_caches, reload, test_vault, vault_with_credentials};
 use super::*;
 
 #[test]
@@ -89,8 +89,7 @@ fn item_in_missing_folder_loads_unfiled() {
 
     let mut encrypted = vault.to_encrypted(true).unwrap();
     encrypted.metadata = None;
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+    let vault = load_encrypted(encrypted);
 
     assert_eq!(vault.get_item("item").unwrap().folder, None);
     // The stale blob is not cached, so the next save writes the fix.

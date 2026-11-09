@@ -14,6 +14,15 @@ fn make_vault() -> EncryptedVault {
     }
 }
 
+/// Vault with item `my-item`, its cipher, and the item.
+fn vault_with_item() -> (EncryptedVault, VaultCipher, VaultItemOverview) {
+    let mut vault = make_vault();
+    let cipher = VaultCipher::new(vault.id);
+    let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
+    vault.add_item(&cipher, None, None, &item).unwrap();
+    (vault, cipher, item)
+}
+
 #[test]
 fn add_multiple_items() {
     let mut vault = make_vault();
@@ -51,10 +60,7 @@ fn add_multiple_items() {
 
 #[test]
 fn added_credential_decrypts() {
-    let mut vault = make_vault();
-    let cipher = VaultCipher::new(vault.id);
-    let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
-    vault.add_item(&cipher, None, None, &item).unwrap();
+    let (mut vault, cipher, item) = vault_with_item();
 
     let cred =
         VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default()).unwrap();
@@ -90,10 +96,7 @@ fn added_credential_decrypts() {
 
 #[test]
 fn credential_position_persisted_in_metadata() {
-    let mut vault = make_vault();
-    let cipher = VaultCipher::new(vault.id);
-    let item = VaultItemOverview::try_new("My Item", "my-item").unwrap();
-    vault.add_item(&cipher, None, None, &item).unwrap();
+    let (mut vault, cipher, item) = vault_with_item();
 
     let mut cred =
         VaultItemCredentialOverview::try_new("Password", "password", FieldKind::default()).unwrap();

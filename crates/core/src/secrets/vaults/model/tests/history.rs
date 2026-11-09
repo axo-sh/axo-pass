@@ -1,5 +1,6 @@
 use super::support::{
-    TEST_FILE_KEY, item_id_of, reload, secret_of, set_value, vault_with_credentials,
+    add_cred, cred_id, cred_mut, item_id_of, load_encrypted, reload, secret_of, set_value,
+    try_load_encrypted, vault_with_credentials,
 };
 use super::*;
 
@@ -48,15 +49,7 @@ fn saving_same_or_first_or_empty_value_adds_no_history() {
     assert!(vault.list_history("item", "alpha").unwrap().is_empty());
 
     // A credential created with no value yet, then given one.
-    vault
-        .add_item_credential(
-            "item",
-            "empty",
-            "Empty",
-            FieldKind::default(),
-            SecretString::from(String::new()),
-        )
-        .unwrap();
+    add_cred(&mut vault, "item", "empty", "Empty", "");
     set_value(&mut vault, "item", "empty", "first");
     assert!(vault.list_history("item", "empty").unwrap().is_empty());
     set_value(&mut vault, "item", "empty", "second");
@@ -110,21 +103,14 @@ fn history_info_that_fails_to_decrypt_fails_load() {
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
     let item_id = item_id_of(&vault, "item");
-    let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let cred_id = cred_id(&vault, "item", "alpha");
 
     let mut encrypted = vault.to_encrypted(true).unwrap();
-    let cred = encrypted
-        .items
-        .get_mut(&item_id)
-        .unwrap()
-        .credentials
-        .get_mut(&cred_id)
-        .unwrap();
+    let cred = cred_mut(&mut encrypted, item_id, cred_id);
     let first_info = cred.history[0].info.clone();
     cred.history[1].info = first_info;
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
 
-    let result = Vault::from_encrypted_with_cipher(cipher, encrypted);
+    let result = try_load_encrypted(encrypted);
     assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));
 }
 
@@ -166,7 +152,7 @@ fn purging_previous_value_removes_it_for_good() {
 fn history_follows_credential_through_delete_and_restore() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "second");
-    let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let cred_id = cred_id(&vault, "item", "alpha");
 
     vault.delete_item_credential("item", "alpha").unwrap();
     assert!(vault.history.is_empty());
@@ -221,38 +207,21 @@ fn previous_value_cannot_be_swapped_into_another_place() {
     set_value(&mut vault, "item", "alpha", "second");
     set_value(&mut vault, "item", "alpha", "third");
     let item_id = item_id_of(&vault, "item");
-    let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
-
-    let load = |encrypted: EncryptedVault| {
-        let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-        Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap()
-    };
+    let cred_id = cred_id(&vault, "item", "alpha");
 
     // A history value in the live value's place.
     let mut encrypted = vault.to_encrypted(true).unwrap();
-    let cred = encrypted
-        .items
-        .get_mut(&item_id)
-        .unwrap()
-        .credentials
-        .get_mut(&cred_id)
-        .unwrap();
+    let cred = cred_mut(&mut encrypted, item_id, cred_id);
     cred.value = cred.history[0].value.clone();
-    let swapped = load(encrypted);
+    let swapped = load_encrypted(encrypted);
     assert!(swapped.get_item_credential_secret("item", "alpha").is_err());
 
     // A history value in another history entry's place.
     let mut encrypted = vault.to_encrypted(true).unwrap();
-    let cred = encrypted
-        .items
-        .get_mut(&item_id)
-        .unwrap()
-        .credentials
-        .get_mut(&cred_id)
-        .unwrap();
+    let cred = cred_mut(&mut encrypted, item_id, cred_id);
     let first_value = cred.history[0].value.clone();
     cred.history[1].value = first_value;
-    let swapped = load(encrypted);
+    let swapped = load_encrypted(encrypted);
     let ids: Vec<Uuid> = swapped
         .list_history("item", "alpha")
         .unwrap()

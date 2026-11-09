@@ -26,11 +26,16 @@ mod format;
 mod import;
 mod wrapping;
 
+/// New random bundle key.
+fn bundle_key() -> aes_gcm::Key<Aes256Gcm> {
+    Aes256Gcm::generate_key(aes_gcm::aead::OsRng)
+}
+
 /// Build a bundle with `count` vaults, each carrying a distinct 32-byte file
 /// key, and serialize it to JSON.
 fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
     let bundle_id = Uuid::new_v4();
-    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundle_key = bundle_key();
     let bundle_cipher = Aes256Gcm::new(&bundle_key);
 
     let mut file_keys = Vec::new();
@@ -98,7 +103,7 @@ impl ExportFile {
     /// Export `vault` to a bundle file in a temp directory.
     fn new(vault: &Vault, include_passkeys: bool) -> Self {
         let bundle_id = Uuid::new_v4();
-        let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+        let bundle_key = bundle_key();
         let bundled = vault
             .to_bundled_vault(
                 None,

@@ -9,14 +9,13 @@ use crate::core::app_broker::wire::{WireResponse, b64_decode_raw};
 async fn routes_key_use_authorization_to_sign_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response = broker.request(
+    let response = broker.request_parsed(
         r#"{"request":"authorize_key_use","fingerprint":"SHA256:abc","comment":"work laptop","caller":"git (ssh)"}"#,
     );
 
     // The stub declines to hand back a context, so the request is answered
     // rather than confirmed. Reaching the stub means the peer was accepted
     // and the request routed.
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
         "unexpected response to a key-use authorization"
@@ -37,11 +36,10 @@ async fn routes_key_use_authorization_to_sign_authorizer() {
 async fn collects_passphrase_for_key_with_nothing_saved() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response = broker.request(
+    let response = broker.request_parsed(
         r#"{"request":"get_passphrase","key_id":null,"description":"Enter passphrase","prompt":null,"error_message":null,"caller":"git (gpg)"}"#,
     );
 
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     let WireResponse::Passphrase { passphrase } = response else {
         panic!("unexpected response to a passphrase request");
     };
@@ -62,14 +60,10 @@ async fn collects_passphrase_for_key_with_nothing_saved() {
 async fn answers_confirm_and_message() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response: WireResponse =
-        serde_json::from_str(&broker.request(r#"{"request":"confirm","description":"ok?"}"#))
-            .unwrap();
+    let response = broker.request_parsed(r#"{"request":"confirm","description":"ok?"}"#);
     assert!(matches!(response, WireResponse::Confirmed { ok: true }));
 
-    let response: WireResponse =
-        serde_json::from_str(&broker.request(r#"{"request":"message","description":"hi"}"#))
-            .unwrap();
+    let response = broker.request_parsed(r#"{"request":"message","description":"hi"}"#);
     assert!(matches!(response, WireResponse::Acknowledged));
 }
 
@@ -79,11 +73,10 @@ async fn answers_confirm_and_message() {
 async fn routes_batch_resolve_to_vault_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response = broker.request(
+    let response = broker.request_parsed(
         r#"{"request":"resolve_secrets","purpose":"exec","caller":"git","refs":[{"vault_key":"v1","item_key":"i1","credential_key":"c1"},{"vault_key":"v2","item_key":"i2","credential_key":"c2"}]}"#,
     );
 
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
         "unexpected response to a batch resolve"
@@ -106,7 +99,7 @@ async fn routes_vault_management_to_vault_authorizer() {
         r#"{"request":"add_external_vault","path":"/tmp/v.json","caller":"zsh"}"#,
     ] {
         let broker = TestBroker::start(accepting_policy()).await;
-        let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+        let response: WireResponse = broker.request_parsed(line);
         assert!(
             matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
             "unexpected response to {line}"
@@ -126,10 +119,9 @@ async fn routes_vault_management_to_vault_authorizer() {
 async fn answers_age_identity_request_for_unknown_key() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response =
-        broker.request(r#"{"request":"get_age_identity","key_id":"nosuchkey","caller":"git"}"#);
+    let response = broker
+        .request_parsed(r#"{"request":"get_age_identity","key_id":"nosuchkey","caller":"git"}"#);
 
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(&response, WireResponse::Failed { message } if message.contains("nosuchkey")),
         "unexpected response to an unknown age key",
@@ -160,10 +152,10 @@ async fn routes_keychain_password_listing() {
 async fn answers_managed_key_deletion_for_unknown_label() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response = broker
-        .request(r#"{"request":"delete_managed_key","label":"ssh-key-nosuchkey","caller":"ap"}"#);
+    let response = broker.request_parsed(
+        r#"{"request":"delete_managed_key","label":"ssh-key-nosuchkey","caller":"ap"}"#,
+    );
 
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(response, WireResponse::Failed { .. }),
         "unexpected response to an unknown managed key deletion"

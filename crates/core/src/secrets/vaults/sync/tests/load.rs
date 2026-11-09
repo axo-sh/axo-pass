@@ -24,6 +24,7 @@ use crate::secrets::vaults::sync::keys::{
 use crate::secrets::vaults::sync::load::{Mismatch, SignatureFailure, SyncLoad};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys, SYNC_FORMAT_VERSION};
+use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
 use crate::secrets::vaults::sync::status::BUILD_ID;
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports};
@@ -227,6 +228,15 @@ impl Fixture {
         );
     }
 
+    /// Write a valid sync state of this vault at [`GENERATION`], signed by a
+    /// key of another Mac.
+    pub(super) fn put_foreign_state(&self) {
+        self.put(
+            &state(self.id(), REPLICA, GENERATION),
+            &TestSigner::random(),
+        );
+    }
+
     /// Vault file and sync state file as they are on disk now.
     pub(super) fn on_disk(&self) -> (String, Option<String>) {
         (
@@ -286,6 +296,23 @@ impl Fixture {
             .files()
             .restore_version(&Target::of(&self.vault), Unlock::Test(&key), name)
     }
+}
+
+/// Whether the sync state, the staged file, and the sidecar of `fx` exist.
+pub(super) fn sync_files(fx: &Fixture) -> [bool; 3] {
+    [
+        LocalSyncState::path(&fx.root, fx.id()),
+        LocalSyncState::staged_path(&fx.root, fx.id()),
+        Sidecar::path(&fx.root, fx.id()),
+    ]
+    .map(|path| path.exists())
+}
+
+/// Assert that the vault file and sync state file of `fx` equal `before`, a
+/// result of [`Fixture::on_disk`], and that no other sync file exists.
+pub(super) fn assert_nothing_written(fx: &Fixture, before: &(String, Option<String>)) {
+    assert_eq!(&fx.on_disk(), before);
+    assert_eq!(sync_files(fx), [false; 3]);
 }
 
 /// Each case, with a vault and a sync state that give it.
@@ -353,7 +380,7 @@ pub(super) fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
     cases.push(("malformed envelope", fx, case));
 
     let fx = Fixture::synced();
-    fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+    fx.put_foreign_state();
     let case = SyncLoad::SignatureFailed(SignatureFailure::Signature);
     cases.push(("signed by another key", fx, case));
 

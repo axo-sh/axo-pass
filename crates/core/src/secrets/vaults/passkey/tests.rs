@@ -130,6 +130,13 @@ async fn register(vw: &mut VaultHandle, target: PasskeyTarget, user: &str) {
         .unwrap();
 }
 
+/// Vault `personal` with a passkey of `user` registered in a new login.
+async fn registered_vault(user: &str) -> VaultHandle {
+    let mut vw = VaultHandle::new_for_test("personal");
+    register(&mut vw, PasskeyTarget::NewLogin, user).await;
+    vw
+}
+
 /// Last used times ten days apart, so they fall on different dates in
 /// every zone.
 const EARLIER_USE: i64 = 1_750_000_000;

@@ -1,6 +1,6 @@
 use super::support::{
-    TEST_FILE_KEY, deleted_ids, item_id_of, populate_caches, reload, secret_of,
-    vault_with_credentials,
+    cred_id, deleted_ids, item_id_of, load_encrypted, populate_caches, reload, secret_of,
+    try_load_encrypted, vault_with_credentials,
 };
 use super::*;
 
@@ -8,7 +8,7 @@ use super::*;
 fn deleting_item_drops_its_cached_credential_metadata() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);
-    let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let cred_id = cred_id(&vault, "item", "alpha");
 
     vault.delete_item("item").unwrap();
     assert!(!vault.cred_blobs.contains_key(&cred_id));
@@ -48,7 +48,7 @@ fn restoring_item_brings_back_credentials_values_and_layout() {
     vault
         .move_item_credential("item", "beta", Some(section_id))
         .unwrap();
-    let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let alpha_id = cred_id(&vault, "item", "alpha");
     populate_caches(&mut vault);
     let item_id = item_id_of(&vault, "item");
 
@@ -62,10 +62,7 @@ fn restoring_item_brings_back_credentials_values_and_layout() {
     assert_eq!(item.id, item_id);
     assert_eq!(item.folder, Some(folder_id));
     assert_eq!(item.sections.get(&section_id).unwrap().title, "Login");
-    assert_eq!(
-        vault.get_item_credential("item", "alpha").unwrap().id,
-        alpha_id
-    );
+    assert_eq!(cred_id(&vault, "item", "alpha"), alpha_id);
     assert_eq!(
         vault.get_item_credential("item", "beta").unwrap().section,
         Some(section_id)
@@ -78,7 +75,7 @@ fn restoring_item_brings_back_credentials_values_and_layout() {
 fn deleted_item_keeps_its_own_deleted_credentials() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     populate_caches(&mut vault);
-    let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let alpha_id = cred_id(&vault, "item", "alpha");
     let item_id = item_id_of(&vault, "item");
     vault.delete_item_credential("item", "alpha").unwrap();
 
@@ -154,11 +151,8 @@ fn deleted_secret_of(vault: &Vault, item_id: Uuid, cred_id: Uuid) -> String {
 #[test]
 fn list_all_deleted_groups_by_live_item() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
-    let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
-    let elsewhere_id = vault
-        .get_item_credential("other-item", "elsewhere")
-        .unwrap()
-        .id;
+    let alpha_id = cred_id(&vault, "item", "alpha");
+    let elsewhere_id = cred_id(&vault, "other-item", "elsewhere");
     vault.delete_item_credential("item", "alpha").unwrap();
     vault
         .delete_item_credential("other-item", "elsewhere")
@@ -188,8 +182,8 @@ fn list_all_deleted_leaves_out_credentials_of_deleted_items() {
 fn deleted_secrets_can_be_read_in_every_deleted_location() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     let item_id = item_id_of(&vault, "item");
-    let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
-    let beta_id = vault.get_item_credential("item", "beta").unwrap().id;
+    let alpha_id = cred_id(&vault, "item", "alpha");
+    let beta_id = cred_id(&vault, "item", "beta");
     let other_item_id = item_id_of(&vault, "other-item");
 
     // Deleted from a live item.
@@ -219,7 +213,7 @@ fn deleted_secrets_can_be_read_in_every_deleted_location() {
 fn live_credential_has_no_deleted_secret() {
     let vault = vault_with_credentials("item", &["alpha"]);
     let item_id = item_id_of(&vault, "item");
-    let alpha_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let alpha_id = cred_id(&vault, "item", "alpha");
     assert!(matches!(
         vault.get_deleted_credential_secret(item_id, alpha_id),
         Err(Error::InvalidCredentialKey(_))
@@ -298,8 +292,7 @@ fn vault_file_without_deleted_field_loads_with_no_deleted_items() {
     assert!(json.get("deleted").is_none());
 
     let encrypted: EncryptedVault = serde_json::from_value(json).unwrap();
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+    let vault = load_encrypted(encrypted);
     assert!(vault.list_deleted_items().is_empty());
 }
 
@@ -315,8 +308,7 @@ fn deleted_item_info_is_bound_to_its_item() {
     let (first, second) = (entries.next().unwrap(), entries.next().unwrap());
     std::mem::swap(&mut first.info, &mut second.info);
 
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    assert!(Vault::from_encrypted_with_cipher(cipher, encrypted).is_err());
+    assert!(try_load_encrypted(encrypted).is_err());
 }
 
 #[test]
@@ -349,8 +341,7 @@ fn old_item_file_without_deleted_loads() {
     }
 
     let encrypted: EncryptedVault = serde_json::from_value(json).unwrap();
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    let vault = Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap();
+    let vault = load_encrypted(encrypted);
     assert!(vault.deleted.is_empty());
     assert!(vault.get_item_credential("item", "alpha").is_ok());
 }
@@ -372,6 +363,5 @@ fn deleted_info_is_bound_to_its_credential() {
     let (first, second) = (entries.next().unwrap(), entries.next().unwrap());
     std::mem::swap(&mut first.info, &mut second.info);
 
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    assert!(Vault::from_encrypted_with_cipher(cipher, encrypted).is_err());
+    assert!(try_load_encrypted(encrypted).is_err());
 }

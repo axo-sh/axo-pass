@@ -9,7 +9,9 @@ use std::sync::{Arc, Weak};
 use tempfile::TempDir;
 use uuid::Uuid;
 
-use super::load::{Fixture, GENERATION, REPLICA, device_key, state};
+use super::load::{
+    Fixture, GENERATION, REPLICA, assert_nothing_written, device_key, state, sync_files,
+};
 use super::manager::{Event, Managed};
 use super::recovery::{ages, key_file};
 use super::transport::FakeTransport;
@@ -116,15 +118,6 @@ fn published_names(vault_id: Uuid, published: StateHash) -> Vec<String> {
 
 /// App data files of `fx` that a setup writes: the sync state, the staged
 /// file, and the sidecar.
-fn sync_files(fx: &Fixture) -> [bool; 3] {
-    [
-        LocalSyncState::path(&fx.root, fx.id()),
-        LocalSyncState::staged_path(&fx.root, fx.id()),
-        Sidecar::path(&fx.root, fx.id()),
-    ]
-    .map(|path| path.exists())
-}
-
 #[test]
 fn enable_writes_meta_key_json_with_one_age_wrapping_and_one_state_file_at_generation_1() {
     let transport = Arc::new(FakeTransport::default());
@@ -274,8 +267,7 @@ fn prepare_without_confirm_writes_nothing() {
     assert!(setup.kit().opens(setup.key()));
     drop(setup);
 
-    assert_eq!(fx.on_disk(), on_disk);
-    assert_eq!(sync_files(&fx), [false; 3]);
+    assert_nothing_written(&fx, &on_disk);
     assert_eq!(transport.writes(), 0);
     assert_eq!(transport.meta(fx.id()), None);
     assert_eq!(fx.read_case(), SyncLoad::NotSynced);
@@ -299,7 +291,7 @@ fn replica_or_leaving_state_vault_refused() {
 
     // A sync state that fails its signature is refused too.
     let fx = unsynced(transport.clone());
-    fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+    fx.put_foreign_state();
     assert!(matches!(
         prepare(&fx, root()),
         Err(Error::SyncAlreadyEnabled)
@@ -351,8 +343,7 @@ fn folder_that_holds_vault_gives_join_offer_and_one_that_gains_it_after_prepare_
         confirm(&fx, &setup),
         Err(Error::SyncFolderHasVault)
     ));
-    assert_eq!(fx.on_disk(), on_disk);
-    assert_eq!(sync_files(&fx), [false; 3]);
+    assert_nothing_written(&fx, &on_disk);
     assert_eq!(transport.writes(), 0);
 }
 
@@ -382,8 +373,7 @@ fn failed_meta_json_write_fails_setup_before_any_local_save() {
         confirm(&fx, &setup),
         Err(Error::SyncTransportError(_))
     ));
-    assert_eq!(fx.on_disk(), on_disk);
-    assert_eq!(sync_files(&fx), [false; 3]);
+    assert_nothing_written(&fx, &on_disk);
 
     // The same kit enables sync once the folder takes writes.
     transport.set_failing_writes(false);

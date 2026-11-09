@@ -13,7 +13,7 @@ use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::manager::VaultsManager;
-use crate::secrets::vaults::storage::test_keys::TestKeys;
+use crate::secrets::vaults::storage::test_keys::{TestKeys, keys};
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::{Target, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
@@ -157,7 +157,7 @@ impl Mac {
 
 /// Keys of a Mac whose `device-signing-key` is lost.
 fn signing_key_lost() -> Arc<TestKeys> {
-    Arc::new(TestKeys::new(KeyProbe::Present, KeyProbe::Missing))
+    keys(KeyProbe::Present, KeyProbe::Missing)
 }
 
 fn raw(path: &Path) -> String {
@@ -363,7 +363,7 @@ fn confirmation_in_other_key_states_fails_and_changes_nothing() {
         (KeyProbe::Missing, KeyProbe::Present),
         (KeyProbe::Error("keychain failed".into()), KeyProbe::Missing),
     ] {
-        let keys = Arc::new(TestKeys::new(encryption.clone(), signing));
+        let keys = keys(encryption.clone(), signing);
 
         let result = mac.catalog(&keys, NEW_KEY).resign();
 

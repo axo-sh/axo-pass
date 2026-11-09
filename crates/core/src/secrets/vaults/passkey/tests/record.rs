@@ -71,8 +71,7 @@ fn credential_keys_are_valid_vault_keys() {
 
 #[tokio::test]
 async fn registration_records_when_it_was_created() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     let value = vw
         .get_secret(&stored.item_key, &stored.credential_key)

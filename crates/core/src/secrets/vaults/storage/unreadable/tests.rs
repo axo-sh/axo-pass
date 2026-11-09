@@ -20,7 +20,7 @@ use crate::secrets::vaults::storage::device_keys::{
 };
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::manager::VaultsManager;
-use crate::secrets::vaults::storage::test_keys::TestKeys;
+use crate::secrets::vaults::storage::test_keys::{TestKeys, keys};
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 use crate::secrets::vaults::sync::model::KeyId;
@@ -170,10 +170,6 @@ impl Mac {
         dirs.sort();
         dirs
     }
-}
-
-fn keys(encryption: KeyProbe, signing: KeyProbe) -> Arc<TestKeys> {
-    Arc::new(TestKeys::new(encryption, signing))
 }
 
 fn moved_events() -> Vec<AuditEvent> {

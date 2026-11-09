@@ -21,12 +21,12 @@ use crate::core::provenance::PeerIdentity;
 async fn serves_request_from_accepted_peer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    let response = broker
-        .request(r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#);
+    let response = broker.request_parsed(
+        r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#,
+    );
 
     // The stub declines, so the request is answered rather than signed.
     // Reaching the stub at all means the peer was accepted.
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
         "unexpected response to an accepted peer"
@@ -122,8 +122,7 @@ async fn drops_prompt_of_disconnected_client() {
 
     // Times out after five seconds if the broker is still stuck on the
     // first prompt.
-    let response = broker.request(r#"{"request":"confirm","description":"ok"}"#);
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
+    let response = broker.request_parsed(r#"{"request":"confirm","description":"ok"}"#);
     assert!(matches!(response, WireResponse::Confirmed { ok: true }));
     assert_eq!(broker.authorizer.prompts_dropped.load(Ordering::SeqCst), 1);
 }
@@ -149,8 +148,7 @@ async fn skips_client_that_disconnected_while_queued() {
     drop(queued);
     drop(busy);
 
-    let response = broker.request(r#"{"request":"confirm","description":"ok"}"#);
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
+    let response = broker.request_parsed(r#"{"request":"confirm","description":"ok"}"#);
     assert!(matches!(response, WireResponse::Confirmed { ok: true }));
     assert!(broker.authorizer.prompts.lock().unwrap().is_empty());
     assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 0);
@@ -318,14 +316,12 @@ async fn policy_peer_satisfies_gives_its_scope() {
     ])
     .await;
 
-    let response: WireResponse =
-        serde_json::from_str(&broker.request(r#"{"request":"list_keychain_passwords"}"#)).unwrap();
+    let response = broker.request_parsed(r#"{"request":"list_keychain_passwords"}"#);
     assert!(
         matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
         "the browser host scope served a keychain listing"
     );
-    let response: WireResponse =
-        serde_json::from_str(&broker.request(r#"{"request":"generate_password"}"#)).unwrap();
+    let response = broker.request_parsed(r#"{"request":"generate_password"}"#);
     assert!(matches!(response, WireResponse::GeneratedPassword { .. }));
 }
 

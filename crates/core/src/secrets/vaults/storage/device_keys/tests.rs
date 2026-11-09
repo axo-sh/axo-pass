@@ -12,7 +12,7 @@ use crate::secrets::vaults::bundle::{ImportAction, ImportSelection, ImportableBu
 use crate::secrets::vaults::storage::catalog::VaultCatalog;
 use crate::secrets::vaults::storage::handle::{VaultHandle, get_vault_encryption_key_with};
 use crate::secrets::vaults::storage::manager::VaultsManager;
-use crate::secrets::vaults::storage::test_keys::TestKeys;
+use crate::secrets::vaults::storage::test_keys::{TestKeys, keys};
 use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
@@ -83,10 +83,6 @@ impl Mac {
         walk(self.root(), &mut found);
         found
     }
-}
-
-fn keys(encryption: KeyProbe, signing: KeyProbe) -> Arc<TestKeys> {
-    Arc::new(TestKeys::new(encryption, signing))
 }
 
 fn failure() -> KeyProbe {

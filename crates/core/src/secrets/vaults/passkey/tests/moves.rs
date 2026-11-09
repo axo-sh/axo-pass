@@ -3,8 +3,7 @@ use crate::secrets::vaults::{CredentialUpdate, VaultItemOverview};
 
 #[tokio::test]
 async fn passkey_moves_to_another_vault_with_its_record_intact() {
-    let mut source = VaultHandle::new_for_test("personal");
-    register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+    let mut source = registered_vault("ada").await;
     let stored = list(&source).unwrap().remove(0);
     source
         .mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
@@ -33,8 +32,7 @@ async fn passkey_moves_to_another_vault_with_its_record_intact() {
 
 #[tokio::test]
 async fn moved_passkey_leaves_no_source_tombstone() {
-    let mut source = VaultHandle::new_for_test("personal");
-    register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+    let mut source = registered_vault("ada").await;
     let stored = list(&source).unwrap().remove(0);
     let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();
     let mut dest = VaultHandle::new_for_test("work");
@@ -48,8 +46,7 @@ async fn moved_passkey_leaves_no_source_tombstone() {
 
 #[tokio::test]
 async fn move_within_vault_keeps_credential() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     vw.mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
         .unwrap();
@@ -89,8 +86,7 @@ async fn move_within_vault_keeps_credential() {
 
 #[tokio::test]
 async fn move_in_vault_to_new_login_matches_copy() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
+    let mut vw = registered_vault("ada@example.com").await;
     let stored = list(&vw).unwrap().remove(0);
     let record = read_record(&vw, &stored.item_key, &stored.credential_key).unwrap();
     let mut copy = VaultHandle::new_for_test("work");
@@ -136,8 +132,7 @@ async fn move_in_vault_to_new_login_matches_copy() {
 /// record and keeps its own id.
 #[tokio::test]
 async fn move_within_vault_onto_same_passkey_replaces_it() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     vw.mark_credential_used(&stored.item_key, &stored.credential_key, 1_750_000_000)
         .unwrap();
@@ -179,8 +174,7 @@ async fn move_within_vault_onto_same_passkey_replaces_it() {
 
 #[tokio::test]
 async fn move_within_vault_to_source_item_changes_nothing() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     let before = vw
         .credential_ids(&stored.item_key, &stored.credential_key)
@@ -202,8 +196,7 @@ async fn move_within_vault_to_source_item_changes_nothing() {
 #[tokio::test]
 async fn move_onto_same_passkey_keeps_later_last_used_time() {
     for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
-        let mut vw = VaultHandle::new_for_test("personal");
-        register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+        let mut vw = registered_vault("ada").await;
         let stored = list(&vw).unwrap().remove(0);
         let key = &stored.credential_key;
         vw.add_item("other", "Other").unwrap();
@@ -228,8 +221,7 @@ async fn move_onto_same_passkey_keeps_later_last_used_time() {
 #[tokio::test]
 async fn copy_across_vaults_keeps_later_last_used() {
     for (source_at, dest_at) in [(EARLIER_USE, LATER_USE), (LATER_USE, EARLIER_USE)] {
-        let mut source = VaultHandle::new_for_test("personal");
-        register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+        let source = registered_vault("ada").await;
         let stored = list(&source).unwrap().remove(0);
         let key = &stored.credential_key;
         let mut dest = VaultHandle::new_for_test("work");
@@ -255,8 +247,7 @@ async fn copy_across_vaults_keeps_later_last_used() {
 
 #[tokio::test]
 async fn move_in_vault_keeps_credential_id() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     vw.add_item("other", "Other").unwrap();
     let recorded = recorded_id(&vw, &stored);
@@ -278,8 +269,7 @@ async fn move_in_vault_keeps_credential_id() {
 
 #[tokio::test]
 async fn move_across_vaults_keeps_credential_id() {
-    let mut source = VaultHandle::new_for_test("personal");
-    register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+    let source = registered_vault("ada").await;
     let stored = list(&source).unwrap().remove(0);
     let recorded = recorded_id(&source, &stored);
     let record = read_record(&source, &stored.item_key, &stored.credential_key).unwrap();

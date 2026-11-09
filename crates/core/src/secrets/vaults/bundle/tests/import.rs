@@ -76,6 +76,11 @@ impl ImportTarget {
     }
 }
 
+/// Assert that `target` holds no vault file or temp file.
+fn assert_nothing_written(target: &ImportTarget) {
+    assert_eq!(target.vault_dir_names(), Vec::<String>::new());
+}
+
 /// Opened bundle vault built from `encrypted`, which `vault` encrypted.
 fn prepared_from(vault: &Vault, encrypted: EncryptedVault) -> PreparedVault {
     PreparedVault {
@@ -199,7 +204,7 @@ fn stale_last_used_at_fails_import() {
     let result = target.import(bundle, &[vault.id()]);
 
     assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));
-    assert_eq!(target.vault_dir_names(), Vec::<String>::new());
+    assert_nothing_written(&target);
 }
 
 #[test]
@@ -237,7 +242,7 @@ fn undecryptable_vault_fails_import() {
     let result = target.import(bundle, &[intact.id(), broken.id()]);
 
     assert!(result.is_err());
-    assert_eq!(target.vault_dir_names(), Vec::<String>::new());
+    assert_nothing_written(&target);
 }
 
 #[test]
@@ -265,7 +270,7 @@ fn interrupted_import_leaves_no_vault_file() {
         "{:?}",
         result.err()
     );
-    assert_eq!(target.vault_dir_names(), Vec::<String>::new());
+    assert_nothing_written(&target);
     assert_eq!(fs::read_to_string(&other[0].path).unwrap(), other_contents);
 }
 

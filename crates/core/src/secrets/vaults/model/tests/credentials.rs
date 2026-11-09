@@ -1,4 +1,6 @@
-use super::support::{cred_id, populate_caches, reload, vault_with_credentials};
+use super::support::{
+    add_cred, cred_id, populate_caches, reload, set_value, vault_with_credentials,
+};
 use super::*;
 use crate::secrets::vaults::model::fields::TextField;
 
@@ -67,15 +69,7 @@ fn updating_credential_kind_persists_through_save() {
 #[test]
 fn transferring_credential_keeps_its_value_history_and_id() {
     let mut vault = vault_with_credentials("item", &["password"]);
-    vault
-        .add_or_update_item_credential(
-            "item",
-            "password",
-            "password",
-            FieldKind::default(),
-            SecretString::from("new"),
-        )
-        .unwrap();
+    set_value(&mut vault, "item", "password", "new");
     let id = cred_id(&vault, "item", "password");
     let section = vault.create_item_section("other-item", "Old").unwrap().id;
 
@@ -264,15 +258,7 @@ fn adding_credential_with_taken_key_fails() {
         .unwrap()
         .unwrap();
     assert_ne!(secret.expose_secret(), "other");
-    vault
-        .add_item_credential(
-            "item",
-            "gamma",
-            "Title",
-            FieldKind::default(),
-            SecretString::from("new".to_string()),
-        )
-        .unwrap();
+    add_cred(&mut vault, "item", "gamma", "Title", "new");
 }
 
 #[test]

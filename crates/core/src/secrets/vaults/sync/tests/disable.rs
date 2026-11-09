@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::join::PEER;
 use super::join_sync::{Mac, enable, file_key, opened, recovered, root};
-use super::load::{Fixture, GENERATION, REPLICA, state};
+use super::load::{Fixture, GENERATION, REPLICA, state, sync_files};
 use super::manager::{Managed, assert_locked_writes, check_locks_on_write, folder_root, set_root};
 use super::publish::{decode, published};
 use super::reads::put_peer;
@@ -40,7 +40,6 @@ use crate::secrets::vaults::sync::meta::MetaFile;
 use crate::secrets::vaults::sync::model::KeyId;
 use crate::secrets::vaults::sync::recovery::import::{RecoveredKey, RecoveryCheck, RecoveryImport};
 use crate::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
-use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash, StateSource};
 use crate::secrets::vaults::sync::status::BUILD_ID;
 use crate::secrets::vaults::sync::transport::{FileName, ReadResult, SyncTransport};
@@ -74,14 +73,12 @@ fn disable(fx: &Fixture) -> Result<Committed<Disabled>, Error> {
         .disable_sync(&Target::of(&fx.vault), Unlock::Test(&key))
 }
 
-/// Whether the sync state, the staged file, and the sidecar of `fx` exist.
-fn sync_files(fx: &Fixture) -> [bool; 3] {
-    [
-        LocalSyncState::path(&fx.root, fx.id()),
-        LocalSyncState::staged_path(&fx.root, fx.id()),
-        Sidecar::path(&fx.root, fx.id()),
-    ]
-    .map(|path| path.exists())
+/// Disable sync of `fx` while the folder of `transport` is missing, which
+/// leaves the final file waiting. The folder is available again afterwards.
+fn disable_with_missing_folder(fx: &Fixture, transport: &FakeTransport) {
+    transport.set_unavailable(true);
+    assert_eq!(disable(fx).unwrap().value, Disabled::Waiting);
+    transport.set_unavailable(false);
 }
 
 /// Replica id and generation of the vault file of `fx`, verified.
@@ -358,9 +355,7 @@ fn interrupted_disable_leaves_no_sync_state() {
     // A disable whose copy did not run, as when the app quits before it.
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
-    transport.set_unavailable(true);
-    assert_eq!(disable(&fx).unwrap().value, Disabled::Waiting);
-    transport.set_unavailable(false);
+    disable_with_missing_folder(&fx, &transport);
 
     let managed = Managed::start(&fx, false);
     managed.run();
@@ -392,9 +387,7 @@ fn after_disable_no_transaction_joins_records_or_publishes_and_read_listing_list
     let files = fx.catalog.files();
     put_peer(&fx, &transport, PEER, "joined");
     assert!(files.read_joins(fx.id()));
-    transport.set_unavailable(true);
-    assert_eq!(disable(&fx).unwrap().value, Disabled::Waiting);
-    transport.set_unavailable(false);
+    disable_with_missing_folder(&fx, &transport);
     let leaving = fs::read(fx.state_path()).unwrap();
     let writes = transport.writes();
 
@@ -487,7 +480,7 @@ fn disable_of_sync_state_that_fails_its_signature_or_is_missing_saves_vault_and_
         let transport = Arc::new(FakeTransport::default());
         let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
         if name == "signed by another key" {
-            fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+            fx.put_foreign_state();
         }
         let staged = LocalSyncState::staged_path(&fx.root, fx.id());
         fs::create_dir_all(staged.parent().unwrap()).unwrap();
@@ -551,9 +544,7 @@ fn crash_after_leaving_save_loads_as_leaving_and_next_transaction_finishes_disab
 fn leaving_sync_state_with_no_vault_file_copied_and_deleted_by_manager() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
-    transport.set_unavailable(true);
-    assert_eq!(disable(&fx).unwrap().value, Disabled::Waiting);
-    transport.set_unavailable(false);
+    disable_with_missing_folder(&fx, &transport);
     let staged = saved(&fx).0.staged_hash.unwrap();
     fs::remove_file(&fx.vault.path).unwrap();
     assert!(fx.catalog.scan().missing.is_empty());
@@ -622,9 +613,7 @@ fn enable_join_and_disable_refuse_while_sync_state_is_leaving() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     transport.put_meta(fx.id(), &MetaFile::new(fx.id()).to_bytes());
-    transport.set_unavailable(true);
-    assert_eq!(disable(&fx).unwrap().value, Disabled::Waiting);
-    transport.set_unavailable(false);
+    disable_with_missing_folder(&fx, &transport);
     let on_disk = fx.on_disk();
     let writes = transport.writes();
     let target = Target::of(&fx.vault);

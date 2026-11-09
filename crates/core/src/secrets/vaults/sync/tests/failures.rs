@@ -82,6 +82,21 @@ fn apply_failed(fx: &Fixture) -> bool {
     matches!(&paused(fx)[..], [PausedCause::ApplyFailed { .. }])
 }
 
+/// Assert that `committed`, a transaction on the faulty build, paused sync on
+/// an apply failure.
+fn assert_apply_paused(fx: &Fixture, committed: &Committed<()>) {
+    assert!(apply_failed(fx), "{:?}", paused(fx));
+    assert_eq!(committed.sync_status, Some(SyncStatus::Paused(paused(fx))));
+}
+
+/// Run a transaction on a build with a fixed view, and assert that sync is
+/// active with no paused cause.
+fn fixed_build(fx: &Fixture) {
+    let committed = fx.write(|_| Ok(())).unwrap();
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    assert!(paused(fx).is_empty());
+}
+
 /// Write ids that `state` holds and `before` lacks, minted by `replica`.
 fn minted_by(before: &State, state: &State, replica: ReplicaId) -> Vec<WriteId> {
     new_write_ids(before, state)
@@ -121,8 +136,7 @@ fn apply_failure_saves_local_edit_and_requested_change_and_fixed_build_joins_wit
 
     let committed = on_faulty_build(&fx, |vh| vh.add_item("mine", "Mine").map(|_| ())).unwrap();
 
-    assert!(apply_failed(&fx), "{:?}", paused(&fx));
-    assert_eq!(committed.sync_status, Some(SyncStatus::Paused(paused(&fx))));
+    assert_apply_paused(&fx, &committed);
     // The requested change is saved on the vault as it was before the join.
     // The vault name that the failed apply wrote is not kept.
     let vault = saved_vault(&fx);
@@ -151,10 +165,8 @@ fn apply_failure_saves_local_edit_and_requested_change_and_fixed_build_joins_wit
     assert!(saved_vault(&fx).get_item("joined").is_err());
 
     // A later build with a fixed view joins the file with no recovery merge.
-    let committed = fx.write(|_| Ok(())).unwrap();
+    fixed_build(&fx);
 
-    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(paused(&fx).is_empty());
     let vault = saved_vault(&fx);
     assert!(vault.get_item("mine").is_ok());
     assert!(vault.get_item("joined").is_ok());
@@ -177,8 +189,7 @@ fn apply_failure_after_recorded_edit_keeps_edit_and_saves_vault_as_change_left_i
     let committed =
         on_faulty_build(&fx, |vh| vh.add_item("mine", UNAPPLICABLE).map(|_| ())).unwrap();
 
-    assert!(apply_failed(&fx), "{:?}", paused(&fx));
-    assert_eq!(committed.sync_status, Some(SyncStatus::Paused(paused(&fx))));
+    assert_apply_paused(&fx, &committed);
     assert!(saved_vault(&fx).get_item("mine").is_ok());
     let (local, recorded) = saved(&fx);
     assert_eq!(minted_by(&loaded, &recorded, REPLICA).len(), 1);
@@ -186,10 +197,8 @@ fn apply_failure_after_recorded_edit_keeps_edit_and_saves_vault_as_change_left_i
     assert_eq!(last_publish(&fx), local.staged_hash);
 
     // A later build finds no edits and records nothing.
-    let committed = fx.write(|_| Ok(())).unwrap();
+    fixed_build(&fx);
 
-    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(paused(&fx).is_empty());
     assert_eq!(saved(&fx).1, recorded);
 }
 
@@ -204,8 +213,7 @@ fn apply_failure_in_rebuild_uses_loaded_sync_state() {
 
     let committed = on_faulty_build(&fx, |vh| vh.add_item("mine", "Mine").map(|_| ())).unwrap();
 
-    assert!(apply_failed(&fx), "{:?}", paused(&fx));
-    assert_eq!(committed.sync_status, Some(SyncStatus::Paused(paused(&fx))));
+    assert_apply_paused(&fx, &committed);
     let vault = saved_vault(&fx);
     assert!(vault.get_item("mine").is_ok());
     assert!(vault.get_item("joined").is_err());
@@ -236,8 +244,7 @@ fn apply_failure_in_v_greater_than_s_repair_saves_vault_only_and_fixed_build_rep
     let committed = on_faulty_build(&fx, |_| Ok(())).unwrap();
 
     // The repair is discarded with the join, and nothing is saved.
-    assert!(apply_failed(&fx), "{:?}", paused(&fx));
-    assert_eq!(committed.sync_status, Some(SyncStatus::Paused(paused(&fx))));
+    assert_apply_paused(&fx, &committed);
     assert!(!committed.changed);
     assert_eq!(fx.on_disk(), on_disk);
 
@@ -254,10 +261,8 @@ fn apply_failure_in_v_greater_than_s_repair_saves_vault_only_and_fixed_build_rep
     assert_eq!(fs::read_to_string(fx.state_path()).unwrap(), backup);
 
     // A later build runs the repair and joins the file.
-    let committed = fx.write(|_| Ok(())).unwrap();
+    fixed_build(&fx);
 
-    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(paused(&fx).is_empty());
     let vault = saved_vault(&fx);
     for key in ["item", "unpublished", "second", "joined"] {
         assert!(vault.get_item(key).is_ok(), "{key}");
@@ -310,10 +315,8 @@ fn diff_failure_saves_change_in_vault_only_and_v_greater_than_s_repair_records_i
     assert_eq!(fx.write_case(), case);
 
     // Once the diff succeeds, the repair records the vault.
-    let committed = fx.write(|_| Ok(())).unwrap();
+    fixed_build(&fx);
 
-    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(paused(&fx).is_empty());
     assert_eq!(saved(&fx).0.generation, GENERATION + 3);
     assert_eq!(saved_vault(&fx).generation(), GENERATION + 3);
     assert_no_edits(&fx);
@@ -359,10 +362,8 @@ fn while_peer_file_has_newer_format_local_edits_recorded_other_peers_join_and_re
     transport.remove(fx.id(), PEER, &StateFile::name(fx.id(), newer_hash));
     transport.put_state(fx.id(), PEER, &state_file(&fx, PEER, &peer));
 
-    let committed = fx.write(|_| Ok(())).unwrap();
+    fixed_build(&fx);
 
-    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(paused(&fx).is_empty());
     let vault = saved_vault(&fx);
     for key in ["item", "second", "other", "joined"] {
         assert!(vault.get_item(key).is_ok(), "{key}");

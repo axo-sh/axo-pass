@@ -13,11 +13,76 @@ pub(super) fn test_vault() -> Vault {
     )
 }
 
+/// Set the value of credential `cred_key` of item `item_key`, and add the
+/// credential if it is missing.
+pub(super) fn set_value(vault: &mut Vault, item_key: &str, cred_key: &str, value: &str) {
+    vault
+        .add_or_update_item_credential(
+            item_key,
+            cred_key,
+            cred_key,
+            FieldKind::default(),
+            SecretString::from(value.to_string()),
+        )
+        .unwrap();
+}
+
+/// Load `encrypted` with the test file key.
+pub(super) fn try_load_encrypted(encrypted: EncryptedVault) -> Result<Vault, Error> {
+    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
+    Vault::from_encrypted_with_cipher(cipher, encrypted)
+}
+
+/// [`try_load_encrypted`] for a file that loads.
+pub(super) fn load_encrypted(encrypted: EncryptedVault) -> Vault {
+    try_load_encrypted(encrypted).unwrap()
+}
+
 /// Save and load the vault, as a restart would.
 pub(super) fn reload(vault: &Vault) -> Vault {
-    let encrypted = vault.to_encrypted(true).unwrap();
-    let cipher = VaultCipher::new_with_bytes(&TEST_FILE_KEY, encrypted.id);
-    Vault::from_encrypted_with_cipher(cipher, encrypted).unwrap()
+    load_encrypted(vault.to_encrypted(true).unwrap())
+}
+
+/// Credential `cred_id` of item `item_id` in `encrypted`.
+pub(super) fn cred_mut(
+    encrypted: &mut EncryptedVault,
+    item_id: Uuid,
+    cred_id: Uuid,
+) -> &mut EncryptedVaultItemCredential {
+    encrypted
+        .items
+        .get_mut(&item_id)
+        .unwrap()
+        .credentials
+        .get_mut(&cred_id)
+        .unwrap()
+}
+
+/// Placement of credential `key` in `section`.
+pub(super) fn placement(key: &str, section: Option<Uuid>) -> CredentialPlacement {
+    CredentialPlacement {
+        key: key.to_string(),
+        section,
+    }
+}
+
+/// Add credential `cred_key` titled `title` to item `item_key`.
+pub(super) fn add_cred(
+    vault: &mut Vault,
+    item_key: &str,
+    cred_key: &str,
+    title: &str,
+    value: &str,
+) {
+    vault
+        .add_item_credential(
+            item_key,
+            cred_key,
+            title,
+            FieldKind::default(),
+            SecretString::from(value.to_string()),
+        )
+        .unwrap();
 }
 
 /// A vault with one item holding the given credential keys, plus a second
@@ -87,18 +152,6 @@ pub(super) fn secret_of(vault: &Vault, item_key: &str, cred_key: &str) -> String
 
 pub(super) fn item_id_of(vault: &Vault, item_key: &str) -> Uuid {
     *vault.get_item_id(item_key).unwrap()
-}
-
-pub(super) fn set_value(vault: &mut Vault, item_key: &str, cred_key: &str, value: &str) {
-    vault
-        .add_or_update_item_credential(
-            item_key,
-            cred_key,
-            cred_key,
-            FieldKind::default(),
-            SecretString::from(value.to_string()),
-        )
-        .unwrap();
 }
 
 /// Credential metadata plaintext read as a JSON object.

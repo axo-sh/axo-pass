@@ -1,10 +1,15 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::core::auth::AuthContext;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeyProbe};
 use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
+
+/// Shared test keys with the given probe results.
+pub fn keys(encryption: KeyProbe, signing: KeyProbe) -> Arc<TestKeys> {
+    Arc::new(TestKeys::new(encryption, signing))
+}
 
 /// Keys in memory for tests. Creating a key makes it present and counts it.
 pub struct TestKeys {

@@ -1,14 +1,8 @@
-use super::support::{populate_caches, reload, vault_with_credentials};
+use super::support::{placement, populate_caches, reload, vault_with_credentials};
 use super::*;
 
 fn unsectioned(cred_keys: &[&str]) -> Vec<CredentialPlacement> {
-    cred_keys
-        .iter()
-        .map(|k| CredentialPlacement {
-            key: k.to_string(),
-            section: None,
-        })
-        .collect()
+    cred_keys.iter().map(|k| placement(k, None)).collect()
 }
 
 fn positions(vault: &Vault, item_key: &str, cred_keys: &[&str]) -> Vec<Option<u32>> {
@@ -119,18 +113,9 @@ fn reorder_sets_sections_and_positions() {
     let section_id = vault.create_item_section("item", "Login").unwrap().id;
 
     let placements = vec![
-        CredentialPlacement {
-            key: "gamma".to_string(),
-            section: None,
-        },
-        CredentialPlacement {
-            key: "alpha".to_string(),
-            section: Some(section_id),
-        },
-        CredentialPlacement {
-            key: "beta".to_string(),
-            section: Some(section_id),
-        },
+        placement("gamma", None),
+        placement("alpha", Some(section_id)),
+        placement("beta", Some(section_id)),
     ];
     vault.reorder_item_credentials("item", &placements).unwrap();
 
@@ -149,10 +134,7 @@ fn reorder_sets_sections_and_positions() {
 #[test]
 fn reorder_rejects_unknown_section_without_changes() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
-    let placements = vec![CredentialPlacement {
-        key: "alpha".to_string(),
-        section: Some(Uuid::new_v4()),
-    }];
+    let placements = vec![placement("alpha", Some(Uuid::new_v4()))];
     let err = vault
         .reorder_item_credentials("item", &placements)
         .unwrap_err();

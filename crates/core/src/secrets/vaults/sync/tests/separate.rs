@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::join::{PEER, peer_state};
 use super::join_sync::{Mac, enable, opened, recovered, root};
-use super::load::{Fixture, GENERATION, REPLICA, body, device_key, state_of};
+use super::load::{Fixture, GENERATION, REPLICA, body, device_key, state_of, sync_files};
 use super::publish::published;
 use super::transport::FakeTransport;
 use super::txn::{saved_vault, synced};
@@ -23,7 +23,7 @@ use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::join_sync::JoinInto;
 use crate::secrets::vaults::sync::keys::SyncKey;
 use crate::secrets::vaults::sync::load::SyncLoad;
-use crate::secrets::vaults::sync::local_state::{LocalSyncState, PinSource, PinnedKeys};
+use crate::secrets::vaults::sync::local_state::{PinSource, PinnedKeys};
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey};
 use crate::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -79,15 +79,6 @@ fn disable(fx: &Fixture) -> Result<Committed<Disabled>, Error> {
 }
 
 /// Whether the sync state, the staged file, and the sidecar of `fx` exist.
-fn sync_files(fx: &Fixture) -> [bool; 3] {
-    [
-        LocalSyncState::path(&fx.root, fx.id()),
-        LocalSyncState::staged_path(&fx.root, fx.id()),
-        Sidecar::path(&fx.root, fx.id()),
-    ]
-    .map(|path| path.exists())
-}
-
 /// Replica id of the vault file at `vh`, verified.
 fn vault_replica(vh: &VaultHandle) -> Option<Uuid> {
     EncryptedVault::load(&vh.path, &TestSigner::device())

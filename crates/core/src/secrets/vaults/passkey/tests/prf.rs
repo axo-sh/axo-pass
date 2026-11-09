@@ -2,8 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn assertion_leaves_stored_record_unchanged() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let before = list(&vw).unwrap();
     let item_key = before[0].item_key.clone();
     let credential_key = before[0].credential_key.clone();
@@ -239,9 +238,8 @@ async fn per_credential_prf_input_takes_precedence() {
 
 #[tokio::test]
 async fn passkey_without_prf_secret_returns_no_prf_results() {
-    let mut vw = VaultHandle::new_for_test("personal");
     // Registered without PRF, as passkeys were before PRF support.
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
     let value = vw
         .get_secret(&stored.item_key, &stored.credential_key)

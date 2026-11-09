@@ -13,9 +13,8 @@ async fn autofill_scope_refuses_other_requests() {
     let broker =
         TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
 
-    let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"x"}"#);
+    let response = broker.request_parsed(r#"{"request":"list_keychain_passwords","caller":"x"}"#);
 
-    let response: WireResponse = serde_json::from_str(&response).unwrap();
     assert!(
         matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
         "the autofill scope served a keychain listing",
@@ -72,7 +71,7 @@ async fn autofill_scope_names_its_own_caller() {
     ] {
         let broker =
             TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
-        let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+        let response: WireResponse = broker.request_parsed(line);
         assert!(
             matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
             "unexpected response to {line}"
@@ -228,7 +227,7 @@ async fn autofill_scope_cannot_generate_or_save() {
         format!(r#"{{"request":"save_login",{PAGE},"password":"pw"}}"#),
         format!(r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":"pw"}}"#),
     ] {
-        let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+        let response: WireResponse = broker.request_parsed(&line);
         assert!(
             matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
             "{line}"

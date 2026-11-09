@@ -1,4 +1,6 @@
-use super::support::{LooseMetadata, TEST_FILE_KEY, reload, test_vault, vault_with_credentials};
+use super::support::{
+    LooseMetadata, TEST_FILE_KEY, cred_mut, reload, test_vault, vault_with_credentials,
+};
 use super::*;
 use crate::secrets::vaults::format::short_id::ShortId;
 
@@ -255,8 +257,7 @@ fn unknown_kind_survives_round_trip() {
     let blob = vault
         .cipher
         .encrypt_cred_metadata_as_for_test(item_id, cred_id, &newer);
-    let credentials = &mut encrypted.items.get_mut(&item_id).unwrap().credentials;
-    credentials.get_mut(&cred_id).unwrap().metadata = blob;
+    cred_mut(&mut encrypted, item_id, cred_id).metadata = blob;
 
     let mut loaded =
         Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted).unwrap();

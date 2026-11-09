@@ -432,7 +432,7 @@ fn rebuild_on_request_refuses_file_that_verifies_and_sync_state_not_trusted_or_l
         let fx = Fixture::synced();
         match name {
             "signed by another key" => {
-                fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+                fx.put_foreign_state();
             },
             "leaving" => {
                 let mut local = state(fx.id(), REPLICA, GENERATION);

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use secrecy::SecretString;
 
 use super::NOW;
-use super::load::{Fixture, GENERATION, REPLICA, body, device_key, state};
+use super::load::{Fixture, GENERATION, REPLICA, body, device_key};
 use super::state_file::{key, keyring};
 use super::transport::FakeTransport;
 use super::view::State;
@@ -567,7 +567,7 @@ fn untrusted_sync_state_saves_locally_same_generation() {
     for name in ["missing", "signed by another key"] {
         let fx = Fixture::with_transport(GENERATION, Some(REPLICA), transport.clone());
         if name != "missing" {
-            fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+            fx.put_foreign_state();
         }
         let state_before = fx.on_disk().1;
 

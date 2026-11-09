@@ -3,8 +3,7 @@ use crate::secrets::vaults::MatchKind;
 
 #[tokio::test]
 async fn new_login_target_creates_login_item() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada@example.com").await;
+    let vw = registered_vault("ada@example.com").await;
 
     let passkeys = list(&vw).unwrap();
     assert_eq!(passkeys.len(), 1);

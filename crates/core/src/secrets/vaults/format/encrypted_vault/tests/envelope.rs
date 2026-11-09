@@ -36,6 +36,21 @@ fn assert_refused(result: Result<EncryptedVault, Error>, pointer: &str) {
     );
 }
 
+/// Assert that `parse` of `contents` and `VaultHeader::parse` of
+/// `header_contents` both fail with an error that `refused` accepts. `context`
+/// labels a failure.
+fn assert_both_refused(
+    contents: &str,
+    header_contents: &str,
+    refused: impl Fn(&Error) -> bool,
+    context: &str,
+) {
+    let error = parse(contents).err();
+    assert!(error.as_ref().is_some_and(&refused), "{context}");
+    let error = VaultHeader::parse(header_contents).err();
+    assert!(error.as_ref().is_some_and(&refused), "{context}");
+}
+
 #[test]
 fn unknown_format_fails_closed() {
     for format in [0, 1, 3, 1000] {
@@ -46,15 +61,11 @@ fn unknown_format_fails_closed() {
         file["signature"] = json!("c2ln");
         let contents = file.to_string();
 
-        let result = parse(&contents);
-        assert!(
-            matches!(result, Err(Error::UnsupportedVaultFormat(f)) if f == format),
-            "format {format}"
-        );
-        let result = VaultHeader::parse(&contents);
-        assert!(
-            matches!(result, Err(Error::UnsupportedVaultFormat(f)) if f == format),
-            "format {format}"
+        assert_both_refused(
+            &contents,
+            &contents,
+            |e| matches!(e, Error::UnsupportedVaultFormat(f) if *f == format),
+            &format!("format {format}"),
         );
     }
 }
@@ -80,14 +91,12 @@ fn format2_file_key_with_members_shape_refused() {
 fn file_without_envelope_refused_as_format_1() {
     // A format 1 file is the vault object without an envelope.
     let contents = serde_json::to_string_pretty(&filled_vault()).unwrap();
-    assert!(matches!(
-        parse(&contents),
-        Err(Error::UnsupportedVaultFormat(1))
-    ));
-    assert!(matches!(
-        VaultHeader::parse(&contents),
-        Err(Error::UnsupportedVaultFormat(1))
-    ));
+    assert_both_refused(
+        &contents,
+        &contents,
+        |e| matches!(e, Error::UnsupportedVaultFormat(1)),
+        "format 1",
+    );
 }
 
 #[test]
@@ -147,14 +156,12 @@ fn file_without_key_refused() {
     file["vault"].as_object_mut().unwrap().remove("key");
     let contents = file.to_string();
 
-    assert!(matches!(
-        parse(&signed(&file)),
-        Err(Error::VaultDeserializationError(_))
-    ));
-    assert!(matches!(
-        VaultHeader::parse(&contents),
-        Err(Error::VaultDeserializationError(_))
-    ));
+    assert_both_refused(
+        &signed(&file),
+        &contents,
+        |e| matches!(e, Error::VaultDeserializationError(_)),
+        "file without key",
+    );
 }
 
 #[test]
@@ -164,16 +171,11 @@ fn file_with_key_not_normalized_refused() {
         file["vault"]["key"] = json!(key);
         let contents = file.to_string();
 
-        assert!(
-            matches!(parse(&signed(&file)), Err(Error::InvalidVaultKey(_))),
-            "{key:?}"
-        );
-        assert!(
-            matches!(
-                VaultHeader::parse(&contents),
-                Err(Error::InvalidVaultKey(_))
-            ),
-            "{key:?}"
+        assert_both_refused(
+            &signed(&file),
+            &contents,
+            |e| matches!(e, Error::InvalidVaultKey(_)),
+            &format!("{key:?}"),
         );
     }
 }

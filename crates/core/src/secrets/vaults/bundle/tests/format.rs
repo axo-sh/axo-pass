@@ -6,7 +6,7 @@ use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::{import_as, make_bundle_json, plain_wrap};
+use super::{bundle_key, import_as, make_bundle_json, plain_wrap};
 use crate::audit::test_support::test_dir;
 use crate::secrets::vaults::bundle::ImportableBundle;
 use crate::secrets::vaults::bundle::export_mode::ExportMode;
@@ -66,7 +66,7 @@ fn blob_json<T>(blob: &EncryptedBlob<T>) -> Value {
 #[test]
 fn bundle_exported_before_vault_format_2_imports() {
     let bundle_id = Uuid::new_v4();
-    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundle_key = bundle_key();
     let bundle_cipher = Aes256Gcm::new(&bundle_key);
 
     let mut vault = Vault::new_for_test();
@@ -173,7 +173,7 @@ fn bundle_exported_before_vault_format_2_imports() {
 #[test]
 fn bundle_written_with_short_ids() {
     let bundle_id = Uuid::new_v4();
-    let bundle_key = Aes256Gcm::generate_key(aes_gcm::aead::OsRng);
+    let bundle_key = bundle_key();
     let bundle_cipher = Aes256Gcm::new(&bundle_key);
     let mut vault = Vault::new_for_test();
     vault.add_or_update_item("login", "Login").unwrap();

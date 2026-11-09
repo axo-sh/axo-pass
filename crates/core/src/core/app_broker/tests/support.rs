@@ -10,6 +10,7 @@ use crate::audit;
 use crate::audit::test_support::{TestDir, test_dir};
 use crate::core::app_broker::access::{Client, RequestScope};
 use crate::core::app_broker::server::serve_on;
+use crate::core::app_broker::wire::WireResponse;
 use crate::core::app_broker::{
     Authorizers, BrokerPasswordEntry, CollectedPassphrase, ConfirmPrompt, KeychainLister,
     LoginIndex, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, SignAuthorizer, SignPrompt,
@@ -221,6 +222,11 @@ impl TestBroker {
         let mut response = String::new();
         BufReader::new(&stream).read_line(&mut response).unwrap();
         response
+    }
+
+    /// [`Self::request`], with the response line parsed.
+    pub(super) fn request_parsed(&self, line: &str) -> WireResponse {
+        serde_json::from_str(&self.request(line)).unwrap()
     }
 }
 

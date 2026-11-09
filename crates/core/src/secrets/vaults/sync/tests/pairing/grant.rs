@@ -686,9 +686,7 @@ fn vault_whose_sync_state_not_trusted_receives_no_wrapping() {
     let (_, keys) = new_mac_keys();
     let cases: [(&str, PutState); 4] = [
         ("missing", |_| {}),
-        ("other signer", |fx| {
-            fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random())
-        }),
+        ("other signer", |fx| fx.put_foreign_state()),
         ("stopped", |fx| {
             let mut local = state(fx.id(), REPLICA, GENERATION);
             local.stopped_build = Some(BUILD_ID.to_string());

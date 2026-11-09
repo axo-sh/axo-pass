@@ -11,6 +11,15 @@ fn event(action: Action, outcome: Outcome) -> AuditEvent {
     AuditEvent::new(Source::Cli, action, outcome)
 }
 
+/// Events whose detail `key` holds `id`.
+fn read_by_detail_id(key: &str, id: impl Into<String>) -> Vec<AuditEvent> {
+    read(&AuditFilter {
+        detail_id: Some(DetailId::new(key, id)),
+        ..Default::default()
+    })
+    .events
+}
+
 #[test]
 fn round_trip_newest_first() {
     let _t = test_dir();
@@ -141,11 +150,8 @@ fn entity_ids_recorded_in_detail_and_found_by_detail_id_filter() {
     assert!(none.detail.is_empty());
     record(none);
 
-    let found = read(&AuditFilter {
-        detail_id: Some(DetailId::new("item_id", ShortId::encode_uuid(item_id))),
-        ..Default::default()
-    });
-    assert_eq!(found.events.len(), 1);
+    let found = read_by_detail_id("item_id", ShortId::encode_uuid(item_id));
+    assert_eq!(found.len(), 1);
 }
 
 #[test]
@@ -164,14 +170,7 @@ fn query_by_short_id_finds_events_with_hyphenated_ids() {
     );
     record(event(Action::ItemUpdated, Outcome::Succeeded).detail("item_id", other_id.to_string()));
 
-    let found = |id: String| {
-        read(&AuditFilter {
-            detail_id: Some(DetailId::new("item_id", id)),
-            ..Default::default()
-        })
-        .events
-        .len()
-    };
+    let found = |id: String| read_by_detail_id("item_id", id).len();
     assert_eq!(found(ShortId::encode_uuid(item_id)), 3);
     assert_eq!(found(hyphenated.to_uppercase()), 3);
     assert_eq!(found(item_id.simple().to_string()), 3);
@@ -188,14 +187,10 @@ fn detail_id_filter_matches_single_id_or_id_in_list() {
     record(event(Action::ItemUpdated, Outcome::Succeeded));
 
     let ids = |id: &str| {
-        read(&AuditFilter {
-            detail_id: Some(DetailId::new("item_id", id)),
-            ..Default::default()
-        })
-        .events
-        .into_iter()
-        .map(|e| e.detail)
-        .collect::<Vec<_>>()
+        read_by_detail_id("item_id", id)
+            .into_iter()
+            .map(|e| e.detail)
+            .collect::<Vec<_>>()
     };
     let a = ids("a");
     assert_eq!(a.len(), 2);

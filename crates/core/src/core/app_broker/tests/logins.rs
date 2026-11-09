@@ -31,7 +31,7 @@ async fn refuses_unmatchable_rp_ids_early() {
     ] {
         let broker =
             TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
-        let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+        let response: WireResponse = broker.request_parsed(line);
         assert!(
             matches!(&response, WireResponse::Failed { message } if message.contains(expected)),
             "unexpected response to {line}"
@@ -51,7 +51,7 @@ async fn locked_listing_refused_to_untrusted() {
     for (scope, line) in refused {
         let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
         broker.logins.replace(Vec::new());
-        let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+        let response: WireResponse = broker.request_parsed(&line);
         assert!(
             matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
             "{scope:?} listed without a prompt"
@@ -85,7 +85,7 @@ async fn locked_listing_answers_from_index_without_prompt() {
         let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
 
         // Nothing is indexed before the app's first unlock.
-        let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+        let response: WireResponse = broker.request_parsed(&line);
         assert!(
             matches!(&response, WireResponse::LockedLogins { logins, indexed: false } if logins.is_empty()),
             "{scope:?}"
@@ -94,7 +94,7 @@ async fn locked_listing_answers_from_index_without_prompt() {
         broker
             .logins
             .replace(vec![item("a", "example.com"), item("b", "other.com")]);
-        let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+        let response: WireResponse = broker.request_parsed(&line);
         let WireResponse::LockedLogins { logins, indexed } = response else {
             panic!("{scope:?}: unexpected response");
         };
@@ -116,7 +116,7 @@ async fn passkey_listing_answers_from_index_without_prompt() {
     let line = r#"{"request":"list_passkeys","rp_id":"example.com"}"#;
 
     // Nothing is indexed before the app's first unlock.
-    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    let response: WireResponse = broker.request_parsed(line);
     assert!(matches!(
         &response,
         WireResponse::Passkeys { passkeys, indexed: false } if passkeys.is_empty()
@@ -132,7 +132,7 @@ async fn passkey_listing_answers_from_index_without_prompt() {
         passkey("other.com", 2, "ada"),
         passkey("example.com", 3, "webby"),
     ]);
-    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    let response: WireResponse = broker.request_parsed(line);
     let WireResponse::Passkeys { passkeys, indexed } = response else {
         panic!("unexpected response");
     };
@@ -153,7 +153,7 @@ async fn passkey_listing_refuses_public_suffix() {
         TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
     broker.logins.replace_passkeys(Vec::new());
     let line = r#"{"request":"list_passkeys","rp_id":"github.io"}"#;
-    let response: WireResponse = serde_json::from_str(&broker.request(line)).unwrap();
+    let response: WireResponse = broker.request_parsed(line);
     assert!(
         matches!(&response, WireResponse::Failed { message } if message.contains("public suffix"))
     );
@@ -163,27 +163,22 @@ async fn passkey_listing_refuses_public_suffix() {
 async fn generates_password_without_prompt() {
     let broker = browser_host_broker().await;
 
-    let response: WireResponse =
-        serde_json::from_str(&broker.request(r#"{"request":"generate_password"}"#)).unwrap();
+    let response = broker.request_parsed(r#"{"request":"generate_password"}"#);
     let WireResponse::GeneratedPassword { password } = response else {
         panic!("unexpected response");
     };
     assert_eq!(password.len(), 20);
 
-    let response: WireResponse = serde_json::from_str(
-        &broker.request(r#"{"request":"generate_password","policy":{"length":8,"symbols":false}}"#),
-    )
-    .unwrap();
+    let response = broker
+        .request_parsed(r#"{"request":"generate_password","policy":{"length":8,"symbols":false}}"#);
     let WireResponse::GeneratedPassword { password } = response else {
         panic!("unexpected response");
     };
     assert_eq!(password.len(), 8);
     assert!(password.chars().all(|c| c.is_ascii_alphanumeric()));
 
-    let response: WireResponse = serde_json::from_str(
-        &broker.request(r#"{"request":"generate_password","policy":{"length":1}}"#),
-    )
-    .unwrap();
+    let response =
+        broker.request_parsed(r#"{"request":"generate_password","policy":{"length":1}}"#);
     assert!(matches!(response, WireResponse::Failed { .. }));
 
     assert!(broker.authorizer.peers.lock().unwrap().is_empty());
@@ -266,7 +261,7 @@ async fn refuses_save_with_no_password_or_page_before_prompting() {
         format!(r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":""}}"#),
         r#"{"request":"save_login","url":"https://example.com","frame_url":"ftp://example.com","password":"pw"}"#.to_string(),
     ] {
-        let response: WireResponse = serde_json::from_str(&broker.request(&line)).unwrap();
+        let response: WireResponse = broker.request_parsed(&line);
         assert!(matches!(response, WireResponse::Failed { .. }), "{line}");
     }
     assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());

@@ -433,7 +433,7 @@ fn set_sync_root_refuses_vault_not_synced_or_is_leaving_or_has_no_valid_sync_sta
     cases.push(("sync state missing", Fixture::synced(), not_set()));
 
     let fx = Fixture::synced();
-    fx.put(&state(fx.id(), REPLICA, GENERATION), &TestSigner::random());
+    fx.put_foreign_state();
     cases.push(("signed by another key", fx, not_set()));
 
     let fx = Fixture::synced();

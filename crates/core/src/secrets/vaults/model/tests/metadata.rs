@@ -1,4 +1,4 @@
-use super::support::{LooseMetadata, vault_with_credentials};
+use super::support::{LooseMetadata, cred_mut, vault_with_credentials};
 use super::*;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::TextField;
@@ -104,8 +104,7 @@ fn stale_credential_metadata_field_fails_load() {
     let blob = vault
         .cipher
         .encrypt_cred_metadata_as_for_test(item_id, cred_id, &stale);
-    let credentials = &mut encrypted.items.get_mut(&item_id).unwrap().credentials;
-    credentials.get_mut(&cred_id).unwrap().metadata = blob;
+    cred_mut(&mut encrypted, item_id, cred_id).metadata = blob;
 
     let result = Vault::from_encrypted_with_cipher(vault.cipher.duplicate(), encrypted);
     assert!(matches!(result, Err(Error::VaultSecretDecryptionError)));

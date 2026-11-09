@@ -40,8 +40,7 @@ fn record_sign_in(vw: &VaultHandle, item_key: &str, credential_key: &str) -> Uui
 #[tokio::test]
 async fn sign_ins_are_assertions_of_one_passkey_newest_first() {
     let _audit = test_dir();
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     register(&mut vw, PasskeyTarget::NewLogin, "bob").await;
     let ada = passkey_of(&vw, "ada");
     let bob = passkey_of(&vw, "bob");
@@ -86,8 +85,7 @@ async fn sign_ins_are_assertions_of_one_passkey_newest_first() {
 #[tokio::test]
 async fn sign_in_history_unchanged_after_rename_and_moves() {
     let _audit = test_dir();
-    let mut source = VaultHandle::new_for_test("personal");
-    register(&mut source, PasskeyTarget::NewLogin, "ada").await;
+    let mut source = registered_vault("ada").await;
     source.add_item("other", "Other").unwrap();
     let stored = list(&source).unwrap().remove(0);
     let item_key = stored.item_key.clone();
@@ -135,8 +133,7 @@ async fn sign_in_history_unchanged_after_rename_and_moves() {
 
 #[tokio::test]
 async fn renaming_account_keeps_key_and_adds_no_history() {
-    let mut vw = VaultHandle::new_for_test("personal");
-    register(&mut vw, PasskeyTarget::NewLogin, "ada").await;
+    let mut vw = registered_vault("ada").await;
     let stored = list(&vw).unwrap().remove(0);
 
     rename_account(

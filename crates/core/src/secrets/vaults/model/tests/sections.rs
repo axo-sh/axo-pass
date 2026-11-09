@@ -1,4 +1,4 @@
-use super::support::{populate_caches, reload, vault_with_credentials};
+use super::support::{cred_id, populate_caches, reload, vault_with_credentials};
 use super::*;
 
 #[test]
@@ -126,7 +126,7 @@ fn restoring_into_deleted_section_drops_section() {
         .move_item_credential("item", "alpha", Some(section_id))
         .unwrap();
     populate_caches(&mut vault);
-    let cred_id = vault.get_item_credential("item", "alpha").unwrap().id;
+    let cred_id = cred_id(&vault, "item", "alpha");
 
     vault.delete_item_credential("item", "alpha").unwrap();
     vault.delete_item_section("item", section_id).unwrap();
