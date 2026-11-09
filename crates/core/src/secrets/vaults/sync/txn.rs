@@ -312,7 +312,9 @@ impl SyncTxn {
     /// A file is left, refused, or quarantined as [`Self::join_own`] states.
     /// A file under another fingerprint for its key id is ignored, and a
     /// file of a newer format is left. Both are read again in each later
-    /// transaction. A folder or a replica directory that cannot be listed
+    /// transaction. A file under another fingerprint for the current key id,
+    /// from a replica with no pin that `replica_keys` lacks, pauses sync with
+    /// `SeparateKey`. A folder or a replica directory that cannot be listed
     /// stops no other directory.
     pub(crate) fn join_peers(
         &mut self,
@@ -325,6 +327,21 @@ impl SyncTxn {
         self.peers_listed = join.listed;
         self.changed |= join.changed;
         join.changed
+    }
+
+    /// Whether a disable deletes the own replica directory in place of the
+    /// final file (D11 of doc 18). The sidecar records `SeparateKey`, and
+    /// `replica_keys` of the state holds no replica other than this one, so
+    /// no other Mac reads the own files.
+    pub(crate) fn leaves_separately(&self) -> bool {
+        let own = self.replica();
+        self.sidecar.separate_key()
+            && self
+                .state
+                .store
+                .replica_keys
+                .iter()
+                .all(|(replica, _)| *replica == own)
     }
 
     /// Whether the peer join listed the replica directories and every peer
@@ -504,6 +521,7 @@ impl SyncTxn {
     fn join<'a>(&'a mut self, session: &'a mut Session) -> StateJoin<'a> {
         StateJoin {
             vault_id: self.local.vault_id,
+            local: &self.local,
             state: &mut self.state,
             keyring: &self.keyring,
             sidecar: &mut self.sidecar,

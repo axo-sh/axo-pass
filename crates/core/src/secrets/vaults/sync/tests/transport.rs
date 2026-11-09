@@ -202,6 +202,12 @@ impl FakeTransport {
         self.folder().meta.get(&vault_id).cloned()
     }
 
+    /// Remove `meta.json` of the directory of vault `vault_id`, as a folder
+    /// that has not received it yet.
+    pub(super) fn remove_meta(&self, vault_id: Uuid) {
+        self.folder().meta.remove(&vault_id);
+    }
+
     /// Put the pairing request `bytes` at `request`, modified at the time of
     /// [`Self::set_now`].
     pub(super) fn put_pairing(&self, request: RequestId, bytes: &[u8]) {

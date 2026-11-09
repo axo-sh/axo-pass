@@ -781,6 +781,11 @@ pub enum Disabled {
     /// staged file, and the sidecar were deleted, and peers see the replica
     /// as inactive (D9 of doc 18).
     Deleted,
+    /// Another Mac enabled sync for the vault separately, and no other
+    /// replica is in `replica_keys`. The own replica directory was deleted in
+    /// place of the final file, since no other Mac reads its files. The sync
+    /// state, the staged file, and the sidecar were deleted (D11 of doc 18).
+    DirectoryDeleted,
 }
 
 /// Outcome of one attempt of [`VaultWriter::write`].
@@ -1546,6 +1551,14 @@ impl VaultWriter {
     /// deletes the sync files. A copy that fails leaves the `leaving` sync
     /// state for the `SyncManager`.
     ///
+    /// A trusted sync state whose sidecar records `SeparateKey`, and whose
+    /// `replica_keys` holds no other replica, writes no final file (D11 of
+    /// doc 18). The own replica directory is deleted in the synced folder,
+    /// the vault is saved without the replica id at the next generation, and
+    /// the sync state, the staged file, and the sidecar are deleted. A folder
+    /// that cannot be reached fails with `SyncFolderUnreachable`, and nothing
+    /// is written.
+    ///
     /// A vault saved before its `leaving` sync state is saved without the
     /// replica id, and the final file is copied. A sync state that is
     /// missing, fails its signature, is under a key the unlock lacks after
@@ -1650,12 +1663,18 @@ impl VaultWriter {
                 if matches!(case, SyncLoad::OlderVault { .. }) {
                     vault = sync.rebuilt_vault(vault.key().to_string(), &vault.unlocked_key())?;
                 }
-                let now = Timestamp::now().as_second() + self.clock_offset;
-                let session = locked.state.session(sync.replica(), sync.loaded());
-                sync.leave(session, now)?;
-                vault.set_sync(sync.next_generation(), None);
-                sync.stage(&self.root)?;
-                Disabled::Waiting
+                if sync.leaves_separately() {
+                    self.delete_own_directory(sync)?;
+                    vault.set_sync(sync.next_generation(), None);
+                    Disabled::DirectoryDeleted
+                } else {
+                    let now = Timestamp::now().as_second() + self.clock_offset;
+                    let session = locked.state.session(sync.replica(), sync.loaded());
+                    sync.leave(session, now)?;
+                    vault.set_sync(sync.next_generation(), None);
+                    sync.stage(&self.root)?;
+                    Disabled::Waiting
+                }
             },
             None if case == SyncLoad::Leaving => {
                 vault.set_sync(vault.generation(), None);
@@ -1666,6 +1685,10 @@ impl VaultWriter {
                 Disabled::Deleted
             },
         };
+        // A separate enable saves no sync state, so its files are deleted.
+        if disabled == Disabled::DirectoryDeleted {
+            sync = None;
+        }
         let vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, SyncKeyring::default());
 
         // The `leaving` sync state is saved before the vault, so a vault
@@ -1688,7 +1711,7 @@ impl VaultWriter {
         // No write id of this replica is minted after a disable.
         locked.state.end_actor();
         let changed = result?;
-        if disabled == Disabled::Deleted {
+        if matches!(disabled, Disabled::Deleted | Disabled::DirectoryDeleted) {
             self.delete_sync_files(id)?;
         }
         let save_count = if changed {
@@ -1707,6 +1730,28 @@ impl VaultWriter {
             sync_status: None,
             recovery_kit_missing: false,
         }))
+    }
+
+    /// Delete the own replica directory of `sync` in the synced folder, for
+    /// the disable of a vault that enabled sync separately (D11 of doc 18).
+    /// Runs under the vault locks before any save. A sidecar with no root, a
+    /// root that cannot be resolved, and a delete that fails give
+    /// `SyncFolderUnreachable`, and nothing is written.
+    fn delete_own_directory(&self, sync: &SyncTxn) -> Result<(), Error> {
+        let id = sync.vault_id();
+        let replica = sync.replica();
+        let unreachable = |e: Error| Error::SyncFolderUnreachable(e.to_string());
+        let transport = self
+            .transports
+            .resolve(sync.transport_root())
+            .map_err(unreachable)?
+            .ok_or_else(|| {
+                Error::SyncFolderUnreachable("vault has no synced folder".to_string())
+            })?;
+        transport.delete_replica(id, replica).map_err(unreachable)?;
+        let replica = replica.0;
+        log::info!("Deleted the replica directory {replica} of vault {id}, enabled separately");
+        Ok(())
     }
 
     /// Disable sync of vault `id`, whose vault file is missing (D9 of doc

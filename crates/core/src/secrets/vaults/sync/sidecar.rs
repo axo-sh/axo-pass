@@ -162,6 +162,14 @@ impl Sidecar {
         self.joined.len() != before
     }
 
+    /// Whether the paused causes hold `SeparateKey`, a separate enable found
+    /// by the last transaction that synced.
+    pub fn separate_key(&self) -> bool {
+        self.paused
+            .iter()
+            .any(|cause| matches!(cause, PausedCause::SeparateKey { .. }))
+    }
+
     /// Whether the file `name` of `replica` with content hash `hash` is
     /// quarantined.
     pub fn is_quarantined(&self, replica: ReplicaId, name: &str, hash: StateHash) -> bool {

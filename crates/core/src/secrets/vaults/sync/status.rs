@@ -12,8 +12,11 @@
 //! runs in the next transaction on another build, or on this build after the
 //! user override.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
+use super::crdt::ReplicaId;
 use super::load::{SignatureFailure, SyncLoad};
 use super::model::KeyId;
 
@@ -55,6 +58,11 @@ pub enum PausedCause {
     /// second unlock. Found again at each load, and not recorded in the
     /// sidecar.
     KeyMissing { key_id: u32 },
+    /// Listed state files are under the current key id with another
+    /// fingerprint, from `replicas` replicas with no pin that `replica_keys`
+    /// of the state lacks. Another Mac enabled sync for the vault separately
+    /// (D10 of doc 18). The files are left, not quarantined.
+    SeparateKey { replicas: usize },
 }
 
 /// Cause of a stopped sync.
@@ -84,6 +92,8 @@ pub(crate) struct FoundCauses {
     pub(crate) version_skew: usize,
     pub(crate) apply_failed: Option<String>,
     pub(crate) diff_failed: Option<String>,
+    /// Replicas of the listed state files of a separate enable.
+    pub(crate) separate: BTreeSet<ReplicaId>,
 }
 
 impl FoundCauses {
@@ -133,6 +143,11 @@ impl FoundCauses {
         if let Some(error) = &self.diff_failed {
             causes.push(PausedCause::DiffFailed {
                 error: error.clone(),
+            });
+        }
+        if !self.separate.is_empty() {
+            causes.push(PausedCause::SeparateKey {
+                replicas: self.separate.len(),
             });
         }
         causes

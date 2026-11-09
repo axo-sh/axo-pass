@@ -29,6 +29,7 @@ mod recovery;
 mod repair;
 mod resolve;
 mod round_trip;
+mod separate;
 mod setup;
 mod sidecar;
 mod simulator;

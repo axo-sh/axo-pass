@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use super::crdt::{CausalState, JoinAction, JoinOutcome, OwnFileState, ReplicaId, Session};
 use super::keys::SyncKeyring;
-use super::model::SyncState;
+use super::local_state::LocalSyncState;
+use super::model::{KeyId, SyncState};
 use super::sidecar::Sidecar;
 use super::state_file::{StateFile, StateFileError, StateHash, StateSource};
 use super::status::FoundCauses;
@@ -64,10 +65,12 @@ pub(crate) struct PeerJoin {
 
 /// Join of the state files of vault `vault_id` into `state`, as received by
 /// `session`. Joined and quarantined files are recorded in `sidecar`.
-/// Listing failures, quarantined files, and files of a newer format are
-/// recorded in `found`.
+/// Listing failures, quarantined files, files of a newer format, and files of
+/// a separate enable are recorded in `found`.
 pub(crate) struct StateJoin<'a> {
     pub vault_id: Uuid,
+    /// Sync state that holds `state`, for its key id, replica id, and pins.
+    pub local: &'a LocalSyncState,
     pub state: &'a mut CausalState<SyncState>,
     pub keyring: &'a SyncKeyring,
     pub sidecar: &'a mut Sidecar,
@@ -83,10 +86,11 @@ impl StateJoin<'_> {
     ///
     /// A file that is missing, `Remote`, under a key the keyring lacks, under
     /// another fingerprint for its key id, or of a newer format is left and
-    /// read again in a later transaction. A file that fails a context check
-    /// is refused and read again. A damaged file, and a state that fails the
-    /// closure or duplicate write id check, is quarantined by path and
-    /// content hash.
+    /// read again in a later transaction. A file under another fingerprint
+    /// is counted if [`Self::is_separate`] holds. A file that fails a
+    /// context check is refused and read again. A damaged file, and a state
+    /// that fails the closure or duplicate write id check, is quarantined by
+    /// path and content hash.
     pub(crate) fn file(
         &mut self,
         transport: &dyn SyncTransport,
@@ -132,6 +136,13 @@ impl StateJoin<'_> {
                 self.found.version_skew += 1;
                 return FileJoin::NotJoined;
             },
+            Err(e @ StateFileError::OtherKey(key_id)) => {
+                log::info!("State file {file_name} of vault {vault_id} is not joined: {e}");
+                if self.is_separate(replica, key_id) {
+                    self.found.separate.insert(replica);
+                }
+                return FileJoin::NotJoined;
+            },
             Err(e) => {
                 log::info!("State file {file_name} of vault {vault_id} is not joined: {e}");
                 return FileJoin::NotJoined;
@@ -156,6 +167,19 @@ impl StateJoin<'_> {
                 },
             },
         }
+    }
+
+    /// Whether a file of `replica` under key id `key_id` with another
+    /// fingerprint is from a Mac that enabled sync separately (D10 of doc
+    /// 18). The key id is the current key id, and the replica is not this
+    /// replica, has no pin, and is not in `replica_keys` of the state. A
+    /// pinned replica under another fingerprint is the re-link case of
+    /// milestone 13 and is not counted.
+    fn is_separate(&self, replica: ReplicaId, key_id: KeyId) -> bool {
+        key_id == self.local.key_id
+            && replica != self.local.replica_id
+            && !self.local.pinned_keys.contains_key(&replica)
+            && self.state.store.replica_keys.get(&replica).is_none()
     }
 
     /// Keep only the joined hashes of `replica` in `listed`.

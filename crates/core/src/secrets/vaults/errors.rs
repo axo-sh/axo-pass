@@ -105,6 +105,9 @@ pub enum Error {
     #[error("Synced folder does not hold this vault")]
     SyncFolderLacksVault,
 
+    #[error("Synced folder cannot be reached: {0}")]
+    SyncFolderUnreachable(String),
+
     #[error("Synced folder meta.json failed: {0}")]
     SyncMetaFileError(#[source] MetaFileError),
 
