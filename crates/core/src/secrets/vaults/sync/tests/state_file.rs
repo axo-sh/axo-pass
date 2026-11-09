@@ -9,6 +9,7 @@ use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::view::State;
 use super::{NOW, id, session};
@@ -454,30 +455,24 @@ fn malformed_body_in_file_quarantined() {
 }
 
 #[test]
-fn nonzero_padding_byte_fails() {
-    let mut padded = PaddedBody::of(&full_state()).unwrap();
-    *padded.last_mut().unwrap() = 1;
+fn padded_body_with_invalid_layout_fails() {
+    let mut nonzero = PaddedBody::of(&full_state()).unwrap();
+    *nonzero.last_mut().unwrap() = 1;
+    let mut past_end = PaddedBody::of(&full_state()).unwrap();
+    let prefix = (past_end.len() as u32 - 3).to_be_bytes();
+    past_end[..4].copy_from_slice(&prefix);
+    let short = Zeroizing::new(past_end[..3].to_vec());
 
-    assert_eq!(
-        decode(&file_of(&padded)),
-        Err(StateFileError::Quarantine(Damage::Padding(
-            PaddingError::NonzeroPadding
-        )))
-    );
-}
-
-#[test]
-fn length_prefix_past_end_of_plaintext_fails() {
-    let mut padded = PaddedBody::of(&full_state()).unwrap();
-    let past_end = (padded.len() as u32 - 3).to_be_bytes();
-    padded[..4].copy_from_slice(&past_end);
-
-    for padded in [&padded[..], &padded[..3]] {
+    let cases = [
+        ("nonzero padding", nonzero, PaddingError::NonzeroPadding),
+        ("length prefix past end", past_end, PaddingError::LengthPrefix),
+        ("shorter than length prefix", short, PaddingError::LengthPrefix),
+    ];
+    for (case, padded, error) in cases {
         assert_eq!(
-            decode(&file_of(padded)),
-            Err(StateFileError::Quarantine(Damage::Padding(
-                PaddingError::LengthPrefix
-            )))
+            decode(&file_of(&padded)),
+            Err(StateFileError::Quarantine(Damage::Padding(error))),
+            "{case}"
         );
     }
 }
