@@ -135,7 +135,7 @@ fn relink_of_vault_whose_sync_state_is_missing_takes_new_replica_id_and_merges()
 }
 
 #[test]
-fn join_of_vault_whose_sync_runs_stopped_or_is_leaving_refused_and_writes_nothing() {
+fn join_of_vault_whose_sync_runs_stopped_or_is_leaving_refused() {
     let transport = Arc::new(FakeTransport::default());
 
     let fx = synced(&transport);

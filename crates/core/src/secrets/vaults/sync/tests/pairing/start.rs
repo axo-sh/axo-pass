@@ -59,7 +59,7 @@ fn new_hardware_start_moves_files_first() {
 }
 
 #[test]
-fn start_with_signing_key_lost_fails_and_writes_no_request() {
+fn start_with_signing_key_lost_fails() {
     let mut mac = NewMac::new();
     mac.keys = TestKeys::new(KeyProbe::Present, KeyProbe::Missing);
     let vaults = mac.root().join("vaults");
@@ -84,7 +84,7 @@ fn vault_this_mac_syncs_not_in_request_map() {
 }
 
 #[test]
-fn start_with_no_vault_to_pair_fails_and_creates_no_key_or_request() {
+fn start_with_no_vault_to_pair_fails() {
     let mut mac = NewMac::new();
     mac.keys = TestKeys::neither();
     for (vaults, synced) in [(vec![], vec![]), (vec![vault(1)], vec![vault(1)])] {

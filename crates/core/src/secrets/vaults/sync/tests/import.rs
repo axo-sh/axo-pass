@@ -334,7 +334,7 @@ fn wait_without_event_polls_every_interval() {
 }
 
 #[test]
-fn shutdown_ends_wait_and_writes_nothing() {
+fn shutdown_ends_wait() {
     let transport = Arc::new(FakeTransport::default());
     let (a, setup) = enabled(&transport);
     let (b, managed, _) = waiting_import(&transport, &a, &setup);

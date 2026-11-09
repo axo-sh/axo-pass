@@ -96,7 +96,7 @@ fn changed_paths(before: &Value, after: &Value) -> BTreeSet<String> {
 }
 
 /// Short id, as in vault file paths.
-fn s(id: Uuid) -> String {
+fn short_id(id: Uuid) -> String {
     ShortId::encode_uuid(id)
 }
 
@@ -176,7 +176,7 @@ fn each_mutation_changes_only_its_field_and_blobs() {
         delta,
         alpha_history,
     } = ids;
-    let [k, r, a, b, g, d] = [kept, removed, alpha, beta, gamma, delta].map(s);
+    let [k, r, a, b, g, d] = [kept, removed, alpha, beta, gamma, delta].map(short_id);
     let alpha_replaced_at = base.list_history("kept", "alpha").unwrap()[0].replaced_at;
     let site = || vec![Website::new("example.org", MatchKind::Host)];
     let cases: Vec<(&str, Mutation, Vec<String>)> = vec![

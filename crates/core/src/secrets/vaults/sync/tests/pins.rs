@@ -278,7 +278,7 @@ fn pin_paired_adds_upgrades_or_refuses_pin() {
 }
 
 #[test]
-fn pin_paired_over_pin_with_other_keys_or_revoked_pin_is_conflict_and_changes_nothing() {
+fn pin_paired_over_pin_with_other_keys_or_revoked_pin_is_conflict() {
     let mut local = LocalSyncState::new(id(1), REPLICA, KeyId(1));
     local
         .pinned_keys

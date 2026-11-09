@@ -246,7 +246,7 @@ fn file_under_key_id_keyring_lacks_not_counted() {
 }
 
 #[test]
-fn separate_disable_while_folder_cannot_be_reached_refused_and_writes_nothing() {
+fn separate_disable_while_folder_cannot_be_reached_refused() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     put_under(

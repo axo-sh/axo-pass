@@ -147,7 +147,7 @@ fn load_finds_vault_by_key_stored_in_file() {
 }
 
 #[test]
-fn write_through_key_of_one_of_two_files_with_one_id_fails_and_writes_nothing() {
+fn write_through_key_of_one_of_two_files_with_one_id_fails() {
     let fx = Fixture::new();
     fx.write_edited("copy", |_| {});
     let before = [
@@ -236,7 +236,7 @@ fn key_of_another_vault_claimed_and_own_key_not() {
 }
 
 #[test]
-fn import_refuses_key_another_vault_holds_and_writes_nothing() {
+fn import_refuses_key_another_vault_holds() {
     let fx = Fixture::new();
     let id = Uuid::new_v4();
     let bundle = ImportableBundle::for_test(&[id]);

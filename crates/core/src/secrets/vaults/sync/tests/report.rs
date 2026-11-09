@@ -246,7 +246,7 @@ fn report_of_vault_paused_by_separate_key_lists_cause() {
 }
 
 #[test]
-fn report_uses_trusted_sync_state_only_where_transaction_builds_on_it_and_writes_nothing() {
+fn report_uses_trusted_sync_state_only_where_transaction_builds_on_it() {
     for (name, fx, case) in cases() {
         let before = files(&fx);
 
@@ -388,8 +388,7 @@ fn set_sync_root_with_folder_that_lacks_vault_refuses_and_writes_nothing_and_wit
 }
 
 #[test]
-fn set_sync_root_refuses_vault_not_synced_or_is_leaving_or_has_no_valid_sync_state_and_writes_nothing()
- {
+fn set_sync_root_refuses_vault_not_synced_or_is_leaving_or_has_no_valid_sync_state() {
     let device = TestSigner::device();
     let mut cases = Vec::new();
     let not_set = || Error::SyncRootNotSet(String::new());
@@ -524,7 +523,7 @@ fn new_kit_confirmation_clears_kit_missing() {
 }
 
 #[test]
-fn kit_refused_where_confirm_saved_refuses_its_recipient_and_writes_nothing() {
+fn kit_refused_where_confirm_saved_refuses_its_recipient() {
     let device = TestSigner::device();
     let mut refused = Vec::new();
     refused.push(("not synced", Fixture::new(GENERATION, None)));

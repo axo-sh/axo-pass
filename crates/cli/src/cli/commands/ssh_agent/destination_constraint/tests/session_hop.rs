@@ -4,7 +4,7 @@ use super::super::{SessionHop, validate_session_hop};
 use super::{TEST_ED25519_KEY, TEST_RSA_KEY, empty_host_tuple, host_tuple};
 
 #[test]
-fn validate_session_hop_valid_single_hop_no_origin() {
+fn valid_single_hop_no_origin() {
     // single hop has no origin (being the first hop)
     let dest_key = &TEST_ED25519_KEY;
     let result = validate_session_hop(
@@ -21,7 +21,7 @@ fn validate_session_hop_valid_single_hop_no_origin() {
 }
 
 #[test]
-fn validate_session_hop_single_hop_signing_on_forwarding_fails() {
+fn single_hop_signing_on_forwarding_fails() {
     // single hop has no origin (being the first hop)
     let dest_key = &TEST_ED25519_KEY;
     let result = validate_session_hop(
@@ -44,7 +44,7 @@ fn validate_session_hop_single_hop_signing_on_forwarding_fails() {
 }
 
 #[test]
-fn validate_session_hop_valid_intermediate_hop() {
+fn valid_intermediate_hop() {
     let origin_key = &TEST_RSA_KEY;
     let dest_key = &TEST_ED25519_KEY;
     let result = validate_session_hop(
@@ -65,7 +65,7 @@ fn validate_session_hop_valid_intermediate_hop() {
 }
 
 #[test]
-fn validate_session_hop_intermediate_hop_not_forwarding_fails() {
+fn intermediate_hop_not_forwarding_fails() {
     let origin_key = &TEST_RSA_KEY;
     let dest_key = &TEST_ED25519_KEY;
 
@@ -93,7 +93,7 @@ fn validate_session_hop_intermediate_hop_not_forwarding_fails() {
 }
 
 #[test]
-fn validate_session_hop_constraint_not_matched() {
+fn constraint_not_matched() {
     let origin_key = &TEST_RSA_KEY;
     let dest_key = &TEST_ED25519_KEY;
     let wrong_dest_key = &TEST_RSA_KEY;

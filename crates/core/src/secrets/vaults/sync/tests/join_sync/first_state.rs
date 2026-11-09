@@ -147,7 +147,7 @@ fn peer_file_that_is_remote_at_join_requested_and_joined_by_later_transaction() 
 }
 
 #[test]
-fn folder_with_no_meta_json_for_vault_or_newer_one_fails_join_and_writes_nothing() {
+fn folder_with_no_meta_json_for_vault_or_newer_one_fails_join() {
     let transport = Arc::new(FakeTransport::default());
     let b = Mac::new(transport.clone());
     let vault_id = Uuid::new_v4();

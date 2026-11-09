@@ -215,7 +215,7 @@ fn sidecar_that_cannot_be_read_fails_with_read_error() {
 }
 
 #[test]
-fn sidecar_that_cannot_be_read_fails_transaction_and_changes_no_file() {
+fn sidecar_that_cannot_be_read_fails_transaction() {
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
     let path = Sidecar::path(&fx.root, fx.id());
