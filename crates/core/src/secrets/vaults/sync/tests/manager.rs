@@ -17,7 +17,6 @@ use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -284,7 +283,7 @@ fn only_files_manager_writes_staged_file_copy_and_sidecar_hash_under_both_locks(
     let held = fx.catalog.files().hold_for_test(fx.id(), &fx.vault.path);
     std::thread::scope(|s| {
         let run = s.spawn(|| managed.run());
-        std::thread::sleep(Duration::from_millis(100));
+        fx.catalog.files().locks().wait_for_waiters(fx.id(), 1);
         assert_eq!(transport.writes(), writes);
         assert_eq!(Sidecar::load(&fx.root, fx.id()), sidecar);
         drop(held);

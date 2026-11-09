@@ -564,7 +564,7 @@ mod tests {
                     .unwrap();
                 VaultsManager::lock(&manager).install(committed);
             });
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            store.files().locks().wait_for_waiters(id, 1);
             // The manager is free while the writer waits.
             assert!(manager.try_lock().is_ok());
             drop(held);

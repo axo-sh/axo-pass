@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -70,6 +72,8 @@ impl VaultLocks {
                     pending: AtomicU64::new(0),
                     watched: AtomicBool::new(false),
                     listed_at: Mutex::new(None),
+                    #[cfg(test)]
+                    waiters: AtomicUsize::new(0),
                 })
             })
             .clone()
@@ -163,6 +167,27 @@ impl VaultLocks {
         self.entries().contains_key(&id)
     }
 
+    /// Wait until `count` threads wait for the locks of vault `id`. A waiting
+    /// thread has entered [`VaultLock::lock`] and holds neither lock yet, or
+    /// holds the mutex and waits for the lock file. Panics after 5 seconds.
+    #[cfg(test)]
+    pub(crate) fn wait_for_waiters(&self, id: Uuid, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let waiting = self
+                .get(id)
+                .map_or(0, |entry| entry.waiters.load(Ordering::SeqCst));
+            if waiting == count {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{waiting} threads wait for the locks of vault {id}, expected {count}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// Drop `entry` if it is still the entry of vault `id`.
     pub(super) fn remove(&self, id: Uuid, entry: &Arc<VaultLock>) {
         let mut entries = self.entries();
@@ -189,6 +214,9 @@ pub(super) struct VaultLock {
     watched: AtomicBool,
     /// Time of the last listing of the peer state files by a read.
     listed_at: Mutex<Option<Instant>>,
+    /// Count of threads in [`Self::lock`] that do not hold both locks yet.
+    #[cfg(test)]
+    waiters: AtomicUsize,
 }
 
 /// The per-vault mutex and the cross-process lock of one vault. The lock file
@@ -204,6 +232,20 @@ impl VaultLock {
     /// threads. The `flock` excludes other processes. The order is the same
     /// everywhere.
     pub(super) fn lock(
+        &self,
+        id: Uuid,
+        lock_file: impl FnOnce() -> Result<File, Error>,
+    ) -> Result<Locked<'_>, Error> {
+        #[cfg(test)]
+        self.waiters.fetch_add(1, Ordering::SeqCst);
+        let locked = self.lock_inner(id, lock_file);
+        #[cfg(test)]
+        self.waiters.fetch_sub(1, Ordering::SeqCst);
+        locked
+    }
+
+    /// Body of [`Self::lock`], without the waiter count of the tests.
+    fn lock_inner(
         &self,
         id: Uuid,
         lock_file: impl FnOnce() -> Result<File, Error>,

@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::value::RawValue;
@@ -448,7 +447,7 @@ fn writer_waits_for_cross_process_lock() {
             fx.add(&fx.target(), "alpha", "one");
             landed.store(true, Ordering::SeqCst);
         });
-        thread::sleep(Duration::from_millis(200));
+        fx.files.locks().wait_for_waiters(fx.id(), 1);
         assert!(!landed.load(Ordering::SeqCst));
         // Closing the file releases the lock, as a process exit does.
         drop(held);
@@ -548,7 +547,7 @@ fn writer_that_found_old_path_lands_after_rename() {
             // Hold the vault mutex so the writer below waits for it.
             let mut locked = fx.files.lock_entry(&entry, fx.id()).unwrap();
             barrier.wait();
-            thread::sleep(Duration::from_millis(100));
+            fx.files.locks().wait_for_waiters(fx.id(), 1);
             let new_path = fx.dir.path().join("vaults/renamed.json");
             fs::rename(&fx.vault.path, &new_path).unwrap();
             locked.state.set_path(new_path);
@@ -636,10 +635,10 @@ fn deleted_vault_not_recreated_by_waiting_writer() {
                 vw.add_item("item", "Item").map(|_| ())
             })
         });
-        // Hold the mutex while the writer starts, then delete.
+        // Hold the mutex until the writer waits for it, then delete.
         let locked = fx.files.lock_entry(&entry, fx.id()).unwrap();
         barrier.wait();
-        thread::sleep(Duration::from_millis(100));
+        fx.files.locks().wait_for_waiters(fx.id(), 1);
         drop(locked);
         fx.files
             .delete(&fx.vault.path, |path| {
@@ -648,8 +647,10 @@ fn deleted_vault_not_recreated_by_waiting_writer() {
             .unwrap();
         writer.join().unwrap()
     });
-    // The writer either ran before the delete, or failed after it. Either
-    // way no file is left.
+    // The waiting writer and the delete race for the mutex. The writer
+    // either ran before the delete, or failed after it. Either way no file
+    // is left. `writer_waiting_on_deleted_entry_fails` covers the order with
+    // the delete first.
     if let Err(e) = result {
         assert!(matches!(e, Error::VaultNotFound(_)), "{e}");
     }
@@ -671,7 +672,7 @@ fn writer_waiting_on_deleted_entry_fails() {
             })
         });
         barrier.wait();
-        thread::sleep(Duration::from_millis(100));
+        fx.files.locks().wait_for_waiters(fx.id(), 1);
         // Delete as `delete` does, while the writer waits for the mutex.
         fs::remove_file(&fx.vault.path).unwrap();
         locked.state.mark_removed();

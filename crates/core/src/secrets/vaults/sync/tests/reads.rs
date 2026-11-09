@@ -11,7 +11,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
@@ -465,7 +464,7 @@ fn app_read_takes_no_vault_mutex_under_manager_mutex() {
     let held = fx.catalog.files().hold_for_test(fx.id(), &fx.vault.path);
     std::thread::scope(|s| {
         let reader = s.spawn(|| VaultsManager::unlock_vault(&manager, "personal").unwrap());
-        std::thread::sleep(Duration::from_millis(100));
+        locks.wait_for_waiters(fx.id(), 1);
         // The manager is free while the read waits.
         assert!(manager.try_lock().is_ok());
         drop(held);
