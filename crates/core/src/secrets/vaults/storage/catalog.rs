@@ -33,14 +33,16 @@ use crate::secrets::vaults::storage::test_keys::TestKeys;
 use crate::secrets::vaults::storage::txn::{
     Committed, Disabled, RetainedVersion, Target, Unlock, VaultWriter,
 };
-use crate::secrets::vaults::storage::unreadable::{SyncedVault, Unreadable};
+use crate::secrets::vaults::storage::unreadable::{MovedVault, SyncedVault, Unreadable};
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinInto, JoinKey, PairingImport};
 use crate::secrets::vaults::sync::keys::SyncKeyWrapper;
 use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::ItemId;
 use crate::secrets::vaults::sync::pairing::PendingPairing;
+use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::recovery::import::RecoveredKey;
+use crate::secrets::vaults::sync::report::SyncReport;
 use crate::secrets::vaults::sync::setup::SyncSetup;
 use crate::secrets::vaults::sync::transport::TransportRoot;
 use crate::secrets::vaults::sync::wrapping::PairingKeys;
@@ -673,6 +675,38 @@ impl VaultCatalog {
             return Err(Error::VaultIdExists(ShortId::encode_uuid(id)));
         }
         self.files.disable_missing(id, unlock)
+    }
+
+    /// Sync report of vault `key`, read under the vault locks. Writes
+    /// nothing. See [`SyncReport::read`].
+    pub fn sync_report(&self, key: &str, unlock: Unlock<'_>) -> Result<SyncReport, Error> {
+        let vw = self.load(key)?;
+        SyncReport::read(&self.files, &Target::new(key, vw.path.clone()), unlock)
+    }
+
+    /// Write `root` as the synced folder of vault `key`, chosen again (D18 of
+    /// doc 18). The caller calls `SyncManager::refresh`. See
+    /// [`VaultWriter::set_sync_root`].
+    pub fn set_sync_root(&self, key: &str, root: &TransportRoot) -> Result<(), Error> {
+        let vw = self.load(key)?;
+        self.files
+            .set_sync_root(&Target::new(key, vw.path.clone()), root)
+    }
+
+    /// New recovery kit for the current sync key of vault `key`, such as for
+    /// a vault with no recipient of the current key. Writes nothing. The
+    /// caller adds it with [`RecoveryKit::confirm_saved`] after the user
+    /// saves it. See [`VaultWriter::create_kit`].
+    pub fn create_kit(&self, key: &str, unlock: Unlock<'_>) -> Result<RecoveryKit, Error> {
+        let vw = self.load(key)?;
+        self.files
+            .create_kit(&Target::new(key, vw.path.clone()), unlock)
+    }
+
+    /// Vault files moved to `unreadable/` on new hardware, by unverified
+    /// header, for the Settings list. See [`Unreadable::moved_vaults`].
+    pub fn moved_vaults(&self) -> Vec<MovedVault> {
+        Unreadable::moved_vaults(self.files.root())
     }
 
     /// Unlock each of `keys` on `context` and export them into one bundle file

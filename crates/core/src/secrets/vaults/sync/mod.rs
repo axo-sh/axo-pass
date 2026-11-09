@@ -18,6 +18,7 @@ pub mod publish;
 pub mod rebuild;
 pub mod recovery;
 pub mod repair;
+pub mod report;
 pub mod resolve;
 pub mod setup;
 pub mod sidecar;

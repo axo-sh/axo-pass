@@ -37,7 +37,7 @@ use secrecy::ExposeSecret;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::keys::{KeyFingerprint, SyncKey};
+use super::keys::{KeyFingerprint, SyncKey, SyncKeyring};
 use super::model::{KeyId, RecoveryRecipient, SyncState};
 use super::repair::SyncRequest;
 use super::wrapping::base32::Crockford;
@@ -226,6 +226,15 @@ impl RecoveryRecipients {
             })
             .map(|(recipient, _)| recipient.clone())
             .collect()
+    }
+
+    /// [`Self::current`] for the key with id `key_id` in `keyring`, the key
+    /// of the body of a sync state. Empty if `keyring` lacks the key.
+    pub(crate) fn of_key(state: &SyncState, key_id: KeyId, keyring: &SyncKeyring) -> Vec<String> {
+        match keyring.get(key_id) {
+            Some(key) => Self::current(state, key_id, &key.fingerprint()),
+            None => Vec::new(),
+        }
     }
 
     /// Add to `file` an `Age` wrapping of `key` under `key_id` for each of

@@ -75,6 +75,15 @@ impl Mac {
         vh.vault_id().unwrap()
     }
 
+    /// Write a vault file with key `key` and name `name` to the vaults
+    /// directory. Returns its vault id.
+    fn add_named_vault(&self, key: &str, name: &str) -> Uuid {
+        let mut vh = VaultHandle::new_for_test_at(self.vaults().join(format!("{key}.json")));
+        vh.set_vault_name(name.to_string()).unwrap();
+        VaultWriter::isolated(self.root()).create(&vh).unwrap();
+        vh.vault_id().unwrap()
+    }
+
     /// Write an external vault file with key `key`, listed in the config.
     fn add_external(&mut self, key: &str) -> PathBuf {
         let path = self.dir.path().join("external").join(format!("{key}.json"));
@@ -459,4 +468,63 @@ fn new_hardware_lists_synced_vaults_by_unverified_sync_state_before_move() {
 
     assert_eq!(moved.synced, expected);
     assert!(mac.catalog(&keys).unverified_synced_vaults().is_empty());
+}
+
+#[test]
+fn moved_vaults_lists_moved_vault_files_by_unverified_name_and_reads_no_file_outside_unreadable() {
+    let _audit = test_dir();
+    let mac = Mac::new();
+    let personal = mac.add_named_vault("personal", "Personal");
+    let first = Unreadable::move_all(&mac.files(), date(2026, 11, 4))
+        .unwrap()
+        .dir
+        .unwrap();
+    let work = mac.add_vault("work");
+    let second = Unreadable::move_all(&mac.files(), date(2026, 11, 5))
+        .unwrap()
+        .dir
+        .unwrap();
+    // Files in a moved vaults directory that are not vault files, and a
+    // vault file whose header cannot be read.
+    mac.put("unreadable/2026-11-05/vaults/notes.txt");
+    mac.put("unreadable/2026-11-05/vaults/broken.json");
+    // Vault files outside `unreadable/`.
+    let current = mac.add_vault("current");
+    mac.save_state(current, ReplicaId(Uuid::from_u128(5)));
+    let short = ShortId::encode_uuid(current);
+    mac.put(&format!("versions/{short}/1000-0.json"));
+    let catalog = mac.catalog(&Arc::new(TestKeys::both()));
+    let before = mac.snapshot();
+    // No directory outside `unreadable/` can be read during the listing.
+    let outside = ["vaults", "versions", "sync"].map(|name| mac.root().join(name));
+    for dir in &outside {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    let moved = catalog.moved_vaults();
+
+    for dir in &outside {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert_eq!(
+        moved,
+        vec![
+            MovedVault {
+                vault_id: personal,
+                key: "personal".to_string(),
+                name: Some("Personal".to_string()),
+                path: first.join("vaults/personal.json"),
+                dir: first.clone(),
+            },
+            MovedVault {
+                vault_id: work,
+                key: "work".to_string(),
+                name: None,
+                path: second.join("vaults/work.json"),
+                dir: second.clone(),
+            },
+        ]
+    );
+    assert_eq!(mac.snapshot(), before);
+    assert_eq!(catalog.list().keys().collect::<Vec<_>>(), vec!["current"]);
 }

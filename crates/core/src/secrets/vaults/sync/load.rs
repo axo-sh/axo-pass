@@ -275,6 +275,21 @@ impl SyncLoad {
         }
     }
 
+    /// Whether a transaction builds its `SyncTxn` on the trusted sync state
+    /// of this case, as `VaultWriter::attempt` does: `Current`,
+    /// `StoppedOlderVault`, and `NewerVault` load, and `OlderVault` and
+    /// `Mismatch(ReplicaId)` are rebuilt from the sync state.
+    pub(crate) fn builds_txn(&self) -> bool {
+        matches!(
+            self,
+            Self::Current
+                | Self::OlderVault { .. }
+                | Self::StoppedOlderVault { .. }
+                | Self::NewerVault { .. }
+                | Self::Mismatch(Mismatch::ReplicaId(_))
+        )
+    }
+
     /// Keyring of the local sync state of `vault` under the app data
     /// directory `root`, unwrapped by `wrapper`. Empty if the vault is not
     /// synced or the sync state fails to load. `None` if the keyring fails to

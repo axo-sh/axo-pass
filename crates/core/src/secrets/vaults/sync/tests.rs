@@ -27,6 +27,7 @@ mod reads;
 mod rebuild;
 mod recovery;
 mod repair;
+mod report;
 mod resolve;
 mod round_trip;
 mod separate;

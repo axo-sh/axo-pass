@@ -108,6 +108,9 @@ pub enum Error {
     #[error("Synced folder cannot be reached: {0}")]
     SyncFolderUnreachable(String),
 
+    #[error("Synced folder was not set: {0}")]
+    SyncRootNotSet(String),
+
     #[error("Synced folder meta.json failed: {0}")]
     SyncMetaFileError(#[source] MetaFileError),
 

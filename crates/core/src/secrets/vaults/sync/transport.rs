@@ -225,3 +225,27 @@ impl SyncTransports for FixedTransport {
         Ok(Some(self.0.clone()))
     }
 }
+
+/// One transport for each listed root, so a test writer syncs a vault only
+/// through the root in its sidecar. No root gives no transport, and a root
+/// that is not listed cannot be reached.
+#[cfg(test)]
+#[derive(Debug)]
+pub struct RootTransports(pub Vec<(TransportRoot, Arc<dyn SyncTransport>)>);
+
+#[cfg(test)]
+impl SyncTransports for RootTransports {
+    fn resolve(
+        &self,
+        root: Option<&TransportRoot>,
+    ) -> Result<Option<Arc<dyn SyncTransport>>, Error> {
+        let Some(root) = root else {
+            return Ok(None);
+        };
+        self.0
+            .iter()
+            .find(|(listed, _)| listed == root)
+            .map(|(_, transport)| Some(transport.clone()))
+            .ok_or_else(|| Error::SyncTransportError(format!("{root} cannot be reached")))
+    }
+}

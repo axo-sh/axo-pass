@@ -421,12 +421,7 @@ impl SyncTxn {
     /// Recipients of the `recovery` map that receive an `Age` wrapping of the
     /// current key (`sync/recovery.rs`).
     pub(crate) fn recovery_recipients(&self) -> Vec<String> {
-        match self.current_key() {
-            Some((key_id, key)) => {
-                RecoveryRecipients::current(&self.state.store, key_id, &key.fingerprint())
-            },
-            None => Vec::new(),
-        }
+        RecoveryRecipients::of_key(&self.state.store, self.local.key_id, &self.keyring)
     }
 
     /// Whether the `recovery` map holds no recipient of the current key, the

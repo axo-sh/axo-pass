@@ -3,8 +3,9 @@
 //! On new hardware `vault-encryption-key` is missing, so no file under
 //! `vaults/`, `versions/`, or `sync/` can be decrypted. Before a key is
 //! created, every such file is renamed to `unreadable/{yyyy-mm-dd}/`, with the
-//! same relative path. Files in `unreadable/` are never listed, loaded,
-//! verified, or pruned. External vault files are never moved.
+//! same relative path. Files in `unreadable/` are never loaded, verified, or
+//! pruned. Only [`Unreadable::moved_vaults`] lists the moved vault files, by
+//! their unverified headers. External vault files are never moved.
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -14,7 +15,8 @@ use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::storage::device_keys::VaultFiles;
+use crate::secrets::vaults::format::encrypted_vault::VaultHeader;
+use crate::secrets::vaults::storage::device_keys::{VAULTS_DIR, VaultFiles};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 
@@ -29,6 +31,20 @@ pub(super) const UNREADABLE_DIR: &str = "unreadable";
 pub struct SyncedVault {
     pub vault_id: Uuid,
     pub replica_id: ReplicaId,
+}
+
+/// Vault file moved to `unreadable/`, with its header read without verifying
+/// it. It opens only on the Mac that made it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovedVault {
+    pub vault_id: Uuid,
+    pub key: String,
+    /// Unverified vault name.
+    pub name: Option<String>,
+    /// Path of the moved file.
+    pub path: PathBuf,
+    /// Directory of the move, `unreadable/{date}` or `unreadable/{date}-{n}`.
+    pub dir: PathBuf,
 }
 
 /// Result of [`Unreadable::move_all`].
@@ -82,6 +98,48 @@ impl Unreadable {
                 })
             })
             .collect()
+    }
+
+    /// Vault files moved to `unreadable/` under the app data directory `root`,
+    /// for the Settings list. Lists each `*.json` file directly under
+    /// `unreadable/*/vaults/`, ordered by move directory and then by file
+    /// name. Its vault id, key, and name are read from the header with
+    /// [`VaultHeader::peek`], which checks no signature. A file whose header
+    /// cannot be read is skipped and logged. A directory that cannot be read
+    /// holds no file. No file outside `unreadable/` is read.
+    pub fn moved_vaults(root: &Path) -> Vec<MovedVault> {
+        let unreadable = root.join(UNREADABLE_DIR);
+        let mut moved = Vec::new();
+        for dir in Self::sorted_entries(&unreadable) {
+            for path in Self::sorted_entries(&dir.join(VAULTS_DIR)) {
+                if !path.is_file() || path.extension().is_none_or(|ext| ext != "json") {
+                    continue;
+                }
+                match VaultHeader::peek(&path) {
+                    Ok(header) => moved.push(MovedVault {
+                        vault_id: header.id,
+                        key: header.key,
+                        name: header.name,
+                        path,
+                        dir: dir.clone(),
+                    }),
+                    Err(e) => log::warn!("Skipped moved vault file {}: {e}", path.display()),
+                }
+            }
+        }
+        moved
+    }
+
+    /// Paths of the entries of `dir`, ordered by name. Empty if `dir` cannot
+    /// be read.
+    fn sorted_entries(dir: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect();
+        paths.sort();
+        paths
     }
 
     /// Move the files and count each one in `count`. Returns the directory

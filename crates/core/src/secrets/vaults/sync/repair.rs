@@ -14,10 +14,13 @@
 //!
 //! [`LocalEdits::find_repair`]: super::diff::LocalEdits::find_repair
 
+use super::diff::LocalEdits;
+use super::load::{SyncLoad, TrustedState};
 use super::local_state::LocalSyncState;
 use super::recovery::RecoveryAdd;
 use super::status::BUILD_ID;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock, VaultWriter};
 
 /// Repair a transaction runs in place of the no-edit guard.
@@ -74,6 +77,24 @@ impl Repair {
     pub(crate) fn override_offered(local: &LocalSyncState) -> bool {
         local.stopped_build.as_deref() == Some(BUILD_ID)
             && local.override_build.as_deref() != Some(BUILD_ID)
+    }
+
+    /// Trusted state `trusted` of the case `case` if the user override is
+    /// offered on it. A transaction rebuilds `OlderVault` and `Mismatch` and
+    /// runs no merge, so the override is not offered for them.
+    pub(crate) fn override_state<'a>(
+        case: &SyncLoad,
+        trusted: Option<&'a TrustedState>,
+    ) -> Option<&'a TrustedState> {
+        let rebuilds = matches!(case, SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(_));
+        trusted.filter(|t| !rebuilds && Self::override_offered(&t.local))
+    }
+
+    /// Number of differences the recovery merge would add to `vault`
+    /// against `trusted`, for the confirmation of the user override.
+    pub(crate) fn preview(trusted: &TrustedState, vault: &Vault) -> Result<usize, Error> {
+        let edits = LocalEdits::find_repair(&trusted.state, vault, trusted.local.replica_id)?;
+        Ok(edits.len())
     }
 
     /// Set the header of `local` for this repair. A recovery merge resumes

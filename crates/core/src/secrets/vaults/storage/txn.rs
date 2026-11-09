@@ -85,7 +85,7 @@ use crate::core::dirs::app_data_dir;
 use crate::core::files::write_atomic;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
+use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader, VerifiedVault};
 use crate::secrets::vaults::format::short_id::ShortId;
 #[cfg(test)]
 use crate::secrets::vaults::format::signing::TestSigner;
@@ -97,19 +97,19 @@ use crate::secrets::vaults::storage::handle::{
 use crate::secrets::vaults::storage::resign::Resigned;
 #[cfg(test)]
 use crate::secrets::vaults::sync::apply::ApplyFault;
-use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinKey};
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
 use crate::secrets::vaults::sync::keys::{SyncKeyring, WrappedSyncKey};
 use crate::secrets::vaults::sync::listing::PeerListing;
-use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad};
+use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad, TrustedState};
 use crate::secrets::vaults::sync::local_state::{LocalStateError, LocalSyncState};
 use crate::secrets::vaults::sync::meta::MetaFile;
 use crate::secrets::vaults::sync::model::{ItemId, PublicKey, ReplicaKeys};
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
 use crate::secrets::vaults::sync::publish::Staged;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
+use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::setup::{FIRST_KEY_ID, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -230,6 +230,13 @@ impl VaultWriter {
             transports: Arc::new(FixedTransport(transport)),
             ..self
         }
+    }
+
+    /// This writer with `transports`, which resolve each vault by the root in
+    /// its sidecar.
+    #[cfg(test)]
+    pub fn with_transports(self, transports: Arc<dyn SyncTransports>) -> Self {
+        Self { transports, ..self }
     }
 
     /// This writer with `seconds` added to the clock of mints, as a Mac
@@ -689,6 +696,23 @@ struct SetupKeys {
     /// not synced, or its sync state fails to load. `None` if the keyring
     /// fails to unwrap.
     local_keyring: Option<SyncKeyring>,
+}
+
+/// Vault and local sync state of [`VaultWriter::read_locked`], read under the
+/// vault locks.
+pub(crate) struct LockedRead {
+    pub(crate) id: Uuid,
+    pub(crate) file_key: UnlockedKey,
+    /// Vault file as reloaded and verified under the locks.
+    pub(crate) vault: VerifiedVault,
+    /// Case of the vault against its sync state.
+    pub(crate) case: SyncLoad,
+    /// Trusted sync state if the case compares the vault with one. The
+    /// trusted state of `Mismatch(VaultId)` belongs to another vault.
+    pub(crate) trusted: Option<TrustedState>,
+    /// Keyring of the sync state as unwrapped before the locks. `None` if it
+    /// failed to unwrap.
+    pub(crate) keyring: Option<SyncKeyring>,
 }
 
 /// Vault file of a join as loaded under the locks.
@@ -1867,6 +1891,28 @@ impl VaultWriter {
         target: &Target,
         unlock: Unlock<'_>,
     ) -> Result<usize, Error> {
+        self.read_locked(target, unlock, |read| {
+            let Some(trusted) = Repair::override_state(&read.case, read.trusted.as_ref()) else {
+                return Err(Error::SyncOverrideNotOffered);
+            };
+            let vault = Vault::from_unlocked_key(&read.file_key, read.vault)?;
+            Repair::preview(trusted, &vault)
+        })
+    }
+
+    /// Run `f` on the vault `target` and its local sync state, read under the
+    /// vault locks. Writes nothing and builds no `SyncTxn`.
+    ///
+    /// The file key and the sync keyring are unwrapped before the locks, as
+    /// in [`Self::write`], with no second unlock for a key id the keyring
+    /// lacks. Under the locks the vault is reloaded and verified, and
+    /// classified against its sync state.
+    pub(crate) fn read_locked<R>(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        f: impl FnOnce(LockedRead) -> Result<R, Error>,
+    ) -> Result<R, Error> {
         let UnlockedKeys {
             id,
             file_key,
@@ -1875,22 +1921,122 @@ impl VaultWriter {
         let entry = self.locks.entry(id, &target.path);
         let mut locked = self.lock_entry(&entry, id)?;
         let path = locked.state.resolve(id, &target.path)?;
-        let enc_vault = EncryptedVault::load(&path, &*self.signer)?;
-        if enc_vault.id != id {
+        let vault = EncryptedVault::load(&path, &*self.signer)?;
+        if vault.id != id {
             return Err(Error::VaultNotFound(path.display().to_string()));
         }
         let local = LocalSyncState::load(&self.root, id, &*self.signer);
         let (case, trusted) =
-            SyncLoad::classify_trusted(&enc_vault, local, keyring.as_ref(), &*self.signer)?;
-        // A transaction rebuilds these cases and runs no merge.
-        let rebuilds = matches!(case, SyncLoad::OlderVault { .. } | SyncLoad::Mismatch(_));
-        let Some(trusted) = trusted.filter(|t| !rebuilds && Repair::override_offered(&t.local))
-        else {
-            return Err(Error::SyncOverrideNotOffered);
+            SyncLoad::classify_trusted(&vault, local, keyring.as_ref(), &*self.signer)?;
+        f(LockedRead {
+            id,
+            file_key,
+            vault,
+            case,
+            trusted,
+            keyring,
+        })
+    }
+
+    /// Write `root` as the root of the synced folder in the sidecar of the
+    /// vault `target`, under the vault locks, for a synced vault whose folder
+    /// is chosen again (D18 of doc 18). Runs with no key, as
+    /// [`Self::copy_staged`] does. The caller calls `SyncManager::refresh`.
+    ///
+    /// The vault is verified, and the sync state is verified under
+    /// `device-signing-key`. A vault that holds no replica id fails with
+    /// `SyncDisableInProgress` if its sync state is `leaving`, and with
+    /// `SyncNotEnabled` otherwise. A `leaving` sync state fails with
+    /// `SyncDisableInProgress`, and one of a newer format with
+    /// `SyncStateVersionSkew`. A sync state that is missing, fails its
+    /// signature, or holds another vault id or replica id fails with
+    /// `SyncRootNotSet`. The folder must then hold `meta.json` of the vault
+    /// ([`SyncSetup::check_folder`]). Only the root of the sidecar changes. A
+    /// root already set is replaced. A sidecar that fails to parse is read as
+    /// empty, as a transaction reads it, and is saved with the new root.
+    pub fn set_sync_root(&self, target: &Target, root: &TransportRoot) -> Result<(), Error> {
+        let id = EncryptedVault::load(&target.path, &*self.signer)?.id;
+        let transport = SyncSetup::transport(self, root)?;
+
+        let entry = self.locks.entry(id, &target.path);
+        let mut locked = self.lock_entry(&entry, id)?;
+        let path = locked.state.resolve(id, &target.path)?;
+        let vault = EncryptedVault::load(&path, &*self.signer)?;
+        if vault.id != id {
+            return Err(Error::VaultNotFound(path.display().to_string()));
+        }
+        let not_set = |reason: &str| Err(Error::SyncRootNotSet(reason.to_string()));
+        let local = match LocalSyncState::load(&self.root, id, &*self.signer) {
+            Ok(local) => local,
+            Err(LocalStateError::Read(e)) => return Err(Error::SyncStateReadError(e)),
+            Err(LocalStateError::SigningKey(e)) => return Err(e),
+            Err(LocalStateError::VersionSkew(message)) if vault.replica_id.is_some() => {
+                return Err(Error::SyncStateVersionSkew(message));
+            },
+            Err(_) if vault.replica_id.is_none() => return Err(Error::SyncNotEnabled),
+            Err(LocalStateError::Missing) => return not_set("sync state is missing"),
+            Err(e) => return not_set(&format!("sync state is not valid: {e}")),
         };
-        let vault = Vault::from_unlocked_key(&file_key, enc_vault)?;
-        let edits = LocalEdits::find_repair(&trusted.state, &vault, trusted.local.replica_id)?;
-        Ok(edits.len())
+        let Some(replica_id) = vault.replica_id else {
+            return Err(if local.leaving {
+                Error::SyncDisableInProgress
+            } else {
+                Error::SyncNotEnabled
+            });
+        };
+        if local.leaving {
+            return Err(Error::SyncDisableInProgress);
+        }
+        if local.vault_id != id || local.replica_id.0 != replica_id {
+            return not_set("sync state belongs to another vault or replica");
+        }
+
+        SyncSetup::check_folder(&*transport, id)?;
+        let mut sidecar = Sidecar::read(&self.root, id)?;
+        sidecar.transport = Some(root.clone());
+        sidecar.save(&self.root, id)?;
+        log::info!("Vault {id} syncs with the synced folder {root}");
+        Ok(())
+    }
+
+    /// New recovery kit for the current key of the trusted sync state of the
+    /// vault `target`, read under the vault locks. Writes nothing.
+    /// [`RecoveryKit::confirm_saved`] adds the recipient after the user saves
+    /// the kit.
+    ///
+    /// A kit is refused with `RecoveryKitNotAdded` wherever
+    /// `confirm_saved` would refuse its recipient before any join: a vault
+    /// whose sync state a transaction builds no `SyncTxn` on, and a sync
+    /// stopped by drift that the next transaction does not resume. A vault
+    /// that already holds a recipient of the current key gets a new kit,
+    /// such as for a kit that was lost, and the earlier kit still opens the
+    /// key.
+    pub(crate) fn create_kit(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+    ) -> Result<RecoveryKit, Error> {
+        self.read_locked(target, unlock, |read| {
+            let refused = |reason: &str| Err(Error::RecoveryKitNotAdded(reason.to_string()));
+            let (Some(trusted), Some(keyring)) = (&read.trusted, &read.keyring) else {
+                return refused(&read.case.to_string());
+            };
+            if !read.case.builds_txn() {
+                return refused(&read.case.to_string());
+            }
+            // A sync stopped by drift on another build is resumed by the
+            // recovery merge of the next transaction.
+            if trusted.local.stopped_build.is_some()
+                && Repair::of(&trusted.local, false, false).is_none()
+            {
+                return refused("sync is stopped");
+            }
+            let key_id = trusted.local.key_id;
+            let Some(key) = keyring.get(key_id) else {
+                return refused("keyring lacks the current key");
+            };
+            Ok(RecoveryKit::create(read.id, key_id, key))
+        })
     }
 
     /// Enable sync of the vault `target` with `setup`, after the user

@@ -26,7 +26,7 @@ use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys, SYNC_FORMAT_VERSION};
 use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
 use crate::secrets::vaults::sync::status::BUILD_ID;
-use crate::secrets::vaults::sync::transport::SyncTransport;
+use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports};
 use crate::secrets::vaults::{Error, VaultCatalog, VaultHandle};
 
 /// Replica id of the synced vaults.
@@ -142,18 +142,38 @@ impl Fixture {
         Self::build(generation, replica, Some(transport))
     }
 
+    /// [`Self::new`], with each vault resolved by the root in its sidecar
+    /// through `transports`.
+    pub(super) fn with_transports(
+        generation: u64,
+        replica: Option<ReplicaId>,
+        transports: Arc<dyn SyncTransports>,
+    ) -> Self {
+        Self::build_with(generation, replica, |files| {
+            files.with_transports(transports)
+        })
+    }
+
     fn build(
         generation: u64,
         replica: Option<ReplicaId>,
         transport: Option<Arc<dyn SyncTransport>>,
     ) -> Self {
+        Self::build_with(generation, replica, |files| match transport {
+            Some(transport) => files.with_transport(transport),
+            None => files,
+        })
+    }
+
+    fn build_with(
+        generation: u64,
+        replica: Option<ReplicaId>,
+        writer: impl FnOnce(VaultWriter) -> VaultWriter,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("data");
         let vaults_dir = dir.path().join("vaults");
-        let mut files = VaultWriter::isolated(&root);
-        if let Some(transport) = transport {
-            files = files.with_transport(transport);
-        }
+        let files = writer(VaultWriter::isolated(&root));
         let mut vault = Vault::new_for_test();
         vault.set_sync(generation, replica.map(|replica| replica.0));
         let vh = VaultHandle::new_in(&vaults_dir, vault);
@@ -269,7 +289,7 @@ impl Fixture {
 }
 
 /// Each case, with a vault and a sync state that give it.
-fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
+pub(super) fn cases() -> Vec<(&'static str, Fixture, SyncLoad)> {
     let device = TestSigner::device();
     let mut cases = Vec::new();
 
