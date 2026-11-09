@@ -59,6 +59,12 @@ enum SyncSheet: Identifiable {
   case kitImport(root: SyncRootInfo?, join: SyncVaultRef?)
   /// Pairing prompt of the pairing requests under `root`.
   case pairingPrompt(root: SyncRootInfo)
+  /// Sync status of the vault, with its notices.
+  case status(SyncVaultRef)
+  /// New recovery kit for the current sync key of the vault.
+  case newKit(SyncVaultRef)
+  /// Synced vaults whose vault file is missing.
+  case missingVaults
 
   var id: String {
     switch self {
@@ -66,6 +72,9 @@ enum SyncSheet: Identifiable {
     case .pair(_, let join): return "pair-\(join?.key ?? "")"
     case .kitImport(_, let join): return "kit-\(join?.key ?? "")"
     case .pairingPrompt(let root): return "prompt-\(rootDescription(root))"
+    case .status(let vault): return "status-\(vault.key)"
+    case .newKit(let vault): return "new-kit-\(vault.key)"
+    case .missingVaults: return "missing-vaults"
     }
   }
 }
@@ -84,6 +93,13 @@ final class SyncModel {
 
   /// Sync state by vault key. A vault with no entry has not been read.
   private(set) var states: [String: VaultSyncState] = [:]
+
+  /// Last sync report by vault key. A vault whose report failed has no entry.
+  private(set) var reports: [String: SyncReportInfo] = [:]
+
+  /// Synced vaults whose vault file is missing, as the core found them at its
+  /// start and after each rebuild or turn-off.
+  private(set) var missingVaults: [MissingVaultInfo] = []
 
   /// Pairing requests that prompt, by synced folder. A folder with no request
   /// has no entry.
@@ -144,12 +160,18 @@ final class SyncModel {
     states[vaultKey]
   }
 
-  /// Read the sync state of every listed vault again. Drops the states of
-  /// vaults no longer listed. Does nothing while locked.
+  func report(_ vaultKey: String) -> SyncReportInfo? {
+    reports[vaultKey]
+  }
+
+  /// Read the sync state of every listed vault and the missing vaults again.
+  /// Drops the states of vaults no longer listed. Does nothing while locked.
   func reloadAll() async {
     guard vaults.isAppUnlocked else { return }
+    reloadMissingVaults()
     let keys = vaults.vaults.map(\.key)
     states = states.filter { keys.contains($0.key) }
+    reports = reports.filter { keys.contains($0.key) }
     for key in keys {
       await reload(key)
       if !vaults.isAppUnlocked { return }
@@ -162,6 +184,7 @@ final class SyncModel {
     guard vaults.isAppUnlocked else { return }
     do {
       let report = try await vaults.core.syncReport(vaultKey: vaultKey)
+      reports[vaultKey] = report
       if report.disableInProgress {
         states[vaultKey] = .turningOff
       } else if report.status != nil || report.root != nil {
@@ -172,8 +195,76 @@ final class SyncModel {
     } catch FfiError.AuthExpired, FfiError.AuthCancelled {
       vaults.lock()
     } catch {
+      reports[vaultKey] = nil
       states[vaultKey] = .unknown(message: String(describing: error))
     }
+  }
+
+  // MARK: - Status actions
+
+  /// Number of differences the override of vault `vaultKey` would show as
+  /// conflicts. Needs the app unlocked.
+  func overridePreview(vaultKey: String) async throws -> UInt32 {
+    try await lockingOnExpiry { try await vaults.core.syncOverridePreview(vaultKey: vaultKey) }
+  }
+
+  /// Resume the sync of vault `vaultKey` stopped by drift, and show the
+  /// differences as conflicts. Needs the app unlocked.
+  func resumeWithConflicts(vaultKey: String) async throws {
+    try await lockingOnExpiry { try await vaults.core.syncOverrideConfirm(vaultKey: vaultKey) }
+    await reload(vaultKey)
+    await vaults.syncedVaultChanged(vaultKey)
+  }
+
+  /// Set the synced folder of vault `vaultKey`, chosen again, to `url`. The
+  /// folder must hold the vault. Reads no key.
+  func setRoot(vaultKey: String, url: URL) async throws {
+    try await vaults.core.syncSetRoot(vaultKey: vaultKey, root: .folder(path: url.path))
+    await reload(vaultKey)
+  }
+
+  /// New recovery kit text for the current sync key of vault `vaultKey`.
+  /// Writes nothing. Needs the app unlocked.
+  func createKit(vaultKey: String) async throws -> String {
+    try await lockingOnExpiry { try await vaults.core.recoveryKitCreate(vaultKey: vaultKey) }
+  }
+
+  /// Add the kit `kitText` to vault `vaultKey` after the user saved it. Needs
+  /// the app unlocked.
+  func confirmKit(vaultKey: String, kitText: String) async throws {
+    try await lockingOnExpiry {
+      try await vaults.core.recoveryKitConfirm(vaultKey: vaultKey, kitText: kitText)
+    }
+    await reload(vaultKey)
+  }
+
+  // MARK: - Missing vaults
+
+  /// Read the missing vaults again. A failure leaves the list empty, since the
+  /// core fails only if its state is poisoned.
+  func reloadMissingVaults() {
+    missingVaults = (try? vaults.core.listMissingVaults()) ?? []
+  }
+
+  /// Rebuild the missing vault `vaultId` from its sync state. Needs the app
+  /// unlocked. Returns the key of the rebuilt vault.
+  @discardableResult
+  func rebuildMissingVault(_ vaultId: String) async throws -> String {
+    let key = try await lockingOnExpiry {
+      try await vaults.core.rebuildMissingVault(vaultId: vaultId)
+    }
+    reloadMissingVaults()
+    vaults.reload()
+    await reload(key)
+    return key
+  }
+
+  /// Turn off sync of the missing vault `vaultId`. Needs the app unlocked.
+  func disableMissingVault(_ vaultId: String) async throws {
+    _ = try await lockingOnExpiry {
+      try await vaults.core.disableMissingVault(vaultId: vaultId)
+    }
+    reloadMissingVaults()
   }
 
   // MARK: - Enable

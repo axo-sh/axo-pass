@@ -141,6 +141,20 @@ struct VaultsSidebar: View {
       .help("Another Mac asks to pair with the vaults in \(rootDescription(root))")
     }
 
+    // Synced vaults whose vault file is missing. Read after the unlock, on each
+    // change of the vault list, and after each rebuild or turn-off.
+    if !sync.missingVaults.isEmpty {
+      let missing = sync.missingVaults.count
+      Button {
+        sync.sheet = .missingVaults
+      } label: {
+        SidebarWarningLabel(
+          missing == 1 ? "1 synced vault missing" : "\(missing) synced vaults missing")
+      }
+      .buttonStyle(.plain)
+      .help("Rebuild a synced vault whose file is missing, or turn off sync for it")
+    }
+
     let hidden = model.hiddenVaultFileCount
     if hidden > 0 {
       Button {
@@ -177,7 +191,7 @@ struct VaultsSidebar: View {
             Image(systemName: "circle.fill").hidden()
           }
           Spacer(minLength: 0)
-          VaultSyncSymbol(vaultKey: vault.key)
+          VaultSyncSymbol(vault: syncRef(vault))
           if model.isPendingSelection(.vault(vault.key)) {
             DelayedProgressView(size: .mini, expands: false)
           }
@@ -228,6 +242,7 @@ struct VaultsSidebar: View {
   private func syncMenuItem(_ vault: VaultInfo) -> some View {
     switch sync.state(vault.key) {
     case .on:
+      Button("Sync Status…") { sync.sheet = .status(syncRef(vault)) }
       Button("Turn Off Sync…") {
         sync.clearDisableError()
         sync.disableRequest = syncRef(vault)

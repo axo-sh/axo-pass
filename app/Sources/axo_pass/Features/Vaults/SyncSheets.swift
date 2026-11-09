@@ -24,6 +24,9 @@ private struct SyncSheetsModifier: ViewModifier {
         case .pair(let root, let join): PairingSheet(root: root, join: join)
         case .kitImport(let root, let join): KitImportSheet(root: root, join: join)
         case .pairingPrompt(let root): PairingPromptSheet(root: root)
+        case .status(let vault): SyncStatusSheet(vault: vault)
+        case .newKit(let vault): NewRecoveryKitSheet(vault: vault)
+        case .missingVaults: MissingVaultsSheet()
         }
       }
       .confirmationDialog(
@@ -80,17 +83,100 @@ struct SyncErrorLabel: View {
   }
 }
 
-/// Sync symbol of a vault row in the sidebar. Shows nothing for a vault that
-/// does not sync. The help text gives the synced folder, the turn-off that
-/// waits, or the error of the report.
-struct VaultSyncSymbol: View {
-  @Environment(SyncModel.self) private var sync
-  let vaultKey: String
+/// Recovery kit text of a vault with Save and Print, and the checkbox that the
+/// user saved it.
+struct RecoveryKitPanel: View {
+  let text: String
+  let vaultName: String
+  @Binding var kitSaved: Bool
+  /// Called with the message of a failed save.
+  let onError: (String) -> Void
 
   var body: some View {
-    switch sync.state(vaultKey) {
+    ScrollView {
+      Text(text)
+        .font(.caption.monospaced())
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+    }
+    .frame(height: 160)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+
+    HStack {
+      Button("Save…") { save() }
+      Button("Print…") { printKit() }
+    }
+
+    Toggle("I saved the recovery kit", isOn: $kitSaved)
+  }
+
+  private func save() {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = "Axo Pass Recovery Kit - \(vaultName).txt"
+    panel.allowedContentTypes = [.plainText]
+    panel.isExtensionHidden = false
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      try text.write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+      onError(String(describing: error))
+    }
+  }
+
+  private func printKit() {
+    let info = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo()
+    info.horizontalPagination = .fit
+    info.isVerticallyCentered = false
+    let width = info.paperSize.width - info.leftMargin - info.rightMargin
+    let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 0))
+    view.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+    view.string = text
+    view.sizeToFit()
+    let operation = NSPrintOperation(view: view, printInfo: info)
+    operation.jobTitle = "Axo Pass Recovery Kit - \(vaultName)"
+    operation.run()
+  }
+}
+
+/// Sync symbol of a vault row in the sidebar. Shows nothing for a vault that
+/// does not sync. The help text gives the notice of the report, the synced
+/// folder, the turn-off that waits, or the error of the report. A click on the
+/// symbol of a synced vault opens its sync status.
+struct VaultSyncSymbol: View {
+  @Environment(SyncModel.self) private var sync
+  let vault: SyncVaultRef
+
+  var body: some View {
+    switch sync.state(vault.key) {
     case .none, .off:
       EmptyView()
+    case .on:
+      Button {
+        sync.sheet = .status(vault)
+      } label: {
+        onSymbol
+      }
+      .buttonStyle(.plain)
+    case .turningOff:
+      symbol("clock.arrow.circlepath", .tertiary, syncDisableInProgressMessage)
+    case .unknown(let message):
+      symbol("exclamationmark.circle", .secondary, "Could not read sync status: \(message)")
+    }
+  }
+
+  @ViewBuilder
+  private var onSymbol: some View {
+    if let notice = sync.report(vault.key).flatMap(syncNotice) {
+      symbol("exclamationmark.arrow.triangle.2.circlepath", .orange, notice)
+    } else {
+      folderSymbol
+    }
+  }
+
+  @ViewBuilder
+  private var folderSymbol: some View {
+    switch sync.state(vault.key) {
     case .on(let root?) where sync.folder != nil && sync.folder != root:
       symbol(
         "arrow.triangle.2.circlepath", .secondary,
@@ -100,10 +186,8 @@ struct VaultSyncSymbol: View {
     case .on(nil):
       symbol(
         "arrow.triangle.2.circlepath", .orange, "Choose the synced folder again")
-    case .turningOff:
-      symbol("clock.arrow.circlepath", .tertiary, syncDisableInProgressMessage)
-    case .unknown(let message):
-      symbol("exclamationmark.circle", .secondary, "Could not read sync status: \(message)")
+    default:
+      EmptyView()
     }
   }
 
@@ -250,22 +334,9 @@ struct SyncEnableSheet: View {
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
 
-      ScrollView {
-        Text(text)
-          .font(.caption.monospaced())
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
+      RecoveryKitPanel(text: text, vaultName: vault.name, kitSaved: $kitSaved) {
+        error = $0
       }
-      .frame(height: 160)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-
-      HStack {
-        Button("Save…") { saveKit(text) }
-        Button("Print…") { printKit(text) }
-      }
-
-      Toggle("I saved the recovery kit", isOn: $kitSaved)
 
       errorLabel
 
@@ -279,33 +350,6 @@ struct SyncEnableSheet: View {
           .disabled(!kitSaved || isWorking)
       }
     }
-  }
-
-  private func saveKit(_ text: String) {
-    let panel = NSSavePanel()
-    panel.nameFieldStringValue = "Axo Pass Recovery Kit - \(vault.name).txt"
-    panel.allowedContentTypes = [.plainText]
-    panel.isExtensionHidden = false
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    do {
-      try text.write(to: url, atomically: true, encoding: .utf8)
-    } catch {
-      self.error = String(describing: error)
-    }
-  }
-
-  private func printKit(_ text: String) {
-    let info = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo()
-    info.horizontalPagination = .fit
-    info.isVerticallyCentered = false
-    let width = info.paperSize.width - info.leftMargin - info.rightMargin
-    let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 0))
-    view.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-    view.string = text
-    view.sizeToFit()
-    let operation = NSPrintOperation(view: view, printInfo: info)
-    operation.jobTitle = "Axo Pass Recovery Kit - \(vault.name)"
-    operation.run()
   }
 
   private func confirm(_ setup: SyncSetupHandle) {

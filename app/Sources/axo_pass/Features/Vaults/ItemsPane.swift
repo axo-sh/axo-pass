@@ -85,6 +85,9 @@ struct ItemsPane: View {
       if model.showAutofillSetupBanner {
         AutofillSetupBanner()
       }
+      if let vault = model.selectedVault {
+        SyncNoticeBanner(vault: vault)
+      }
     }
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
