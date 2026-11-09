@@ -504,12 +504,18 @@ fn import_builds_vault_as_view_with_new_file_key_and_vault_key_from_view_name_ma
         .unwrap();
 
     let join = recovered(&setup, &*transport);
+    let today = || Zoned::now().date().strftime("%Y%m%d").to_string();
+    let day_before = today();
     let committed = b
         .join(&join, JoinInto::New, MAC_B, &file_key(a.id(), 2))
         .unwrap();
 
-    let date = Zoned::now().date().strftime("%Y%m%d");
-    assert_eq!(committed.vault.key, format!("family-{date}-1"));
+    let keys = [day_before, today()].map(|date| format!("family-{date}-1"));
+    assert!(
+        keys.contains(&committed.vault.key),
+        "{}",
+        committed.vault.key
+    );
     assert_eq!(
         committed.vault.path,
         VaultHandle::file_path(&b.vaults_dir, a.id())

@@ -845,8 +845,12 @@ fn marking_credential_used_persists_without_history() {
 fn use_on_same_local_day_not_written() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let zone = TimeZone::fixed(jiff::tz::Offset::from_seconds(-7 * 3600).unwrap());
-    // 2026-10-22 08:00 at UTC-7.
-    let first = 1_792_713_600 - 9 * 3600;
+    let first = jiff::civil::date(2026, 10, 22)
+        .at(8, 0, 0, 0)
+        .to_zoned(zone.clone())
+        .unwrap()
+        .timestamp()
+        .as_second();
     assert!(
         vault
             .mark_credential_used("item", "alpha", first, &zone)
@@ -1260,11 +1264,10 @@ fn purge_deleted_removes_entries_older_than_cutoff() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     vault.delete_item_credential("item", "alpha").unwrap();
     vault.delete_item_credential("item", "beta").unwrap();
-    let now = OffsetDateTime::now_utc().unix_timestamp();
 
     assert_eq!(vault.purge_deleted(0), 0);
     assert_eq!(vault.list_deleted("item").unwrap().len(), 2);
-    assert_eq!(vault.purge_deleted(now + 10), 2);
+    assert_eq!(vault.purge_deleted(i64::MAX), 2);
     assert!(vault.list_deleted("item").unwrap().is_empty());
 }
 
@@ -1791,9 +1794,8 @@ fn purge_deleted_includes_deleted_credentials_of_deleted_items() {
         .unwrap();
     let item_id = item_id_of(&vault, "item");
     vault.delete_item("item").unwrap();
-    let now = OffsetDateTime::now_utc().unix_timestamp();
 
-    assert_eq!(vault.purge_deleted(now + 10), 2);
+    assert_eq!(vault.purge_deleted(i64::MAX), 2);
     assert!(vault.deleted.is_empty());
     assert_eq!(vault.list_deleted_items()[0].deleted_credentials.len(), 0);
 
@@ -1808,11 +1810,10 @@ fn purge_deleted_items_removes_entries_older_than_cutoff() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     vault.delete_item("item").unwrap();
     vault.delete_item("other-item").unwrap();
-    let now = OffsetDateTime::now_utc().unix_timestamp();
 
     assert_eq!(vault.purge_deleted_items(0), 0);
     assert_eq!(vault.list_deleted_items().len(), 2);
-    assert_eq!(vault.purge_deleted_items(now + 10), 2);
+    assert_eq!(vault.purge_deleted_items(i64::MAX), 2);
     assert!(vault.list_deleted_items().is_empty());
 }
 

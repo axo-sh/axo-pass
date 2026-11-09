@@ -158,6 +158,7 @@ impl<'de> DeserializeAs<'de, Uuid> for ShortId {
 mod tests {
     use std::collections::BTreeMap;
 
+    use proptest::prelude::*;
     use serde_json::json;
     use serde_with::serde_as;
 
@@ -210,18 +211,27 @@ mod tests {
     }
 
     #[test]
-    fn every_encoded_id_is_22_characters() {
+    fn edge_ids_encode_to_22_characters() {
         let mut ids = vec![Uuid::nil(), Uuid::max()];
         for zero_bytes in 1..16 {
             let mut bytes = *Uuid::max().as_bytes();
             bytes[..zero_bytes].fill(0);
             ids.push(Uuid::from_bytes(bytes));
         }
-        ids.extend((0..1000).map(|_| Uuid::new_v4()));
         for id in ids {
             let short = ShortId::encode_uuid(id);
             assert_eq!(short.len(), SHORT_ID_LEN, "{id}");
             assert_eq!(ShortId::parse_uuid(&short).unwrap(), id);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn any_id_encodes_to_22_characters(bits in any::<u128>()) {
+            let id = Uuid::from_u128(bits);
+            let short = ShortId::encode_uuid(id);
+            prop_assert_eq!(short.len(), SHORT_ID_LEN);
+            prop_assert_eq!(ShortId::parse_uuid(&short).unwrap(), id);
         }
     }
 

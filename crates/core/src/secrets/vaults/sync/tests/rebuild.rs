@@ -343,7 +343,7 @@ fn rebuilt_vault_takes_free_header_key_or_synced_name_with_date_and_index() {
     let device = TestSigner::device();
     let fx = Fixture::synced();
     fx.put_state(GENERATION);
-    let date = Zoned::now().date().strftime("%Y%m%d").to_string();
+    let today = || Zoned::now().date().strftime("%Y%m%d").to_string();
     let rebuild = |id: Uuid, name: &str| {
         state_of(id, REPLICA, 1, &filled(REPLICA, name))
             .save(&fx.root, &device)
@@ -355,10 +355,15 @@ fn rebuilt_vault_takes_free_header_key_or_synced_name_with_date_and_index() {
 
     // A synced name whose key another vault claims takes today's date and
     // the first free index.
+    let day_before = today();
     let first = rebuild(Uuid::from_u128(0x200), "Personal");
     let second = rebuild(Uuid::from_u128(0x300), "Personal");
-    assert_eq!(first, format!("personal-{date}-1"));
-    assert_eq!(second, format!("personal-{date}-2"));
+    let keys = [day_before, today()]
+        .map(|date| [format!("personal-{date}-1"), format!("personal-{date}-2")]);
+    assert!(
+        keys.contains(&[first.clone(), second.clone()]),
+        "{first} {second}"
+    );
 
     // A synced name that does not give a valid key gives `vault`.
     assert_eq!(rebuild(Uuid::from_u128(0x400), "?"), "vault");
