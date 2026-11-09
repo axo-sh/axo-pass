@@ -113,26 +113,6 @@ fn saved_vault_signed_and_reloads_unchanged() {
 }
 
 #[test]
-fn unchanged_save_writes_nothing() {
-    let fx = Fixture::new();
-    let signer = fx.files.signer().as_ref();
-    assert_ne!(
-        fx.vault.file_contents(signer).unwrap(),
-        fx.vault.file_contents(signer).unwrap()
-    );
-    let before = fs::read_to_string(&fx.vault.path).unwrap();
-
-    let committed = fx
-        .files
-        .write::<_, Error>(&fx.target(), fx.unlock(), |vw| vw.list_items().map(|_| ()))
-        .unwrap();
-
-    assert!(!committed.changed);
-    assert_eq!(fs::read_to_string(&fx.vault.path).unwrap(), before);
-    assert!(fx.versions().is_empty());
-}
-
-#[test]
 fn reload_verifies_before_file_key_compared() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
@@ -251,17 +231,6 @@ fn write_saves_and_retains_replaced_file() {
     assert_eq!(retained, before);
 }
 
-#[test]
-fn write_that_changes_nothing_saves_nothing() {
-    let fx = Fixture::new();
-    let committed = fx
-        .files
-        .write::<_, Error>(&fx.target(), fx.unlock(), |vw| vw.list_items().map(|_| ()))
-        .unwrap();
-    assert!(!committed.changed);
-    assert!(fx.versions().is_empty());
-}
-
 /// Vault with entries of every kind, created at `vaults/personal.json` in
 /// `dir`.
 fn filled_vault(dir: &TempDir, files: &VaultWriter) -> VaultHandle {
@@ -297,6 +266,12 @@ fn unchanged_vault_with_every_entry_kind_saves_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let files = VaultWriter::isolated(dir.path().join("data"));
     let vh = filled_vault(&dir, &files);
+    // Each signature differs, so equal bytes show that nothing was saved.
+    let signer = files.signer().as_ref();
+    assert_ne!(
+        vh.file_contents(signer).unwrap(),
+        vh.file_contents(signer).unwrap()
+    );
     let before = fs::read_to_string(&vh.path).unwrap();
 
     let committed = files

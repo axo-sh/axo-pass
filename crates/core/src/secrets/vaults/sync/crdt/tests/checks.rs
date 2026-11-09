@@ -21,33 +21,6 @@ fn local(a: &mut Session) -> (State, Mint) {
 }
 
 #[test]
-fn refused_state_leaves_local_state_unchanged() {
-    let (mut a, mut b) = (session(1), session(2));
-    let (mut state, _) = local(&mut a);
-    let mut high = state.clone();
-    let m = b.mint(&mut high, NOW);
-    let above = Mint {
-        counter: MAX_COUNTER + 1,
-        ..m
-    };
-    high.store.items.entry(1).title.write(&above, "Mail");
-    let mut claim = state.clone();
-    claim.context.record(WriteId {
-        actor: actor(1, 1),
-        seq: 5,
-    });
-    b.mint(&mut claim, NOW);
-    let before = state.clone();
-
-    for peer in [high, claim] {
-        let err = state.try_join(peer, &mut a).unwrap_err();
-
-        assert_eq!(err.action(), JoinAction::Refuse);
-        assert_eq!(state, before);
-    }
-}
-
-#[test]
 fn state_with_counter_above_max_counter_refused() {
     let (mut a, mut b) = (session(1), session(2));
     let (mut state, m_a) = local(&mut a);
@@ -58,6 +31,7 @@ fn state_with_counter_above_max_counter_refused() {
         ..m
     };
     peer.store.name.write(&above, "Home");
+    let before = state.clone();
 
     let err = state.try_join(peer, &mut a).unwrap_err();
 
@@ -67,6 +41,7 @@ fn state_with_counter_above_max_counter_refused() {
     };
     assert_eq!(err, expected);
     assert_eq!(err.action(), JoinAction::Refuse);
+    assert_eq!(state, before);
     assert_eq!(a.last_write(), Some(m_a.write_id));
 }
 

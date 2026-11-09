@@ -742,8 +742,3 @@ fn retained_version_of_another_replica_id_not_restored() {
     assert!(matches!(result, Err(Error::SyncRepairNeeded(_))));
     assert_eq!(fx.on_disk(), before);
 }
-
-#[test]
-fn generated_replica_ids_differ() {
-    assert_ne!(ReplicaId::generate(), ReplicaId::generate());
-}

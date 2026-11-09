@@ -164,7 +164,7 @@ proptest! {
     }
 
     #[test]
-    fn write_after_join_orders_above_every_joined_value(
+    fn write_after_join_orders_above_every_joined_value_on_generated_states(
         history in History::strategy(),
         replica in any::<Index>(),
         version in any::<Index>(),

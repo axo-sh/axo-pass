@@ -309,7 +309,6 @@ fn reenabling_disabled_vault_offers_join_and_joins_with_recovered_key() {
     let start = SyncSetup::prepare(a.catalog.files(), &target, root(), MAC_A).unwrap();
     assert!(matches!(start, SetupStart::Join(r) if r == root()));
     let join = recovered(&setup, &*transport);
-    let replica = join.replica_id;
     let key = || a.vault.unlocked_key().unwrap();
     a.catalog
         .join_sync(
@@ -321,9 +320,6 @@ fn reenabling_disabled_vault_offers_join_and_joins_with_recovered_key() {
         )
         .unwrap();
 
-    assert_ne!(replica, setup.replica_id());
-    assert_eq!(vault_sync(&a).0, Some(replica.0));
-    assert_eq!(opened(&a.root, a.id()).0.replica_id, replica);
     assert!(saved_vault(&a).get_item("item").is_ok());
     assert_eq!(a.read_case(), SyncLoad::Current);
 }

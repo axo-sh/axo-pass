@@ -458,45 +458,39 @@ fn creating_vault_with_signing_key_lost_creates_no_key() {
 }
 
 #[test]
-fn build_that_sees_neither_key_is_new_hardware_and_changes_nothing() {
-    let mac = Mac::with_vault();
-    mac.put("versions/abc/1000-1.json");
-    mac.put("sync/abc.json");
-    let keys = TestKeys::neither();
-    let before = mac.snapshot();
+fn build_with_missing_keys_changes_nothing() {
+    let rows: [(&str, TestKeys, KeyState, fn(&Error) -> bool); 2] = [
+        (
+            "neither key",
+            TestKeys::neither(),
+            KeyState::NewHardware,
+            |e| matches!(e, Error::NewHardware),
+        ),
+        (
+            "encryption key only",
+            TestKeys::new(KeyProbe::Present, KeyProbe::Missing),
+            KeyState::SigningKeyLost,
+            |e| matches!(e, Error::SigningKeyNotFound),
+        ),
+    ];
+    for (label, keys, state, refused) in rows {
+        let mac = Mac::with_vault();
+        mac.put("versions/abc/1000-1.json");
+        mac.put("sync/abc.json");
+        let before = mac.snapshot();
 
-    assert_eq!(classify(&keys, &mac.files()), KeyState::NewHardware);
-    let result = ensure_device_keys(
-        &keys,
-        &mac.files(),
-        AuthContext::OneTime,
-        OnNewHardware::Fail,
-    );
+        assert_eq!(classify(&keys, &mac.files()), state, "{label}");
+        let result = ensure_device_keys(
+            &keys,
+            &mac.files(),
+            AuthContext::OneTime,
+            OnNewHardware::Fail,
+        );
 
-    assert!(matches!(result, Err(Error::NewHardware)));
-    assert_eq!(keys.created(), 0);
-    assert_eq!(mac.snapshot(), before);
-}
-
-#[test]
-fn build_that_sees_only_encryption_key_is_signing_key_lost_and_changes_nothing() {
-    let mac = Mac::with_vault();
-    mac.put("versions/abc/1000-1.json");
-    mac.put("sync/abc.json");
-    let keys = TestKeys::new(KeyProbe::Present, KeyProbe::Missing);
-    let before = mac.snapshot();
-
-    assert_eq!(classify(&keys, &mac.files()), KeyState::SigningKeyLost);
-    let result = ensure_device_keys(
-        &keys,
-        &mac.files(),
-        AuthContext::OneTime,
-        OnNewHardware::Fail,
-    );
-
-    assert!(matches!(result, Err(Error::SigningKeyNotFound)));
-    assert_eq!(keys.created(), 0);
-    assert_eq!(mac.snapshot(), before);
+        assert!(matches!(&result, Err(e) if refused(e)), "{label}");
+        assert_eq!(keys.created(), 0, "{label}");
+        assert_eq!(mac.snapshot(), before, "{label}");
+    }
 }
 
 #[test]

@@ -199,14 +199,8 @@ mod tests {
             let id = Uuid::parse_str(hyphenated).unwrap();
             assert_eq!(ShortId::encode_uuid(id), short, "{hyphenated}");
             assert_eq!(ShortId::parse_uuid(short).unwrap(), id, "{short}");
-        }
-    }
-
-    #[test]
-    fn nil_and_max_ids_round_trip() {
-        for id in [Uuid::nil(), Uuid::max()] {
-            let short = ShortId::new(id).to_string();
-            assert_eq!(short.parse::<ShortId>().unwrap().uuid(), id);
+            assert_eq!(ShortId::new(id).to_string(), short, "{hyphenated}");
+            assert_eq!(short.parse::<ShortId>().unwrap().uuid(), id, "{short}");
         }
     }
 

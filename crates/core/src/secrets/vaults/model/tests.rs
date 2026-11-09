@@ -543,11 +543,16 @@ fn records_resolve_by_id_after_credential_renamed() {
 }
 
 #[test]
-fn legacy_item_metadata_without_category_loads() {
+fn legacy_item_metadata_loads_with_defaults() {
     let meta: VaultItemMetadata = serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
     assert_eq!(meta.category, None);
+    assert_eq!(meta.folder, None);
+    assert!(meta.sections.is_empty());
+
     let json = serde_json::to_value(&meta).unwrap();
     assert!(json.get("category").is_none());
+    assert!(json.get("folder").is_none());
+    assert!(json.get("sections").is_none());
 }
 
 #[test]
@@ -558,10 +563,12 @@ fn default_kind_omitted_from_json() {
 }
 
 #[test]
-fn legacy_metadata_without_kind_loads_as_default() {
+fn legacy_credential_metadata_loads_with_defaults() {
     let meta: VaultCredentialMetadata =
         serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
     assert_eq!(meta.kind, FieldKind::default());
+    assert_eq!(meta.position, None);
+    assert_eq!(meta.section, None);
 }
 
 #[test]
@@ -579,14 +586,6 @@ fn position_omitted_when_unset_and_roundtrips_when_set() {
 }
 
 #[test]
-fn legacy_metadata_without_position_loads_as_none() {
-    let meta: VaultCredentialMetadata =
-        serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
-    assert_eq!(meta.position, None);
-    assert_eq!(meta.section, None);
-}
-
-#[test]
 fn non_default_kind_roundtrips_through_metadata() {
     let meta = cred_metadata(
         "Notes",
@@ -598,17 +597,6 @@ fn non_default_kind_roundtrips_through_metadata() {
     let json = serde_json::to_value(&meta).unwrap();
     let back: VaultCredentialMetadata = serde_json::from_value(json).unwrap();
     assert_eq!(back.kind, meta.kind);
-}
-
-#[test]
-fn legacy_item_metadata_loads_unfiled_without_sections() {
-    let meta: VaultItemMetadata = serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
-    assert_eq!(meta.folder, None);
-    assert!(meta.sections.is_empty());
-
-    let json = serde_json::to_value(&meta).unwrap();
-    assert!(json.get("folder").is_none());
-    assert!(json.get("sections").is_none());
 }
 
 #[test]
@@ -1857,7 +1845,7 @@ fn deleted_item_info_is_bound_to_its_item() {
 }
 
 #[test]
-fn bundled_export_leaves_out_deleted() {
+fn bundled_export_leaves_out_deleted_credentials() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     vault.delete_item_credential("item", "alpha").unwrap();
 

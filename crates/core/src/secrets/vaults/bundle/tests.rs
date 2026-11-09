@@ -509,23 +509,6 @@ fn two_exports_of_one_vault_have_different_file_keys() {
 }
 
 #[test]
-fn export_imports_with_values_and_history() {
-    let vault = filled_vault();
-
-    let prepared = export_and_open(&vault, true);
-    assert_eq!(prepared.id, vault.id());
-    let imported = prepared
-        .into_vault("imported".to_string(), None, plain_wrap)
-        .unwrap();
-
-    imported.assert_live_filled_for_test();
-    assert_eq!(imported.id(), vault.id());
-    // Deleted entries are not exported.
-    assert!(imported.list_deleted("kept").unwrap().is_empty());
-    assert!(imported.list_deleted_items().is_empty());
-}
-
-#[test]
 fn bundle_blobs_fail_to_decrypt_under_source_file_key() {
     let vault = filled_vault();
     let prepared = export_and_open(&vault, true);

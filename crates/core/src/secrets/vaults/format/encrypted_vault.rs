@@ -1094,35 +1094,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_field_in_deleted_item_refused() {
-        let file = filled_file();
-        let deleted_item = only_entry(&file, "/vault/deleted");
-        let deleted_credential = only_entry(&file, &format!("{deleted_item}/item/deleted"));
-        let pointers = [
-            deleted_item.clone(),
-            format!("{deleted_item}/item"),
-            deleted_credential.clone(),
-            format!("{deleted_credential}/credential"),
-        ];
-        for pointer in pointers {
-            assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);
-        }
-    }
-
-    #[test]
-    fn unknown_field_in_deleted_credential_refused() {
-        let file = filled_file();
-        let item = only_entry(&file, "/vault/items");
-        let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
-        for pointer in [
-            deleted_credential.clone(),
-            format!("{deleted_credential}/credential"),
-        ] {
-            assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);
-        }
-    }
-
-    #[test]
     fn unknown_field_in_any_outer_struct_refused() {
         let file = filled_file();
         parse(&signed(&file)).unwrap();
@@ -1131,6 +1102,7 @@ mod tests {
         let credential = only_entry_with_history(&file, &format!("{item}/credentials"));
         let deleted_credential = only_entry(&file, &format!("{item}/deleted"));
         let deleted_item = only_entry(&file, "/vault/deleted");
+        let deleted_item_credential = only_entry(&file, &format!("{deleted_item}/item/deleted"));
         let pointers = [
             String::new(),
             "/vault".to_string(),
@@ -1141,6 +1113,8 @@ mod tests {
             format!("{deleted_credential}/credential"),
             deleted_item.clone(),
             format!("{deleted_item}/item"),
+            deleted_item_credential.clone(),
+            format!("{deleted_item_credential}/credential"),
         ];
         for pointer in pointers {
             assert_refused(parse_with_unknown_field(&file, &pointer), &pointer);

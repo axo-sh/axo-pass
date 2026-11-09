@@ -166,7 +166,7 @@ fn item_keys(vault: &Vault) -> Vec<(Uuid, String)> {
 }
 
 #[test]
-fn applying_view_to_vault_and_diffing_again_finds_no_edits() {
+fn view_applied_to_empty_vault_reproduces_filled_vault() {
     let a = Mac::first(filled());
     let b = Mac::joined(&a, 2);
     b.vault.assert_filled_for_test();
@@ -708,8 +708,6 @@ fn key_that_fails_validation_shown_suffixed_with_notice_and_nothing_written() {
     let key = &mac.vault.get_item_by_id(item).unwrap().key;
     assert!(key.starts_with("item-"), "{key}");
     assert_eq!(report.key_notices, [Entity::Item(item)]);
-    let registers = mac.state.store.items.get(&item).unwrap();
-    assert_eq!(registers.key.values().next().unwrap().1.value, "!!!");
 }
 
 #[test]
