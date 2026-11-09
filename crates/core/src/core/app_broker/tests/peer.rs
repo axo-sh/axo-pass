@@ -233,71 +233,59 @@ async fn falls_back_to_peer_chain_for_prompt() {
     );
 }
 
-/// A rejected peer cannot list the saved passwords.
+/// A rejected peer is hung up on and never reaches the authorizer. Listing is
+/// gated on the same check as signing, so a rejected peer cannot read the
+/// public keys, the saved passwords, an age identity, or a passphrase either.
 #[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_rejected_peer_listing_keychain_passwords() {
-    let broker = TestBroker::start(rejecting_policy()).await;
+async fn hangs_up_on_rejected_peer() {
+    type Untouched = fn(&TestBroker);
+    let cases: [(&str, &str, Untouched); 5] = [
+        (
+            "listing keychain passwords",
+            r#"{"request":"list_keychain_passwords","caller":"evil"}"#,
+            |_| {},
+        ),
+        (
+            "asking for age identity",
+            r#"{"request":"get_age_identity","key_id":"demo","caller":"evil"}"#,
+            |broker| assert!(broker.authorizer.peers.lock().unwrap().is_empty()),
+        ),
+        (
+            "asking for passphrase",
+            r#"{"request":"get_passphrase","key_id":null,"description":null,"prompt":null,"error_message":null,"caller":"evil"}"#,
+            |broker| {
+                assert!(
+                    broker
+                        .authorizer
+                        .passphrase_prompts
+                        .lock()
+                        .unwrap()
+                        .is_empty()
+                );
+            },
+        ),
+        (
+            "signing",
+            r#"{"request":"sign","key_label":"key-1","caller":"evil","data":"aGk="}"#,
+            |broker| assert!(broker.authorizer.prompts.lock().unwrap().is_empty()),
+        ),
+        (
+            "listing identities",
+            r#"{"request":"list_identities"}"#,
+            |_| {},
+        ),
+    ];
+    for (case, request, untouched) in cases {
+        let broker = TestBroker::start(rejecting_policy()).await;
 
-    let response = broker.request(r#"{"request":"list_keychain_passwords","caller":"evil"}"#);
+        let response = broker.request(request);
 
-    assert!(response.is_empty(), "broker answered a rejected peer");
-}
-
-/// A rejected peer cannot ask for an age identity.
-#[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_rejected_peer_asking_for_age_identity() {
-    let broker = TestBroker::start(rejecting_policy()).await;
-
-    let response =
-        broker.request(r#"{"request":"get_age_identity","key_id":"demo","caller":"evil"}"#);
-
-    assert!(response.is_empty(), "broker answered a rejected peer");
-    assert!(broker.authorizer.peers.lock().unwrap().is_empty());
-}
-
-/// A rejected peer cannot ask for a passphrase either.
-#[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_rejected_peer_asking_for_passphrase() {
-    let broker = TestBroker::start(rejecting_policy()).await;
-
-    let response = broker.request(
-        r#"{"request":"get_passphrase","key_id":null,"description":null,"prompt":null,"error_message":null,"caller":"evil"}"#,
-    );
-
-    assert!(response.is_empty(), "broker answered a rejected peer");
-    assert!(
-        broker
-            .authorizer
-            .passphrase_prompts
-            .lock()
-            .unwrap()
-            .is_empty()
-    );
-}
-
-/// A process that is not the agent is hung up on and never reaches the
-/// authorizer.
-#[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_peer_policy_rejects() {
-    let broker = TestBroker::start(rejecting_policy()).await;
-
-    let response =
-        broker.request(r#"{"request":"sign","key_label":"key-1","caller":"evil","data":"aGk="}"#);
-
-    assert!(response.is_empty(), "broker answered a rejected peer");
-    assert!(broker.authorizer.prompts.lock().unwrap().is_empty());
-}
-
-/// Listing is gated on the same check as signing, so a rejected peer cannot
-/// read the public keys either.
-#[tokio::test(flavor = "multi_thread")]
-async fn hangs_up_on_rejected_peer_listing_identities() {
-    let broker = TestBroker::start(rejecting_policy()).await;
-    assert!(
-        broker
-            .request(r#"{"request":"list_identities"}"#)
-            .is_empty()
-    );
+        assert!(
+            response.is_empty(),
+            "broker answered a rejected peer {case}"
+        );
+        untouched(&broker);
+    }
 }
 
 /// A peer is matched against each client's policy in turn, and the first

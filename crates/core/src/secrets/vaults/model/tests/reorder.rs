@@ -43,52 +43,52 @@ fn reorder_invalidates_metadata_cache() {
 }
 
 #[test]
-fn reorder_rejects_partial_list() {
-    let mut vault = vault_with_credentials("item", &["alpha", "beta", "gamma"]);
-    let err = vault
-        .reorder_item_credentials("item", &unsectioned(&["beta", "alpha"]))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidCredentialOrder(_)));
-    assert_eq!(
-        positions(&vault, "item", &["alpha", "beta", "gamma"]),
-        vec![None, None, None]
-    );
-}
+fn reorder_rejects_invalid_unsectioned_lists() {
+    type Expected = fn(&Error) -> bool;
+    let cases: [(&str, &str, &[&str], &[&str], Expected); 5] = [
+        (
+            "partial list",
+            "item",
+            &["alpha", "beta", "gamma"],
+            &["beta", "alpha"],
+            |err| matches!(err, Error::InvalidCredentialOrder(_)),
+        ),
+        (
+            "duplicated key",
+            "item",
+            &["alpha", "beta"],
+            &["alpha", "alpha"],
+            |err| matches!(err, Error::InvalidCredentialOrder(_)),
+        ),
+        (
+            "unknown key",
+            "item",
+            &["alpha", "beta"],
+            &["alpha", "nope"],
+            |err| matches!(err, Error::InvalidCredentialKey(_)),
+        ),
+        (
+            "key from another item",
+            "item",
+            &["alpha", "beta"],
+            &["alpha", "elsewhere"],
+            |err| matches!(err, Error::InvalidCredentialKey(_)),
+        ),
+        ("unknown item", "nope", &["alpha"], &["alpha"], |err| {
+            matches!(err, Error::InvalidItemKey(_))
+        }),
+    ];
+    for (case, item_key, keys, order, expected) in cases {
+        let mut vault = vault_with_credentials("item", keys);
 
-#[test]
-fn reorder_rejects_duplicated_key() {
-    let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
-    let err = vault
-        .reorder_item_credentials("item", &unsectioned(&["alpha", "alpha"]))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidCredentialOrder(_)));
-}
+        let err = vault
+            .reorder_item_credentials(item_key, &unsectioned(order))
+            .unwrap_err();
 
-#[test]
-fn reorder_rejects_unknown_key() {
-    let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
-    let err = vault
-        .reorder_item_credentials("item", &unsectioned(&["alpha", "nope"]))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidCredentialKey(_)));
-}
-
-#[test]
-fn reorder_rejects_key_from_another_item() {
-    let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
-    let err = vault
-        .reorder_item_credentials("item", &unsectioned(&["alpha", "elsewhere"]))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidCredentialKey(_)));
-}
-
-#[test]
-fn reorder_rejects_unknown_item() {
-    let mut vault = vault_with_credentials("item", &["alpha"]);
-    let err = vault
-        .reorder_item_credentials("nope", &unsectioned(&["alpha"]))
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidItemKey(_)));
+        assert!(expected(&err), "{case}: {err:?}");
+        let unchanged = vec![None; keys.len()];
+        assert_eq!(positions(&vault, "item", keys), unchanged, "{case}");
+    }
 }
 
 #[test]

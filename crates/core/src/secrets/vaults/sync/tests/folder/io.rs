@@ -1,13 +1,10 @@
 use super::*;
 
 #[test]
-fn plain_io_reads_only_exact_state_file_names() {
-    transport::reads_only_exact_state_file_names(&Folder::plain());
-}
-
-#[test]
-fn coordinated_io_reads_only_exact_state_file_names() {
-    transport::reads_only_exact_state_file_names(&Folder::coordinated());
+fn each_io_reads_only_exact_state_file_names() {
+    for folder in Folder::each() {
+        transport::reads_only_exact_state_file_names(&folder);
+    }
 }
 
 #[test]
@@ -21,33 +18,24 @@ fn plain_io_returns_remote_for_file_not_yet_local() {
 }
 
 #[test]
-fn plain_io_writes_and_deletes_own_files_and_fails_while_unavailable() {
-    transport::writes_and_deletes_own_files_and_fails_while_unavailable(&Folder::plain());
+fn each_io_writes_and_deletes_own_files_and_fails_while_unavailable() {
+    for folder in Folder::each() {
+        transport::writes_and_deletes_own_files_and_fails_while_unavailable(&folder);
+    }
 }
 
 #[test]
-fn coordinated_io_writes_and_deletes_own_files_and_fails_while_unavailable() {
-    transport::writes_and_deletes_own_files_and_fails_while_unavailable(&Folder::coordinated());
+fn each_io_lists_vaults_and_reads_and_writes_meta() {
+    for folder in Folder::each() {
+        transport::lists_vaults_and_reads_and_writes_meta(&folder);
+    }
 }
 
 #[test]
-fn plain_io_lists_vaults_and_reads_and_writes_meta() {
-    transport::lists_vaults_and_reads_and_writes_meta(&Folder::plain());
-}
-
-#[test]
-fn coordinated_io_lists_vaults_and_reads_and_writes_meta() {
-    transport::lists_vaults_and_reads_and_writes_meta(&Folder::coordinated());
-}
-
-#[test]
-fn plain_io_deletes_replica_directory_and_leaves_others() {
-    transport::deletes_replica_directory_and_leaves_others(&Folder::plain());
-}
-
-#[test]
-fn coordinated_io_deletes_replica_directory_and_leaves_others() {
-    transport::deletes_replica_directory_and_leaves_others(&Folder::coordinated());
+fn each_io_deletes_replica_directory_and_leaves_others() {
+    for folder in Folder::each() {
+        transport::deletes_replica_directory_and_leaves_others(&folder);
+    }
 }
 
 #[test]
