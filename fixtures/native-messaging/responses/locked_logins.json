@@ -1,0 +1,17 @@
+{
+  "status": "locked_logins",
+  "logins": [
+    {
+      "record_id": "0192f3a4-5b6c-7d8e-9f01-23456789abcd/0192f3a4-5b6c-7d8e-9f01-23456789abce/0192f3a4-5b6c-7d8e-9f01-23456789abcf",
+      "title": "GitHub",
+      "username": "tp@example.com",
+      "matched": {
+        "host": "gist.github.com",
+        "kind": "starts-with",
+        "rank": "domain"
+      },
+      "has_totp": false
+    }
+  ],
+  "indexed": true
+}

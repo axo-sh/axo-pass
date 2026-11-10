@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      .gone {
+        display: none;
+      }
+      .invisible {
+        visibility: hidden;
+      }
+      .faded {
+        opacity: 0;
+      }
+      .sr-only {
+        position: absolute;
+        clip: rect(0, 0, 0, 0);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- A hidden password field and an off-screen username field. Nothing in
+         this form may be filled. -->
+    <form id="trap">
+      <input id="trap-user" type="text" name="username" data-rect="-9999,10,200,24" />
+      <input id="trap-password" type="password" class="gone" />
+    </form>
+
+    <!-- Decoys hidden in each way the fill must notice, around one real login. -->
+    <form id="decoys">
+      <input id="decoy-hidden-attr" type="password" hidden />
+      <input id="decoy-type-hidden" type="hidden" name="password" />
+      <input id="decoy-invisible" type="password" class="invisible" />
+      <div class="faded"><input id="decoy-faded" type="password" /></div>
+      <input id="decoy-sr-only" type="password" class="sr-only" />
+      <input id="decoy-tiny" type="password" data-rect="10,10,1,1" />
+      <input id="decoy-above" type="password" data-rect="10,-500,200,24" />
+      <input id="real-user" type="email" name="email" />
+      <input id="real-password" type="password" />
+    </form>
+  </body>
+</html>

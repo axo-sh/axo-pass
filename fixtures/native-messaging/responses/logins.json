@@ -1,0 +1,24 @@
+{
+  "status": "logins",
+  "logins": [
+    {
+      "record_id": "0192f3a4-5b6c-7d8e-9f01-23456789abcd/0192f3a4-5b6c-7d8e-9f01-23456789abce/0192f3a4-5b6c-7d8e-9f01-23456789abcf",
+      "title": "GitHub",
+      "username": "tp@example.com",
+      "matched": {
+        "host": "github.com",
+        "kind": "domain",
+        "rank": "host"
+      },
+      "has_totp": true
+    }
+  ],
+  "others": [
+    {
+      "record_id": "0192f3a4-5b6c-7d8e-9f01-23456789abcd/0192f3a4-5b6c-7d8e-9f01-23456789abd0/0192f3a4-5b6c-7d8e-9f01-23456789abd1",
+      "title": "Example",
+      "username": null,
+      "has_totp": false
+    }
+  ]
+}

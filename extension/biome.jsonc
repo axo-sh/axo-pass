@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "root": ".."
+  },
+  "files": {
+    "includes": [
+      "**/*.{js,jsx,ts,tsx,json,jsonc}",
+      "!**/dist",
+      "!**/build",
+      "!**/node_modules",
+      "!**/*.generated.*"
+    ],
+    "ignoreUnknown": true
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "html": {
+    "experimentalFullSupportEnabled": true
+  },
+  "javascript": {
+    "formatter": {
+      "bracketSpacing": false,
+      "quoteStyle": "single",
+      "quoteProperties": "preserve",
+      "trailingCommas": "es5"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "useExhaustiveDependencies": "off",
+        "noUnusedImports": "error"
+      },
+      "complexity": {
+        "noForEach": "off"
+      },
+      "suspicious": {
+        "noConfusingVoidType": "off",
+        "noExplicitAny": "off"
+      },
+      "style": {
+        "noInferrableTypes": "off",
+        "useBlockStatements": "error",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["./*", "../*"]
+              }
+            ]
+          }
+        }
+      },
+      "a11y": "off"
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on",
+          "options": {
+            "groups": [":NODE:", ":BLANK_LINE:", ":PACKAGE:", ":BLANK_LINE:", ":PATH:"]
+          }
+        }
+      }
+    }
+  }
+}

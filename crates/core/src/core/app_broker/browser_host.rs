@@ -11,6 +11,10 @@
 //! disconnects after the reply. The host exits on stdin EOF, which closes the
 //! broker connection and ends any prompt on screen.
 //!
+//! Replies are broker responses, plus two statuses of the host's own: the app
+//! could not be reached, and a locked listing was refused because the browser
+//! is not verified. See [`HostStatus`].
+//!
 //! Stdout carries native messaging frames only. Logs go to stderr and to
 //! `~/Library/Logs/Axo Pass/browser-host.log`. Request bodies are never logged.
 
@@ -22,6 +26,8 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::process::ExitCode;
+
+use serde::Serialize;
 
 use self::framing::{FrameError, read_message, write_message};
 use self::parent::verify_parent;
@@ -71,17 +77,46 @@ pub fn run() -> ExitCode {
             .map_or("unverified browser", |b| b.name.as_str())
     );
 
+    // The broker refuses a locked listing for an unverified browser. The host
+    // says so itself, so the extension can tell this from other failures.
+    if client.browser.is_none() && matches!(request, ExtensionRequest::ListLoginsLocked { .. }) {
+        return exit_code(reply(&HostStatus::BrowserNotVerified));
+    }
+
     exit_on_stdin_eof();
 
-    let response = match send_request(&request.into_wire(client)) {
-        Ok(response) => response,
-        Err(BrokerError::Cancelled) => WireResponse::Cancelled,
+    let sent = match send_request(&request.into_wire(client)) {
+        Ok(response) => reply(&response),
+        Err(BrokerError::Cancelled) => reply(&WireResponse::Cancelled),
+        Err(e @ BrokerError::Unavailable) => {
+            log::warn!("Browser host could not reach the app: {e}");
+            reply(&HostStatus::AppUnavailable {
+                message: e.to_string(),
+            })
+        },
         Err(e) => {
             log::warn!("Browser host request failed: {e}");
-            failed(e.to_string())
+            reply(&failed(e.to_string()))
         },
     };
-    if reply(&response) {
+    exit_code(sent)
+}
+
+/// Replies the host makes without an answer from the broker. They share the
+/// `status` tag of [`WireResponse`] and use names it does not.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize, PartialEq))]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum HostStatus {
+    /// No app is listening and none could be started.
+    AppUnavailable { message: String },
+    /// The host could not verify the browser that started it, so it refused a
+    /// request that needs a verified browser.
+    BrowserNotVerified,
+}
+
+fn exit_code(sent: bool) -> ExitCode {
+    if sent {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -93,7 +128,7 @@ fn failed(message: String) -> WireResponse {
 }
 
 /// Write `response` to stdout. False if it could not be written.
-fn reply(response: &WireResponse) -> bool {
+fn reply(response: &impl Serialize) -> bool {
     let body = match serde_json::to_vec(response) {
         Ok(body) => body,
         Err(e) => {
@@ -328,6 +363,65 @@ mod tests {
         std::fs::write(&manifest, r#"{"name":"x"}"#).unwrap();
         assert!(check_manifest(&manifest, &exe).is_err());
         assert!(check_manifest(&dir.path().join("missing.json"), &exe).is_err());
+    }
+
+    /// Response fixtures shared with the extension tests, one file per status
+    /// the extension handles. Each parses as a broker response or a host
+    /// status, never both, and serializes back to the same JSON.
+    #[test]
+    fn response_fixtures_round_trip() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/native-messaging/responses");
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["status"], name.as_str(), "{name}");
+
+            let broker = serde_json::from_value::<WireResponse>(value.clone());
+            let host = serde_json::from_value::<HostStatus>(value.clone());
+            let round_trip = match (broker, host) {
+                (Ok(response), Err(_)) => serde_json::to_value(&response).unwrap(),
+                (Err(_), Ok(status)) => serde_json::to_value(&status).unwrap(),
+                (broker, host) => panic!("{name}: broker {:?}, host {host:?}", broker.is_ok()),
+            };
+            assert_eq!(round_trip, value, "{name}");
+            names.push(name);
+        }
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "acknowledged",
+                "app_unavailable",
+                "browser_not_verified",
+                "cancelled",
+                "failed",
+                "generated_password",
+                "locked_logins",
+                "login_fill",
+                "login_saved",
+                "logins",
+                "totp_code",
+            ]
+        );
+    }
+
+    #[test]
+    fn host_statuses_serialize_with_status_tag() {
+        assert_eq!(
+            serde_json::to_value(HostStatus::BrowserNotVerified).unwrap(),
+            serde_json::json!({"status": "browser_not_verified"})
+        );
+        assert_eq!(
+            serde_json::to_value(HostStatus::AppUnavailable {
+                message: BrokerError::Unavailable.to_string()
+            })
+            .unwrap(),
+            serde_json::json!({"status": "app_unavailable", "message": "App broker unavailable"})
+        );
     }
 
     /// The test runner has no browser parent, so the host reports no browser

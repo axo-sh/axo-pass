@@ -1,0 +1,17 @@
+project_name = "axo-pass-extension"
+
+# Only the Firefox package is built until M5.
+[tasks]
+install = "npm ci"
+build = "webpack --env target=ff"
+"build:chrome" = "webpack --env target=chrome"
+watch = "webpack --watch --env target=ff"
+typecheck = "tsc --noEmit"
+test = [":typecheck", "vitest run"]
+check = "biome check"
+lint = [":check", ":build", "web-ext lint --source-dir build/ff"]
+run = [":build", "web-ext run --source-dir build/ff"]
+fmt = "biome check --write"
+
+[global_packages]
+"nodejs/node" = "^26.2.0"

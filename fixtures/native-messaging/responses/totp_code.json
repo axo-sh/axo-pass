@@ -1,0 +1,7 @@
+{
+  "status": "totp_code",
+  "code": {
+    "code": "123456",
+    "seconds_remaining": 17
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@test/*": ["./test/*"]
+    },
+    "strict": true,
+    "noUnusedLocals": true,
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "target": "es2022",
+    "sourceMap": true,
+    "resolveJsonModule": true,
+    "types": []
+  },
+  "include": ["src", "test"]
+}
