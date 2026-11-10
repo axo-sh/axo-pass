@@ -1,5 +1,6 @@
 import * as browser from 'webextension-polyfill';
 
+import {offersCode} from '@/lib/logins';
 import type {PopupFillReply, PopupListReply, PopupRequest, PopupTarget} from '@/lib/messages';
 import type {LoginSummary, OtherLogin} from '@/lib/protocol';
 import type {View} from '@/popup/state';
@@ -27,15 +28,24 @@ const load = async (all: boolean): Promise<void> => {
   render(viewForList(await send<PopupListReply>({type: 'popup-list', all})));
 };
 
-const fill = async (target: PopupTarget, login: LoginSummary | OtherLogin, unmatched: boolean) => {
-  render(null, 'Filling…');
-  const reply = await send<PopupFillReply>({
+const fill = (target: PopupTarget, login: LoginSummary | OtherLogin, unmatched: boolean) => {
+  return run({
     type: 'popup-fill',
     frameUrl: target.frameUrl,
     recordId: login.record_id,
     account: login.username ?? login.title,
     unmatched,
   });
+};
+
+const fillCode = (target: PopupTarget, login: LoginSummary) => {
+  return run({type: 'popup-code', frameUrl: target.frameUrl, recordId: login.record_id});
+};
+
+/** Send a fill or code request and show its outcome. A fill closes the popup. */
+const run = async (request: PopupRequest): Promise<void> => {
+  render(null, 'Filling…');
+  const reply = await send<PopupFillReply>(request);
   if (reply.state === 'filled') {
     window.close();
     return;
@@ -98,6 +108,13 @@ const loginList = (
     button.addEventListener('click', () => void fill(target, login, unmatched));
     const item = el('li');
     item.append(button);
+    if (offersCode(login)) {
+      const code = el('button', 'code', 'Code');
+      code.title = 'Fill one-time code';
+      code.setAttribute('aria-label', `Fill one-time code for ${login.username ?? login.title}`);
+      code.addEventListener('click', () => void fillCode(target, login));
+      item.append(code);
+    }
     list.append(item);
   }
   return list;

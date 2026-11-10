@@ -48,10 +48,16 @@ ul {
   padding: 0;
 }
 
+li {
+  display: flex;
+  align-items: center;
+}
+
 .login {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  width: 100%;
+  min-width: 0;
   padding: 6px 14px;
   border: 0;
   background: none;
@@ -75,6 +81,24 @@ ul {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+button.code {
+  flex: none;
+  margin-right: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.code:hover,
+button.code:focus-visible {
+  background: var(--hover);
 }
 
 .message {

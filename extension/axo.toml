@@ -10,7 +10,8 @@ typecheck = "tsc --noEmit"
 test = [":typecheck", "vitest run"]
 check = "biome check"
 lint = [":check", ":build", "web-ext lint --source-dir build/ff"]
-run = [":build", "web-ext run --source-dir build/ff"]
+# Update checks in the temporary profile raise macOS prompts for the updater.
+run = [":build", "web-ext run --source-dir build/ff --pref app.update.disabledForTesting=true"]
 fmt = "biome check --write"
 
 [global_packages]

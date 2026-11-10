@@ -31,7 +31,7 @@
       "suggested_key": {
         "default": "Alt+Shift+L"
       },
-      "description": "Fill the login for this page"
+      "description": "Fill the login for this page, or the one-time code in a code field"
     }
   },
   "content_security_policy": {

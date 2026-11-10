@@ -1,8 +1,11 @@
 import * as browser from 'webextension-polyfill';
 
+import type {FieldKind} from '@/lib/fields';
 import {callHost} from '@/lib/host';
+import {codeLoginsOf, matchesOf} from '@/lib/logins';
 import type {
   FieldTargetMessage,
+  FillCodeMessage,
   FillMessage,
   FillResult,
   PopupFillReply,
@@ -22,12 +25,19 @@ import {clearTarget, saveTarget, targetForTab} from '@/lib/target';
 // registered at the top level so the browser can wake it for each event.
 
 const MENU_FILL = 'fill-login';
+const MENU_CODE = 'fill-code';
 const COMMAND_FILL = 'fill-login';
 
 browser.runtime.onInstalled.addListener(() => {
+  // With two items, the browser groups them under the extension name.
   browser.contextMenus.create({
     id: MENU_FILL,
-    title: 'Fill login with Axo Pass',
+    title: 'Fill Login',
+    contexts: ['editable'],
+  });
+  browser.contextMenus.create({
+    id: MENU_CODE,
+    title: 'Fill One-Time Code',
     contexts: ['editable'],
   });
 });
@@ -43,7 +53,10 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
     if (!isWebPage(check.target.frameUrl)) {
       return undefined;
     }
-    return saveTarget(check.target).then(() => undefined);
+    // The field kind comes from the page. It only chooses what the shortcut
+    // asks for, and a code always prompts.
+    const field: FieldKind = (message as FieldTargetMessage).field === 'code' ? 'code' : 'login';
+    return saveTarget({...check.target, field}).then(() => undefined);
   }
   if (!isExtensionPage(sender, runtimeId, browser.runtime.getURL(''))) {
     return undefined;
@@ -54,6 +67,8 @@ browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime
       return popupList(request.all);
     case 'popup-fill':
       return popupFill(request);
+    case 'popup-code':
+      return popupCode(request);
     default:
       return undefined;
   }
@@ -64,7 +79,7 @@ browser.tabs.onRemoved.addListener((tabId) => {
 });
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== MENU_FILL) {
+  if (info.menuItemId !== MENU_FILL && info.menuItemId !== MENU_CODE) {
     return;
   }
   const tabId = tab?.id;
@@ -81,7 +96,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     stored.frameId === frameId
       ? stored
       : {tabId, frameId, frameUrl: frameId === 0 ? topUrl : (info.frameUrl ?? topUrl), topUrl};
-  await quickFill(target);
+  await quickFill(target, info.menuItemId === MENU_CODE ? 'code' : 'login');
 });
 
 browser.commands.onCommand.addListener(async (command, tab) => {
@@ -92,7 +107,10 @@ browser.commands.onCommand.addListener(async (command, tab) => {
   if (active?.id === undefined || !isWebPage(active.url)) {
     return;
   }
-  await quickFill(await targetForTab(active.id, active.url));
+  // One shortcut for both. It fills a code if the field the user last acted
+  // on is a code field, and the login otherwise.
+  const target = await targetForTab(active.id, active.url);
+  await quickFill(target, target.field);
 });
 
 const activeTab = async (): Promise<browser.Tabs.Tab | undefined> => {
@@ -146,6 +164,16 @@ const popupFill = async (
   return fillTarget(target, request.recordId, request.account, request.unmatched);
 };
 
+const popupCode = async (
+  request: Extract<PopupRequest, {type: 'popup-code'}>
+): Promise<PopupFillReply> => {
+  const target = await activeTarget();
+  if (!target || target.frameUrl !== request.frameUrl) {
+    return {state: 'refused', reason: 'The page changed since the logins were listed.'};
+  }
+  return codeTarget(target, request.recordId);
+};
+
 /** Ask the host for a login and send it to the target frame alone. */
 const fillTarget = async (
   target: FrameTarget,
@@ -163,12 +191,41 @@ const fillTarget = async (
     return {state: 'host', result};
   }
 
-  const message: FillMessage = {
+  return sendToFrame(target, {
     type: 'fill',
     origin,
     username: result.username,
     password: result.password,
-  };
+  });
+};
+
+/**
+ * Ask the host for the one-time code of a login and send it to the target
+ * frame alone. The broker serves a code only for a login stored for the frame,
+ * and always prompts.
+ */
+const codeTarget = async (target: FrameTarget, recordId: string): Promise<PopupFillReply> => {
+  const origin = originOf(target.frameUrl);
+  if (origin === null) {
+    return {state: 'refused', reason: 'The frame has no origin.'};
+  }
+
+  const result = await callHost(requests.generateTotp(pageOf(target), recordId));
+  if (result.status !== 'totp_code') {
+    return {state: 'host', result};
+  }
+  if (result.code === null) {
+    return {state: 'refused', reason: 'That login has no one-time code.'};
+  }
+
+  return sendToFrame(target, {type: 'fill-code', origin, code: result.code.code});
+};
+
+/** Send a fill to the target frame and report the frame's answer. */
+const sendToFrame = async (
+  target: FrameTarget,
+  message: FillMessage | FillCodeMessage
+): Promise<PopupFillReply> => {
   // `documentId` is Chromium only. It keeps the fill out of a document that
   // replaced the one that asked.
   const options: {frameId: number; documentId?: string} = {frameId: target.frameId};
@@ -189,10 +246,11 @@ const fillTarget = async (
 };
 
 /**
- * Fill from the keyboard shortcut or the context menu. A single match is
- * filled. Otherwise the popup opens so the user can choose.
+ * Fill a login or a one-time code from the keyboard shortcut or the context
+ * menu. A single match is filled. Otherwise the popup opens so the user can
+ * choose. A code is offered only for logins that match the frame and have one.
  */
-const quickFill = async (target: FrameTarget): Promise<void> => {
+const quickFill = async (target: FrameTarget, kind: FieldKind): Promise<void> => {
   await showBadge(target.tabId, '', null);
   const page = pageOf(target);
   let listing: HostResult = await callHost(requests.listLoginsLocked(page));
@@ -202,10 +260,9 @@ const quickFill = async (target: FrameTarget): Promise<void> => {
   ) {
     listing = await callHost(requests.listLogins(page, false));
   }
-  const logins = matchesOf(listing);
+  const logins = kind === 'code' ? codeLoginsOf(listing) : matchesOf(listing);
   if (logins?.length === 1) {
-    const login = logins[0];
-    const reply = await fillTarget(target, login.record_id, login.username ?? login.title, false);
+    const reply = await quickFillOne(target, kind, logins[0]);
     if (reply.state === 'filled' || isCancelled(reply)) {
       return;
     }
@@ -224,20 +281,28 @@ const quickFill = async (target: FrameTarget): Promise<void> => {
   } catch {
     // Firefox opens the popup only directly from a user action, and the
     // listing above waited on the host. The badge points the user to it.
+    const none = kind === 'code' ? 'No one-time codes for this page' : 'No logins for this page';
     await showBadge(
       target.tabId,
       String(logins.length),
-      logins.length === 0 ? 'No logins for this page' : 'Choose a login'
+      logins.length === 0 ? none : 'Choose a login'
     );
   }
 };
 
-const isCancelled = (reply: PopupFillReply): boolean => {
-  return reply.state === 'host' && reply.result.status === 'cancelled';
+const quickFillOne = (
+  target: FrameTarget,
+  kind: FieldKind,
+  login: LoginSummary
+): Promise<PopupFillReply> => {
+  if (kind === 'code') {
+    return codeTarget(target, login.record_id);
+  }
+  return fillTarget(target, login.record_id, login.username ?? login.title, false);
 };
 
-const matchesOf = (result: HostResult): LoginSummary[] | null => {
-  return result.status === 'logins' || result.status === 'locked_logins' ? result.logins : null;
+const isCancelled = (reply: PopupFillReply): boolean => {
+  return reply.state === 'host' && reply.result.status === 'cancelled';
 };
 
 const showBadge = async (tabId: number, text: string, title: string | null): Promise<void> => {

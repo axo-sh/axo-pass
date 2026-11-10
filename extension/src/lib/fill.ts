@@ -1,5 +1,5 @@
-import {findLoginFields} from '@/lib/fields';
-import type {FillMessage, FillResult} from '@/lib/messages';
+import {findCodeFields, findLoginFields} from '@/lib/fields';
+import type {FillCodeMessage, FillMessage, FillResult} from '@/lib/messages';
 
 /**
  * Fill the login form the user acted on in `doc`. Only visible fields are
@@ -23,6 +23,48 @@ export const fillLogin = (
     return {
       ok: false,
       reason: 'No visible login form. Click the username or password field first.',
+    };
+  }
+
+  let filled = 0;
+  for (const [field, value] of writes) {
+    const origin = doc.defaultView?.location.origin;
+    if (origin !== values.origin) {
+      return {ok: false, reason: `The frame is now on ${origin}, not ${values.origin}.`};
+    }
+    setValue(field, value);
+    filled++;
+  }
+  return {ok: true, filled};
+};
+
+/**
+ * Fill a one-time code into the code field the user acted on in `doc`. A code
+ * split across single-character fields gets one character per field. The
+ * origin rule of `fillLogin` applies.
+ */
+export const fillCode = (
+  doc: Document,
+  anchor: HTMLInputElement | null,
+  values: Pick<FillCodeMessage, 'origin' | 'code'>
+): FillResult => {
+  const fields = findCodeFields(doc, anchor);
+  if (fields.length === 0) {
+    return {
+      ok: false,
+      reason: 'No visible one-time code field. Click the code field first.',
+    };
+  }
+  const chars = Array.from(values.code);
+  let writes: [HTMLInputElement, string][];
+  if (fields.length === 1) {
+    writes = [[fields[0], values.code]];
+  } else if (fields.length === chars.length) {
+    writes = fields.map((field, i) => [field, chars[i]]);
+  } else {
+    return {
+      ok: false,
+      reason: `The page has ${fields.length} code fields for a ${chars.length}-digit code.`,
     };
   }
 

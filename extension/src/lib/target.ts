@@ -1,18 +1,24 @@
 import * as browser from 'webextension-polyfill';
 
+import type {FieldKind} from '@/lib/fields';
 import type {FrameTarget} from '@/lib/sender';
 import {originOf} from '@/lib/sender';
 
-// The frame of the login field the user last focused or right-clicked, per
-// tab. Kept in `storage.session`, which the browser holds in memory and never
-// writes to disk, because the background script keeps no state of its own
-// between events.
+// The frame of the login or code field the user last focused or right-clicked,
+// per tab. Kept in `storage.session`, which the browser holds in memory and
+// never writes to disk, because the background script keeps no state of its
+// own between events.
+
+/** Frame target with the kind of field the user acted on there. */
+export interface FieldTarget extends FrameTarget {
+  field: FieldKind;
+}
 
 const key = (tabId: number): string => {
   return `target:${tabId}`;
 };
 
-export const saveTarget = async (target: FrameTarget): Promise<void> => {
+export const saveTarget = async (target: FieldTarget): Promise<void> => {
   await browser.storage.session.set({[key(target.tabId)]: target});
 };
 
@@ -22,17 +28,18 @@ export const clearTarget = async (tabId: number): Promise<void> => {
 
 /**
  * Frame to fill in a tab: the frame of the field the user last acted on, if
- * the tab still shows the same top-level origin, otherwise the top frame.
+ * the tab still shows the same top-level origin. Otherwise the top frame, for
+ * a login.
  */
-export const targetForTab = async (tabId: number, topUrl: string): Promise<FrameTarget> => {
+export const targetForTab = async (tabId: number, topUrl: string): Promise<FieldTarget> => {
   const stored = (await browser.storage.session.get(key(tabId)))[key(tabId)] as
-    | FrameTarget
+    | FieldTarget
     | undefined;
   if (stored && originOf(stored.topUrl) === originOf(topUrl)) {
     // The tab URL is current. A stored top frame URL may predate a navigation
     // within the same origin.
     const frameUrl = stored.frameId === 0 ? topUrl : stored.frameUrl;
-    return {...stored, frameUrl, topUrl};
+    return {...stored, frameUrl, topUrl, field: stored.field ?? 'login'};
   }
-  return {tabId, frameId: 0, frameUrl: topUrl, topUrl};
+  return {tabId, frameId: 0, frameUrl: topUrl, topUrl, field: 'login'};
 };

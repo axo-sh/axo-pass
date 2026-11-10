@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Code fields marked without autocomplete. Each is alone in its form. -->
+    <form><input id="by-name" type="text" name="otp" /></form>
+    <form><input id="totpPin" type="text" /></form>
+    <form><input id="by-camel" type="text" name="verificationCode" /></form>
+    <form><input id="by-numeric" type="text" name="value" inputmode="numeric" maxlength="6" /></form>
+    <form><input id="by-placeholder" type="tel" placeholder="6-digit code" /></form>
+    <form>
+      <label for="by-label">Enter the code from your authenticator app</label>
+      <input id="by-label" type="text" name="f" />
+    </form>
+
+    <!-- Fields that are not one-time codes. -->
+    <form><input id="promo" type="text" name="promo_code" /></form>
+    <form><input id="zip" type="text" name="zip_code" inputmode="numeric" maxlength="6" /></form>
+    <form><input id="csc" type="text" name="security_code" autocomplete="cc-csc" /></form>
+    <form>
+      <label for="card-code">Card security code</label>
+      <input id="card-code" type="text" name="f2" />
+    </form>
+    <form><input id="search" type="search" name="code" /></form>
+    <form><input id="numeric-short" type="text" inputmode="numeric" maxlength="4" /></form>
+    <form><input id="login-user" type="text" name="username" /></form>
+  </body>
+</html>

@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <body>
+    <form id="split">
+      <p>Enter the 6-digit code</p>
+      <div class="digits">
+        <input id="d1" type="text" maxlength="1" inputmode="numeric" autocomplete="one-time-code" />
+        <input id="d2" type="text" maxlength="1" inputmode="numeric" />
+        <input id="d3" type="text" maxlength="1" inputmode="numeric" />
+        <span>-</span>
+        <input id="d4" type="text" maxlength="1" inputmode="numeric" />
+        <input id="d5" type="text" maxlength="1" inputmode="numeric" />
+        <input id="d6" type="text" maxlength="1" inputmode="numeric" />
+      </div>
+      <input id="trust" type="checkbox" name="trust" />
+    </form>
+    <form id="short">
+      <!-- Two single-character fields are not a code. -->
+      <input id="s1" type="text" maxlength="1" />
+      <input id="s2" type="text" maxlength="1" />
+    </form>
+  </body>
+</html>

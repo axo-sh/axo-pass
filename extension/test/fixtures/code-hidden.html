@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      .gone {
+        display: none;
+      }
+      .faded {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Hidden and off-screen code fields. Nothing in this form may be filled. -->
+    <form id="trap">
+      <input id="trap-hidden" type="text" autocomplete="one-time-code" class="gone" />
+      <input id="trap-offscreen" type="text" name="otp" data-rect="-9999,10,200,24" />
+    </form>
+
+    <!-- A split code with one digit hidden. -->
+    <form id="split-trap">
+      <input id="t1" type="text" maxlength="1" data-rect="10,10,24,24" />
+      <input id="t2" type="text" maxlength="1" data-rect="40,10,24,24" />
+      <input id="t3" type="text" maxlength="1" data-rect="70,10,24,24" />
+      <input id="t4" type="text" maxlength="1" data-rect="100,10,24,24" />
+      <input id="t5" type="text" maxlength="1" data-rect="130,10,24,24" />
+      <input id="t6" type="text" maxlength="1" class="faded" />
+    </form>
+
+    <!-- Decoys beside one real code field. -->
+    <form id="decoys">
+      <input id="decoy-hidden" type="text" name="otp" hidden />
+      <input id="decoy-faded" type="text" name="otp" class="faded" />
+      <input id="decoy-above" type="text" name="otp" data-rect="10,-500,200,24" />
+      <input id="real-code" type="text" autocomplete="one-time-code" />
+    </form>
+  </body>
+</html>
