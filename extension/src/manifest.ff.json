@@ -5,8 +5,8 @@
   "homepage_url": "https://github.com/octavore",
   "manifest_version": 3,
   "icons": {
-    "48": "axo-dark.svg",
-    "96": "axo-dark.svg"
+    "48": "axo-auto.svg",
+    "96": "axo-auto.svg"
   },
   "permissions": ["nativeMessaging", "storage", "contextMenus"],
   "host_permissions": ["<all_urls>"],
@@ -24,16 +24,16 @@
   "action": {
     "default_title": "__MANIFEST_NAME__",
     "default_popup": "popup.html",
-    "default_icon": "axo-dark.svg",
+    "default_icon": "axo-auto.svg",
     "theme_icons": [
       {
-        "dark": "axo-light.svg",
-        "light": "axo-dark.svg",
+        "dark": "axo-auto.svg",
+        "light": "axo-light.svg",
         "size": 16
       },
       {
-        "dark": "axo-light.svg",
-        "light": "axo-dark.svg",
+        "dark": "axo-auto.svg",
+        "light": "axo-light.svg",
         "size": 32
       }
     ]
