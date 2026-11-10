@@ -3,7 +3,7 @@ use secrecy::{ExposeSecret, SecretString};
 use super::super::BrokerError;
 use super::super::client::send_request;
 use super::super::wire::{
-    BrowserClient, WireExportMode, WireImportIdentity, WireImportSelection, WirePrfAssertion,
+    WireExportMode, WireImportIdentity, WireImportSelection, WirePrfAssertion,
     WirePrfCredentialValues, WirePrfRegistration, WirePrfValues, WireRequest, WireResponse,
     b64_decode, b64_encode, decode_prf_values,
 };
@@ -201,7 +201,6 @@ pub fn request_create_passkey(
         }),
         origin: None,
         caller: caller.map(String::from),
-        client: BrowserClient::default(),
     };
     exchange(&wire, "passkey registration", |response| match response {
         WireResponse::PasskeyRegistered {
@@ -255,7 +254,6 @@ pub fn request_assert_passkey(
         }),
         origin: None,
         caller: caller.map(String::from),
-        client: BrowserClient::default(),
     };
     exchange(&wire, "passkey assertion", |response| match response {
         WireResponse::PasskeyAsserted {

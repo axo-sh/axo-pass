@@ -452,9 +452,6 @@ pub(super) enum WireRequest {
         origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
-        /// See [`BrowserClient`].
-        #[serde(default)]
-        client: BrowserClient,
     },
 
     /// The AutoFill extension's passkey assertion: sign the challenge with a
@@ -477,9 +474,6 @@ pub(super) enum WireRequest {
         origin: Option<String>,
         #[serde(default)]
         caller: Option<String>,
-        /// See [`BrowserClient`].
-        #[serde(default)]
-        client: BrowserClient,
     },
 
     /// The AutoFill extension lists the passkeys of `rp_id` from the app's
@@ -577,9 +571,7 @@ impl WireRequest {
             | WireRequest::FillLogin { client, .. }
             | WireRequest::GenerateTotp { client, .. }
             | WireRequest::SaveLogin { client, .. }
-            | WireRequest::UpdateLoginPassword { client, .. }
-            | WireRequest::CreatePasskey { client, .. }
-            | WireRequest::AssertPasskey { client, .. } => Some(client),
+            | WireRequest::UpdateLoginPassword { client, .. } => Some(client),
             _ => None,
         }
     }

@@ -552,7 +552,6 @@ pub(super) async fn serve_request(
                 prf,
                 origin,
                 caller,
-                client: _,
             } => {
                 if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
                     log::warn!("App broker refused a passkey registration: {message}");
@@ -615,7 +614,6 @@ pub(super) async fn serve_request(
                 prf,
                 origin,
                 caller,
-                client: _,
             } => {
                 if let Err(message) = check_rp_id(&rp_id, origin.as_deref()) {
                     log::warn!("App broker refused a passkey assertion: {message}");
