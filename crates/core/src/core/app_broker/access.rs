@@ -26,37 +26,38 @@ pub(super) enum RequestScope {
     /// passkey listing, and site reports about passkeys. It cannot read a vault
     /// secret by name.
     AutofillExtension,
-    /// The browser host: the same requests as the AutoFill extension, plus
-    /// password generation and saving. It cannot read a vault secret by name.
+    /// The browser host: the login requests, plus password generation and
+    /// saving. It cannot read a vault secret by name. Browsers reach passkeys
+    /// through the system, so it sends no passkey request.
     BrowserHost,
 }
 
 impl RequestScope {
     pub(super) fn allows(self, request: &WireRequest) -> bool {
-        let autofill = matches!(
+        let logins = matches!(
             request,
             WireRequest::ListLogins { .. }
                 | WireRequest::ListLoginsLocked { .. }
                 | WireRequest::FillLogin { .. }
                 | WireRequest::GenerateTotp { .. }
-                | WireRequest::CreatePasskey { .. }
-                | WireRequest::AssertPasskey { .. }
         );
-        // Site reports about passkeys arrive only through the system, which
-        // hands them to the AutoFill extension. Only the extension shows its
-        // own passkey list.
+        // Passkey requests and site reports about passkeys arrive only through
+        // the system, which hands them to the AutoFill extension. Only the
+        // extension shows its own passkey list.
         let extension_only = matches!(
             request,
-            WireRequest::ListPasskeys { .. }
+            WireRequest::CreatePasskey { .. }
+                | WireRequest::AssertPasskey { .. }
+                | WireRequest::ListPasskeys { .. }
                 | WireRequest::ReportUnknownPasskey { .. }
                 | WireRequest::ReportAcceptedPasskeys { .. }
                 | WireRequest::ReportPasskeyName { .. }
         );
         match self {
             RequestScope::Agent => true,
-            RequestScope::AutofillExtension => autofill || extension_only,
+            RequestScope::AutofillExtension => logins || extension_only,
             RequestScope::BrowserHost => {
-                autofill
+                logins
                     || matches!(
                         request,
                         WireRequest::GeneratePassword { .. }

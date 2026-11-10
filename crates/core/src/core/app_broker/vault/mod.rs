@@ -396,6 +396,22 @@ pub struct BrokerCredential {
     pub title: String,
 }
 
+/// What the app returned for a prompt: the context to unlock on, and whether an
+/// approval the user gave earlier answered the request with no prompt.
+pub struct VaultAuthorization {
+    pub context: ForeignContext,
+    pub reused: bool,
+}
+
+impl From<ForeignContext> for VaultAuthorization {
+    fn from(context: ForeignContext) -> Self {
+        Self {
+            context,
+            reused: false,
+        }
+    }
+}
+
 /// Supplies an `LAContext` to unlock the vault on, and learns how the attempt
 /// ended so it can take its prompt down.
 #[async_trait]
@@ -403,8 +419,11 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// Prepare a context for `prompt` and put the prompt on screen. The broker
     /// unlocks on the returned context, which is what makes the attached
     /// `LAAuthenticationView` draw. `peer` is the process the broker verified.
-    async fn begin(&self, prompt: VaultAccessPrompt, peer: Actor)
-    -> Result<ForeignContext, String>;
+    async fn begin(
+        &self,
+        prompt: VaultAccessPrompt,
+        peer: Actor,
+    ) -> Result<VaultAuthorization, String>;
 
     /// The client disconnected while `begin` was still waiting on the user.
     /// Dismiss the prompt so `begin` returns early. `begin` is still awaited,
@@ -433,6 +452,12 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// The attempt finished. Always called once `begin` has been called, so the
     /// app can take the prompt down and settle the authorization it handed out.
     async fn end(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
+
+    /// The broker filled a login for a verified browser from an approval the
+    /// user gave earlier, so no prompt was shown. `account` is the filled
+    /// username. Called after `end`. The app reports the fill, since nothing
+    /// else on screen shows it.
+    async fn notify_preapproved(&self, _prompt: VaultAccessPrompt, _account: Option<String>) {}
 
     /// A site report about a passkey was recorded. The app refreshes what it
     /// shows and what it offers in AutoFill. The vaults are unchanged.

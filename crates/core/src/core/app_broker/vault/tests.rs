@@ -19,7 +19,7 @@ use super::serve::{AccessIds, Served, authorize_and_serve, serve_on_context};
 use super::{
     AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, ImportPayload,
     LoginPage, ResolvePurpose, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt,
-    VaultAction, VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
+    VaultAction, VaultAuthorization, VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
 };
 use crate::audit::test_support::test_dir;
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, PASSKEY_CREDENTIAL_ID, SubjectIds};
@@ -224,9 +224,9 @@ impl VaultAuthorizer for Approver {
         &self,
         _prompt: VaultAccessPrompt,
         _peer: Actor,
-    ) -> Result<ForeignContext, String> {
+    ) -> Result<VaultAuthorization, String> {
         if self.approve {
-            Ok(ForeignContext::for_test())
+            Ok(ForeignContext::for_test().into())
         } else {
             Err("Declined".to_string())
         }

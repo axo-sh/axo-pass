@@ -311,6 +311,32 @@ impl From<app_broker::VaultAction> for VaultAction {
     }
 }
 
+/// Who a vault access is for. Mirrors [`app_broker::ClientIdentity`] without
+/// the unverified extension id.
+#[derive(uniffi::Enum, Clone)]
+pub enum VaultClient {
+    /// A process the broker verified from its own peer.
+    Process,
+    /// A browser the browser host verified as its parent. `name` is its
+    /// display name.
+    Browser { name: String },
+    /// A browser host that could not verify the browser that started it. The
+    /// prompt warns that the request may come from any process.
+    UnverifiedBrowser,
+}
+
+impl From<&app_broker::ClientIdentity> for VaultClient {
+    fn from(client: &app_broker::ClientIdentity) -> Self {
+        match client {
+            app_broker::ClientIdentity::Process => Self::Process,
+            app_broker::ClientIdentity::Browser { name, .. } => {
+                Self::Browser { name: name.clone() }
+            },
+            app_broker::ClientIdentity::Unverified { .. } => Self::UnverifiedBrowser,
+        }
+    }
+}
+
 /// A vault access prompt, as the app sees it. Mirrors
 /// [`app_broker::VaultAccessPrompt`].
 #[derive(uniffi::Record, Clone)]
@@ -324,7 +350,17 @@ pub struct VaultAccessPrompt {
     /// `None` when any process in the chain could not be verified, in which
     /// case no approval may be reused.
     pub caller_identity: Option<String>,
+    pub client: VaultClient,
     pub action: VaultAction,
+}
+
+/// What `begin_authorization` returns: the address of a live `LAContext`, and
+/// whether an approval the user gave earlier answered the request with no
+/// prompt.
+#[derive(uniffi::Record, Clone)]
+pub struct VaultAuthorization {
+    pub context: u64,
+    pub reused: bool,
 }
 
 impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
@@ -342,6 +378,7 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
             vault_key: prompt.vault_key,
             caller: prompt.caller,
             caller_identity,
+            client: (&prompt.client).into(),
             caller_chain: prompt.caller_chain.into_iter().map(Into::into).collect(),
             action: prompt.action.into(),
         }
@@ -354,15 +391,15 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait VaultPromptDelegate: Send + Sync {
-    /// Return the address of a live `LAContext` to unlock the vault on. The app
-    /// must keep its own reference to that context until `end_authorization`.
-    /// `peer` is the process the broker verified, for the grant events the app
-    /// records.
+    /// Return the address of a live `LAContext` to unlock the vault on, and
+    /// whether an earlier approval answered the request. The app must keep its
+    /// own reference to that context until `end_authorization`. `peer` is the
+    /// process the broker verified, for the grant events the app records.
     async fn begin_authorization(
         &self,
         prompt: VaultAccessPrompt,
         peer: RequestActor,
-    ) -> Result<u64, FfiError>;
+    ) -> Result<VaultAuthorization, FfiError>;
 
     /// The client disconnected while `begin_authorization` was waiting on the
     /// user. Dismiss the prompt so it returns. `end_authorization` follows as
@@ -386,6 +423,11 @@ pub trait VaultPromptDelegate: Send + Sync {
 
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: VaultAccessPrompt, outcome: PromptOutcome);
+
+    /// The broker filled a login for a verified browser from an earlier
+    /// approval, with no prompt. `account` is the filled username. Called after
+    /// `end_authorization`.
+    async fn notify_preapproved(&self, prompt: VaultAccessPrompt, account: Option<String>);
 
     /// A broker request wrote to one or more vaults on disk. The app drops its
     /// cached copy of each named vault and re-indexes AutoFill. An empty list
@@ -442,21 +484,36 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
         &self,
         prompt: app_broker::VaultAccessPrompt,
         peer: audit::Actor,
-    ) -> Result<ForeignContext, String> {
-        let context_ptr = self
+    ) -> Result<app_broker::VaultAuthorization, String> {
+        let authorization = self
             .delegate
             .begin_authorization(prompt.into(), peer.into())
             .await
             .map_err(|e| e.to_string())?;
-        if context_ptr == 0 {
+        if authorization.context == 0 {
             return Err(
                 "the app did not return an authentication session for unlocking".to_string(),
             );
         }
         // SAFETY: the app holds a reference to the context until
         // `end_authorization`, which the broker calls after the unlock.
-        unsafe { ForeignContext::from_ptr(context_ptr as *mut std::ffi::c_void) }
-            .map_err(|e| e.to_string())
+        let context =
+            unsafe { ForeignContext::from_ptr(authorization.context as *mut std::ffi::c_void) }
+                .map_err(|e| e.to_string())?;
+        Ok(app_broker::VaultAuthorization {
+            context,
+            reused: authorization.reused,
+        })
+    }
+
+    async fn notify_preapproved(
+        &self,
+        prompt: app_broker::VaultAccessPrompt,
+        account: Option<String>,
+    ) {
+        self.delegate
+            .notify_preapproved(prompt.into(), account)
+            .await;
     }
 
     async fn abandon(&self) {

@@ -190,7 +190,8 @@ async fn generates_password_without_prompt() {
 async fn registration_prompt_carries_placement_choices() {
     use crate::secrets::vaults::{LoginPlace, MatchKind, Website};
 
-    let broker = browser_host_broker().await;
+    let broker =
+        TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
     let place = |item: &str, user: &str, site: &str| LoginPlace {
         vault_key: "work".to_string(),
         item_key: item.to_string(),

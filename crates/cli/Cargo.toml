@@ -12,6 +12,12 @@ name = "axo_pass_cli"
 name = "ap"
 path = "src/main.rs"
 
+# Browser native messaging host. A separate executable so the broker can give
+# it its own peer policy and request scope.
+[[bin]]
+name = "AxoPassBrowserHost"
+path = "src/bin/browser_host.rs"
+
 [dependencies]
 age = {version = "0.11.5", features = ["armor"]}
 anyhow.workspace = true

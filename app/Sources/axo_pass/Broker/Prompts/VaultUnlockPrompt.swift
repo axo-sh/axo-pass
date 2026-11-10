@@ -3,6 +3,7 @@ import AxoPassFFI
 import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 import SwiftUI
+import UserNotifications
 
 /// Draws the authorization prompt for `ap item list`, `ap item get`, `ap read`,
 /// and `ap item set`, which the core's broker delegates here.
@@ -51,11 +52,16 @@ final class VaultUnlockPromptModel {
   // MARK: - Broker delegate
 
   /// Authorize the access and return the address of the context the core should
-  /// unlock on. Returns 0 when the user dismisses the prompt or the evaluation
-  /// fails, which the broker reports as a cancellation.
-  func begin(prompt: VaultAccessPrompt, peer: RequestActor) async -> UInt64 {
+  /// unlock on, and whether an earlier approval answered it. The address is 0
+  /// when the user dismisses the prompt or the evaluation fails, which the
+  /// broker reports as a cancellation.
+  func begin(prompt: VaultAccessPrompt, peer: RequestActor) async -> VaultAuthorization {
+    let declined = VaultAuthorization(context: 0, reused: false)
     let key = Self.grantKey(prompt)
     let grant = grants.begin(key, policy: Self.policy(for: prompt.action), peer: peer)
+    // `begin` drops an expired or unsettled grant, so an approval on the grant
+    // it returns is still valid.
+    let reused = grant.approvedAt != nil
     beginning = prompt
     defer { beginning = nil }
 
@@ -64,18 +70,21 @@ final class VaultUnlockPromptModel {
     } else {
       placement = nil
     }
+    let fillGrant = reused ? nil : Self.fillGrantOffer(for: prompt)
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
-    // prompts, so it does not wait.
+    // prompts, so it does not wait. A reused approval shows no panel.
     showTask?.cancel()
-    if Self.promptsEveryTime(prompt.action) {
-      showPanel(prompt: prompt, view: grant.view)
+    if reused {
+      showTask = nil
+    } else if Self.promptsEveryTime(prompt.action) {
+      showPanel(prompt: prompt, view: grant.view, fillGrant: fillGrant)
     } else {
       showTask = Task { [weak self] in
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
-        self?.showPanel(prompt: prompt, view: grant.view)
+        self?.showPanel(prompt: prompt, view: grant.view, fillGrant: fillGrant)
       }
     }
 
@@ -87,7 +96,7 @@ final class VaultUnlockPromptModel {
       showTask?.cancel()
       panel.hide()
       grants.end(key, outcome: .failed(message: String(describing: error)))
-      return 0
+      return declined
     }
 
     let reason = Self.reason(for: prompt)
@@ -102,10 +111,45 @@ final class VaultUnlockPromptModel {
       showTask?.cancel()
       panel.hide()
       grants.end(key, outcome: .cancelled)
-      return 0
+      return declined
     }
 
-    return contextPointer(grant.context)
+    if let fillGrant, fillGrant.choice.allow, let seconds = fillGrant.choice.expiration.seconds {
+      let duration = TimeInterval(seconds)
+      grants.widen(key, to: .cache(idle: duration, absolute: duration))
+    }
+    return VaultAuthorization(context: contextPointer(grant.context), reused: reused)
+  }
+
+  /// The broker filled a login for a verified browser from an earlier approval.
+  /// No prompt appeared, so the notification is the only sign of the fill.
+  func notifyPreapproved(prompt: VaultAccessPrompt, account: String?) {
+    guard case .fillLogin(let page, _, _, _) = prompt.action else { return }
+    let content = UNMutableNotificationContent()
+    content.title = "Login filled"
+    var body = "Filled \(account ?? "a login") on \(page.host)"
+    if case .browser(let name) = prompt.client {
+      body += " in \(name)"
+    }
+    content.body = body + "."
+    let request = UNNotificationRequest(
+      identifier: UUID().uuidString, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request) { error in
+      if let error {
+        NSLog("VaultUnlockPrompt: could not post notification: %@", String(describing: error))
+      }
+    }
+  }
+
+  /// The choice to reuse this approval, offered on a fill for a verified
+  /// browser. Not offered for a login picked from the logins that do not match
+  /// the page, or when reuse is turned off in Settings.
+  private static func fillGrantOffer(for prompt: VaultAccessPrompt) -> FillGrantOffer? {
+    guard Preferences.reuseApprovals, prompt.callerIdentity != nil,
+      case .browser(let browser) = prompt.client,
+      case .fillLogin(let page, _, _, let unmatched) = prompt.action, !unmatched
+    else { return nil }
+    return FillGrantOffer(browser: browser, host: page.host, choice: GrantChoice())
   }
 
   /// The vault and item the user chose for a passkey, read once the evaluation
@@ -172,7 +216,9 @@ final class VaultUnlockPromptModel {
 
   // MARK: - Panel
 
-  private func showPanel(prompt: VaultAccessPrompt, view: LAAuthenticationView) {
+  private func showPanel(
+    prompt: VaultAccessPrompt, view: LAAuthenticationView, fillGrant: FillGrantOffer?
+  ) {
     let content = VaultUnlockView(
       // A registration picks its vault in the placement card instead.
       vaultKey: placement == nil ? prompt.vaultKey : "",
@@ -183,7 +229,8 @@ final class VaultUnlockPromptModel {
       headline: Self.headline(for: prompt.action),
       login: Self.login(for: prompt.action),
       secrets: Self.secrets(for: prompt),
-      notes: Self.notes(for: prompt.action),
+      notes: Self.notes(for: prompt),
+      fillGrant: fillGrant,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
@@ -231,23 +278,30 @@ final class VaultUnlockPromptModel {
     }
   }
 
-  /// Facts about the page that the user should see before approving a fill or a
-  /// save. A listing has none, since it returns no secret.
-  private static func notes(for action: VaultAction) -> [String] {
-    switch action {
+  /// Facts the user should see before approving a login request. Every login
+  /// request from a browser host that could not verify its browser carries a
+  /// warning. The page facts apply to a fill or a save, and a listing has none,
+  /// since it returns no secret.
+  private static func notes(for prompt: VaultAccessPrompt) -> [String] {
+    var notes: [String] = []
+    if case .unverifiedBrowser = prompt.client {
+      notes.append(
+        "Axo Pass could not verify the browser that sent this request. Any app on this Mac "
+          + "could have sent it.")
+    }
+    switch prompt.action {
     case .fillLogin(let page, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _),
       .updateLoginPassword(let page, _, _):
-      var notes: [String] = []
       if !page.secure {
         notes.append("This page is not secure (http). Anyone on the network can read the password.")
       }
       if let top = page.topHost {
         notes.append("The form is in a frame on \(page.host), inside a page on \(top).")
       }
-      return notes
     default:
-      return []
+      break
     }
+    return notes
   }
 
   /// The localized reason `LocalAuthentication` shows in its own chrome.
@@ -382,6 +436,56 @@ final class VaultUnlockPromptModel {
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]
     }
+  }
+}
+
+/// The offer on a browser fill prompt to fill the same login on the same site
+/// without asking for a while.
+struct FillGrantOffer {
+  let browser: String
+  let host: String
+  let choice: GrantChoice
+}
+
+extension GrantExpiration {
+  /// Durations a browser fill may be reused for. 12 hours is the longest.
+  static let browserFill: [GrantExpiration] = [.fiveMinutes, .oneHour, .twelveHours]
+}
+
+private struct FillGrantCard: View {
+  let offer: FillGrantOffer
+  @Bindable var choice: GrantChoice
+
+  init(offer: FillGrantOffer) {
+    self.offer = offer
+    self.choice = offer.choice
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Toggle(
+        "Fill this login on \(offer.host) in \(offer.browser) without asking", isOn: $choice.allow
+      )
+      .toggleStyle(.checkbox)
+
+      if choice.allow {
+        // Indent to line up with the checkbox label.
+        VStack(alignment: .leading, spacing: 4) {
+          Picker("Duration:", selection: $choice.expiration) {
+            ForEach(GrantExpiration.browserFill, id: \.self) { expiration in
+              Text(expiration.label).tag(expiration)
+            }
+          }
+          .pickerStyle(.menu)
+          .fixedSize()
+          Text("Each fill shows a notification. Locking Axo Pass or the Mac ends it.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 20)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -523,6 +627,8 @@ private struct VaultUnlockView: View {
   let login: String?
   let secrets: [String]
   let notes: [String]
+  /// Set for a fill from a verified browser, which may be reused.
+  let fillGrant: FillGrantOffer?
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
@@ -560,6 +666,10 @@ private struct VaultUnlockView: View {
             summary: isAutofill
               ? (requester ?? "Safari") : PromptCaller.requesterName(chain: callerChain))
         }
+      }
+
+      if let fillGrant {
+        FillGrantCard(offer: fillGrant)
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
@@ -622,8 +732,14 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
     self.onVaultsChanged = onVaultsChanged
   }
 
-  func beginAuthorization(prompt: VaultAccessPrompt, peer: RequestActor) async throws -> UInt64 {
+  func beginAuthorization(prompt: VaultAccessPrompt, peer: RequestActor) async throws
+    -> VaultAuthorization
+  {
     await model.begin(prompt: prompt, peer: peer)
+  }
+
+  func notifyPreapproved(prompt: VaultAccessPrompt, account: String?) async {
+    await model.notifyPreapproved(prompt: prompt, account: account)
   }
 
   func abandonAuthorization() async {

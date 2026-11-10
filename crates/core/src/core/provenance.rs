@@ -11,7 +11,7 @@ use objc2_security::SecCode;
 use serde::{Deserialize, Serialize};
 
 use crate::audit::Actor;
-use crate::core::provenance::helpers::get_parent_pid;
+pub(crate) use crate::core::provenance::helpers::{get_audit_token_for_pid, get_parent_pid};
 use crate::core::provenance::peer::own_signing_info;
 pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
 use crate::core::provenance::proc_info::ProcInfo;

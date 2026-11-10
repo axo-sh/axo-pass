@@ -160,6 +160,49 @@ pub fn get_effective_uid(pid: u32) -> anyhow::Result<u32> {
     Ok(fetch(pid)?.kp_eproc.e_ucred.cr_uid)
 }
 
+type MachPort = u32;
+type KernReturn = i32;
+
+// `task_flavor_t` for `TASK_AUDIT_TOKEN` and its count in `natural_t` words.
+// From `mach/task_info.h`.
+const TASK_AUDIT_TOKEN: u32 = 15;
+const TASK_AUDIT_TOKEN_COUNT: u32 = 8;
+
+unsafe extern "C" {
+    static mach_task_self_: MachPort;
+
+    fn task_name_for_pid(target: MachPort, pid: libc::c_int, name: *mut MachPort) -> KernReturn;
+    fn task_info(task: MachPort, flavor: u32, info: *mut u32, count: *mut u32) -> KernReturn;
+    fn mach_port_deallocate(task: MachPort, name: MachPort) -> KernReturn;
+}
+
+/// Get the audit token of a running process by pid.
+///
+/// Uses `task_name_for_pid`, which returns a task name port. A name port allows
+/// `task_info` and nothing that reads or controls the task. The token names one
+/// process instance, but the pid lookup itself can race with pid reuse. Callers
+/// confirm afterwards that `pid` still names the expected process.
+pub fn get_audit_token_for_pid(pid: u32) -> anyhow::Result<[u32; 8]> {
+    let mut name: MachPort = 0;
+    // SAFETY: `mach_task_self_` is a process-wide constant set before `main`.
+    let kr = unsafe { task_name_for_pid(mach_task_self_, pid as libc::c_int, &mut name) };
+    if kr != 0 {
+        anyhow::bail!("task_name_for_pid({pid}) failed: {kr:#x}");
+    }
+
+    let mut token = [0u32; 8];
+    let mut count = TASK_AUDIT_TOKEN_COUNT;
+    let kr = unsafe { task_info(name, TASK_AUDIT_TOKEN, token.as_mut_ptr(), &mut count) };
+    unsafe { mach_port_deallocate(mach_task_self_, name) };
+    if kr != 0 {
+        anyhow::bail!("task_info(TASK_AUDIT_TOKEN) for pid {pid} failed: {kr:#x}");
+    }
+    if count != TASK_AUDIT_TOKEN_COUNT {
+        anyhow::bail!("task_info(TASK_AUDIT_TOKEN) for pid {pid} returned {count} words");
+    }
+    Ok(token)
+}
+
 fn fetch(pid: u32) -> anyhow::Result<KinfoProc> {
     let mut mib: [libc::c_int; 4] = [
         libc::CTL_KERN,
@@ -193,6 +236,21 @@ fn fetch(pid: u32) -> anyhow::Result<KinfoProc> {
         anyhow::bail!("sysctl(KERN_PROC_PID, {pid}): no such process");
     }
     Ok(info)
+}
+
+#[cfg(test)]
+mod audit_token_tests {
+    use super::{get_audit_token_for_pid, get_parent_pid};
+
+    /// `task_name_for_pid` works unprivileged on a same-user parent. The token
+    /// pid is word 5 and the effective uid is word 1.
+    #[test]
+    fn reads_parent_audit_token() {
+        let ppid = get_parent_pid(std::process::id()).unwrap();
+        let token = get_audit_token_for_pid(ppid).unwrap();
+        assert_eq!(token[5], ppid);
+        assert_eq!(token[1], unsafe { libc::geteuid() });
+    }
 }
 
 #[cfg(test)]

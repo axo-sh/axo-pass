@@ -93,7 +93,6 @@ fn browser_host_scope_extends_requests() {
         format!(r#"{{"request":"list_logins_locked",{PAGE}}}"#),
         format!(r#"{{"request":"fill_login",{PAGE},"record_id":"r"}}"#),
         format!(r#"{{"request":"generate_totp",{PAGE},"record_id":"r"}}"#),
-        r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#.to_string(),
     ];
     let browser_only = [
         r#"{"request":"generate_password"}"#.to_string(),
@@ -114,6 +113,8 @@ fn browser_host_scope_extends_requests() {
         r#"{"request":"get_passphrase","key_id":"k"}"#,
         r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
         r#"{"request":"list_passkeys","rp_id":"example.com"}"#,
+        r#"{"request":"create_passkey","rp_id":"example.com","user_handle":"","user_name":"u","user_display_name":"u","client_data_hash":"","algorithms":[-7]}"#,
+        r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":""}"#,
     ];
     for line in autofill.iter().chain(&browser_only) {
         let request = parse(line);

@@ -10,7 +10,10 @@ use super::passkeys::{
     Ended, SignedPasskey, assert_passkey, choose_account, choose_placement, create_passkey,
 };
 use super::secrets::{list_items, read_secret, resolve_secrets, write_vault_secret};
-use super::{VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultPayload};
+use super::{
+    ClientIdentity, VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer,
+    VaultPayload,
+};
 use crate::audit::{self, Actor, Outcome, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::secrets::vaults::{VaultCatalog, VaultHandle};
@@ -61,15 +64,15 @@ async fn authorize(
     prompt: &VaultAccessPrompt,
     actor: &Actor,
     in_flight: &InFlightRequest,
-) -> Result<ForeignContext, WireResponse> {
+) -> Result<VaultAuthorization, WireResponse> {
     if in_flight.is_abandoned() {
         return Err(WireResponse::Cancelled);
     }
     // The app evaluates inside `begin`, holding the auth lock, so it is
     // dismissed rather than dropped when the client disconnects.
     let begin = authorizer.begin(prompt.clone(), actor.clone());
-    let context = match in_flight.abandoning(begin, authorizer.abandon()).await {
-        Ok(context) => context,
+    let authorization = match in_flight.abandoning(begin, authorizer.abandon()).await {
+        Ok(authorization) => authorization,
         Err(message) => {
             log::debug!("App broker vault authorization declined: {message}");
             record_failure(prompt, actor, Outcome::Denied, &message);
@@ -82,9 +85,9 @@ async fn authorize(
     // An import unlocks and writes one vault at a time on this context, so
     // invalidating it partway would leave some vaults imported and others not.
     if !matches!(prompt.action, VaultAction::ImportVaults { .. }) {
-        in_flight.attach(&context);
+        in_flight.attach(&authorization.context);
     }
-    Ok(context)
+    Ok(authorization)
 }
 
 /// Serve a login request: a listing, a fill, a one-time code, a save, or a
@@ -102,10 +105,11 @@ pub(in super::super) async fn authorize_and_serve_logins(
 ) -> WireResponse {
     let authorizer = &*authorizers.vault;
     let confirmer = &*authorizers.passphrase;
-    let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
-        Ok(context) => context,
-        Err(response) => return response,
-    };
+    let VaultAuthorization { context, reused } =
+        match authorize(authorizer, &prompt, &actor, in_flight).await {
+            Ok(authorization) => authorization,
+            Err(response) => return response,
+        };
 
     let job = prompt.clone();
     let index = Arc::clone(&authorizers.logins);
@@ -145,6 +149,7 @@ pub(in super::super) async fn authorize_and_serve_logins(
         Err(message) => (Err(Some(message)), AccessIds::None),
     };
 
+    let mut notify = None;
     let (response, outcome) = match served {
         Ok(response) => {
             record_access(
@@ -155,6 +160,9 @@ pub(in super::super) async fn authorize_and_serve_logins(
                 &ids,
                 None,
             );
+            if reused {
+                notify = reused_fill_account(&prompt, &response);
+            }
             (response, PromptOutcome::Succeeded)
         },
         Err(None) => {
@@ -178,8 +186,31 @@ pub(in super::super) async fn authorize_and_serve_logins(
             )
         },
     };
-    authorizer.end(prompt, outcome).await;
+    authorizer.end(prompt.clone(), outcome).await;
+    if let Some(account) = notify {
+        authorizer.notify_preapproved(prompt, account).await;
+    }
     response
+}
+
+/// The account to report for a fill served from an earlier approval, or `None`
+/// if the request is not one to report. Only fills for a verified browser are
+/// reported. The username is the one filled, and the client's label for the
+/// login stands in when the login has no username.
+fn reused_fill_account(
+    prompt: &VaultAccessPrompt,
+    response: &WireResponse,
+) -> Option<Option<String>> {
+    let VaultAction::FillLogin { account, .. } = &prompt.action else {
+        return None;
+    };
+    if !matches!(prompt.client, ClientIdentity::Browser { .. }) {
+        return None;
+    }
+    let WireResponse::LoginFill { username, .. } = response else {
+        return None;
+    };
+    Some(username.clone().or_else(|| account.clone()))
 }
 
 pub(in super::super) async fn authorize_and_serve(
@@ -191,7 +222,7 @@ pub(in super::super) async fn authorize_and_serve(
     in_flight: &InFlightRequest,
 ) -> WireResponse {
     let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
-        Ok(context) => context,
+        Ok(authorization) => authorization.context,
         Err(response) => return response,
     };
 
@@ -355,4 +386,74 @@ pub(super) fn open_vault(
     vaults
         .open(vault_key, AuthContext::Foreign(context))
         .map_err(|e| format!("Failed to open vault {vault_key}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::LoginPage;
+    use super::*;
+
+    fn fill(client: ClientIdentity, account: Option<&str>) -> VaultAccessPrompt {
+        VaultAccessPrompt {
+            vault_key: String::new(),
+            caller: None,
+            caller_chain: Vec::new(),
+            client,
+            action: VaultAction::FillLogin {
+                page: LoginPage::parse("https://github.com", "https://github.com", None).unwrap(),
+                record_id: "r".to_string(),
+                account: account.map(String::from),
+                unmatched: false,
+            },
+        }
+    }
+
+    fn firefox() -> ClientIdentity {
+        ClientIdentity::Browser {
+            name: "Firefox".to_string(),
+            team_id: "43AQ936H96".to_string(),
+            extension: None,
+        }
+    }
+
+    fn filled(username: Option<&str>) -> WireResponse {
+        WireResponse::LoginFill {
+            username: username.map(String::from),
+            password: "pw".to_string(),
+        }
+    }
+
+    #[test]
+    fn reports_reused_fill_for_verified_browser() {
+        assert_eq!(
+            reused_fill_account(&fill(firefox(), Some("label")), &filled(Some("tp"))),
+            Some(Some("tp".to_string()))
+        );
+        assert_eq!(
+            reused_fill_account(&fill(firefox(), Some("label")), &filled(None)),
+            Some(Some("label".to_string()))
+        );
+    }
+
+    #[test]
+    fn reports_nothing_for_other_clients_or_requests() {
+        for client in [
+            ClientIdentity::Process,
+            ClientIdentity::Unverified { extension: None },
+        ] {
+            assert_eq!(
+                reused_fill_account(&fill(client, None), &filled(Some("tp"))),
+                None
+            );
+        }
+        let mut listing = fill(firefox(), None);
+        listing.action = VaultAction::ListLogins {
+            page: LoginPage::parse("https://github.com", "https://github.com", None).unwrap(),
+            all: false,
+        };
+        assert_eq!(
+            reused_fill_account(&listing, &WireResponse::Acknowledged),
+            None
+        );
+    }
 }

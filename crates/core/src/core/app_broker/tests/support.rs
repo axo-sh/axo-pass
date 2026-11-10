@@ -138,7 +138,7 @@ impl vault::VaultAuthorizer for StubAuthorizer {
         &self,
         prompt: vault::VaultAccessPrompt,
         peer: audit::Actor,
-    ) -> Result<ForeignContext, String> {
+    ) -> Result<vault::VaultAuthorization, String> {
         self.vault_prompts.lock().unwrap().push(prompt);
         self.peers.lock().unwrap().push(peer);
         Err("stub authorizer".to_string())

@@ -1,0 +1,6 @@
+{
+  "request": "list_logins",
+  "url": "https://github.com/login",
+  "frame_url": "https://github.com/login",
+  "all": true
+}

@@ -1,0 +1,7 @@
+{
+  "request": "save_login",
+  "url": "https://example.com/signup",
+  "frame_url": "https://example.com/signup",
+  "username": "tp@example.com",
+  "password": "correct horse battery staple"
+}

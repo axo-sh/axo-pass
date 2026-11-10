@@ -1,0 +1,5 @@
+{
+  "request": "list_logins_locked",
+  "url": "https://github.com/login",
+  "frame_url": "https://github.com/login"
+}

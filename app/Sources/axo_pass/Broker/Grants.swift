@@ -124,10 +124,9 @@ final class Grant {
   let context: LAContext
   let view: LAAuthenticationView
 
-  /// How long this approval is reused. Fixed for the life of the grant: it is
-  /// a property of the key, and a key's constraints do not change between
-  /// requests.
-  let policy: GrantPolicy
+  /// How long this approval is reused. Set when the grant is created, and
+  /// widened only by `AuthorizationGrants.widen` while a request is in flight.
+  var policy: GrantPolicy
 
   var isEveryUse: Bool {
     if case .everyUse = policy { return true }
@@ -265,6 +264,16 @@ final class AuthorizationGrants {
     }
 
     armExpiry(key)
+  }
+
+  /// Reuse the approval in flight for `key` under `policy`, which the user chose
+  /// on the prompt. Only a grant with a request in flight is changed, since no
+  /// expiry timer runs while one is. A key with no verified caller identity is
+  /// never widened.
+  func widen(_ key: Key, to policy: GrantPolicy) {
+    guard key.callerIdentity != nil, let grant = grants[key], grant.inFlight > 0 else { return }
+    log("approval for \(key) reused as chosen on the prompt")
+    grant.policy = policy
   }
 
   /// Drop one approval. Invalidating the context fails any evaluation in

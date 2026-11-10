@@ -26,6 +26,8 @@ use crate::secrets::vaults::VaultCatalog;
 
 mod access;
 pub mod age;
+pub mod browser_host;
+pub mod browsers;
 mod client;
 mod dispatch;
 pub mod gpg;
@@ -63,8 +65,8 @@ pub use ssh::{
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, PasskeyAccountChoice,
-    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultRef, WireLogin,
-    request_add_external_vault, request_assert_passkey, request_create_passkey,
+    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer, VaultRef,
+    WireLogin, request_add_external_vault, request_assert_passkey, request_create_passkey,
     request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
     request_vault_secret, request_write_vault_secret,
 };
