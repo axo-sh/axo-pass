@@ -121,6 +121,19 @@ struct VaultsSidebar: View {
 
   @ViewBuilder
   private var vaultItems: some View {
+    // Key state of this Mac if no vault opens: new hardware, signing key lost,
+    // or a keychain error. Read after the unlock and on each change of the
+    // vault list.
+    if let title = keyStateTitle(sync.keyState) {
+      Button {
+        sync.sheet = .keyState
+      } label: {
+        SidebarWarningLabel(title)
+      }
+      .buttonStyle(.plain)
+      .help("Show why the vaults on this Mac cannot be opened")
+    }
+
     // Pairing requests of each synced folder. The counts are held while the
     // app is locked, and show here at the next unlock. A count of zero has no
     // entry.

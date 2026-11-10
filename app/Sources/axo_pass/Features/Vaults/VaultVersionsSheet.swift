@@ -2,15 +2,19 @@ import AxoPassFFI
 import SwiftUI
 
 /// Previous versions of one vault. A version is the vault file as it was
-/// before a save. Versions are kept for up to 30 days.
+/// before a save. Versions are kept for up to 30 days. A vault file that fails
+/// to load can be replaced with a version too.
 struct VaultVersionsSheet: View {
   @Environment(VaultsModel.self) private var model
+  @Environment(SyncModel.self) private var sync
   @Environment(\.dismiss) private var dismiss
 
   let vaultKey: String
   let vaultName: String
 
   @State private var versions: [RetainedVersionInfo]? = nil
+  /// Whether the vault file fails to load. Nil until checked.
+  @State private var refused: Bool? = nil
   @State private var errorMessage: String? = nil
   @State private var confirmingRestore: RetainedVersionInfo? = nil
   @State private var confirmingErase = false
@@ -18,6 +22,16 @@ struct VaultVersionsSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Previous Versions of \(vaultName)").font(.headline)
+
+      if refused == true {
+        Label(
+          "This vault file failed to load. Restore a previous version to replace it. The file that failed is kept aside.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
 
       Group {
         if let versions {
@@ -59,7 +73,7 @@ struct VaultVersionsSheet: View {
     }
     .padding(20)
     .frame(width: 480)
-    .task { await load() }
+    .task { await start() }
     .onChange(of: model.isAppUnlocked) { _, unlocked in
       if !unlocked { dismiss() }
     }
@@ -71,8 +85,7 @@ struct VaultVersionsSheet: View {
     ) { version in
       Button("Restore") { restore(version) }
     } message: { _ in
-      Text(
-        "The vault is replaced with this version. The current vault is kept as a previous version.")
+      Text(restoreMessage)
     }
     .confirmationDialog(
       "Erase every previous version of \(vaultName)?",
@@ -82,6 +95,21 @@ struct VaultVersionsSheet: View {
     } message: {
       Text("The vault itself is unchanged. This cannot be undone.")
     }
+  }
+
+  /// Text of the restore confirmation. The sync state of a vault file that
+  /// fails to load cannot be read.
+  private var restoreMessage: String {
+    if refused == true {
+      return
+        "The vault file that failed to load is replaced with this version and kept aside. If the vault syncs, the differences are recorded as edits on every Mac."
+    }
+    if sync.state(vaultKey)?.isOn == true {
+      return
+        "The vault is replaced with this version. The current vault is kept as a previous version. The vault syncs, so the differences are recorded as edits on every Mac."
+    }
+    return
+      "The vault is replaced with this version. The current vault is kept as a previous version."
   }
 
   private func row(_ version: RetainedVersionInfo) -> some View {
@@ -94,8 +122,15 @@ struct VaultVersionsSheet: View {
       Spacer(minLength: 0)
       Button("Restore…") { confirmingRestore = version }
         .controlSize(.small)
+        .disabled(refused == nil)
     }
     .padding(.vertical, 4)
+  }
+
+  /// List the versions, and check whether the vault file loads.
+  private func start() async {
+    await load()
+    refused = await model.loadFailure(vaultKey) != nil
   }
 
   private func load() async {
@@ -109,9 +144,18 @@ struct VaultVersionsSheet: View {
 
   private func restore(_ version: RetainedVersionInfo) {
     errorMessage = nil
+    let refused = self.refused == true
     Task {
       errorMessage = await failureMessage {
-        try await model.restoreVaultVersion(vaultKey: vaultKey, name: version.name)
+        do {
+          try await model.restoreVaultVersion(
+            vaultKey: vaultKey, name: version.name, refused: refused)
+        } catch FfiError.AuthExpired {
+          // The app locked, which closes the sheet.
+          return
+        }
+        self.refused = false
+        await sync.reload(vaultKey)
       }
       await load()
     }

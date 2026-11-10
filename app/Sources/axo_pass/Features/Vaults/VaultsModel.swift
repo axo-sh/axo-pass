@@ -198,15 +198,25 @@ final class VaultsModel {
 
   // MARK: - Vault list
 
+  /// Scan the vault files again and list them. Finds files added or moved
+  /// outside this model, such as a vault of a pairing import or the move to
+  /// `unreadable/` on new hardware. Drops the items of vaults no longer listed.
   func reload() {
     do {
+      try core.rescanVaults()
       vaults = try core.listVaults().sorted {
         ($0.name ?? $0.key).localizedCaseInsensitiveCompare($1.name ?? $1.key) == .orderedAscending
       }
       duplicateVaults = try core.listDuplicateVaults()
       duplicateVaultKeys = try core.listDuplicateVaultKeys()
       loadError = nil
-      if sidebarSelection == nil, let key = vaults.first?.key {
+      let keys = Set(vaults.map(\.key))
+      itemCache = itemCache.filter { keys.contains($0.key) }
+      folderCache = folderCache.filter { keys.contains($0.key) }
+      itemLoadFailures = itemLoadFailures.filter { keys.contains($0.key) }
+      if case .vault(let key) = sidebarSelection, key != allSecretsKey, !keys.contains(key) {
+        selectSidebarDestination(vaults.first.map { .vault($0.key) })
+      } else if sidebarSelection == nil, let key = vaults.first?.key {
         selectSidebarDestination(.vault(key))
       }
     } catch {
@@ -821,11 +831,31 @@ final class VaultsModel {
     try await core.listVaultVersions(vaultKey: vaultKey)
   }
 
+  /// Load failure of vault `vaultKey`, or nil if it loads. Loads its items
+  /// first if they are not cached.
+  func loadFailure(_ vaultKey: String) async -> String? {
+    if itemCache[vaultKey] == nil { await loadItems(for: vaultKey) }
+    return itemLoadFailures[vaultKey]
+  }
+
   /// Replace a vault with a previous version. The replaced vault becomes a
-  /// previous version in turn.
-  func restoreVaultVersion(vaultKey: String, name: String) async throws {
-    try await core.restoreVaultVersion(vaultKey: vaultKey, name: name)
+  /// previous version in turn. A vault file that fails to load is replaced
+  /// with `refused` set, and is kept aside as an invalid file. A synced vault
+  /// records the differences as edits. Needs the app unlocked. An expired
+  /// authentication locks the app.
+  func restoreVaultVersion(vaultKey: String, name: String, refused: Bool) async throws {
+    do {
+      if refused {
+        try await core.restoreRefusedVaultVersion(vaultKey: vaultKey, name: name)
+      } else {
+        try await core.restoreVaultVersion(vaultKey: vaultKey, name: name)
+      }
+    } catch FfiError.AuthExpired {
+      lock()
+      throw FfiError.AuthExpired
+    }
     folderCache.removeValue(forKey: vaultKey)
+    itemLoadFailures.removeValue(forKey: vaultKey)
     reload()
     await brokerVaultsChanged([vaultKey])
   }

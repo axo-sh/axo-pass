@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 
 extension View {
   /// Present the sync sheets that `SyncModel` requests: the enable sheet, the
-  /// pairing sheets, the kit import, and the turn-off confirmation. Attach
-  /// once, in the main window.
+  /// pairing sheets, the kit import, the status sheets, the key state sheet,
+  /// and the turn-off confirmation. Attach once, in the main window.
   func syncSheets() -> some View {
     modifier(SyncSheetsModifier())
   }
@@ -27,6 +27,7 @@ private struct SyncSheetsModifier: ViewModifier {
         case .status(let vault): SyncStatusSheet(vault: vault)
         case .newKit(let vault): NewRecoveryKitSheet(vault: vault)
         case .missingVaults: MissingVaultsSheet()
+        case .keyState: KeyStateSheet()
         }
       }
       .confirmationDialog(

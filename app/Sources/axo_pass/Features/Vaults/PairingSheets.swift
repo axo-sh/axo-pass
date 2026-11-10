@@ -19,6 +19,9 @@ struct PairingSheet: View {
 
   @State private var handle: PairingHandle? = nil
   @State private var error: String? = nil
+  /// Whether the start waits for the user to confirm the move of the vault
+  /// files on new hardware.
+  @State private var confirmingMove = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -33,6 +36,8 @@ struct PairingSheet: View {
           Button("OK") { dismiss() }
             .keyboardShortcut(.defaultAction)
         }
+      } else if confirmingMove {
+        moveStep
       } else if let handle {
         codeStep(handle)
       } else if let error {
@@ -58,14 +63,41 @@ struct PairingSheet: View {
     }
   }
 
-  private func start() async {
+  /// Start the pairing. On new hardware the start moves the vault files, so
+  /// the user confirms the move first.
+  private func start(moveConfirmed: Bool = false) async {
     guard let root, handle == nil else { return }
+    if !moveConfirmed {
+      await sync.reloadKeyState()
+      if sync.keyState == .newHardware {
+        confirmingMove = true
+        return
+      }
+    }
+    confirmingMove = false
     do {
       handle = try await sync.startPairing(root: root)
     } catch FfiError.AuthExpired {
       // The app locked, which closes the sheet.
     } catch {
       self.error = String(describing: error)
+    }
+  }
+
+  private var moveStep: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(newHardwareMoveMessage)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Move Files and Pair") {
+          Task { await start(moveConfirmed: true) }
+        }
+        .keyboardShortcut(.defaultAction)
+      }
     }
   }
 
@@ -484,6 +516,14 @@ struct KitImportSheet: View {
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
 
+      // The import moves the vault files on new hardware, after the kit opens
+      // the key.
+      if sync.keyState == .newHardware {
+        Label(newHardwareMoveMessage, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
       if let error { SyncErrorLabel(message: error) }
 
       HStack {
@@ -494,6 +534,7 @@ struct KitImportSheet: View {
           .keyboardShortcut(.defaultAction)
       }
     }
+    .task { await sync.reloadKeyState() }
   }
 
   private func chooseKit() {

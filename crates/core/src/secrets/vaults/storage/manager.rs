@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 
 use uuid::Uuid;
@@ -377,6 +377,43 @@ impl VaultsManager {
         Ok(VaultsManager::lock(manager).install(committed))
     }
 
+    /// Scan the vault files again, for files added or moved outside this
+    /// manager, such as a vault of a pairing import or the move to
+    /// `unreadable/` on new hardware. The copy of a vault with the same key,
+    /// path, and vault id stays. Other copies are dropped. The duplicates, the
+    /// missing vaults, and the key state are replaced.
+    pub fn rescan(&mut self) {
+        let VaultScanResult {
+            vaults,
+            duplicates,
+            duplicate_keys,
+            missing,
+        } = self.store.scan();
+        let mut previous = std::mem::take(&mut self.vaults);
+        let mut kept = BTreeSet::new();
+        for (key, scanned) in vaults {
+            let held = previous.remove(&key).filter(|held| {
+                held.path == scanned.path
+                    && held
+                        .peek_vault_id()
+                        .is_ok_and(|id| scanned.peek_vault_id().is_ok_and(|other| other == id))
+            });
+            let vault = match held {
+                Some(held) => {
+                    kept.insert(key.clone());
+                    held
+                },
+                None => scanned,
+            };
+            self.vaults.insert(key, vault);
+        }
+        self.saves.retain(|key, _| kept.contains(key));
+        self.duplicates = duplicates;
+        self.duplicate_keys = duplicate_keys;
+        self.missing = missing;
+        self.key_state = self.store.key_state();
+    }
+
     /// Store and target of a vault of a shared manager, loading the vault if
     /// the manager has not yet. The manager mutex is released on return.
     fn locate(manager: &Mutex<Self>, vault_key: &str) -> Result<(VaultCatalog, Target), Error> {
@@ -409,6 +446,8 @@ impl VaultsManager {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use tempfile::TempDir;
@@ -459,6 +498,10 @@ mod tests {
                     vw.add_item(key, key).map(|_| ())
                 })
                 .unwrap()
+        }
+
+        fn vaults_dir(&self) -> PathBuf {
+            self._dir.path().join("vaults")
         }
 
         fn is_unlocked(&self, key: &str) -> bool {
@@ -540,6 +583,35 @@ mod tests {
         let m = VaultsManager::lock(&manager);
         let vw = m.get_vault("personal").unwrap();
         assert!(vw.get_item_overview("alpha").unwrap().is_some());
+    }
+
+    #[test]
+    fn rescan_lists_added_vault_and_leaves_unchanged_copy_unlocked() {
+        let mut fx = Fixture::new();
+        let target = fx.target();
+        let committed = fx.add_item(&target, "alpha");
+        fx.manager.install(committed);
+        let added = VaultHandle::new_for_test_at(fx.vaults_dir().join("work.json"));
+        fx.manager.store.files().create(&added).unwrap();
+
+        fx.manager.rescan();
+
+        assert!(fx.manager.get_vault("work").is_some());
+        assert!(fx.is_unlocked("personal"));
+    }
+
+    #[test]
+    fn rescan_drops_vault_whose_file_moved() {
+        let mut fx = Fixture::new();
+        let target = fx.target();
+        let committed = fx.add_item(&target, "alpha");
+        fx.manager.install(committed);
+        fs::rename(&fx.original.path, fx._dir.path().join("moved.json")).unwrap();
+
+        fx.manager.rescan();
+
+        assert!(fx.manager.get_vault("personal").is_none());
+        assert!(!fx.manager.saves.contains_key("personal"));
     }
 
     #[test]

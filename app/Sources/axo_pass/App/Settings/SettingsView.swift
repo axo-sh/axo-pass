@@ -200,9 +200,24 @@ private struct VaultsSettingsView: View {
   @Environment(SyncModel.self) private var sync
   @State private var showingExport = false
   @State private var showingImport = false
+  /// Vault files moved to `unreadable/` on new hardware.
+  @State private var moved: [MovedVaultInfo] = []
+  @State private var showingMoved = false
 
   var body: some View {
     Form {
+      if !moved.isEmpty {
+        LabeledContent("Moved vaults:") {
+          HStack(spacing: 8) {
+            Text(
+              moved.count == 1
+                ? "1 vault file from another Mac" : "\(moved.count) vault files from another Mac"
+            )
+            Button("Show…") { showingMoved = true }
+          }
+        }
+      }
+
       LabeledContent("Synced folder:") {
         VStack(alignment: .leading) {
           HStack(spacing: 8) {
@@ -249,6 +264,10 @@ private struct VaultsSettingsView: View {
     .sheet(isPresented: $showingImport) {
       VaultImportSheet(model: model)
     }
+    .sheet(isPresented: $showingMoved) {
+      MovedVaultsSheet(moved: moved)
+    }
+    .task { moved = (try? await sync.movedVaults()) ?? [] }
   }
 
   private func chooseSyncFolder() {

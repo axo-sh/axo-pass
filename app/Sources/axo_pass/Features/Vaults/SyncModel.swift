@@ -65,6 +65,9 @@ enum SyncSheet: Identifiable {
   case newKit(SyncVaultRef)
   /// Synced vaults whose vault file is missing.
   case missingVaults
+  /// Key state of this Mac: new hardware, signing key lost, or a keychain
+  /// error.
+  case keyState
 
   var id: String {
     switch self {
@@ -75,6 +78,7 @@ enum SyncSheet: Identifiable {
     case .status(let vault): return "status-\(vault.key)"
     case .newKit(let vault): return "new-kit-\(vault.key)"
     case .missingVaults: return "missing-vaults"
+    case .keyState: return "key-state"
     }
   }
 }
@@ -100,6 +104,16 @@ final class SyncModel {
   /// Synced vaults whose vault file is missing, as the core found them at its
   /// start and after each rebuild or turn-off.
   private(set) var missingVaults: [MissingVaultInfo] = []
+
+  /// Key state of this Mac at the last read. Nil until read.
+  private(set) var keyState: KeyStateInfo? = nil
+
+  /// Synced vaults of the local sync states, read without verifying them, if
+  /// the key state is new hardware.
+  private(set) var newHardwareVaults: [SyncedVaultInfo] = []
+
+  /// Whether the key state sheet opened on its own once in this process.
+  private var keyStateShown = false
 
   /// Pairing requests that prompt, by synced folder. A folder with no request
   /// has no entry.
@@ -164,10 +178,17 @@ final class SyncModel {
     reports[vaultKey]
   }
 
-  /// Read the sync state of every listed vault and the missing vaults again.
-  /// Drops the states of vaults no longer listed. Does nothing while locked.
+  /// Read the key state, the sync state of every listed vault, and the missing
+  /// vaults again. Drops the states of vaults no longer listed. The first read
+  /// that finds a key state with a notice opens its sheet. Does nothing while
+  /// locked.
   func reloadAll() async {
     guard vaults.isAppUnlocked else { return }
+    await reloadKeyState()
+    if !keyStateShown, hasKeyStateNotice, sheet == nil {
+      keyStateShown = true
+      sheet = .keyState
+    }
     reloadMissingVaults()
     let keys = vaults.vaults.map(\.key)
     states = states.filter { keys.contains($0.key) }
@@ -198,6 +219,48 @@ final class SyncModel {
       reports[vaultKey] = nil
       states[vaultKey] = .unknown(message: String(describing: error))
     }
+  }
+
+  // MARK: - Key state
+
+  /// Whether the key state of this Mac needs a notice: new hardware, signing
+  /// key lost, or a keychain error.
+  var hasKeyStateNotice: Bool {
+    switch keyState {
+    case .newHardware, .signingKeyLost, .keychainError: return true
+    case .normal, .noVaultFiles, nil: return false
+    }
+  }
+
+  /// Read the key state again, and the synced vaults on new hardware. Probes
+  /// the keychain without a prompt. A failed read clears both, since the core
+  /// fails only if its state is poisoned.
+  func reloadKeyState() async {
+    do {
+      let state = try await vaults.core.keyState()
+      keyState = state
+      newHardwareVaults =
+        state == .newHardware ? try await vaults.core.newHardwareSyncedVaults() : []
+    } catch {
+      keyState = nil
+      newHardwareVaults = []
+    }
+  }
+
+  /// Create a new signing key and sign every vault file and previous version
+  /// again, after the user confirmed. Then read the vaults and the key state
+  /// again.
+  func resign() async throws -> ResignedInfo {
+    let resigned = try await vaults.core.resign()
+    vaults.reload()
+    await vaults.brokerVaultsChanged([])
+    await reloadKeyState()
+    return resigned
+  }
+
+  /// Vault files moved to `unreadable/` on new hardware.
+  func movedVaults() async throws -> [MovedVaultInfo] {
+    try await vaults.core.movedVaults()
   }
 
   // MARK: - Status actions
@@ -339,12 +402,16 @@ final class SyncModel {
   /// Start pairing this Mac as the new Mac with the folder `root`. Reads
   /// `vault-encryption-key` once on the shared context. Clears the import
   /// progress of the vaults of the request. The sync manager reports each
-  /// vault through the events.
+  /// vault through the events. On new hardware the start moves every vault
+  /// file to `unreadable/` and creates the keys, so the vaults and the key
+  /// state are read again.
   func startPairing(root: SyncRootInfo) async throws -> PairingHandle {
     let handle = try await lockingOnExpiry {
       try await vaults.core.pairingStart(root: root, name: macName)
     }
     for id in handle.vaultIds() { imports[id] = nil }
+    vaults.reload()
+    await reloadKeyState()
     return handle
   }
 
@@ -389,7 +456,8 @@ final class SyncModel {
   /// Import the vault of the kit `kitText` from the folder `root`, or join the
   /// vault `join` with it. The kit is checked again first. Reads
   /// `vault-encryption-key` once on the shared context. A kit of another vault
-  /// than `join` is refused.
+  /// than `join` is refused. On new hardware the import moves every vault file
+  /// to `unreadable/` and creates the keys, so the key state is read again.
   func importKit(root: SyncRootInfo, kitText: String, join: SyncVaultRef?) async throws
     -> RecoveryImportInfo
   {
@@ -402,6 +470,7 @@ final class SyncModel {
     }
     if case .imported(let vaultKey, _) = result {
       vaults.reload()
+      await reloadKeyState()
       await reload(vaultKey)
       await vaults.syncedVaultChanged(vaultKey)
     }

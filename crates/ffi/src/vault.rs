@@ -668,6 +668,18 @@ fn change_event(
 
 #[uniffi::export(async_runtime = "tokio")]
 impl AxoPass {
+    /// Scan the vault files again, for vault files added or moved since this
+    /// object was created, such as by a pairing import or the move to
+    /// `unreadable/` on new hardware. Reads only the file headers. Does not
+    /// require authentication.
+    pub fn rescan_vaults(&self) -> Result<(), FfiError> {
+        self.manager
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .rescan();
+        Ok(())
+    }
+
     /// List all known vaults. Does not require authentication.
     pub fn list_vaults(&self) -> Result<Vec<VaultInfo>, FfiError> {
         let manager = self.manager.lock().map_err(|_| FfiError::Poisoned)?;
