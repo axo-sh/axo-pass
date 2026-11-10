@@ -143,11 +143,12 @@ final class VaultUnlockPromptModel {
 
   /// The choice to reuse this approval, offered on a fill for a verified
   /// browser. Not offered for a login picked from the logins that do not match
-  /// the page, or when reuse is turned off in Settings.
+  /// the page, for a form in a cross-site frame, or when reuse is turned off in
+  /// Settings.
   private static func fillGrantOffer(for prompt: VaultAccessPrompt) -> FillGrantOffer? {
     guard Preferences.reuseApprovals, prompt.callerIdentity != nil,
       case .browser(let browser) = prompt.client,
-      case .fillLogin(let page, _, _, let unmatched) = prompt.action, !unmatched
+      case .fillLogin(let page, _, _, let unmatched) = prompt.action, !unmatched, !page.crossSite
     else { return nil }
     return FillGrantOffer(browser: browser, host: page.host, choice: GrantChoice())
   }
@@ -420,9 +421,9 @@ final class VaultUnlockPromptModel {
         ? [.plain("list logins, starting with those for "), .bold(page.host)]
         : [.plain("find logins for "), .bold(page.host)]
     case .fillLogin(let page, _, _, _):
-      return [.plain("fill a login on "), .bold(page.host)]
+      return [.plain("fill a login on "), .bold(page.host)] + insideTopHost(page)
     case .generateTotp(let page, _):
-      return [.plain("get a one-time code for "), .bold(page.host)]
+      return [.plain("get a one-time code for "), .bold(page.host)] + insideTopHost(page)
     case .saveLogin(let page, _):
       return [.plain("save a login for "), .bold(page.host)]
     case .updateLoginPassword(let page, _, _):
@@ -436,6 +437,12 @@ final class VaultUnlockPromptModel {
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]
     }
+  }
+
+  /// Headline suffix naming the top-level site of a cross-site frame.
+  private static func insideTopHost(_ page: LoginPage) -> [HeadlinePart] {
+    guard page.crossSite, let top = page.topHost else { return [] }
+    return [.plain(" inside "), .bold(top)]
   }
 }
 

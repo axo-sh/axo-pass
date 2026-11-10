@@ -110,6 +110,14 @@ pub(in super::super) async fn authorize_and_serve_logins(
             Ok(authorization) => authorization,
             Err(response) => return response,
         };
+    if let Some(message) = refused_reuse(&prompt, reused) {
+        log::warn!("App broker refused a reused approval: {message}");
+        record_failure(&prompt, &actor, Outcome::Denied, &message);
+        authorizer
+            .end(prompt, PromptOutcome::Failed(message.clone()))
+            .await;
+        return WireResponse::Failed { message };
+    }
 
     let job = prompt.clone();
     let index = Arc::clone(&authorizers.logins);
@@ -191,6 +199,14 @@ pub(in super::super) async fn authorize_and_serve_logins(
         authorizer.notify_preapproved(prompt, account).await;
     }
     response
+}
+
+/// Refusal of an earlier approval the app reused for a request that must
+/// prompt. The app never reuses one for such a request, since the prompt it is
+/// given has no caller identity. This check holds if it does.
+fn refused_reuse(prompt: &VaultAccessPrompt, reused: bool) -> Option<String> {
+    (reused && !prompt.may_reuse_approval())
+        .then(|| "A fill in a frame of another site needs its own approval".to_string())
 }
 
 /// The account to report for a fill served from an earlier approval, or `None`
@@ -433,6 +449,24 @@ mod tests {
             reused_fill_account(&fill(firefox(), Some("label")), &filled(None)),
             Some(Some("label".to_string()))
         );
+    }
+
+    /// An approval the app reused is refused for a cross-site fill, even for a
+    /// verified browser with a widened grant.
+    #[test]
+    fn refuses_reused_approval_for_cross_site_fill() {
+        let mut prompt = fill(firefox(), None);
+        assert_eq!(refused_reuse(&prompt, true), None);
+        assert_eq!(refused_reuse(&prompt, false), None);
+
+        prompt.action = VaultAction::FillLogin {
+            page: LoginPage::parse("https://icloud.com", "https://idmsa.apple.com", None).unwrap(),
+            record_id: "r".to_string(),
+            account: None,
+            unmatched: false,
+        };
+        assert!(refused_reuse(&prompt, true).is_some());
+        assert_eq!(refused_reuse(&prompt, false), None);
     }
 
     #[test]

@@ -227,7 +227,7 @@ pub(super) async fn serve_request(
                 caller,
                 client: _,
             } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester))
-                .and_then(vault::LoginPage::require_same_site)
+                .and_then(|page| page.refuse_unmatched_cross_site(unmatched))
             {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
@@ -255,9 +255,7 @@ pub(super) async fn serve_request(
                 requester,
                 caller,
                 client: _,
-            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester))
-                .and_then(vault::LoginPage::require_same_site)
-            {
+            } => match vault::LoginPage::parse(&url, &frame_url, requester_for(scope, requester)) {
                 Ok(page) => {
                     let prompt = vault::VaultAccessPrompt {
                         vault_key: String::new(),

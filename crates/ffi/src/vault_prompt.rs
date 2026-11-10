@@ -179,6 +179,9 @@ pub struct LoginPage {
     pub domain: String,
     /// The top-level host, when the form is in a frame of another host.
     pub top_host: Option<String>,
+    /// True when the top-level page is on another registrable domain. A fill
+    /// or a one-time code for such a frame always prompts.
+    pub cross_site: bool,
     /// False when the frame is on `http:`.
     pub secure: bool,
     /// The name of the app that asked. `None` means a browser.
@@ -191,6 +194,7 @@ impl From<app_broker::LoginPage> for LoginPage {
             host: page.host,
             domain: page.domain,
             top_host: page.top_host,
+            cross_site: page.cross_site,
             secure: page.secure,
             requester: page.requester,
         }
@@ -367,7 +371,10 @@ impl From<app_broker::VaultAccessPrompt> for VaultAccessPrompt {
     fn from(prompt: app_broker::VaultAccessPrompt) -> Self {
         // A browser is identified by its signing identity, not by the host's
         // process chain, and an unverified browser host is never identified.
+        // A request that must always prompt is not identified either, so the
+        // app neither reuses an approval for it nor offers to keep one.
         let caller_identity = match &prompt.client {
+            _ if !prompt.may_reuse_approval() => None,
             app_broker::ClientIdentity::Process => provenance::chain_identity(&prompt.caller_chain),
             app_broker::ClientIdentity::Browser { name, team_id, .. } => {
                 Some(format!("browser:{team_id}:{name}"))
@@ -573,5 +580,77 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
     /// the app reload what it shows and re-register AutoFill identities.
     async fn passkey_reports_changed(&self) {
         self.delegate.vaults_changed(Vec::new()).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn firefox_prompt(action: app_broker::VaultAction) -> app_broker::VaultAccessPrompt {
+        app_broker::VaultAccessPrompt {
+            vault_key: String::new(),
+            caller: Some("Firefox".to_string()),
+            caller_chain: Vec::new(),
+            client: app_broker::ClientIdentity::Browser {
+                name: "Firefox".to_string(),
+                team_id: "43AQ936H96".to_string(),
+                extension: None,
+            },
+            action,
+        }
+    }
+
+    fn page(url: &str, frame_url: &str) -> app_broker::LoginPage {
+        app_broker::LoginPage::parse(url, frame_url, None).unwrap()
+    }
+
+    fn fill(url: &str, frame_url: &str) -> app_broker::VaultAction {
+        app_broker::VaultAction::FillLogin {
+            page: page(url, frame_url),
+            record_id: "r".to_string(),
+            account: None,
+            unmatched: false,
+        }
+    }
+
+    /// The app keys reused approvals on `caller_identity`, and a key with none
+    /// always prompts. A widened grant for a fill on the same site is never
+    /// found for a cross-site frame.
+    #[test]
+    fn cross_site_login_prompts_have_no_caller_identity() {
+        let same_site = VaultAccessPrompt::from(firefox_prompt(fill(
+            "https://icloud.com",
+            "https://icloud.com/login",
+        )));
+        assert_eq!(
+            same_site.caller_identity.as_deref(),
+            Some("browser:43AQ936H96:Firefox")
+        );
+
+        let cross_site = VaultAccessPrompt::from(firefox_prompt(fill(
+            "https://icloud.com",
+            "https://idmsa.apple.com/signin",
+        )));
+        assert_eq!(cross_site.caller_identity, None);
+        let VaultAction::FillLogin { page: shown, .. } = cross_site.action else {
+            panic!("not a fill");
+        };
+        assert!(shown.cross_site);
+        assert_eq!(shown.top_host.as_deref(), Some("icloud.com"));
+
+        let code = VaultAccessPrompt::from(firefox_prompt(app_broker::VaultAction::GenerateTotp {
+            page: page("https://icloud.com", "https://idmsa.apple.com/signin"),
+            record_id: "r".to_string(),
+        }));
+        assert_eq!(code.caller_identity, None);
+
+        // A listing returns no secret, so its approval may still be reused.
+        let listing =
+            VaultAccessPrompt::from(firefox_prompt(app_broker::VaultAction::ListLogins {
+                page: page("https://icloud.com", "https://idmsa.apple.com/signin"),
+                all: false,
+            }));
+        assert!(listing.caller_identity.is_some());
     }
 }

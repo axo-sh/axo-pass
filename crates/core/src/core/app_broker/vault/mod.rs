@@ -194,6 +194,9 @@ pub enum VaultAction {
 /// grant is keyed on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginPage {
+    /// The top-level page URL as the client sent it. Matching uses it only for
+    /// a cross-site frame, whose login must be stored for both sites.
+    pub url: String,
     /// The frame's URL as the client sent it. Matching uses this.
     pub frame_url: String,
     /// The frame's origin, `scheme://host[:port]`. The path and query are left
@@ -229,6 +232,7 @@ impl LoginPage {
             .map(|parsed| parsed.origin().ascii_serialization())
             .unwrap_or_else(|_| format!("https://{}", frame.host));
         Ok(Self {
+            url: url.to_string(),
             frame_url: frame_url.to_string(),
             frame_origin,
             host: frame.host,
@@ -240,18 +244,29 @@ impl LoginPage {
         })
     }
 
-    /// Refuse a page whose form is in a frame of another site. A fill or a
-    /// one-time code is released only to a form on the site that is visible in
-    /// the top-level page.
-    pub fn require_same_site(self) -> Result<Self, String> {
-        if self.cross_site {
-            let top = self.top_host.as_deref().unwrap_or("another site");
-            return Err(format!(
-                "AutoFill does not fill a form on {} inside a page on {top}",
-                self.host
-            ));
+    /// Top-level host for messages about a cross-site frame.
+    pub fn top_label(&self) -> &str {
+        self.top_host.as_deref().unwrap_or("another site")
+    }
+
+    /// Refuse a login picked from the logins that do not match, if the form is
+    /// in a frame of another site. A cross-site frame is filled only with a
+    /// login stored for both sites, so a pick from "All logins" never applies.
+    pub fn refuse_unmatched_cross_site(self, unmatched: bool) -> Result<Self, String> {
+        if self.cross_site && unmatched {
+            return Err(self.unmatched_cross_site_message());
         }
         Ok(self)
+    }
+
+    /// Refusal of a login picked from "All logins" for a cross-site frame.
+    pub fn unmatched_cross_site_message(&self) -> String {
+        format!(
+            "AutoFill fills a form on {host} inside a page on {top} only with a login saved for \
+             both sites. Add {host} and {top} to the login's websites to fill it here.",
+            host = self.host,
+            top = self.top_label(),
+        )
     }
 }
 
@@ -380,6 +395,20 @@ pub struct VaultAccessPrompt {
     pub client: ClientIdentity,
 
     pub action: VaultAction,
+}
+
+impl VaultAccessPrompt {
+    /// Whether an earlier approval may answer this request, and whether this
+    /// request may leave one behind. False for a fill or a one-time code in a
+    /// cross-site frame, which always prompts.
+    pub fn may_reuse_approval(&self) -> bool {
+        match &self.action {
+            VaultAction::FillLogin { page, .. } | VaultAction::GenerateTotp { page, .. } => {
+                !page.cross_site
+            },
+            _ => true,
+        }
+    }
 }
 
 /// One vault item as it crosses the socket: the overview only, never a secret.

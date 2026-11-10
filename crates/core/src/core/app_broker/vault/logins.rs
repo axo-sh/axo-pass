@@ -140,8 +140,6 @@ pub(super) fn serve_logins(
 /// login in it that matches the page. The match is decided here from the vault
 /// and does not rely on the client's claim.
 fn serve_record(vh: &VaultHandle, action: &VaultAction) -> Result<Option<LoginResult>, String> {
-    use secrecy::ExposeSecret;
-
     let (page, record_id, totp, unmatched) = match action {
         VaultAction::FillLogin {
             page,
@@ -154,6 +152,9 @@ fn serve_record(vh: &VaultHandle, action: &VaultAction) -> Result<Option<LoginRe
     };
     let found = autofill::find_login(vh, record_id, &page.frame_url)
         .map_err(|e| format!("Failed to look up the login: {e}"))?;
+    if page.cross_site {
+        return serve_cross_site(vh, page, found, totp, unmatched);
+    }
     // A login picked from the list of logins that do not match is filled only
     // after the user confirms it.
     let (item, other_site) = match found {
@@ -181,17 +182,59 @@ fn serve_record(vh: &VaultHandle, action: &VaultAction) -> Result<Option<LoginRe
         cancel_label: Some("Cancel".to_string()),
     });
 
+    let mut served = read_record(vh, &item, totp)?;
+    served.confirm = confirm;
+    Ok(Some(served))
+}
+
+/// Serve a fill or a one-time code for a form in a frame of another site. The
+/// login must be stored for the frame and for the top-level page. A login
+/// picked from the logins that do not match is refused.
+fn serve_cross_site(
+    vh: &VaultHandle,
+    page: &LoginPage,
+    found: Option<autofill::AutofillItem>,
+    totp: bool,
+    unmatched: bool,
+) -> Result<Option<LoginResult>, String> {
+    if unmatched {
+        return Err(page.unmatched_cross_site_message());
+    }
+    let Some(item) = found else {
+        return Ok(None);
+    };
+    if !autofill::is_stored_for(&item, &page.url) {
+        return Err(format!(
+            "\"{title}\" is saved for {stored} but not for {top}, and this form is in a frame on \
+             {host} inside a page on {top}. Add {top} to the login's websites to fill it here.",
+            title = item.title,
+            stored = stored_hosts(&item),
+            host = page.host,
+            top = page.top_label(),
+        ));
+    }
+    read_record(vh, &item, totp).map(Some)
+}
+
+/// Read the password or the one-time code of a login found for the page.
+fn read_record(
+    vh: &VaultHandle,
+    item: &autofill::AutofillItem,
+    totp: bool,
+) -> Result<LoginResult, String> {
+    use secrecy::ExposeSecret;
+
     // A one-time code is read from the TOTP credential, not the password.
-    let mut ids = login_ids(&item);
+    let mut ids = login_ids(item);
     let response = if totp {
-        let code = autofill::login_totp(vh, &item).map_err(|e| e.to_string())?;
+        let code = autofill::login_totp(vh, item).map_err(|e| e.to_string())?;
         ids.credential_id = vh
             .get_item_overview(&item.item_key)?
             .and_then(|overview| overview.autofill.totp_credential(overview))
             .map(|cred| cred.id);
         WireResponse::TotpCode { code }
     } else {
-        let secrets = autofill::read_login(vh, &item)
+        let secrets = autofill::read_login(vh, item)
             .map_err(|e| format!("Failed to read the login: {e}"))?
             .ok_or_else(|| "That login no longer has a password".to_string())?;
         WireResponse::LoginFill {
@@ -199,12 +242,7 @@ fn serve_record(vh: &VaultHandle, action: &VaultAction) -> Result<Option<LoginRe
             password: secrets.password.expose_secret().to_string(),
         }
     };
-    Ok(Some(LoginResult {
-        response,
-        confirm,
-        commit: None,
-        ids: AccessIds::One(ids),
-    }))
+    Ok(LoginResult::new(response, AccessIds::One(ids)))
 }
 
 /// The hosts a login is stored for, as a comma-separated list for a question to
@@ -360,16 +398,21 @@ mod tests {
     use crate::secrets::vaults::MatchKind;
 
     fn vault_with_github() -> (VaultHandle, String) {
+        vault_with_login("github", "GitHub", &["github.com"])
+    }
+
+    fn vault_with_login(key: &str, title: &str, websites: &[&str]) -> (VaultHandle, String) {
         let mut vh = VaultHandle::new_for_test("personal");
+        let websites: Vec<String> = websites.iter().map(|w| w.to_string()).collect();
         autofill::write_login(
             &mut vh,
             autofill::LoginWrite {
-                item_key: "github",
-                title: "GitHub",
+                item_key: key,
+                title,
                 password_key: "password",
                 password: SecretString::from("pw"),
                 username: Some("tp"),
-                websites: &["github.com".to_string()],
+                websites: &websites,
                 match_kind: MatchKind::Domain,
             },
         )
@@ -378,6 +421,110 @@ mod tests {
             .record_id
             .clone();
         (vh, record_id)
+    }
+
+    const ICLOUD: &str = "https://www.icloud.com/";
+    const IDMSA: &str = "https://idmsa.apple.com/appleauth/auth/signin";
+
+    fn cross_site_fill(record_id: &str, unmatched: bool) -> VaultAction {
+        VaultAction::FillLogin {
+            page: LoginPage::parse(ICLOUD, IDMSA, None).unwrap(),
+            record_id: record_id.to_string(),
+            account: None,
+            unmatched,
+        }
+    }
+
+    fn cross_site_code(record_id: &str) -> VaultAction {
+        VaultAction::GenerateTotp {
+            page: LoginPage::parse(ICLOUD, IDMSA, None).unwrap(),
+            record_id: record_id.to_string(),
+        }
+    }
+
+    /// A login stored only for the frame is refused, and the refusal names the
+    /// top-level site to add.
+    #[test]
+    fn cross_site_refused_with_only_frame_site_stored() {
+        let (vh, record_id) = vault_with_login("apple", "Apple ID", &["apple.com"]);
+        for action in [
+            cross_site_fill(&record_id, false),
+            cross_site_code(&record_id),
+        ] {
+            let Err(message) = serve_record(&vh, &action) else {
+                panic!("{action:?} was served");
+            };
+            assert!(
+                message.contains("Add icloud.com to the login's websites"),
+                "{message}"
+            );
+            assert!(message.contains("idmsa.apple.com"), "{message}");
+        }
+    }
+
+    #[test]
+    fn cross_site_filled_with_both_sites_stored() {
+        let (vh, record_id) = vault_with_login("apple", "Apple ID", &["apple.com", "icloud.com"]);
+        let served = serve_record(&vh, &cross_site_fill(&record_id, false))
+            .unwrap()
+            .unwrap();
+        assert!(served.confirm.is_none());
+        assert!(matches!(served.response, WireResponse::LoginFill { .. }));
+
+        let served = serve_record(&vh, &cross_site_code(&record_id))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(served.response, WireResponse::TotpCode { .. }));
+    }
+
+    /// A login stored only for the top-level site does not match the frame,
+    /// so it is not found, as on any other page.
+    #[test]
+    fn cross_site_not_found_with_only_top_site_stored() {
+        let (vh, record_id) = vault_with_login("icloud", "iCloud", &["icloud.com"]);
+        assert!(
+            serve_record(&vh, &cross_site_fill(&record_id, false))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            serve_record(&vh, &cross_site_code(&record_id))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A pick from "All logins" never fills a cross-site frame, even a login
+    /// stored for both sites.
+    #[test]
+    fn cross_site_unmatched_refused() {
+        for websites in [&["github.com"][..], &["apple.com", "icloud.com"]] {
+            let (vh, record_id) = vault_with_login("login", "Login", websites);
+            let Err(message) = serve_record(&vh, &cross_site_fill(&record_id, true)) else {
+                panic!("an unmatched cross-site fill was served for {websites:?}");
+            };
+            assert!(message.contains("saved for both sites"), "{message}");
+        }
+    }
+
+    /// The approval for a cross-site fill or code is never reused or kept,
+    /// whatever the grant policy.
+    #[test]
+    fn cross_site_always_prompts() {
+        let prompt = |action| VaultAccessPrompt {
+            vault_key: String::new(),
+            caller: None,
+            caller_chain: Vec::new(),
+            client: super::super::ClientIdentity::Browser {
+                name: "Firefox".to_string(),
+                team_id: "43AQ936H96".to_string(),
+                extension: None,
+            },
+            action,
+        };
+        assert!(!prompt(cross_site_fill("r", false)).may_reuse_approval());
+        assert!(!prompt(cross_site_code("r")).may_reuse_approval());
+        assert!(prompt(fill("r", "https://github.com", false)).may_reuse_approval());
     }
 
     fn fill(record_id: &str, frame_url: &str, unmatched: bool) -> VaultAction {
