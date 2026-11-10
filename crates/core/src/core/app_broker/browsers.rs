@@ -4,7 +4,7 @@
 //! The host checks the installed manifest at startup. The app writes the same
 //! manifests from this table.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Native messaging host name. Names the manifest file, and the extension
 /// passes it to `runtime.connectNative`.
@@ -51,22 +51,62 @@ impl Browser {
         Self::ALL.into_iter().find(|b| b.team_id() == team_id)
     }
 
+    /// Short lowercase identifier for command arguments.
+    pub fn id(self) -> &'static str {
+        match self {
+            Browser::Chrome => "chrome",
+            Browser::Firefox => "firefox",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Browser> {
+        Self::ALL.into_iter().find(|b| b.id() == id)
+    }
+
+    /// Support directories the browser creates for the user, relative to the
+    /// home directory. The browser counts as installed if any of them exists.
+    /// The first entry holds the manifest directory.
+    fn support_dirs(self) -> &'static [&'static str] {
+        match self {
+            Browser::Chrome => &["Library/Application Support/Google/Chrome"],
+            Browser::Firefox => &[
+                "Library/Application Support/Mozilla",
+                "Library/Application Support/Firefox",
+            ],
+        }
+    }
+
+    /// Whether the browser has a support directory under `home`.
+    pub fn is_installed_in(self, home: &Path) -> bool {
+        self.support_dirs()
+            .iter()
+            .any(|dir| home.join(dir).is_dir())
+    }
+
+    /// Directory the browser reads native messaging manifests from, under
+    /// `home`.
+    pub fn manifest_dir_in(self, home: &Path) -> PathBuf {
+        home.join(self.support_dirs()[0])
+            .join("NativeMessagingHosts")
+    }
+
+    /// Path of the host manifest the app installs for this browser, under
+    /// `home`.
+    pub fn manifest_path_in(self, home: &Path) -> PathBuf {
+        self.manifest_dir_in(home)
+            .join(format!("{NATIVE_HOST_NAME}.json"))
+    }
+
     /// Directory the browser reads native messaging manifests from, for the
     /// current user.
     pub fn manifest_dir(self) -> Option<PathBuf> {
-        let relative = match self {
-            Browser::Chrome => "Library/Application Support/Google/Chrome/NativeMessagingHosts",
-            Browser::Firefox => "Library/Application Support/Mozilla/NativeMessagingHosts",
-        };
-        Some(dirs::home_dir()?.join(relative))
+        Some(self.manifest_dir_in(&dirs::home_dir()?))
     }
 
-    /// Path of the host manifest the app installs for this browser.
+    /// Path of the host manifest the app installs for this browser, for the
+    /// current user.
     pub fn manifest_path(self) -> Option<PathBuf> {
-        Some(
-            self.manifest_dir()?
-                .join(format!("{NATIVE_HOST_NAME}.json")),
-        )
+        Some(self.manifest_path_in(&dirs::home_dir()?))
     }
 
     /// The extension identity this browser passes the host: the origin for
@@ -88,6 +128,15 @@ pub(super) fn browser_requirement() -> String {
         .collect::<Vec<_>>()
         .join(" or ");
     format!("anchor apple generic and ({teams})")
+}
+
+/// Compare two paths after resolving symlinks. A path that does not resolve
+/// matches nothing.
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -120,5 +169,13 @@ mod tests {
             assert_eq!(Browser::from_team_id(browser.team_id()), Some(browser));
         }
         assert_eq!(Browser::from_team_id("ABCDE12345"), None);
+    }
+
+    #[test]
+    fn ids_map_back_to_browsers() {
+        for browser in Browser::ALL {
+            assert_eq!(Browser::from_id(browser.id()), Some(browser));
+        }
+        assert_eq!(Browser::from_id("safari"), None);
     }
 }

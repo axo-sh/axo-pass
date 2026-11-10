@@ -77,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let brokerLaunch = model.isBrokerLaunch()
     Task { await AgentService.shared.sync(launch: true, startIfStopped: !brokerLaunch) }
 
+    // Install browser manifests that are missing, and point the ones we own
+    // back at the bundled host. Manifests that name another host are left
+    // alone.
+    Task { await ensureBrowserManifests() }
+
     if brokerLaunch {
       NSApp.setActivationPolicy(.accessory)
     } else {

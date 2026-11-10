@@ -15,6 +15,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::agent::AgentCommand;
+use crate::cli::commands::browser::BrowserCommand;
 use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
@@ -93,6 +94,9 @@ pub enum AxoPassCommand {
 
     /// Commands for age encryption
     Age(AgeCommand),
+
+    /// Native messaging manifests for the browser extension
+    Browser(BrowserCommand),
 
     /// Show version and build
     Info,
@@ -183,6 +187,7 @@ impl AxoPassCommand {
             AxoPassCommand::Exec(exec) => exec.execute().await,
             AxoPassCommand::Inject(inject) => inject.execute().await,
             AxoPassCommand::Age(age) => age.execute().await,
+            AxoPassCommand::Browser(browser) => browser.execute().await,
             AxoPassCommand::Info => {
                 println!("ap {}", env!("CARGO_PKG_VERSION"));
                 println!("Built at: {}", build_sha::BUILT_AT.unwrap_or("not set"));

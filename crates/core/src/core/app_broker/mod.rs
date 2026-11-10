@@ -27,6 +27,7 @@ use crate::secrets::vaults::VaultCatalog;
 mod access;
 pub mod age;
 pub mod browser_host;
+pub mod browser_manifest;
 pub mod browsers;
 mod client;
 mod dispatch;

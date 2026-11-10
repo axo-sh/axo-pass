@@ -27,7 +27,7 @@ use self::framing::{FrameError, read_message, write_message};
 use self::parent::verify_parent;
 use self::request::ExtensionRequest;
 use super::BrokerError;
-use super::browsers::Browser;
+use super::browsers::{Browser, same_file};
 use super::client::send_request;
 use super::wire::{BrowserClient, VerifiedBrowser, WireResponse};
 
@@ -227,15 +227,6 @@ fn check_manifest(manifest: &Path, exe: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// Compare two paths after resolving symlinks. A path that does not resolve
-/// matches nothing.
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

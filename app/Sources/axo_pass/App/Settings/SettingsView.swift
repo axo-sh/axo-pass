@@ -282,9 +282,13 @@ private struct VaultsSettingsView: View {
   }
 }
 
-/// Whether the system's AutoFill provider for Safari and other apps is on.
+/// Whether the system's AutoFill provider for Safari and other apps is on, and
+/// the native messaging manifest of each browser.
 private struct AutoFillSettingsView: View {
   @State private var isEnabled: Bool? = nil
+  @State private var browsers: [BrowserManifestStatus] = []
+  @State private var installing: BrowserKind? = nil
+  @State private var installError: String? = nil
 
   var body: some View {
     Form {
@@ -309,6 +313,33 @@ private struct AutoFillSettingsView: View {
         "Turn on Axo Pass under Passwords > Password Options to fill logins, one-time codes, and passkeys in Safari and other apps."
       )
       .settingsCaption()
+      Divider()
+      ForEach(browsers, id: \.name) { status in
+        LabeledContent("\(status.name):") {
+          HStack(spacing: 6) {
+            Label(
+              BrowserManifestStyle.label(status),
+              systemImage: BrowserManifestStyle.icon(status)
+            )
+            .foregroundStyle(BrowserManifestStyle.color(status))
+            if installing == status.browser {
+              ProgressView().controlSize(.small)
+            } else if let action = BrowserManifestStyle.action(status) {
+              Button(action) { Task { await install(status.browser) } }
+                .disabled(installing != nil)
+            }
+          }
+        }
+      }
+      if let error = installError {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+      Text(
+        "Lets the Axo Pass extension in Chrome and Firefox reach this app. Axo Pass installs and repairs these on launch."
+      )
+      .settingsCaption()
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 12)
@@ -321,7 +352,60 @@ private struct AutoFillSettingsView: View {
   }
 
   private func refresh() async {
+    browsers = browserManifestStatuses()
     isEnabled = await ASCredentialIdentityStore.shared.state().isEnabled
+  }
+
+  private func install(_ browser: BrowserKind) async {
+    installing = browser
+    installError = nil
+    do {
+      _ = try await installBrowserManifest(browser: browser)
+    } catch {
+      installError = String(describing: error)
+    }
+    browsers = browserManifestStatuses()
+    installing = nil
+  }
+}
+
+/// Labels for a browser manifest state in Settings > AutoFill.
+private enum BrowserManifestStyle {
+  static func label(_ status: BrowserManifestStatus) -> String {
+    switch status.state {
+    case .notInstalled: return status.browserInstalled ? "Not Installed" : "Browser Not Found"
+    case .current: return "Installed"
+    case .pointsElsewhere: return "Points to Another Host"
+    case .outdated: return "Outdated"
+    case .foreign: return "Used by Another App"
+    case .unreadable: return "Unreadable"
+    }
+  }
+
+  static func icon(_ status: BrowserManifestStatus) -> String {
+    switch status.state {
+    case .current: return "checkmark.circle.fill"
+    case .notInstalled: return "circle"
+    case .pointsElsewhere, .outdated, .foreign, .unreadable: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  static func color(_ status: BrowserManifestStatus) -> Color {
+    switch status.state {
+    case .current: return .green
+    case .notInstalled: return .secondary
+    case .pointsElsewhere, .outdated, .foreign, .unreadable: return .orange
+    }
+  }
+
+  /// Button title, or nil if the manifest is current or must not be written.
+  static func action(_ status: BrowserManifestStatus) -> String? {
+    guard status.browserInstalled else { return nil }
+    switch status.state {
+    case .notInstalled: return "Install"
+    case .pointsElsewhere, .outdated, .unreadable: return "Repair"
+    case .current, .foreign: return nil
+    }
   }
 }
 
