@@ -340,6 +340,7 @@ dependencies = [
  "ssh-agent-lib",
  "ssh-encoding",
  "ssh-key",
+ "subtle",
  "tempfile",
  "thiserror 2.0.21",
  "time",

@@ -1,6 +1,10 @@
 {
-  "request": "list_logins",
-  "url": "https://github.com/login",
-  "frame_url": "https://github.com/login",
-  "all": true
+  "version": 1,
+  "nonce": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+  "body": {
+    "request": "list_logins",
+    "url": "https://github.com/login",
+    "frame_url": "https://github.com/login",
+    "all": true
+  }
 }

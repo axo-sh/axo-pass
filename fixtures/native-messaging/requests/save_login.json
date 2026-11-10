@@ -1,7 +1,11 @@
 {
-  "request": "save_login",
-  "url": "https://example.com/signup",
-  "frame_url": "https://example.com/signup",
-  "username": "tp@example.com",
-  "password": "correct horse battery staple"
+  "version": 1,
+  "nonce": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+  "body": {
+    "request": "save_login",
+    "url": "https://example.com/signup",
+    "frame_url": "https://example.com/signup",
+    "username": "tp@example.com",
+    "password": "correct horse battery staple"
+  }
 }

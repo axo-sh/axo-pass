@@ -54,6 +54,7 @@ serde_json.workspace = true
 serde_with = {version = "3.24.0", features = ["base64"]}
 sha2 = "0.10.9"
 shlex = "2.0.1"
+subtle = "2.6.1"
 socket2 = { version = "0.6", features = ["all"] }
 ssh-agent-lib = "0.6.0"
 ssh-encoding = "0.2"

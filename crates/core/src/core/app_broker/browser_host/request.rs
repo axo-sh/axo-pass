@@ -8,6 +8,19 @@ use serde::Deserialize;
 use super::super::wire::{BrowserClient, WireRequest};
 use crate::secrets::password::PasswordPolicy;
 
+/// Message from the extension: the protocol version and nonce from the host
+/// hello, around one [`ExtensionRequest`]. The body is parsed only after the
+/// nonce and version are checked. It has no `Debug`, so the nonce is never
+/// logged.
+#[derive(Deserialize)]
+#[cfg_attr(test, derive(serde::Serialize))]
+#[serde(deny_unknown_fields)]
+pub(super) struct Envelope {
+    pub(super) version: u32,
+    pub(super) nonce: String,
+    pub(super) body: serde_json::Value,
+}
+
 #[derive(Debug, Deserialize)]
 #[cfg_attr(test, derive(serde::Serialize))]
 #[serde(tag = "request", rename_all = "snake_case", deny_unknown_fields)]
@@ -176,16 +189,27 @@ mod tests {
 
     use serde_json::{Map, Value};
 
+    use super::super::session::PROTOCOL_VERSION;
     use super::*;
     use crate::core::app_broker::access::RequestScope;
     use crate::core::app_broker::wire::VerifiedBrowser;
 
-    /// Fixtures shared with the extension tests, one file per request kind.
+    /// Fixtures shared with the extension tests, one file per request kind,
+    /// each in the envelope the extension sends.
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/native-messaging/requests")
     }
 
+    /// Request bodies of the fixtures.
     fn fixtures() -> Vec<(String, Value)> {
+        envelopes()
+            .into_iter()
+            .map(|(name, envelope)| (name, envelope["body"].clone()))
+            .collect()
+    }
+
+    /// Fixtures as sent, each request inside its envelope.
+    fn envelopes() -> Vec<(String, Value)> {
         let mut out: Vec<(String, Value)> = std::fs::read_dir(fixtures_dir())
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -240,6 +264,19 @@ mod tests {
             assert_eq!(request.kind(), name);
             assert_eq!(value["request"], name, "{name}");
             assert_eq!(serde_json::to_value(&request).unwrap(), value, "{name}");
+        }
+    }
+
+    /// Every fixture envelope carries the protocol version and a nonce, has no
+    /// other fields, and serializes back to the same JSON.
+    #[test]
+    fn envelopes_round_trip() {
+        for (name, value) in envelopes() {
+            let envelope: Envelope =
+                serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(envelope.version, PROTOCOL_VERSION, "{name}");
+            assert_eq!(envelope.nonce.len(), 64, "{name}");
+            assert_eq!(serde_json::to_value(&envelope).unwrap(), value, "{name}");
         }
     }
 

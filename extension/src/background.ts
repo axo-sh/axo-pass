@@ -14,7 +14,7 @@ import type {
   PopupTarget,
 } from '@/lib/messages';
 import type {HostResult, LoginSummary, Page} from '@/lib/protocol';
-import {requests} from '@/lib/protocol';
+import {requests, updateNeeded} from '@/lib/protocol';
 import type {FrameTarget} from '@/lib/sender';
 import {displayHost, frameFromSender, isExtensionPage, isWebPage, originOf} from '@/lib/sender';
 import {clearTarget, saveTarget, targetForTab} from '@/lib/target';
@@ -328,6 +328,10 @@ const describeResult = (result: HostResult): string => {
       return 'Axo Pass is not set up for this browser';
     case 'app_unavailable':
       return 'Axo Pass is not running';
+    case 'version_mismatch':
+      return updateNeeded(result.version) === 'extension'
+        ? 'Update the Axo Pass extension'
+        : 'Update the Axo Pass app';
     case 'cancelled':
       return 'Cancelled';
     case 'failed':

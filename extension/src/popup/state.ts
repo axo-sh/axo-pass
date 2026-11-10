@@ -1,5 +1,6 @@
 import type {PopupListReply, PopupTarget} from '@/lib/messages';
 import type {LoginSummary, OtherLogin} from '@/lib/protocol';
+import {updateNeeded} from '@/lib/protocol';
 
 /** What the popup shows. */
 export type View =
@@ -7,6 +8,7 @@ export type View =
   | {kind: 'no-page'}
   | {kind: 'host-not-installed'; message: string}
   | {kind: 'app-unavailable'; message: string}
+  | {kind: 'update-needed'; update: 'extension' | 'app'}
   | {kind: 'unverified'; target: PopupTarget}
   | {kind: 'locked'; target: PopupTarget}
   | {kind: 'cancelled'; target: PopupTarget}
@@ -32,6 +34,8 @@ export const viewForList = (reply: PopupListReply): View => {
       return {kind: 'app-unavailable', message: result.message};
     case 'browser_not_verified':
       return {kind: 'unverified', target};
+    case 'version_mismatch':
+      return {kind: 'update-needed', update: updateNeeded(result.version)};
     case 'locked_logins':
       // Nothing is indexed until the first unlock after the app starts.
       return result.indexed

@@ -1,8 +1,12 @@
 {
-  "request": "fill_login",
-  "url": "https://github.com/login",
-  "frame_url": "https://github.com/login",
-  "record_id": "0192f3a4-5b6c-7d8e-9f01-23456789abcd/0192f3a4-5b6c-7d8e-9f01-23456789abce/0192f3a4-5b6c-7d8e-9f01-23456789abcf",
-  "account": "tp@example.com",
-  "unmatched": false
+  "version": 1,
+  "nonce": "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+  "body": {
+    "request": "fill_login",
+    "url": "https://github.com/login",
+    "frame_url": "https://github.com/login",
+    "record_id": "0192f3a4-5b6c-7d8e-9f01-23456789abcd/0192f3a4-5b6c-7d8e-9f01-23456789abce/0192f3a4-5b6c-7d8e-9f01-23456789abcf",
+    "account": "tp@example.com",
+    "unmatched": false
+  }
 }

@@ -7,13 +7,15 @@
 //! requests, and builds the broker request itself. `client` and `caller` come
 //! from its own check of the parent process.
 //!
-//! One request per process. The extension connects, sends one message, and
+//! One request per process. The host first writes a hello with the protocol
+//! version and a nonce. The extension sends one request with both, and
 //! disconnects after the reply. The host exits on stdin EOF, which closes the
-//! broker connection and ends any prompt on screen.
+//! broker connection and ends any prompt on screen. See [`session`].
 //!
-//! Replies are broker responses, plus two statuses of the host's own: the app
-//! could not be reached, and a locked listing was refused because the browser
-//! is not verified. See [`HostStatus`].
+//! Replies are broker responses, plus statuses of the host's own: the app
+//! could not be reached, a locked listing was refused because the browser is
+//! not verified, and the request was for another protocol version. See
+//! [`HostStatus`].
 //!
 //! Stdout carries native messaging frames only. Logs go to stderr and to
 //! `~/Library/Logs/Axo Pass/browser-host.log`. Request bodies are never logged.
@@ -21,17 +23,20 @@
 mod framing;
 mod parent;
 mod request;
+mod session;
 
 use std::ffi::OsString;
 use std::io;
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::process::ExitCode;
 
 use serde::Serialize;
 
-use self::framing::{FrameError, read_message, write_message};
+use self::framing::{FrameError, write_message};
 use self::parent::verify_parent;
 use self::request::ExtensionRequest;
+use self::session::{greet, read_request};
 use super::BrokerError;
 use super::browsers::{Browser, same_file};
 use super::client::send_request;
@@ -44,27 +49,21 @@ pub fn run() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let client = identify_client(&args);
 
-    let body = match read_message(&mut io::stdin().lock()) {
-        Ok(Some(body)) => body,
-        Ok(None) => return ExitCode::SUCCESS,
-        Err(e) => {
-            log::warn!("Browser host could not read a message: {e}");
-            // Input is unreadable past a bad frame. Report and stop.
-            reply(&failed(e.to_string()));
+    let stdin = io::stdin();
+    let greeting = greet(stdin.as_fd(), &mut io::stdout().lock());
+    let nonce = match greeting {
+        Ok(nonce) => nonce,
+        Err(refusal) => {
+            reply(&refusal);
             return ExitCode::FAILURE;
         },
     };
-
-    let request: ExtensionRequest = match serde_json::from_slice(&body) {
-        Ok(request) => request,
-        Err(e) => {
-            // The error text can quote the input, so it goes back to the
-            // extension and not to the log.
-            log::warn!(
-                "Browser host refused a malformed request ({:?})",
-                e.classify()
-            );
-            reply(&failed(format!("Malformed request: {e}")));
+    let request = match read_request(&mut stdin.lock(), &nonce) {
+        Ok(Some(request)) => request,
+        Ok(None) => return ExitCode::SUCCESS,
+        Err(refusal) => {
+            // Input past a refused message is not read. Report and stop.
+            reply(&refusal);
             return ExitCode::FAILURE;
         },
     };
@@ -113,6 +112,9 @@ enum HostStatus {
     /// The host could not verify the browser that started it, so it refused a
     /// request that needs a verified browser.
     BrowserNotVerified,
+    /// The request was for another protocol version. `version` is the version
+    /// the host speaks.
+    VersionMismatch { version: u32 },
 }
 
 fn exit_code(sent: bool) -> ExitCode {
@@ -405,6 +407,7 @@ mod tests {
                 "login_saved",
                 "logins",
                 "totp_code",
+                "version_mismatch",
             ]
         );
     }
@@ -414,6 +417,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(HostStatus::BrowserNotVerified).unwrap(),
             serde_json::json!({"status": "browser_not_verified"})
+        );
+        assert_eq!(
+            serde_json::to_value(HostStatus::VersionMismatch { version: 1 }).unwrap(),
+            serde_json::json!({"status": "version_mismatch", "version": 1})
         );
         assert_eq!(
             serde_json::to_value(HostStatus::AppUnavailable {

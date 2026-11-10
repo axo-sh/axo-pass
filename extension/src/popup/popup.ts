@@ -156,6 +156,17 @@ const render = (view: View | null, loading = 'Loading…'): void => {
         action('Try Again', () => void load(false))
       );
       return;
+    case 'update-needed':
+      root.append(
+        message('This version of the extension does not work with this version of Axo Pass.'),
+        message(
+          view.update === 'extension'
+            ? 'Update the Axo Pass extension.'
+            : 'Update the Axo Pass app.',
+          true
+        )
+      );
+      return;
     case 'unverified':
       root.append(
         el('h2', undefined, matchesHeading(view.target)),

@@ -1,11 +1,15 @@
-// Messages between the extension and AxoPassBrowserHost. The host parses
-// requests with unknown fields refused, so every request lists exactly the
-// fields of `ExtensionRequest` in
-// crates/core/src/core/app_broker/browser_host/request.rs. Fixtures shared with
-// the Rust tests are in fixtures/native-messaging.
+// Messages between the extension and AxoPassBrowserHost. The host first sends
+// a hello with its protocol version and a nonce. The extension sends one
+// request inside an envelope that echoes both. The host parses requests with
+// unknown fields refused, so every request lists exactly the fields of
+// `ExtensionRequest` in crates/core/src/core/app_broker/browser_host/request.rs.
+// Fixtures shared with the Rust tests are in fixtures/native-messaging.
 
 /** Native messaging host name in the manifests the app installs. */
 export const HOST_NAME = 'com.breakfastlabs.axo_pass';
+
+/** Protocol version the extension speaks. `PROTOCOL_VERSION` in session.rs. */
+export const PROTOCOL_VERSION = 1;
 
 export interface PasswordPolicy {
   length: number;
@@ -74,6 +78,28 @@ export type HostRequest =
   | GeneratePasswordRequest
   | SaveLoginRequest
   | UpdateLoginPasswordRequest;
+
+/**
+ * First message from the host. `nonce` is `null` for a hello of another
+ * protocol version, since later versions may change everything but `version`.
+ */
+export interface Hello {
+  version: number;
+  nonce: string | null;
+}
+
+/** Message the extension sends: one request with the version and nonce. */
+export interface Envelope {
+  version: number;
+  nonce: string;
+  body: HostRequest;
+}
+
+export const envelope = (nonce: string, request: HostRequest): Envelope => ({
+  version: PROTOCOL_VERSION,
+  nonce,
+  body: request,
+});
 
 /** Page a login request is for. `frameUrl` is the frame holding the form. */
 export interface Page {
@@ -181,7 +207,14 @@ export type HostResponse =
   | {status: 'cancelled'}
   | {status: 'failed'; message: string}
   | {status: 'app_unavailable'; message: string}
-  | {status: 'browser_not_verified'};
+  | {status: 'browser_not_verified'}
+  /** `version` is the version the host speaks. */
+  | {status: 'version_mismatch'; version: number};
+
+/** Which side needs an update for a host that speaks `version`. */
+export const updateNeeded = (version: number): 'extension' | 'app' => {
+  return version > PROTOCOL_VERSION ? 'extension' : 'app';
+};
 
 /** Outcomes of a host call that the extension reports itself. */
 export type LocalStatus =
@@ -232,6 +265,14 @@ const number = (value: unknown, what: string): number => {
     throw new ProtocolError(`${what} is not a number`);
   }
   return value;
+};
+
+const version = (value: unknown, what: string): number => {
+  const n = number(value, what);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new ProtocolError(`${what} is ${n}`);
+  }
+  return n;
 };
 
 const nullable = <T>(value: unknown, decode: (v: unknown) => T): T | null => {
@@ -332,7 +373,26 @@ export const decodeResponse = (value: unknown): HostResponse => {
     case 'failed':
     case 'app_unavailable':
       return {status, message: string(o.message, 'message')};
+    case 'version_mismatch':
+      return {status, version: version(o.version, 'version')};
     default:
       throw new ProtocolError(`Unknown status ${status}`);
   }
+};
+
+/**
+ * Check the first message from the host. Throws `ProtocolError` if it is not
+ * a hello. The nonce is read only for a hello of `PROTOCOL_VERSION`.
+ */
+export const decodeHello = (value: unknown): Hello => {
+  const o = object(value, 'hello');
+  const v = version(o.version, 'hello.version');
+  if (v !== PROTOCOL_VERSION) {
+    return {version: v, nonce: null};
+  }
+  const nonce = string(o.nonce, 'hello.nonce');
+  if (nonce === '') {
+    throw new ProtocolError('hello.nonce is empty');
+  }
+  return {version: v, nonce};
 };

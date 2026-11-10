@@ -23,6 +23,7 @@ describe('popup states', () => {
       'app-unavailable'
     );
     expect(view({status: 'browser_not_verified'})).toBe('unverified');
+    expect(view({status: 'version_mismatch', version: 2})).toBe('update-needed');
     expect(view({status: 'locked_logins', logins: [], indexed: false})).toBe('locked');
     expect(view({status: 'locked_logins', logins: [], indexed: true})).toBe('logins');
     expect(view({status: 'logins', logins: [], others: []})).toBe('logins');

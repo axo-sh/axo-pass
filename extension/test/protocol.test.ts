@@ -4,12 +4,26 @@ import path from 'node:path';
 import {describe, expect, it} from 'vitest';
 
 import type {HostRequest, Page} from '@/lib/protocol';
-import {decodeResponse, disconnected, ProtocolError, requests} from '@/lib/protocol';
+import {
+  decodeHello,
+  decodeResponse,
+  disconnected,
+  envelope,
+  PROTOCOL_VERSION,
+  ProtocolError,
+  requests,
+  updateNeeded,
+} from '@/lib/protocol';
 
-// Fixtures shared with the Rust tests in browser_host.rs and request.rs.
+// Fixtures shared with the Rust tests in browser_host.rs, request.rs, and
+// session.rs.
 const FIXTURES = path.join(__dirname, '../../fixtures/native-messaging');
 
 type Fixture = Record<string, any>;
+
+const HELLO: {version: number; nonce: string} = JSON.parse(
+  readFileSync(path.join(FIXTURES, 'hello.json'), 'utf8')
+);
 
 const fixtures = (dir: string): [string, Fixture][] => {
   return readdirSync(path.join(FIXTURES, dir))
@@ -41,10 +55,48 @@ describe('request fixtures', () => {
   });
 
   it.each(fixtures('requests'))('%s builds to the fixture with every field', (name, fixture) => {
-    const built = builders[name](fixture);
+    const built = builders[name](fixture.body);
     expect(built.request).toBe(name);
-    // The host refuses unknown fields, so the request has exactly these.
-    expect(JSON.parse(JSON.stringify(built))).toEqual(fixture);
+    // The host refuses unknown fields, so the envelope and the request have
+    // exactly these.
+    const sent = envelope(HELLO.nonce, built);
+    expect(JSON.parse(JSON.stringify(sent))).toEqual(fixture);
+  });
+});
+
+describe('hello fixture', () => {
+  it('decodes to the fixture', () => {
+    expect(decodeHello(HELLO)).toEqual(HELLO);
+    expect(HELLO.version).toBe(PROTOCOL_VERSION);
+  });
+
+  it('reads only the version of another protocol version', () => {
+    expect(decodeHello({version: PROTOCOL_VERSION + 1, other: true})).toEqual({
+      version: PROTOCOL_VERSION + 1,
+      nonce: null,
+    });
+  });
+
+  it('refuses a message that is not a hello', () => {
+    for (const value of [
+      {status: 'failed', message: 'Input was written before the host nonce'},
+      {version: PROTOCOL_VERSION},
+      {version: PROTOCOL_VERSION, nonce: ''},
+      {version: PROTOCOL_VERSION, nonce: 7},
+      {version: '1', nonce: HELLO.nonce},
+      {version: 1.5, nonce: HELLO.nonce},
+      'hello',
+      null,
+    ]) {
+      expect(() => decodeHello(value), JSON.stringify(value)).toThrow(ProtocolError);
+    }
+  });
+});
+
+describe('version mismatch', () => {
+  it('names the side to update', () => {
+    expect(updateNeeded(PROTOCOL_VERSION + 1)).toBe('extension');
+    expect(updateNeeded(PROTOCOL_VERSION - 1)).toBe('app');
   });
 });
 
