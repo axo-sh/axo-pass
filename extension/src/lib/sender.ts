@@ -2,7 +2,7 @@ import type {Runtime} from 'webextension-polyfill';
 
 /**
  * Frame a fill is addressed to. `frameUrl` and `topUrl` come from the browser,
- * never from a message body. `documentId` is set in Chromium only.
+ * never from a message body. `documentId` is set if the browser reports it.
  */
 export interface FrameTarget {
   tabId: number;

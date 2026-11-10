@@ -1,15 +1,30 @@
-import {findCodeFields, findLoginFields} from '@/lib/fields';
-import type {FillCodeMessage, FillMessage, FillResult} from '@/lib/messages';
+import {
+  findCodeFields,
+  findLoginFields,
+  findNewPasswordFields,
+  groupOf,
+  usernameBeside,
+} from '@/lib/fields';
+import type {
+  FillCodeMessage,
+  FillGeneratedMessage,
+  FillGeneratedResult,
+  FillMessage,
+  FillResult,
+} from '@/lib/messages';
 
 /**
  * Fill the login form the user acted on in `doc`. Only visible fields are
  * written. The document origin is compared with the expected origin
  * immediately before each write, so a frame that navigated away gets nothing.
+ * The password field and its value are recorded in `filled`, so a submit of
+ * the same password is not offered for saving.
  */
 export const fillLogin = (
   doc: Document,
   anchor: HTMLInputElement | null,
-  values: Pick<FillMessage, 'origin' | 'username' | 'password'>
+  values: Pick<FillMessage, 'origin' | 'username' | 'password'>,
+  filled?: WeakMap<HTMLInputElement, string>
 ): FillResult => {
   const {username, password} = findLoginFields(doc, anchor);
   const writes: [HTMLInputElement, string][] = [];
@@ -26,11 +41,53 @@ export const fillLogin = (
     };
   }
 
+  const result = writeAll(doc, values.origin, writes);
+  if (result.ok && password) {
+    filled?.set(password, values.password);
+  }
+  return result;
+};
+
+/**
+ * Fill a generated password into the new password field the user acted on in
+ * `doc` and into its confirm field. A current password field is never written.
+ * The origin rule of `fillLogin` applies. The reply carries the username the
+ * form holds, for the capture of the generated password.
+ */
+export const fillNewPassword = (
+  doc: Document,
+  anchor: HTMLInputElement | null,
+  values: Pick<FillGeneratedMessage, 'origin' | 'password'>
+): FillGeneratedResult => {
+  const fields = findNewPasswordFields(doc, anchor);
+  if (!fields) {
+    return {
+      ok: false,
+      reason: 'No visible new password field. Click the new password field first.',
+    };
+  }
+  const writes: [HTMLInputElement, string][] = [[fields.password, values.password]];
+  if (fields.confirm) {
+    writes.push([fields.confirm, values.password]);
+  }
+  const result = writeAll(doc, values.origin, writes);
+  if (!result.ok) {
+    return result;
+  }
+  return {...result, username: usernameBeside(groupOf(fields.password), fields.password)};
+};
+
+/** Write each value, checking the document origin immediately before each write. */
+const writeAll = (
+  doc: Document,
+  expected: string,
+  writes: [HTMLInputElement, string][]
+): FillResult => {
   let filled = 0;
   for (const [field, value] of writes) {
     const origin = doc.defaultView?.location.origin;
-    if (origin !== values.origin) {
-      return {ok: false, reason: `The frame is now on ${origin}, not ${values.origin}.`};
+    if (origin !== expected) {
+      return {ok: false, reason: `The frame is now on ${origin}, not ${expected}.`};
     }
     setValue(field, value);
     filled++;
@@ -68,16 +125,7 @@ export const fillCode = (
     };
   }
 
-  let filled = 0;
-  for (const [field, value] of writes) {
-    const origin = doc.defaultView?.location.origin;
-    if (origin !== values.origin) {
-      return {ok: false, reason: `The frame is now on ${origin}, not ${values.origin}.`};
-    }
-    setValue(field, value);
-    filled++;
-  }
-  return {ok: true, filled};
+  return writeAll(doc, values.origin, writes);
 };
 
 /**

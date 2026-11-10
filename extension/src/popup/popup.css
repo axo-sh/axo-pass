@@ -111,6 +111,9 @@ button.code:focus-visible {
 }
 
 .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin: 8px 14px 4px;
 }
 

@@ -4,7 +4,7 @@
   "description": "__MANIFEST_DESCRIPTION__",
   "homepage_url": "https://github.com/octavore",
   "manifest_version": 3,
-  "permissions": ["nativeMessaging", "storage", "contextMenus"],
+  "permissions": ["nativeMessaging", "storage", "contextMenus", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
@@ -31,7 +31,7 @@
       "suggested_key": {
         "default": "Alt+Shift+L"
       },
-      "description": "Fill the login for this page, or the one-time code in a code field"
+      "description": "Fill the login for this page, the one-time code in a code field, or a generated password in a new password field"
     }
   },
   "content_security_policy": {

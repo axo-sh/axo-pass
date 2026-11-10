@@ -8,6 +8,7 @@ const TARGET: PopupTarget = {
   frameUrl: 'https://github.com/login',
   host: 'github.com',
   topHost: null,
+  field: 'login',
 };
 
 const view = (result: HostResult) => {
@@ -49,6 +50,7 @@ describe('popup states', () => {
         frameUrl: 'https://idmsa.apple.com/signin',
         host: 'idmsa.apple.com',
         topHost: 'icloud.com',
+        field: 'login',
       })
     ).toBe('Matches for idmsa.apple.com inside icloud.com');
   });

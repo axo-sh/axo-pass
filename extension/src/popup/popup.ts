@@ -1,17 +1,38 @@
 import * as browser from 'webextension-polyfill';
 
 import {offersCode} from '@/lib/logins';
-import type {PopupFillReply, PopupListReply, PopupRequest, PopupTarget} from '@/lib/messages';
+import type {
+  CaptureSummary,
+  PopupCaptureReply,
+  PopupFillReply,
+  PopupListReply,
+  PopupRequest,
+  PopupSaveReply,
+  PopupTarget,
+} from '@/lib/messages';
 import type {LoginSummary, OtherLogin} from '@/lib/protocol';
-import type {View} from '@/popup/state';
-import {matchesHeading, viewForList} from '@/popup/state';
+import type {SaveView, View} from '@/popup/state';
+import {
+  captureDetail,
+  matchesHeading,
+  saveHeading,
+  viewForCapture,
+  viewForList,
+} from '@/popup/state';
 
-// The popup asks the background script for everything, so a fill continues if
-// the popup closes while the app shows its prompt.
+// The popup asks the background script for everything, so a fill or a save
+// continues if the popup closes while the app shows its prompt. Captured
+// passwords stay in the background script.
 
 const ALL_SITES = {origins: ['<all_urls>']};
 
-const root = document.getElementById('root') as HTMLElement;
+const container = document.getElementById('root') as HTMLElement;
+
+/** Save offer for a captured login, above the logins. */
+const saveRoot = document.createElement('section');
+/** Logins and states. */
+const root = document.createElement('div');
+container.append(saveRoot, root);
 
 const send = async <T>(request: PopupRequest): Promise<T> => {
   return (await browser.runtime.sendMessage(request)) as T;
@@ -40,6 +61,85 @@ const fill = (target: PopupTarget, login: LoginSummary | OtherLogin, unmatched: 
 
 const fillCode = (target: PopupTarget, login: LoginSummary) => {
   return run({type: 'popup-code', frameUrl: target.frameUrl, recordId: login.record_id});
+};
+
+const generate = (target: PopupTarget) => {
+  return run({type: 'popup-generate', frameUrl: target.frameUrl});
+};
+
+/** Load the capture of the tab. With `find`, existing logins are listed with a prompt. */
+const loadCapture = async (find: boolean): Promise<void> => {
+  if (find) {
+    renderSave(null, 'Finding logins…');
+  }
+  renderSave(viewForCapture(await send<PopupCaptureReply>({type: 'popup-capture', find})));
+};
+
+/** Save a capture as a new login, or as the new password of `login`. */
+const saveCapture = async (capture: CaptureSummary, login: LoginSummary | null) => {
+  renderSave(null, 'Saving…');
+  const reply = await send<PopupSaveReply>({
+    type: 'popup-save',
+    captureId: capture.id,
+    recordId: login?.record_id ?? null,
+    account: login ? (login.username ?? login.title) : null,
+  });
+  if (reply.state === 'saved') {
+    saveRoot.replaceChildren(message('Saved in Axo Pass.', true), el('hr'));
+    return;
+  }
+  if (reply.state === 'host' && reply.result.status === 'cancelled') {
+    await loadCapture(false);
+    return;
+  }
+  const text =
+    reply.state === 'refused'
+      ? reply.reason
+      : 'message' in reply.result
+        ? reply.result.message
+        : `Unexpected reply from Axo Pass: ${reply.result.status}`;
+  saveRoot.replaceChildren(
+    message(text),
+    actions([['Try Again', () => void loadCapture(false)]]),
+    el('hr')
+  );
+};
+
+const dismiss = async (capture: CaptureSummary) => {
+  await send<void>({type: 'popup-dismiss', captureId: capture.id});
+  saveRoot.replaceChildren();
+};
+
+/** Draw the save offer, or a progress line if `view` is `null`. */
+const renderSave = (view: SaveView | null, progress = 'Loading…'): void => {
+  saveRoot.replaceChildren();
+  if (!view) {
+    saveRoot.append(message(progress, true));
+    return;
+  }
+  if (view.kind === 'none') {
+    return;
+  }
+  const {capture, choice} = view;
+  saveRoot.append(el('h2', undefined, saveHeading(view)), message(captureDetail(capture), true));
+  if (view.note) {
+    saveRoot.append(message(view.note, true));
+  }
+  const buttons: [string, () => void][] = [];
+  if (choice.kind === 'update') {
+    for (const login of choice.logins) {
+      buttons.push([`Update ${login.title}`, () => void saveCapture(capture, login)]);
+    }
+  }
+  buttons.push([
+    choice.kind === 'save' ? 'Save' : 'Save as New',
+    () => void saveCapture(capture, null),
+  ]);
+  if (choice.kind === 'unknown') {
+    buttons.push(['Find Existing Login', () => void loadCapture(true)]);
+  }
+  buttons.push(['Not Now', () => void dismiss(capture)]);
+  saveRoot.append(actions(buttons), el('hr'));
 };
 
 /** Send a fill or code request and show its outcome. A fill closes the popup. */
@@ -82,12 +182,18 @@ const message = (text: string, muted = false): HTMLElement => {
   return el('p', muted ? 'message muted' : 'message', text);
 };
 
-const action = (label: string, onClick: () => void): HTMLElement => {
+const actions = (buttons: [string, () => void][]): HTMLElement => {
   const wrap = el('div', 'actions');
-  const button = el('button', 'action', label);
-  button.addEventListener('click', onClick);
-  wrap.append(button);
+  for (const [label, onClick] of buttons) {
+    const button = el('button', 'action', label);
+    button.addEventListener('click', onClick);
+    wrap.append(button);
+  }
   return wrap;
+};
+
+const action = (label: string, onClick: () => void): HTMLElement => {
+  return actions([[label, onClick]]);
 };
 
 const loginList = (
@@ -126,6 +232,10 @@ const render = (view: View | null, loading = 'Loading…'): void => {
   if (!view) {
     root.append(message(loading, true));
     return;
+  }
+  if ('target' in view && view.target.field === 'new-password') {
+    const target = view.target;
+    root.append(action('Generate Password', () => void generate(target)));
   }
   switch (view.kind) {
     case 'permissions':
@@ -217,3 +327,4 @@ const render = (view: View | null, loading = 'Loading…'): void => {
 };
 
 void load(false);
+void loadCapture(false);

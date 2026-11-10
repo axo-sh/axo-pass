@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Sign-up form marked with autocomplete. -->
+    <form id="signup" action="/users">
+      <input id="email" type="email" name="email" autocomplete="username" />
+      <input id="password" type="password" name="password" autocomplete="new-password" />
+      <input id="confirm" type="password" name="password2" autocomplete="new-password" />
+      <input id="decoy" type="password" class="gone" style="display: none" />
+      <button id="submit" type="submit">Create account</button>
+    </form>
+
+    <!-- Sign-up form without autocomplete, found by words. -->
+    <form id="register" action="/register">
+      <input id="reg-user" type="text" name="user" />
+      <input id="reg-password" type="password" name="password" />
+      <input id="reg-confirm" type="password" name="password_confirmation" />
+      <button type="submit">Continue</button>
+    </form>
+
+    <!-- Sign-up form with one password field, found by its button. -->
+    <form id="join-form">
+      <input id="join-email" type="email" name="email" />
+      <input id="join-password" type="password" name="pw" />
+      <button type="submit">Sign up</button>
+    </form>
+  </body>
+</html>
