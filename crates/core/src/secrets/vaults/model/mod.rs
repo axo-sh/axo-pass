@@ -1411,6 +1411,129 @@ impl Vault {
         self.get_item_by_id(item_id)
     }
 
+    /// Plaintext copy of a live item for [`Self::import_item`] on another
+    /// vault. It holds the credential values and previous values. The item's
+    /// deleted credentials are not copied.
+    pub fn export_item(&self, item_key: &str) -> Result<ItemTransfer, Error> {
+        let overview = self.get_item(item_key)?.clone();
+        let item_id = overview.id;
+        let mut values = BTreeMap::new();
+        let mut history = BTreeMap::new();
+        for cred_id in overview.credentials.keys() {
+            if let Some(blob) = self.secrets.get(cred_id) {
+                values.insert(
+                    *cred_id,
+                    self.cipher.decrypt_cred_value(item_id, *cred_id, blob)?,
+                );
+            }
+            let mut entries = Vec::new();
+            for entry in self.history.get(cred_id).into_iter().flatten() {
+                let info =
+                    self.cipher
+                        .decrypt_history_info(item_id, *cred_id, entry.id, &entry.info)?;
+                entries.push(PreviousValueTransfer {
+                    id: entry.id,
+                    replaced_at: info.expose_secret().replaced_at,
+                    value: self.cipher.decrypt_history_value(
+                        item_id,
+                        *cred_id,
+                        entry.id,
+                        &entry.value,
+                    )?,
+                });
+            }
+            if !entries.is_empty() {
+                history.insert(*cred_id, entries);
+            }
+        }
+        Ok(ItemTransfer {
+            overview,
+            values,
+            history,
+        })
+    }
+
+    /// Add an item exported from another vault. The item keeps its id, its
+    /// credential ids, and its previous values. It is unfiled, since folders
+    /// belong to a vault. It gets `new_key` if given. Fails with
+    /// `DuplicateItemKey` if the resulting key is taken.
+    pub fn import_item(
+        &mut self,
+        transfer: ItemTransfer,
+        new_key: Option<&str>,
+    ) -> Result<&VaultItemOverview, Error> {
+        let ItemTransfer {
+            mut overview,
+            values,
+            history,
+        } = transfer;
+        let item_id = overview.id;
+        let key = match new_key {
+            Some(key) => {
+                normalized_key(key).ok_or_else(|| Error::InvalidItemKey(key.to_string()))?
+            },
+            None => overview.key.clone(),
+        };
+        if self.item_index.contains_key(&key) {
+            return Err(Error::DuplicateItemKey(key));
+        }
+        if self.items.contains_key(&item_id) {
+            return Err(Error::InvalidItemKey(format!(
+                "item {item_id} is already in this vault"
+            )));
+        }
+        overview.key = key;
+        overview.folder = None;
+
+        // Encrypt everything for this vault before changing anything.
+        let mut secrets = BTreeMap::new();
+        let mut histories = BTreeMap::new();
+        for cred_id in overview.credentials.keys() {
+            if let Some(value) = values.get(cred_id) {
+                secrets.insert(
+                    *cred_id,
+                    self.cipher
+                        .encrypt_cred_value(item_id, *cred_id, value.expose_secret())?,
+                );
+            }
+            let mut entries = Vec::new();
+            for entry in history.get(cred_id).into_iter().flatten() {
+                entries.push(HistoryEntry {
+                    id: entry.id,
+                    value: self.cipher.encrypt_history_value(
+                        item_id,
+                        *cred_id,
+                        entry.id,
+                        entry.value.expose_secret(),
+                    )?,
+                    info: self.cipher.encrypt_history_info(
+                        item_id,
+                        *cred_id,
+                        entry.id,
+                        &HistoryInfo {
+                            replaced_at: entry.replaced_at,
+                        },
+                    )?,
+                });
+            }
+            if !entries.is_empty() {
+                histories.insert(*cred_id, entries);
+            }
+        }
+
+        for cred in overview.credentials.values() {
+            self.item_credential_index
+                .insert((overview.key.clone(), cred.key.clone()), (item_id, cred.id));
+        }
+        self.secrets.extend(secrets);
+        self.history.extend(histories);
+        self.item_index.insert(overview.key.clone(), item_id);
+        self.items.insert(item_id, overview);
+        self.items
+            .get(&item_id)
+            .ok_or_else(|| Error::InvalidItemKey(item_id.to_string()))
+    }
+
     /// Set the display category of an item, such as `login`.
     pub fn set_item_category(
         &mut self,
@@ -2661,6 +2784,26 @@ struct DeletedItemEntry {
     item: DecryptedItem,
     info: EncryptedBlob<DeletedInfo>,
     deleted_at: i64,
+}
+
+/// Plaintext copy of an item, as it is held while moving between vaults.
+pub struct ItemTransfer {
+    overview: VaultItemOverview,
+    values: BTreeMap<CredentialId, SecretBox<String>>,
+    history: BTreeMap<CredentialId, Vec<PreviousValueTransfer>>,
+}
+
+impl ItemTransfer {
+    /// Id of the item.
+    pub fn item_id(&self) -> Uuid {
+        self.overview.id
+    }
+}
+
+struct PreviousValueTransfer {
+    id: Uuid,
+    replaced_at: i64,
+    value: SecretBox<String>,
 }
 
 /// An item with decrypted metadata and encrypted secrets, as it is held while

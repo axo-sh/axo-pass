@@ -25,7 +25,7 @@ use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
-    HistoryOverview, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
+    HistoryOverview, ItemTransfer, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
     VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
@@ -327,6 +327,22 @@ impl VaultHandle {
     ) -> Result<&VaultItemOverview, Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.change_item_key(item_key, new_key)
+    }
+
+    /// Plaintext copy of an item, for [`Self::import_item`] on another vault.
+    pub fn export_item(&self, item_key: &str) -> Result<ItemTransfer, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.export_item(item_key)
+    }
+
+    /// Add an item exported from another vault. See [`Vault::import_item`].
+    pub fn import_item(
+        &mut self,
+        transfer: ItemTransfer,
+        new_key: Option<&str>,
+    ) -> Result<&VaultItemOverview, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.import_item(transfer, new_key)
     }
 
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {

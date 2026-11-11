@@ -332,6 +332,7 @@ fn category_matches_action_namespace() {
         (Action::AgeEncrypt, Category::Age, "age"),
         (Action::VaultExported, Category::Vault, "vault"),
         (Action::ItemListed, Category::Item, "item"),
+        (Action::ItemMoved, Category::Item, "item"),
         (Action::CredentialExec, Category::Credential, "credential"),
         (Action::PasskeyMoved, Category::Passkey, "passkey"),
         (Action::AuthGrantExpired, Category::Grant, "auth"),

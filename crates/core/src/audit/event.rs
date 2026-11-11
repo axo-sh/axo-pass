@@ -399,6 +399,8 @@ pub enum Action {
     ItemPurged,
     #[serde(rename = "item.merged")]
     ItemMerged,
+    #[serde(rename = "item.moved")]
+    ItemMoved,
     #[serde(rename = "item.websites_changed")]
     ItemWebsitesChanged,
     #[serde(rename = "item.converted")]
@@ -495,6 +497,7 @@ impl Action {
             Action::ItemRestored => "item.restored",
             Action::ItemPurged => "item.purged",
             Action::ItemMerged => "item.merged",
+            Action::ItemMoved => "item.moved",
             Action::ItemWebsitesChanged => "item.websites_changed",
             Action::ItemConverted => "item.converted",
             Action::CredentialRead => "credential.read",
@@ -522,7 +525,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 64] = [
+    pub const ALL: [Action; 65] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -565,6 +568,7 @@ impl Action {
         Action::ItemRestored,
         Action::ItemPurged,
         Action::ItemMerged,
+        Action::ItemMoved,
         Action::ItemWebsitesChanged,
         Action::ItemConverted,
         Action::CredentialRead,
@@ -655,6 +659,7 @@ impl Action {
             Action::ItemRestored => "Restored a deleted item.",
             Action::ItemPurged => "Permanently deleted an item.",
             Action::ItemMerged => "Moved the credentials of one item into another.",
+            Action::ItemMoved => "Moved an item to another vault.",
             Action::ItemWebsitesChanged => "Changed the websites an item is filled on.",
             Action::ItemConverted => "Gave an item the roles and websites of a login.",
             Action::CredentialRead => {
@@ -737,6 +742,7 @@ impl Action {
             | Action::ItemRestored
             | Action::ItemPurged
             | Action::ItemMerged
+            | Action::ItemMoved
             | Action::ItemWebsitesChanged
             | Action::ItemConverted => Category::Item,
             Action::CredentialRead
@@ -805,6 +811,7 @@ impl Action {
             | Action::ItemRestored
             | Action::ItemPurged
             | Action::ItemMerged
+            | Action::ItemMoved
             | Action::ItemWebsitesChanged
             | Action::ItemConverted
             | Action::CredentialCreated

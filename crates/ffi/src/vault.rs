@@ -1352,6 +1352,76 @@ impl AxoPass {
         Ok(())
     }
 
+    /// Move an item to another vault with its credentials and previous values.
+    /// The item keeps its key unless `dest_item_key` is given. It is unfiled in
+    /// the destination. The item is purged from the source, not left in its
+    /// deleted items. The destination is written first and then the source in
+    /// separate transactions, so a failure between the two leaves the item in
+    /// both vaults. Fails if the destination has an item with the key.
+    pub async fn move_item_to_vault(
+        &self,
+        vault_key: String,
+        item_key: String,
+        dest_vault_key: String,
+        dest_item_key: Option<String>,
+    ) -> Result<(), FfiError> {
+        if vault_key == dest_vault_key {
+            return Err(FfiError::Internal(
+                "the item is already in this vault".to_string(),
+            ));
+        }
+        let manager = Arc::clone(&self.manager);
+        let (source_key, source_item) = (vault_key.clone(), item_key.clone());
+        let dest_key = dest_vault_key.clone();
+        let (title, source_ids, dest_ids, dest_final_key, removed) =
+            tokio::task::spawn_blocking(move || {
+                // Plaintext values are held only between the two transactions.
+                let (transfer, title, source_ids) =
+                    VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                        let title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
+                        let ids = vw.item_ids(&item_key)?;
+                        Ok::<_, FfiError>((vw.export_item(&item_key)?, title, ids))
+                    })?;
+                let item_id = transfer.item_id();
+                let (final_key, dest_ids) =
+                    VaultsManager::write_vault(&manager, &dest_vault_key, |vw| {
+                        let key = vw
+                            .import_item(transfer, dest_item_key.as_deref())?
+                            .key
+                            .clone();
+                        let ids = vw.item_ids(&key)?;
+                        Ok::<_, FfiError>((key, ids))
+                    })?;
+                let removed = VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                    vw.delete_item(&item_key)?;
+                    vw.purge_item(item_id)?;
+                    Ok::<_, FfiError>(())
+                });
+                Ok::<_, FfiError>((title, source_ids, dest_ids, final_key, removed))
+            })
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))??;
+        let mut event = change_event(
+            audit::Action::ItemMoved,
+            &source_key,
+            item_subject(&source_key, &source_item).maybe_label(title),
+            source_ids,
+        )
+        .detail("dest_vault", dest_key)
+        .detail("dest_item", dest_final_key)
+        .maybe_detail("dest_vault_id", dest_ids.vault_id.map(ShortId::encode_uuid));
+        // The destination holds the item even if removing the source failed,
+        // so that is recorded as a failed move.
+        if let Err(e) = &removed {
+            event.outcome = audit::Outcome::Failed;
+            event = event
+                .detail("source_removed", "false")
+                .message(e.to_string());
+        }
+        event.record_async().await;
+        removed
+    }
+
     /// Change the key of an item. Fails if another item has the key.
     pub async fn change_item_key(
         &self,

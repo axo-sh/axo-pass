@@ -1,6 +1,6 @@
 use super::support::{
     add_cred, cred_id, cred_mut, item_id_of, load_encrypted, reload, secret_of, set_value,
-    try_load_encrypted, vault_with_credentials,
+    test_vault, try_load_encrypted, vault_with_credentials,
 };
 use super::*;
 
@@ -17,6 +17,71 @@ fn history_values(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<String> 
                 .clone()
         })
         .collect()
+}
+
+#[test]
+fn importing_item_in_another_vault_keeps_ids_values_and_history() {
+    let mut source = vault_with_credentials("item", &["alpha"]);
+    set_value(&mut source, "item", "alpha", "second");
+    set_value(&mut source, "item", "alpha", "third");
+    let item_id = item_id_of(&source, "item");
+    let cred_id = cred_id(&source, "item", "alpha");
+    let history_ids: Vec<_> = source
+        .list_history("item", "alpha")
+        .unwrap()
+        .iter()
+        .map(|h| h.id)
+        .collect();
+
+    let transfer = source.export_item("item").unwrap();
+    let mut dest = test_vault();
+    let imported = dest.import_item(transfer, Some("Moved Item")).unwrap();
+    assert_eq!(imported.key, "moved-item");
+    assert_eq!(imported.id, item_id);
+    assert_eq!(imported.credentials.keys().next(), Some(&cred_id));
+
+    assert_eq!(secret_of(&dest, "moved-item", "alpha"), "third");
+    assert_eq!(
+        history_values(&dest, "moved-item", "alpha"),
+        vec!["second", "secret"]
+    );
+    let moved_ids: Vec<_> = dest
+        .list_history("moved-item", "alpha")
+        .unwrap()
+        .iter()
+        .map(|h| h.id)
+        .collect();
+    assert_eq!(moved_ids, history_ids);
+
+    let dest = reload(&dest);
+    assert_eq!(secret_of(&dest, "moved-item", "alpha"), "third");
+    assert_eq!(
+        history_values(&dest, "moved-item", "alpha"),
+        vec!["second", "secret"]
+    );
+}
+
+#[test]
+fn importing_item_rejects_taken_key_and_leaves_vault_unchanged() {
+    let source = vault_with_credentials("item", &["alpha"]);
+    let mut dest = vault_with_credentials("item", &["beta"]);
+
+    let transfer = source.export_item("item").unwrap();
+    let err = dest.import_item(transfer, None).unwrap_err();
+    assert!(matches!(err, Error::DuplicateItemKey(_)));
+    assert!(dest.get_item_credential("item", "alpha").is_err());
+    assert!(dest.get_item_credential("item", "beta").is_ok());
+}
+
+#[test]
+fn importing_item_unfiles_it() {
+    let mut source = vault_with_credentials("item", &["alpha"]);
+    let folder = source.create_folder("Folder").id;
+    source.move_item("item", Some(folder)).unwrap();
+
+    let transfer = source.export_item("item").unwrap();
+    let mut dest = test_vault();
+    assert_eq!(dest.import_item(transfer, None).unwrap().folder, None);
 }
 
 #[test]

@@ -7,6 +7,7 @@ struct TitleSheetRequest: Identifiable {
   let heading: String
   let actionLabel: String
   var initialTitle: String = ""
+  var fieldLabel: String = "Title"
   /// Saves the trimmed title. Returns an error message, or nil on success.
   let onSubmit: @MainActor (String) async -> String?
 }
@@ -28,7 +29,7 @@ struct TitleSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       Text(request.heading).font(.headline)
       Form {
-        TextField("Title", text: $title)
+        TextField(request.fieldLabel, text: $title)
       }
 
       if let errorMessage {

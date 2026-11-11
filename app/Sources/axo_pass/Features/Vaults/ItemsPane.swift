@@ -32,6 +32,7 @@ struct ItemsPane: View {
   @State private var searchQuery = ""
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var renamingItem: DisplayItem? = nil
+  @State private var moveError: String? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
   // Drop highlight target. A folder id for drops into that folder, or an
@@ -124,6 +125,14 @@ struct ItemsPane: View {
         }
         return model.actionError ?? "Failed to create item."
       }
+    }
+    .alert(
+      "Could Not Move Item",
+      isPresented: Binding(get: { moveError != nil }, set: { if !$0 { moveError = nil } })
+    ) {
+      Button("OK") { moveError = nil }
+    } message: {
+      Text(moveError ?? "")
     }
     .sheet(item: $renamingItem) { display in
       RenameItemSheet(title: display.item.title, key: display.item.key) { title, key in
@@ -242,6 +251,14 @@ struct ItemsPane: View {
       }
     }
     Button("Rename…") { renamingItem = display }
+    let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
+    if !otherVaults.isEmpty {
+      Menu("Move to Vault") {
+        ForEach(otherVaults, id: \.key) { vault in
+          Button(vault.name ?? vault.key) { moveToVault(display, destVaultKey: vault.key) }
+        }
+      }
+    }
     Button("Delete", role: .destructive) {
       Task {
         await model.deleteItem(
@@ -264,6 +281,34 @@ struct ItemsPane: View {
       }
       Button("Delete", role: .destructive) {
         Task { try? await model.deleteFolder(vaultKey: vaultKey, folderId: folder.id) }
+      }
+    }
+  }
+
+  /// Move an item to another vault. If the destination has an item with the
+  /// key, ask for a new key first.
+  private func moveToVault(_ display: DisplayItem, destVaultKey: String) {
+    Task {
+      let taken = await model.destinationItems(in: destVaultKey).contains {
+        $0.key == display.item.key
+      }
+      if taken {
+        titleSheet = TitleSheetRequest(
+          heading: "Key Already Used", actionLabel: "Move", initialTitle: display.item.key,
+          fieldLabel: "Key"
+        ) { key in
+          await failureMessage {
+            try await model.moveItemToVault(
+              vaultKey: display.vaultKey, itemKey: display.item.key, destVaultKey: destVaultKey,
+              destItemKey: key)
+          }
+        }
+      } else if let error = await failureMessage({
+        try await model.moveItemToVault(
+          vaultKey: display.vaultKey, itemKey: display.item.key, destVaultKey: destVaultKey,
+          destItemKey: nil)
+      }) {
+        moveError = error
       }
     }
   }

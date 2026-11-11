@@ -956,6 +956,25 @@ final class VaultsModel {
     if wasSelected { selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: currentKey) }
   }
 
+  /// Move an item to another vault with its credentials and previous values.
+  /// The item is purged from the source vault. It keeps its key unless
+  /// `destItemKey` is given. Throws if the destination has the key.
+  func moveItemToVault(
+    vaultKey: String, itemKey: String, destVaultKey: String, destItemKey: String?
+  ) async throws {
+    let result: Result<Void, Error>
+    do {
+      try await core.moveItemToVault(
+        vaultKey: vaultKey, itemKey: itemKey, destVaultKey: destVaultKey, destItemKey: destItemKey)
+      result = .success(())
+    } catch {
+      result = .failure(error)
+    }
+    await loadItems(for: vaultKey)
+    await loadItems(for: destVaultKey)
+    try result.get()
+  }
+
   /// Delete an item. It stays in the vault's deleted items until purged. If
   /// `undoManager` is given, an undo is registered that restores the item.
   @discardableResult
