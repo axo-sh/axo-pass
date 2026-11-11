@@ -1,9 +1,10 @@
 import * as browser from 'webextension-polyfill';
 
-import {fieldKind} from '@/lib/fields';
+import {fieldKind, guessKind} from '@/lib/fields';
 import {fillCode, fillLogin, fillNewPassword} from '@/lib/fill';
 import type {
   CaptureMessage,
+  DetectFieldMessage,
   FieldTargetMessage,
   FillCodeMessage,
   FillGeneratedMessage,
@@ -28,7 +29,10 @@ const noteField = (event: Event): void => {
   if (!event.isTrusted) {
     return;
   }
-  const field = event.target instanceof Element ? event.target : null;
+  reportField(event.target instanceof Element ? event.target : null);
+};
+
+const reportField = (field: Element | null): void => {
   const kind = fieldKind(field);
   if (kind === null) {
     return;
@@ -63,6 +67,15 @@ const noteSubmit = (event: Event): void => {
   });
 };
 
+// A page can focus a field before this script runs, as a one-time code page
+// often does. The user then types without a focus event. The top-level frame
+// reports that field. A child frame does not, since a page could use a frame
+// to choose which frame the extension fills. A fill still needs the user's
+// shortcut or popup click.
+if (window === window.top) {
+  reportField(document.activeElement);
+}
+
 document.addEventListener('focusin', noteField, true);
 document.addEventListener('contextmenu', noteField, true);
 document.addEventListener('submit', noteSubmit, true);
@@ -71,8 +84,17 @@ document.addEventListener('click', noteSubmit, true);
 
 browser.runtime.onMessage.addListener(
   (message: unknown): Promise<FillResult | FillGeneratedResult> | undefined => {
-    const fill = message as FillMessage | FillCodeMessage | FillGeneratedMessage;
+    const fill = message as
+      | FillMessage
+      | FillCodeMessage
+      | FillGeneratedMessage
+      | DetectFieldMessage;
     switch (fill?.type) {
+      case 'detect-field':
+        // Only the top frame answers, so a frame cannot choose the fill.
+        return window === window.top
+          ? attempt(() => ({ok: true, filled: 0, field: guessKind(document)}))
+          : undefined;
       case 'fill':
         return attempt(() => fillLogin(document, lastField, fill, filled));
       case 'fill-code':

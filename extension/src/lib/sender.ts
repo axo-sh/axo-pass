@@ -41,8 +41,12 @@ export const frameFromSender = (sender: Runtime.MessageSender, runtimeId: string
     return {ok: false, reason: 'Message not from a frame'};
   }
   const chromium = sender as ChromiumSender;
-  if (chromium.origin !== undefined && originOf(sender.url) !== chromium.origin) {
-    return {ok: false, reason: `Frame URL does not match its origin ${chromium.origin}`};
+  if (chromium.origin !== undefined) {
+    // An opaque origin is "null", and so is the origin of the URL of an
+    // `about:blank` frame, so a matching pair is checked for a web URL too.
+    if (!isWebPage(sender.url) || originOf(sender.url) !== chromium.origin) {
+      return {ok: false, reason: `Frame URL does not match its origin ${chromium.origin}`};
+    }
   }
   return {
     ok: true,

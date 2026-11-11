@@ -16,6 +16,10 @@ module.exports = (env) => {
     entry[`${browser}/content`] = 'content.ts';
     entry[`${browser}/popup`] = 'popup/popup.ts';
   }
+  // Chromium reads the color scheme in an offscreen document.
+  if (targets.includes('chrome')) {
+    entry['chrome/offscreen'] = 'offscreen/offscreen.ts';
+  }
 
   return {
     // Development mode with source maps keeps the output readable for store
@@ -61,7 +65,13 @@ module.exports = (env) => {
           },
           {from: 'src/popup/popup.html', to: `${browser}/popup.html`},
           {from: 'src/popup/popup.css', to: `${browser}/popup.css`},
-          {from: 'icons/*.svg', to: `${browser}/[name][ext]`},
+          // Chrome accepts PNG icons only.
+          browser === 'chrome'
+            ? {from: 'icons/chrome/*.png', to: `${browser}/[name][ext]`}
+            : {from: 'icons/*.svg', to: `${browser}/[name][ext]`},
+          ...(browser === 'chrome'
+            ? [{from: 'src/offscreen/offscreen.html', to: `${browser}/offscreen.html`}]
+            : []),
         ]),
       }),
     ],

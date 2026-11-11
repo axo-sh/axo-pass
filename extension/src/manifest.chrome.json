@@ -4,7 +4,14 @@
   "description": "__MANIFEST_DESCRIPTION__",
   "homepage_url": "https://github.com/octavore",
   "manifest_version": 3,
-  "permissions": ["nativeMessaging", "storage", "contextMenus", "alarms"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw5ryApL0+5tNVWkI82qkIovv5FbQFn2TdCyim9KtIslqZIqOzsWrKp/G2Os0nLUAKoB7+w1etjFxA06M+bMBjwzGHDreji27kmRHulkeQtc/RF5bJUupfK6LqBIjngGYzS0a2V5EgNLrpBBpjYXmhNfnaRNRNsPeOc+45/+r1dzUhP+8t5OdutgrarT3muvaWmoMMqo9a7D81vxYaWwPrt89ahSbToZRScaEoceAx7RH6OyHCYtV0z2+R065bxfmkcZd83dyUZxGYmSSZX1QXTkxn4guIyFEV6GFiSMW1vbsHFuVlzrvOtgIb5V7RruenrCzId1IXU8Lk1/N7h8UvwIDAQAB",
+  "icons": {
+    "16": "axo-16.png",
+    "32": "axo-32.png",
+    "48": "axo-48.png",
+    "128": "axo-128.png"
+  },
+  "permissions": ["nativeMessaging", "storage", "contextMenus", "alarms", "offscreen"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
@@ -19,7 +26,13 @@
   ],
   "action": {
     "default_title": "__MANIFEST_NAME__",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "axo-16.png",
+      "32": "axo-32.png",
+      "48": "axo-48.png",
+      "128": "axo-128.png"
+    }
   },
   "commands": {
     "_execute_action": {
@@ -29,7 +42,8 @@
     },
     "fill-login": {
       "suggested_key": {
-        "default": "Alt+Shift+L"
+        "default": "Alt+Shift+L",
+        "mac": "Command+Shift+L"
       },
       "description": "Fill the login for this page, the one-time code in a code field, or a generated password in a new password field"
     }

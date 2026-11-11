@@ -4,10 +4,12 @@ import type {Capture} from '@/lib/captures';
 import {captureForTab, clearCapture, storeCapture, tabOfAlarm} from '@/lib/captures';
 import type {FieldKind} from '@/lib/fields';
 import {callHost} from '@/lib/host';
+import {applyScheme, ensureSchemeReporter} from '@/lib/icon';
 import {codeLoginsOf, matchesOf, saveChoice} from '@/lib/logins';
 import type {
   CaptureMessage,
   CaptureSummary,
+  DetectFieldMessage,
   FieldTargetMessage,
   FillCodeMessage,
   FillGeneratedMessage,
@@ -23,10 +25,11 @@ import type {
 } from '@/lib/messages';
 import type {HostResult, LoginSummary, Page} from '@/lib/protocol';
 import {requests, updateNeeded} from '@/lib/protocol';
+import {schemeFromMessage} from '@/lib/scheme';
 import type {FrameTarget} from '@/lib/sender';
 import {displayHost, frameFromSender, isExtensionPage, isWebPage, originOf} from '@/lib/sender';
 import {MAX_VALUE_LENGTH} from '@/lib/submit';
-import type {FieldTarget} from '@/lib/target';
+import type {FieldTarget, TabTarget} from '@/lib/target';
 import {clearTarget, saveTarget, targetForTab} from '@/lib/target';
 
 // The background script talks to the native host and addresses fills to one
@@ -42,7 +45,13 @@ const COMMAND_FILL = 'fill-login';
 /** Badge text of a tab with a capture to save. */
 const SAVE_BADGE = 'Save';
 
+// Chromium only. Each time the service worker starts, make sure the document
+// that reports the color scheme is open.
+void ensureSchemeReporter();
+browser.runtime.onStartup.addListener(() => void ensureSchemeReporter());
+
 browser.runtime.onInstalled.addListener(() => {
+  void ensureSchemeReporter();
   // With several items, the browser groups them under the extension name.
   browser.contextMenus.create({
     id: MENU_FILL,
@@ -64,6 +73,10 @@ browser.runtime.onInstalled.addListener(() => {
 browser.runtime.onMessage.addListener((message: unknown, sender: browser.Runtime.MessageSender) => {
   const runtimeId = browser.runtime.id;
   const type = (message as {type?: unknown} | null)?.type;
+  if (type === 'color-scheme') {
+    const scheme = schemeFromMessage(message, sender, runtimeId, browser.runtime.getURL(''));
+    return scheme ? applyScheme(scheme) : undefined;
+  }
   if (type === 'field-target' || type === 'capture') {
     const check = frameFromSender(sender, runtimeId);
     if (!check.ok) {
@@ -176,7 +189,7 @@ browser.commands.onCommand.addListener(async (command, tab) => {
   // One shortcut for all three, chosen by the field the user last acted on: a
   // code in a code field, a generated password in a new password field, and
   // the login otherwise.
-  const target = await targetForTab(active.id, active.url);
+  const target = await detectField(await targetForTab(active.id, active.url));
   if (target.field === 'new-password') {
     await quickGenerate(target);
     return;
@@ -195,7 +208,35 @@ const activeTarget = async (): Promise<FieldTarget | null> => {
   if (tab?.id === undefined || !isWebPage(tab.url)) {
     return null;
   }
-  return targetForTab(tab.id, tab.url);
+  return detectField(await targetForTab(tab.id, tab.url));
+};
+
+/**
+ * For a tab where the user has not acted on a field, ask the top frame which
+ * fill the page needs, such as a code on a code page. The answer only chooses
+ * between a login, a generated password, and a code. The prompt, the frame,
+ * and the broker's checks are unchanged. A frame that does not answer leaves
+ * the login default.
+ */
+const detectField = async (target: TabTarget): Promise<FieldTarget> => {
+  if (target.reported) {
+    return target;
+  }
+  try {
+    const reply = (await browser.tabs.sendMessage(
+      target.tabId,
+      {type: 'detect-field'} satisfies DetectFieldMessage,
+      {frameId: 0}
+    )) as {field?: unknown} | undefined;
+    const field = reply?.field;
+    if (field === 'login' || field === 'code' || field === 'new-password') {
+      return {...target, field};
+    }
+  } catch {
+    // No content script in the tab, as in a tab open before the extension was
+    // installed. The fill then reports it.
+  }
+  return target;
 };
 
 const pageOf = (target: FrameTarget): Page => {
@@ -481,7 +522,12 @@ const deliver = async (
       | undefined;
     return reply ?? {ok: false, reason: 'The page did not answer.'};
   } catch (e) {
-    return {ok: false, reason: `The page changed before the fill (${String(e)}).`};
+    // A tab that was open before the extension was installed or reloaded has
+    // no content script.
+    return {
+      ok: false,
+      reason: `The page did not receive the fill. Reload the page and try again (${String(e)}).`,
+    };
   }
 };
 
@@ -506,14 +552,14 @@ const quickFill = async (target: FrameTarget, kind: 'login' | 'code'): Promise<v
     if (reply.state === 'filled' || isCancelled(reply)) {
       return;
     }
-    await showBadge(target.tabId, '!', describeFill(reply));
+    await failBadge(target, kind, describeFill(reply));
     return;
   }
   if (listing.status === 'cancelled') {
     return;
   }
   if (logins === null) {
-    await showBadge(target.tabId, '!', describeResult(listing));
+    await failBadge(target, kind, describeResult(listing));
     return;
   }
   try {
@@ -548,7 +594,19 @@ const quickGenerate = async (target: FrameTarget): Promise<void> => {
   if (reply.state === 'filled' || isCancelled(reply)) {
     return;
   }
-  await showBadge(target.tabId, '!', describeFill(reply));
+  await failBadge(target, 'generate', describeFill(reply));
+};
+
+/** Show a failed shortcut or context menu action on the badge and in the console. */
+const failBadge = async (
+  target: FrameTarget,
+  kind: 'login' | 'code' | 'generate',
+  reason: string
+): Promise<void> => {
+  console.warn(
+    `Axo Pass could not fill ${displayHost(target.frameUrl)}: ${reason} (${kind}, frame ${target.frameId})`
+  );
+  await showBadge(target.tabId, '!', reason);
 };
 
 const isCancelled = (reply: PopupFillReply): boolean => {

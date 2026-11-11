@@ -11,6 +11,7 @@
       "**/*.{js,jsx,ts,tsx,json,jsonc}",
       "!**/dist",
       "!**/build",
+      "!**/test-results",
       "!**/node_modules",
       "!**/*.generated.*"
     ],
@@ -36,6 +37,9 @@
   },
   "linter": {
     "enabled": true,
+    // The Playwright rules read the page-text helper `describe` in
+    // `src/lib/fields.ts` as a test suite.
+    "domains": { "playwright": "none" },
     "rules": {
       "preset": "recommended",
       "correctness": {

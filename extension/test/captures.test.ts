@@ -22,17 +22,20 @@ const fire = async (name: string, ...args: unknown[]): Promise<unknown> => {
 const session = new Map<string, unknown>();
 const alarms = new Map<string, {when: number}>();
 const badges = new Map<number, string>();
+const icons: unknown[] = [];
 const toFrame: unknown[] = [];
 const frameOptions: unknown[] = [];
 const hostCalls: HostRequest[] = [];
 let hostReplies: HostResult[] = [];
 let frameReply: unknown;
+let detectReply: unknown;
 
 vi.mock('webextension-polyfill', () => ({
   runtime: {
     id: 'ext',
     getURL: (path: string) => `moz-extension://abc/${path}`,
     onInstalled: event('installed'),
+    onStartup: event('startup'),
     onMessage: event('message'),
   },
   storage: {
@@ -56,6 +59,9 @@ vi.mock('webextension-polyfill', () => ({
     onUpdated: event('updated'),
     query: async () => [TAB],
     sendMessage: async (_tabId: number, message: unknown, options: unknown) => {
+      if ((message as {type?: string}).type === 'detect-field') {
+        return detectReply;
+      }
       toFrame.push(message);
       frameOptions.push(options);
       return frameReply;
@@ -68,6 +74,7 @@ vi.mock('webextension-polyfill', () => ({
       void badges.set(tabId, text),
     setTitle: async () => undefined,
     openPopup: async () => undefined,
+    setIcon: async (details: unknown) => void icons.push(details),
   },
 }));
 
@@ -300,6 +307,69 @@ describe('captures', () => {
     });
     expect(reply).toEqual({state: 'refused', reason: 'The login to save has expired.'});
     expect(hostCalls).toEqual([]);
+  });
+});
+
+describe('field of a tab with no reported field', () => {
+  const list = {type: 'popup-list', all: false};
+
+  beforeEach(() => {
+    session.clear();
+    hostCalls.length = 0;
+    hostReplies = [{status: 'locked_logins', logins: [], indexed: true}];
+  });
+
+  it('asks the top frame which fill the page needs', async () => {
+    detectReply = {field: 'code'};
+    const reply = (await fromPopup(list)) as {target: {field: string}};
+    expect(reply.target.field).toBe('code');
+  });
+
+  it('keeps the login default if the frame gives no valid answer', async () => {
+    for (const answer of [undefined, {field: 'other'}, null]) {
+      detectReply = answer;
+      hostReplies = [{status: 'locked_logins', logins: [], indexed: true}];
+      const reply = (await fromPopup(list)) as {target: {field: string}};
+      expect(reply.target.field).toBe('login');
+    }
+  });
+
+  it('does not ask if the user acted on a field', async () => {
+    await fromPage({type: 'field-target', field: 'new-password'}, PAGE_SENDER);
+    detectReply = {field: 'code'};
+    const reply = (await fromPopup(list)) as {target: {field: string}};
+    expect(reply.target.field).toBe('new-password');
+  });
+});
+
+describe('toolbar icon', () => {
+  const OFFSCREEN_SENDER = {id: 'ext', url: 'moz-extension://abc/offscreen.html'};
+
+  beforeEach(() => {
+    session.clear();
+    icons.length = 0;
+  });
+
+  it('sets the icon for the scheme the offscreen document reports', async () => {
+    await fire('message', {type: 'color-scheme', scheme: 'dark'}, OFFSCREEN_SENDER);
+    expect(icons).toEqual([
+      {
+        path: {
+          '16': 'axo-dark-16.png',
+          '32': 'axo-dark-32.png',
+          '48': 'axo-dark-48.png',
+          '128': 'axo-dark-128.png',
+        },
+      },
+    ]);
+    expect(session.get('scheme')).toBe('dark');
+  });
+
+  it('ignores a scheme report from a page or the popup', async () => {
+    await fire('message', {type: 'color-scheme', scheme: 'dark'}, PAGE_SENDER);
+    await fire('message', {type: 'color-scheme', scheme: 'dark'}, POPUP_SENDER);
+    expect(icons).toEqual([]);
+    expect(session.has('scheme')).toBe(false);
   });
 });
 

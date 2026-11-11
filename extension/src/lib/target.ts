@@ -26,12 +26,17 @@ export const clearTarget = async (tabId: number): Promise<void> => {
   await browser.storage.session.remove(key(tabId));
 };
 
+/** A tab's target. `reported` is false for the top frame default. */
+export interface TabTarget extends FieldTarget {
+  reported: boolean;
+}
+
 /**
  * Frame to fill in a tab: the frame of the field the user last acted on, if
  * the tab still shows the same top-level origin. Otherwise the top frame, for
- * a login.
+ * a login, until the caller asks the page what it needs.
  */
-export const targetForTab = async (tabId: number, topUrl: string): Promise<FieldTarget> => {
+export const targetForTab = async (tabId: number, topUrl: string): Promise<TabTarget> => {
   const stored = (await browser.storage.session.get(key(tabId)))[key(tabId)] as
     | FieldTarget
     | undefined;
@@ -39,7 +44,7 @@ export const targetForTab = async (tabId: number, topUrl: string): Promise<Field
     // The tab URL is current. A stored top frame URL may predate a navigation
     // within the same origin.
     const frameUrl = stored.frameId === 0 ? topUrl : stored.frameUrl;
-    return {...stored, frameUrl, topUrl, field: stored.field ?? 'login'};
+    return {...stored, frameUrl, topUrl, field: stored.field ?? 'login', reported: true};
   }
-  return {tabId, frameId: 0, frameUrl: topUrl, topUrl, field: 'login'};
+  return {tabId, frameId: 0, frameUrl: topUrl, topUrl, field: 'login', reported: false};
 };

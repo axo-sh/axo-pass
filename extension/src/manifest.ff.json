@@ -46,7 +46,8 @@
     },
     "fill-login": {
       "suggested_key": {
-        "default": "Alt+Shift+L"
+        "default": "Alt+Shift+L",
+        "mac": "Command+Shift+L"
       },
       "description": "Fill the login for this page, the one-time code in a code field, or a generated password in a new password field"
     }

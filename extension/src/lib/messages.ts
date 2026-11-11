@@ -13,6 +13,18 @@ export interface FieldTargetMessage {
   field: FieldKind;
 }
 
+/**
+ * Background to the top frame: which kind of fill does the page ask for? Sent
+ * when the user has not acted on a field. The frame replies `DetectFieldResult`.
+ */
+export interface DetectFieldMessage {
+  type: 'detect-field';
+}
+
+export interface DetectFieldResult {
+  field: FieldKind;
+}
+
 /** Content script to background: the user submitted a login. */
 export interface CaptureMessage extends Submission {
   type: 'capture';

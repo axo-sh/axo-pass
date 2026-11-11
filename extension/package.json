@@ -3,6 +3,7 @@
   "name": "axo-pass-extension",
   "devDependencies": {
     "@biomejs/biome": "^2.6.6",
+    "@playwright/test": "^1.65.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.6",
     "@types/webextension-polyfill": "^0.12.5",

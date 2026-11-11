@@ -476,6 +476,27 @@ const codeCandidates = (inputs: HTMLInputElement[]): HTMLInputElement[][] => {
 };
 
 /**
+ * Kind of fill a page asks for when the user has not acted on a field. A
+ * page with a current password field asks for a login. Otherwise a page with
+ * one new password field asks for a generated password, and a page with one
+ * code field asks for a code. Anything else asks for a login, which refuses if
+ * the page has no form.
+ */
+export const guessKind = (doc: Document): FieldKind => {
+  const groups = formGroups(doc);
+  const hasCurrent = groups.some((inputs) =>
+    passwordFields(inputs).some(({role}) => role === 'current')
+  );
+  if (hasCurrent) {
+    return 'login';
+  }
+  if (findNewPasswordFields(doc, null)) {
+    return 'new-password';
+  }
+  return findCodeFields(doc, null).length > 0 ? 'code' : 'login';
+};
+
+/**
  * One-time code fields in the form the user acted on, in document order. The
  * result is one field, a run of single-character fields for a split code, or
  * empty. `anchor` is the field the user last focused or right-clicked. If it

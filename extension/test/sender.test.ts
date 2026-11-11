@@ -57,6 +57,50 @@ describe('frameFromSender', () => {
     const result = frameFromSender(sender({origin: 'https://evil.example.net'}), ID);
     expect(result.ok).toBe(false);
   });
+
+  it('refuses an about:blank frame with an opaque origin in Chromium', () => {
+    // A sandboxed frame has the origin "null", and so does the URL of an
+    // about:blank frame.
+    for (const url of ['about:blank', 'about:srcdoc', 'data:text/html,x', 'blob:null/1']) {
+      expect(frameFromSender(sender({url, origin: 'null'}), ID).ok).toBe(false);
+    }
+  });
+
+  it('refuses a sandboxed web frame in Chromium', () => {
+    const result = frameFromSender(sender({origin: 'null'}), ID);
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses a srcdoc frame that inherits the top-level origin', () => {
+    const result = frameFromSender(
+      sender({
+        url: 'about:srcdoc',
+        origin: 'https://icloud.com',
+        documentId: 'doc-2',
+        frameId: 4,
+      }),
+      ID
+    );
+    expect(result).toEqual({ok: false, reason: expect.stringContaining('https://icloud.com')});
+  });
+
+  it('accepts a same-origin frame and a cross-site frame in Chromium', () => {
+    for (const [url, origin] of [
+      ['https://icloud.com/login', 'https://icloud.com'],
+      ['https://idmsa.apple.com:8443/signin?x=1', 'https://idmsa.apple.com:8443'],
+    ]) {
+      const result = frameFromSender(sender({url, origin, documentId: 'doc-3'}), ID);
+      expect(result.ok && result.target).toMatchObject({frameUrl: url, documentId: 'doc-3'});
+    }
+  });
+
+  it('refuses a message from a page that carries another extension id in Chromium', () => {
+    const result = frameFromSender(
+      sender({id: 'abcdefghijklmnopabcdefghijklmnop', origin: 'https://idmsa.apple.com'}),
+      ID
+    );
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe('isExtensionPage', () => {
