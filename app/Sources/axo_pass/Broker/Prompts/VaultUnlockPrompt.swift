@@ -37,6 +37,10 @@ final class VaultUnlockPromptModel {
   /// read the answer after the evaluation returns.
   private var placement: PasskeyPlacementState?
 
+  /// Where the user is choosing to save the login a save prompt is for. Set
+  /// while that prompt is up, and kept until it ends, as `placement` is.
+  private var saveVaultState: SaveVaultState?
+
   /// Resumes the broker when the user picks the account of a passkey sign-in.
   /// Set while the account list is on screen.
   private var accountChoice: CheckedContinuation<UInt32?, Never>?
@@ -65,10 +69,15 @@ final class VaultUnlockPromptModel {
     beginning = prompt
     defer { beginning = nil }
 
-    if case .createPasskey(_, _, let choices) = prompt.action {
+    placement = nil
+    saveVaultState = nil
+    switch prompt.action {
+    case .createPasskey(_, _, let choices):
       placement = PasskeyPlacementState(choices: choices)
-    } else {
-      placement = nil
+    case .saveLogin(_, _, let choices):
+      saveVaultState = SaveVaultState(choices: choices)
+    default:
+      break
     }
     let fillGrant = reused ? nil : Self.fillGrantOffer(for: prompt)
 
@@ -159,6 +168,12 @@ final class VaultUnlockPromptModel {
     placement?.answer
   }
 
+  /// The vault the user chose to save a login in, read once the evaluation has
+  /// returned. `nil` when the prompt is not a save.
+  func saveVault() -> String? {
+    saveVaultState?.vaultKey
+  }
+
   /// Show the passkeys of a sign-in and wait for the user to pick one. Called
   /// after the evaluation returned, so the vaults are already unlocked. Returns
   /// an index into `accounts`, or `nil` if the user cancelled.
@@ -189,6 +204,7 @@ final class VaultUnlockPromptModel {
     // The broker stops waiting on a client that disconnects mid-choice.
     finishAccountChoice(nil)
     placement = nil
+    saveVaultState = nil
     showTask?.cancel()
     showTask = nil
     panel.hide()
@@ -221,9 +237,10 @@ final class VaultUnlockPromptModel {
     prompt: VaultAccessPrompt, view: LAAuthenticationView, fillGrant: FillGrantOffer?
   ) {
     let content = VaultUnlockView(
-      // A registration picks its vault in the placement card instead.
-      vaultKey: placement == nil ? prompt.vaultKey : "",
+      // A registration or a save picks its vault in its own card instead.
+      vaultKey: placement == nil && saveVaultState == nil ? prompt.vaultKey : "",
       placement: placement,
+      saveVault: saveVaultState,
       caller: prompt.caller,
       callerChain: prompt.callerChain,
       appRequester: Self.appRequester(for: prompt.action),
@@ -272,7 +289,7 @@ final class VaultUnlockPromptModel {
   private static func login(for action: VaultAction) -> String? {
     switch action {
     case .fillLogin(_, _, let account, _), .updateLoginPassword(_, _, let account): return account
-    case .saveLogin(_, let username): return username
+    case .saveLogin(_, let username, _): return username
     case .createPasskey(_, let userName, _): return userName.isEmpty ? nil : userName
     case .assertPasskey(_, let userName): return userName
     default: return nil
@@ -291,7 +308,7 @@ final class VaultUnlockPromptModel {
           + "could have sent it.")
     }
     switch prompt.action {
-    case .fillLogin(let page, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _),
+    case .fillLogin(let page, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _, _),
       .updateLoginPassword(let page, _, _):
       if !page.secure {
         notes.append("This page is not secure (http). Anyone on the network can read the password.")
@@ -323,7 +340,7 @@ final class VaultUnlockPromptModel {
       what = "fill \(account ?? "a login") on \(page.host)"
     case .generateTotp(let page, _):
       what = "get a one-time code for \(page.host)"
-    case .saveLogin(let page, let username):
+    case .saveLogin(let page, let username, _):
       what = "save \(username ?? "a login") for \(page.host)"
     case .updateLoginPassword(let page, _, let account):
       what = "update the password of \(account ?? "a login") from \(page.host)"
@@ -372,9 +389,10 @@ final class VaultUnlockPromptModel {
       id = recordId
     case .listLogins: id = "logins"
     // The vault key changes before the prompt ends, so it cannot name the
-    // grant. A registration takes the user's choice, and a sign-in takes the
-    // vault that signed.
+    // grant. A registration and a save take the user's choice, and a sign-in
+    // takes the vault that signed.
     case .createPasskey, .assertPasskey: id = "passkey"
+    case .saveLogin: id = "save-login"
     default: id = prompt.vaultKey
     }
     let subject = GrantSubject(kind: .vault, id: id, label: nil)
@@ -391,7 +409,7 @@ final class VaultUnlockPromptModel {
     case .listLogins(let page, _): return "list-logins:\(page.domain)"
     case .fillLogin(let page, _, _, _): return "fill:\(page.domain)"
     case .generateTotp(let page, _): return "totp:\(page.domain)"
-    case .saveLogin(let page, _): return "save:\(page.domain)"
+    case .saveLogin(let page, _, _): return "save:\(page.domain)"
     case .updateLoginPassword(let page, _, _): return "update:\(page.domain)"
     case .writeSecret: return "write"
     case .exportVaults: return "export"
@@ -424,7 +442,7 @@ final class VaultUnlockPromptModel {
       return [.plain("fill a login on "), .bold(page.host)] + insideTopHost(page)
     case .generateTotp(let page, _):
       return [.plain("get a one-time code for "), .bold(page.host)] + insideTopHost(page)
-    case .saveLogin(let page, _):
+    case .saveLogin(let page, _, _):
       return [.plain("save a login for "), .bold(page.host)]
     case .updateLoginPassword(let page, _, _):
       return [.plain("update a password from "), .bold(page.host)]
@@ -538,24 +556,65 @@ final class PasskeyPlacementState {
   }
 }
 
+/// The vault choice in a save login prompt. Defaults to the broker's write
+/// vault. A save always creates a new login, so there is no login to choose.
+@MainActor
+@Observable
+final class SaveVaultState {
+  let vaults: [VaultInfo]
+  var vaultKey: String
+
+  init(choices: VaultChoicesInfo) {
+    vaults = choices.vaults
+    vaultKey = choices.defaultVault
+  }
+}
+
+/// Vault row of a placement card. A menu if there are several vaults, and the
+/// vault name otherwise.
+private struct VaultPicker: View {
+  let vaults: [VaultInfo]
+  @Binding var selection: String
+
+  var body: some View {
+    if vaults.count > 1 {
+      Picker("Vault", selection: $selection) {
+        ForEach(vaults, id: \.key) { vault in
+          Text(vault.name ?? vault.key).tag(vault.key)
+        }
+      }
+    } else {
+      LabeledContent("Vault", value: vaults.first.map { $0.name ?? $0.key } ?? selection)
+    }
+  }
+}
+
+extension View {
+  /// Background and padding of a card that asks where to store something.
+  fileprivate func placementCard() -> some View {
+    padding(12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+  }
+}
+
+private struct SaveVaultCard: View {
+  @Bindable var state: SaveVaultState
+
+  var body: some View {
+    VaultPicker(vaults: state.vaults, selection: $state.vaultKey)
+      .placementCard()
+  }
+}
+
 private struct PasskeyPlacementCard: View {
   @Bindable var state: PasskeyPlacementState
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      if state.vaults.count > 1 {
-        Picker(
-          "Vault",
-          selection: Binding(get: { state.vaultKey }, set: { state.selectVault($0) })
-        ) {
-          ForEach(state.vaults, id: \.key) { vault in
-            Text(vault.name ?? vault.key).tag(vault.key)
-          }
-        }
-      } else {
-        LabeledContent(
-          "Vault", value: state.vaults.first.map { $0.name ?? $0.key } ?? state.vaultKey)
-      }
+      VaultPicker(
+        vaults: state.vaults,
+        selection: Binding(get: { state.vaultKey }, set: { state.selectVault($0) }))
 
       Picker("Save to", selection: $state.itemKey) {
         Text("New login").tag(String?.none)
@@ -564,9 +623,7 @@ private struct PasskeyPlacementCard: View {
         }
       }
     }
-    .padding(12)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    .placementCard()
   }
 
   private static func label(_ login: PasskeyLoginChoice) -> String {
@@ -626,6 +683,8 @@ private struct VaultUnlockView: View {
   let vaultKey: String
   /// Set for a passkey registration, which asks where to store the passkey.
   let placement: PasskeyPlacementState?
+  /// Set for a login save, which asks which vault to save the login in.
+  let saveVault: SaveVaultState?
   let caller: String?
   let callerChain: [ProcessNode]
   /// The app an AutoFill request is for. `nil` means a browser.
@@ -661,6 +720,9 @@ private struct VaultUnlockView: View {
         }
         if let placement {
           PasskeyPlacementCard(state: placement)
+        }
+        if let saveVault {
+          SaveVaultCard(state: saveVault)
         }
         // An AutoFill request spans every vault, so it carries no vault key.
         if !vaultKey.isEmpty {
@@ -755,6 +817,10 @@ final class VaultUnlockPromptBridge: VaultPromptDelegate {
 
   func passkeyPlacement(prompt: VaultAccessPrompt) async -> PasskeyPlacementInfo? {
     await model.passkeyPlacement()
+  }
+
+  func saveVault(prompt: VaultAccessPrompt) async -> String? {
+    await model.saveVault()
   }
 
   func choosePasskey(prompt: VaultAccessPrompt, accounts: [PasskeyAccountInfo]) async -> UInt32? {

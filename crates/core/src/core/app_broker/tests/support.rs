@@ -28,7 +28,7 @@ pub(super) const STUB_PASSPHRASE: &str = "hunter2";
 /// `begin` methods decline. A request that reaches it has still been
 /// accepted, framed, parsed and routed, which is what these tests cover.
 #[derive(Default)]
-pub(super) struct StubAuthorizer {
+pub(in crate::core::app_broker) struct StubAuthorizer {
     pub(super) prompts: Mutex<Vec<SignPrompt>>,
     pub(super) passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
     pub(super) vault_prompts: Mutex<Vec<vault::VaultAccessPrompt>>,

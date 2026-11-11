@@ -1,11 +1,11 @@
-//! Where a new passkey is stored, and the choices the registration prompt
+//! Where a new passkey or a saved login is stored, and the choices the prompt
 //! offers.
 //!
-//! The broker builds the choices from its login index before it raises the
-//! prompt, so the user sees the vault and the login with the approval. The
-//! answer comes back from the app and is checked against the same choices, so a
-//! client or a compromised app delegate cannot name a vault or an item the
-//! prompt did not offer.
+//! The broker builds the choices before it raises the prompt, so the user sees
+//! the vault, and for a passkey the login, with the approval. The answer comes
+//! back from the app and is checked against the same choices, so a client or a
+//! compromised app delegate cannot name a vault or an item the prompt did not
+//! offer.
 
 use crate::secrets::vaults::autofill::{LoginPlace, places_for_rp};
 use crate::secrets::vaults::passkey::PasskeyTarget;
@@ -115,9 +115,7 @@ impl PasskeyChoices {
     /// Accept `placement` only when the prompt offered it. With no vaults yet
     /// the default vault is the one a write creates, so it is accepted.
     pub fn validate(&self, placement: PasskeyPlacement) -> Result<PasskeyPlacement, String> {
-        let vault_offered = placement.vault_key == self.default_vault
-            || self.vaults.iter().any(|v| v.key == placement.vault_key);
-        if !vault_offered {
+        if !offers_vault(&self.vaults, &self.default_vault, &placement.vault_key) {
             return Err(format!(
                 "Vault {} was not offered for the passkey",
                 placement.vault_key
@@ -134,6 +132,32 @@ impl PasskeyChoices {
         }
         Ok(placement)
     }
+}
+
+/// What the save login prompt offers: the vault to save the login in. A save
+/// always creates a new item, so there is no login to choose.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VaultChoices {
+    /// Every vault.
+    pub vaults: Vec<PlacementVault>,
+    /// The vault used when the user does not choose.
+    pub default_vault: String,
+}
+
+impl VaultChoices {
+    /// Accept `vault_key` only when the prompt offered it. With no vaults yet
+    /// the default vault is the one a write creates, so it is accepted.
+    pub fn validate(&self, vault_key: String) -> Result<String, String> {
+        if !offers_vault(&self.vaults, &self.default_vault, &vault_key) {
+            return Err(format!("Vault {vault_key} was not offered for the login"));
+        }
+        Ok(vault_key)
+    }
+}
+
+/// Whether a prompt with `vaults` and `default_vault` offered `vault_key`.
+fn offers_vault(vaults: &[PlacementVault], default_vault: &str, vault_key: &str) -> bool {
+    vault_key == default_vault || vaults.iter().any(|v| v.key == vault_key)
 }
 
 #[cfg(test)]
@@ -227,5 +251,23 @@ mod tests {
         // The item exists in another vault, but was not offered in this one.
         assert!(choices.validate(choice("work", Some("a"))).is_err());
         assert!(choices.validate(choice("personal", Some("zzz"))).is_err());
+    }
+
+    #[test]
+    fn vault_validation_accepts_only_offered_vaults() {
+        let choices = VaultChoices {
+            vaults: vaults(),
+            default_vault: "personal".to_string(),
+        };
+        assert_eq!(choices.validate("work".to_string()).as_deref(), Ok("work"));
+        assert!(choices.validate("elsewhere".to_string()).is_err());
+
+        // With no vaults, only the default vault a write creates is accepted.
+        let empty = VaultChoices {
+            vaults: Vec::new(),
+            default_vault: "default".to_string(),
+        };
+        assert!(empty.validate("default".to_string()).is_ok());
+        assert!(empty.validate("work".to_string()).is_err());
     }
 }

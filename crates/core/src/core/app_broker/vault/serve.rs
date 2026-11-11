@@ -4,7 +4,7 @@ use super::super::in_flight::InFlightRequest;
 use super::super::wire::WireResponse;
 use super::super::{Authorizers, PromptOutcome};
 use super::audit::{access_event, record_access, record_failure};
-use super::logins::serve_logins;
+use super::logins::{choose_save_vault, serve_logins};
 use super::manage::{add_external_vault, export_vaults, import_vaults};
 use super::passkeys::{
     Ended, SignedPasskey, assert_passkey, choose_account, choose_placement, create_passkey,
@@ -98,7 +98,7 @@ async fn authorize(
 /// password update from a page the login is not stored for.
 pub(in super::super) async fn authorize_and_serve_logins(
     authorizers: &Authorizers,
-    prompt: VaultAccessPrompt,
+    mut prompt: VaultAccessPrompt,
     actor: Actor,
     payload: Option<VaultPayload>,
     in_flight: &InFlightRequest,
@@ -117,6 +117,9 @@ pub(in super::super) async fn authorize_and_serve_logins(
             .end(prompt, PromptOutcome::Failed(message.clone()))
             .await;
         return WireResponse::Failed { message };
+    }
+    if let Some(ended) = choose_save_vault(authorizer, &mut prompt).await {
+        return end_early(authorizer, prompt, &actor, ended).await;
     }
 
     let job = prompt.clone();
@@ -311,9 +314,9 @@ pub(in super::super) async fn authorize_and_serve(
     response
 }
 
-/// Record a request that a passkey step ended, take the prompt down, and
-/// return the response to send. A failed response ends the prompt as failed.
-/// Any other response ends it as cancelled.
+/// Record a request that a passkey or save step ended, take the prompt down,
+/// and return the response to send. A failed response ends the prompt as
+/// failed. Any other response ends it as cancelled.
 async fn end_early(
     authorizer: &dyn VaultAuthorizer,
     prompt: VaultAccessPrompt,

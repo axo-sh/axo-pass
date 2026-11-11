@@ -1,10 +1,13 @@
 use super::super::ConfirmPrompt;
 use super::super::login_index::LoginIndex;
+use super::super::placement::{PlacementVault, VaultChoices};
 use super::super::wire::WireResponse;
 use super::audit::record_locked_listing;
+use super::passkeys::Ended;
 use super::serve::{AccessIds, open_vault};
 use super::{
-    LoginPage, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt, VaultAction, VaultPayload,
+    LoginPage, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt, VaultAction,
+    VaultAuthorizer, VaultPayload,
 };
 use crate::audit::{Actor, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
@@ -55,7 +58,7 @@ pub(super) fn serve_logins(
     index: &LoginIndex,
 ) -> Result<LoginResult, String> {
     match (&prompt.action, payload) {
-        (VaultAction::SaveLogin { page, username }, Some(VaultPayload::SaveLogin(save))) => {
+        (VaultAction::SaveLogin { page, username, .. }, Some(VaultPayload::SaveLogin(save))) => {
             return save_login(
                 vaults,
                 prompt,
@@ -260,7 +263,8 @@ fn stored_hosts(item: &autofill::AutofillItem) -> String {
     }
 }
 
-/// Save a captured login as a new item in the vault the prompt named.
+/// Save a captured login as a new item in the vault the prompt named, which is
+/// the vault the user chose.
 pub(super) fn save_login(
     vaults: &VaultCatalog,
     prompt: &VaultAccessPrompt,
@@ -377,16 +381,59 @@ pub(in super::super) fn list_logins_locked(
     response
 }
 
-/// The vault a new item from a client is written to: the default vault when it
-/// exists or there are no vaults, otherwise the first one. The broker names
-/// this vault in the prompt, so it is chosen before the prompt rather than
-/// after.
-pub(in super::super) fn write_vault_key(vaults: &VaultCatalog) -> String {
-    let keys: Vec<String> = vaults.list().into_keys().collect();
-    if keys.is_empty() || keys.iter().any(|k| k == DEFAULT_VAULT) {
-        DEFAULT_VAULT.to_string()
-    } else {
-        keys.into_iter().next().unwrap()
+/// The vaults a new item from a client may be written to, for the prompt. The
+/// default is the vault from [`write_vault_key`].
+pub(in super::super) fn vault_choices(vaults: &VaultCatalog) -> VaultChoices {
+    let vaults: Vec<PlacementVault> = vaults
+        .list()
+        .into_iter()
+        .map(|(key, vh)| PlacementVault {
+            name: vh.vault_name().map(String::from),
+            key,
+        })
+        .collect();
+    let keys: Vec<&str> = vaults.iter().map(|v| v.key.as_str()).collect();
+    VaultChoices {
+        default_vault: write_vault_key(&keys),
+        vaults,
+    }
+}
+
+/// The vault a new item from a client is written to if the user does not
+/// choose: the default vault when it exists or there are no vaults, otherwise
+/// the first one.
+fn write_vault_key(keys: &[&str]) -> String {
+    match keys.first() {
+        Some(first) if !keys.contains(&DEFAULT_VAULT) => first.to_string(),
+        _ => DEFAULT_VAULT.to_string(),
+    }
+}
+
+/// Save the login in the vault the user chose in the prompt. The choice is
+/// checked against the vaults the prompt offered. With no answer, the default
+/// vault is used. Returns the response to send if the choice is refused.
+pub(super) async fn choose_save_vault(
+    authorizer: &dyn VaultAuthorizer,
+    prompt: &mut VaultAccessPrompt,
+) -> Option<Ended> {
+    let VaultAction::SaveLogin { choices, .. } = &prompt.action else {
+        return None;
+    };
+    let chosen = match authorizer.save_vault(prompt).await {
+        Some(vault_key) => choices.validate(vault_key),
+        None => Ok(choices.default_vault.clone()),
+    };
+    match chosen {
+        Ok(vault_key) => {
+            prompt.vault_key = vault_key;
+            None
+        },
+        Err(message) => Some(Ended {
+            response: WireResponse::Failed {
+                message: message.clone(),
+            },
+            message,
+        }),
     }
 }
 

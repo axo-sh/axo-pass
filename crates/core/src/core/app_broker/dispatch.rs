@@ -297,12 +297,19 @@ pub(super) async fn serve_request(
                 match vault::LoginPage::parse(&url, &frame_url, None) {
                     Ok(page) => {
                         let username = username.filter(|name| !name.trim().is_empty());
+                        let choices = vault::vault_choices(&authorizers.vaults);
                         let prompt = vault::VaultAccessPrompt {
-                            vault_key: vault::write_vault_key(&authorizers.vaults),
+                            // Replaced with the user's choice once the prompt
+                            // is answered.
+                            vault_key: choices.default_vault.clone(),
                             caller: vouched_caller(scope, &client_id, caller),
                             caller_chain: caller_chain.clone(),
                             client: client_id.clone(),
-                            action: vault::VaultAction::SaveLogin { page, username },
+                            action: vault::VaultAction::SaveLogin {
+                                page,
+                                username,
+                                choices,
+                            },
                         };
                         log::debug!("App broker request: {prompt:?}");
                         let payload = vault::VaultPayload::SaveLogin(vault::SaveLoginPayload {

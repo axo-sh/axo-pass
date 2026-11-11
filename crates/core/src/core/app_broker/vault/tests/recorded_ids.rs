@@ -361,6 +361,7 @@ fn saved_login_and_password_update_record_ids_of_login() {
             VaultAction::SaveLogin {
                 page: page.clone(),
                 username: Some("ada".to_string()),
+                choices: Default::default(),
             },
         ),
         &page,
@@ -511,7 +512,10 @@ fn passkey_report_records_passkey_credential_ids_it_names() {
     let rp_id = "reports.example".to_string();
     let report = |report: Report| {
         fx.rt.block_on(record_passkey_report(
-            &Approver { approve: true },
+            &Approver {
+                approve: true,
+                save_vault: None,
+            },
             report,
             Actor::default(),
         ));

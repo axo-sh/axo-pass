@@ -58,7 +58,9 @@ pub use keychain::{
     request_keychain_passwords,
 };
 pub use login_index::{IndexedPasskey, LoginIndex};
-pub use placement::{PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault};
+pub use placement::{
+    PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault, VaultChoices,
+};
 pub use server::serve;
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,

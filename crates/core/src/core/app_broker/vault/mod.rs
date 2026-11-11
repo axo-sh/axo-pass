@@ -22,7 +22,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use super::PromptOutcome;
-use super::placement::{PasskeyChoices, PasskeyPlacement};
+use super::placement::{PasskeyChoices, PasskeyPlacement, VaultChoices};
 #[cfg(doc)]
 use super::wire::WireRequest;
 use super::wire::{WireImportIdentity, WireImportSelection};
@@ -42,7 +42,7 @@ mod serve;
 #[cfg(test)]
 mod tests;
 
-pub(super) use logins::{list_logins_locked, write_vault_key};
+pub(super) use logins::{list_logins_locked, vault_choices};
 pub(super) use passkeys::{list_passkeys_locked, passkey_choices, record_passkey_report};
 pub use requests::{
     request_add_external_vault, request_assert_passkey, request_create_passkey,
@@ -120,10 +120,13 @@ pub enum VaultAction {
 
     /// Save a login captured from a form on `page` as a new item. Prompts every
     /// time. `username` is shown in the prompt. The password travels in
-    /// [`SaveLoginPayload`].
+    /// [`SaveLoginPayload`]. The prompt offers the vault to save the login in,
+    /// and the app returns the user's choice through
+    /// [`VaultAuthorizer::save_vault`].
     SaveLogin {
         page: LoginPage,
         username: Option<String>,
+        choices: VaultChoices,
     },
 
     /// Replace the password of one login with the one a form on `page`
@@ -464,6 +467,14 @@ pub trait VaultAuthorizer: Send + Sync + 'static {
     /// and the prompt's default placement applies. The broker checks the answer
     /// against the choices it offered.
     async fn passkey_placement(&self, _prompt: &VaultAccessPrompt) -> Option<PasskeyPlacement> {
+        None
+    }
+
+    /// The vault the user chose to save a login in, read after `begin` returns
+    /// for a [`VaultAction::SaveLogin`]. `None` means the user did not choose,
+    /// and the prompt's default vault applies. The broker checks the answer
+    /// against the vaults it offered.
+    async fn save_vault(&self, _prompt: &VaultAccessPrompt) -> Option<String> {
         None
     }
 

@@ -33,6 +33,7 @@ use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, au
 
 mod access;
 mod recorded_ids;
+mod save;
 
 /// Vault `personal` in the vaults directory and external vault `shared` in
 /// another directory, served through a [`VaultCatalog`] that unlocks with the
@@ -126,7 +127,10 @@ impl Fixture {
         payload: Option<VaultPayload>,
     ) -> AuditEvent {
         self.rt.block_on(authorize_and_serve(
-            &Approver { approve },
+            &Approver {
+                approve,
+                save_vault: None,
+            },
             &self.vaults,
             prompt(vault_key, action),
             Actor::default(),
@@ -214,8 +218,10 @@ fn prompt(vault_key: &str, action: VaultAction) -> VaultAccessPrompt {
 }
 
 /// Approves every prompt if `approve` is set, and declines it otherwise.
+/// Answers a save prompt with `save_vault`.
 struct Approver {
     approve: bool,
+    save_vault: Option<String>,
 }
 
 #[async_trait]
@@ -233,6 +239,10 @@ impl VaultAuthorizer for Approver {
     }
 
     async fn abandon(&self) {}
+
+    async fn save_vault(&self, _prompt: &VaultAccessPrompt) -> Option<String> {
+        self.save_vault.clone()
+    }
 
     async fn end(&self, _prompt: VaultAccessPrompt, _outcome: PromptOutcome) {}
 }

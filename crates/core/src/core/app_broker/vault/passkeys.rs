@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use super::super::in_flight::InFlightRequest;
 use super::super::login_index::LoginIndex;
-use super::super::placement::{PasskeyChoices, PlacementVault};
+use super::super::placement::{PasskeyChoices, VaultChoices};
 use super::super::wire::{
     WirePasskeyAccount, WirePrfRegistrationOutput, WirePrfValues, WireResponse, b64_encode,
 };
-use super::logins::write_vault_key;
+use super::logins::vault_choices;
 use super::serve::{AccessIds, Served, open_vault};
 use super::{PasskeyAccountChoice, VaultAccessPrompt, VaultAction, VaultAuthorizer, VaultPayload};
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
@@ -88,21 +88,11 @@ pub(in super::super) fn passkey_choices(
     user_name: &str,
     index: &LoginIndex,
 ) -> PasskeyChoices {
-    let places = vaults
-        .list()
-        .into_iter()
-        .map(|(key, vh)| PlacementVault {
-            name: vh.vault_name().map(String::from),
-            key,
-        })
-        .collect();
-    PasskeyChoices::build(
-        rp_id,
-        user_name,
-        &index.places(),
-        places,
-        write_vault_key(vaults),
-    )
+    let VaultChoices {
+        vaults,
+        default_vault,
+    } = vault_choices(vaults);
+    PasskeyChoices::build(rp_id, user_name, &index.places(), vaults, default_vault)
 }
 
 /// The passkeys of `rp_id` from the login index, for the AutoFill extension's
@@ -250,7 +240,7 @@ pub(super) fn assert_passkey(
     Err(last_error.unwrap_or_else(|| "No stored passkey matched the request".to_string()))
 }
 
-/// A passkey step that ended the request before the vault was served.
+/// A passkey or save step that ended the request before the vault was served.
 pub(super) struct Ended {
     /// Response to send to the client.
     pub(super) response: WireResponse,

@@ -39,10 +39,12 @@ pub enum VaultAction {
         record_id: String,
     },
     /// A browser captured a login from a form on `page` and is asking to save
-    /// it as a new item. The password is not carried to the app.
+    /// it as a new item. The password is not carried to the app. The prompt
+    /// offers the vault to save it in.
     SaveLogin {
         page: LoginPage,
         username: Option<String>,
+        choices: VaultChoicesInfo,
     },
     /// A browser captured a new password for one login from a form on `page`.
     /// `account` is the client's own label for the login, like `FillLogin`'s.
@@ -114,18 +116,21 @@ pub struct PasskeyLoginChoice {
     pub username: Option<String>,
 }
 
+fn vault_infos(vaults: Vec<app_broker::PlacementVault>) -> Vec<VaultInfo> {
+    vaults
+        .into_iter()
+        .map(|v| VaultInfo {
+            key: v.key,
+            name: v.name,
+            id: None,
+        })
+        .collect()
+}
+
 impl From<app_broker::PasskeyChoices> for PasskeyChoicesInfo {
     fn from(choices: app_broker::PasskeyChoices) -> Self {
         Self {
-            vaults: choices
-                .vaults
-                .into_iter()
-                .map(|v| VaultInfo {
-                    key: v.key,
-                    name: v.name,
-                    id: None,
-                })
-                .collect(),
+            vaults: vault_infos(choices.vaults),
             logins: choices
                 .logins
                 .into_iter()
@@ -138,6 +143,25 @@ impl From<app_broker::PasskeyChoices> for PasskeyChoicesInfo {
                 .collect(),
             default_vault: choices.default_vault,
             suggested: choices.suggested.map(|index| index as u32),
+        }
+    }
+}
+
+/// The vaults a saved login may be stored in. Mirrors
+/// [`app_broker::VaultChoices`].
+#[derive(uniffi::Record, Clone)]
+pub struct VaultChoicesInfo {
+    /// Every vault.
+    pub vaults: Vec<VaultInfo>,
+    /// The vault selected when the prompt opens.
+    pub default_vault: String,
+}
+
+impl From<app_broker::VaultChoices> for VaultChoicesInfo {
+    fn from(choices: app_broker::VaultChoices) -> Self {
+        Self {
+            vaults: vault_infos(choices.vaults),
+            default_vault: choices.default_vault,
         }
     }
 }
@@ -268,9 +292,14 @@ impl From<app_broker::VaultAction> for VaultAction {
                 page: page.into(),
                 record_id,
             },
-            app_broker::VaultAction::SaveLogin { page, username } => Self::SaveLogin {
+            app_broker::VaultAction::SaveLogin {
+                page,
+                username,
+                choices,
+            } => Self::SaveLogin {
                 page: page.into(),
                 username,
+                choices: choices.into(),
             },
             app_broker::VaultAction::UpdateLoginPassword {
                 page,
@@ -418,6 +447,11 @@ pub trait VaultPromptDelegate: Send + Sync {
     /// the user made no choice, and the prompt's default applies.
     async fn passkey_placement(&self, prompt: VaultAccessPrompt) -> Option<PasskeyPlacementInfo>;
 
+    /// The vault the user chose to save the login a `SaveLogin` prompt is for.
+    /// Called after `begin_authorization` returns a context. `None` means the
+    /// user made no choice, and the prompt's default vault applies.
+    async fn save_vault(&self, prompt: VaultAccessPrompt) -> Option<String>;
+
     /// Ask the user which passkey an `AssertPasskey` prompt signs in with.
     /// Called after `begin_authorization` returns a context, only if several
     /// passkeys match. Returns an index into `accounts`. `None` means the user
@@ -467,9 +501,9 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
 
 /// The vault keys a mutating action wrote to, when the prompt names them.
 /// `WriteSecret`, `SaveLogin`, and `CreatePasskey` carry the real key, which
-/// for a registration is the vault the user chose. A passkey sign-in records
-/// its use in the vault that signed, which the broker fills in once it is
-/// known. The password update, import and add actions do not, so they return
+/// for a save or a registration is the vault the user chose. A passkey sign-in
+/// records its use in the vault that signed, which the broker fills in once it
+/// is known. The password update, import and add actions do not, so they return
 /// an empty list and every vault is relocked.
 fn changed_vault_keys(prompt: &app_broker::VaultAccessPrompt) -> Vec<String> {
     match &prompt.action {
@@ -539,6 +573,10 @@ impl app_broker::VaultAuthorizer for DelegatingVaultAuthorizer {
             vault_key: placement.vault_key,
             item_key: placement.item_key,
         })
+    }
+
+    async fn save_vault(&self, prompt: &app_broker::VaultAccessPrompt) -> Option<String> {
+        self.delegate.save_vault(prompt.clone().into()).await
     }
 
     async fn choose_passkey(
@@ -652,5 +690,36 @@ mod tests {
                 all: false,
             }));
         assert!(listing.caller_identity.is_some());
+    }
+
+    /// A save prompt carries its vault choices to the app. Once the broker
+    /// sets the chosen vault, that vault is the one reported as changed.
+    #[test]
+    fn save_prompt_carries_vault_choices_and_reports_chosen_vault() {
+        let vault = |key: &str| app_broker::PlacementVault {
+            key: key.to_string(),
+            name: Some(key.to_uppercase()),
+        };
+        let mut prompt = firefox_prompt(app_broker::VaultAction::SaveLogin {
+            page: page("https://example.com", "https://example.com/login"),
+            username: Some("ada".to_string()),
+            choices: app_broker::VaultChoices {
+                vaults: vec![vault("personal"), vault("work")],
+                default_vault: "personal".to_string(),
+            },
+        });
+        prompt.vault_key = "personal".to_string();
+
+        let shown = VaultAccessPrompt::from(prompt.clone());
+        let VaultAction::SaveLogin { choices, .. } = shown.action else {
+            panic!("not a save");
+        };
+        let keys: Vec<_> = choices.vaults.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(keys, ["personal", "work"]);
+        assert_eq!(choices.vaults[1].name.as_deref(), Some("WORK"));
+        assert_eq!(choices.default_vault, "personal");
+
+        prompt.vault_key = "work".to_string();
+        assert_eq!(changed_vault_keys(&prompt), ["work"]);
     }
 }

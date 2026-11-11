@@ -240,7 +240,7 @@ async fn saving_login_always_prompts_and_keeps_password_out_of_it() {
     let prompts = broker.authorizer.vault_prompts.lock().unwrap();
     assert_eq!(prompts.len(), 2);
     assert!(
-        matches!(&prompts[0].action, VaultAction::SaveLogin { page, username }
+        matches!(&prompts[0].action, VaultAction::SaveLogin { page, username, .. }
             if page.host == "example.com" && username.as_deref() == Some("tp@example.com"))
     );
     assert!(
@@ -251,6 +251,26 @@ async fn saving_login_always_prompts_and_keeps_password_out_of_it() {
         assert_eq!(prompt.caller.as_deref(), Some("Google Chrome"));
         assert!(!format!("{prompt:?}").contains("s3cret"));
     }
+}
+
+/// A save prompt carries the vault choices, and names the default vault until
+/// the user chooses. With no vaults yet, the default vault is the one a write
+/// creates.
+#[tokio::test(flavor = "multi_thread")]
+async fn save_prompt_carries_vault_choices() {
+    let broker = browser_host_broker().await;
+    broker.request(&format!(
+        r#"{{"request":"save_login",{PAGE},"password":"s3cret",{CHROME}}}"#
+    ));
+
+    let prompts = broker.authorizer.vault_prompts.lock().unwrap();
+    assert_eq!(prompts.len(), 1);
+    let VaultAction::SaveLogin { choices, .. } = &prompts[0].action else {
+        panic!("expected a save prompt");
+    };
+    assert!(choices.vaults.is_empty());
+    assert_eq!(choices.default_vault, "default");
+    assert_eq!(prompts[0].vault_key, "default");
 }
 
 /// Nothing without a password or an http(s) page reaches the prompt.
