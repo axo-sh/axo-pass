@@ -21,6 +21,12 @@ enum IssueSeverity: Int, Comparable {
   var isCounted: Bool { self <= .advice }
 }
 
+/// Sidebar source that an issue belongs to.
+enum IssueSource {
+  case ssh
+  case gpg
+}
+
 /// GPG key named by an issue.
 struct GpgKeyRef: Hashable {
   let fingerprint: String
@@ -129,6 +135,24 @@ enum Issue: Hashable, Identifiable {
       return .advice
     case .browserManifestBroken:
       return .broken
+    }
+  }
+
+  /// Sidebar source of the issue. Nil for vault, sync, and AutoFill issues.
+  var source: IssueSource? {
+    switch self {
+    case .vaultKeyState, .vaultLoadFailed, .syncedVaultsMissing, .vaultFilesHidden,
+      .syncFolderNeeded, .syncStopped, .syncPaused, .syncUnreadable, .recoveryKitMissing,
+      .pairingRequests:
+      return nil
+    case .agentNotRunning, .agentNeedsApproval, .identityAgentMissing, .identityAgentOther,
+      .shellIntegrationMissing:
+      return .ssh
+    case .pinentryMissing, .pinentryOther, .gpgKeyExpiring, .gpgKeyExpired,
+      .gpgOrphanedPassphrases:
+      return .gpg
+    case .autofillOff, .browserManifestMissing, .browserManifestBroken, .browserManifestForeign:
+      return nil
     }
   }
 

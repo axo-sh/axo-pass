@@ -7,6 +7,7 @@ import LocalAuthentication
 import Observation
 
 enum SidebarDestination: Hashable {
+  case today
   case vault(String)
   case ssh
   case gpg

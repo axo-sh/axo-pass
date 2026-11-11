@@ -36,7 +36,9 @@ private struct MainView: View {
 
   @ViewBuilder
   private var detailPane: some View {
-    if case .ssh = model.sidebarSelection {
+    if case .today = model.sidebarSelection {
+      Color.clear.paneBackground()
+    } else if case .ssh = model.sidebarSelection {
       SshKeyDetailView(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
       GpgKeyDetailView(model: gpgModel)
@@ -51,7 +53,9 @@ private struct MainView: View {
 
   @ViewBuilder
   private var contentPane: some View {
-    if case .vault = model.sidebarSelection {
+    if case .today = model.sidebarSelection {
+      TodayPane(sshModel: sshModel, gpgModel: gpgModel)
+    } else if case .vault = model.sidebarSelection {
       ItemsPane()
     } else if case .ssh = model.sidebarSelection {
       SshPane(model: sshModel)

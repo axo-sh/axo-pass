@@ -5,14 +5,17 @@ import SwiftUI
 struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
+  @Environment(IssuesModel.self) private var issues
   @State private var showingNewVaultSheet = false
   @State private var deletingSyncedVault: SyncVaultRef? = nil
-  @State private var showingDuplicates = false
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
   @State private var secretsExpanded = true
-  @State private var toolsExpanded = true
+  @State private var sourcesExpanded = true
+  // Whether the selection after the unlock was checked. The sidebar is
+  // created again at each unlock.
+  @State private var checkedStartSelection = false
 
   private var selectionBinding: Binding<SidebarDestination?> {
     Binding(
@@ -25,21 +28,23 @@ struct VaultsSidebar: View {
 
   var body: some View {
     List(selection: selectionBinding) {
+      todayRow
+
       Section(isExpanded: $secretsExpanded) {
         vaultItems
       } header: {
         SidebarSectionHeader("Secrets") { withAnimation { secretsExpanded.toggle() } }
       }
 
-      Section(isExpanded: $toolsExpanded) {
-        Label("SSH", systemImage: "asterisk")
+      Section(isExpanded: $sourcesExpanded) {
+        sourceRow("SSH", systemImage: "asterisk", source: .ssh)
           .tag(SidebarDestination.ssh)
-        Label("GPG", systemImage: "key.fill")
+        sourceRow("GPG Keyring", systemImage: "key.fill", source: .gpg)
           .tag(SidebarDestination.gpg)
         Label("Age", systemImage: "lock.rectangle.stack")
           .tag(SidebarDestination.age)
       } header: {
-        SidebarSectionHeader("Tools") { withAnimation { toolsExpanded.toggle() } }
+        SidebarSectionHeader("Sources") { withAnimation { sourcesExpanded.toggle() } }
       }
     }
     .listStyle(.sidebar)
@@ -97,10 +102,6 @@ struct VaultsSidebar: View {
       let existing = model.vaults.first { $0.key == vaultKey }
       VaultVersionsSheet(vaultKey: vaultKey, vaultName: existing?.name ?? vaultKey)
     }
-    .sheet(isPresented: $showingDuplicates) {
-      DuplicateVaultsSheet(
-        duplicates: model.duplicateVaults, duplicateKeys: model.duplicateVaultKeys)
-    }
     .syncSheets()
     .confirmationDialog(
       "Delete \(deletingSyncedVault?.name ?? "this vault") from this Mac?",
@@ -116,74 +117,59 @@ struct VaultsSidebar: View {
     }
     // Read the sync state of each vault after the unlock and when the list
     // changes.
-    .task(id: model.vaults) { await sync.reloadAll() }
+    .task(id: model.vaults) {
+      let start = model.sidebarHighlight
+      await sync.reloadAll()
+      // Saved passphrases are not listed while locked, so read them now.
+      if !checkedStartSelection { await issues.refreshAll() }
+      selectTodayAfterUnlock(ifStill: start)
+    }
+  }
+
+  /// Today row with the count of counted issues. The count is red if the worst
+  /// issue is broken.
+  private var todayRow: some View {
+    HStack(spacing: 4) {
+      Label("Today", systemImage: "sun.max")
+      Spacer(minLength: 0)
+      let count = issues.countedIssues.count
+      if count > 0 {
+        Text("\(count)")
+          .monospacedDigit()
+          .foregroundStyle(issues.worstSeverity == .broken ? Color.red : Color.secondary)
+      }
+    }
+    .tag(SidebarDestination.today)
+  }
+
+  /// Source row with a red dot if a broken issue belongs to `source`.
+  private func sourceRow(_ title: String, systemImage: String, source: IssueSource) -> some View {
+    let broken = issues.issues.first { $0.source == source && $0.severity == .broken }
+    return HStack(spacing: 4) {
+      Label(title, systemImage: systemImage)
+      Spacer(minLength: 0)
+      if let broken {
+        Circle()
+          .fill(.red)
+          .frame(width: 6, height: 6)
+          .help(broken.title)
+      }
+    }
+  }
+
+  /// Select Today once after the unlock if any counted issue exists. Runs after
+  /// the first sync read, so vault and sync issues are included. Leaves the
+  /// selection alone if the user changed it from `start` in the meantime.
+  private func selectTodayAfterUnlock(ifStill start: SidebarDestination?) {
+    guard !checkedStartSelection else { return }
+    checkedStartSelection = true
+    guard model.sidebarHighlight == start, !issues.countedIssues.isEmpty else { return }
+    model.selectSidebarDestination(.today)
   }
 
   @ViewBuilder
   private var vaultItems: some View {
-    // Key state of this Mac if no vault opens: new hardware, signing key lost,
-    // or a keychain error. Read after the unlock and on each change of the
-    // vault list.
-    if let title = keyStateTitle(sync.keyState) {
-      Button {
-        sync.sheet = .keyState
-      } label: {
-        SidebarWarningLabel(title)
-      }
-      .buttonStyle(.plain)
-      .help("Show why the vaults on this Mac cannot be opened")
-    }
-
-    // Pairing requests of each synced folder. The counts are held while the
-    // app is locked, and show here at the next unlock. A count of zero has no
-    // entry.
-    ForEach(pairingRoots, id: \.self) { root in
-      let count = sync.pairingCounts[root] ?? 0
-      Button {
-        sync.sheet = .pairingPrompt(root: root)
-      } label: {
-        Label {
-          Text(count == 1 ? "1 pairing request" : "\(count) pairing requests")
-        } icon: {
-          Image(systemName: "laptopcomputer.and.arrow.down")
-            .foregroundStyle(.tint)
-        }
-        .font(.caption)
-      }
-      .buttonStyle(.plain)
-      .help("Another Mac asks to pair with the vaults in \(rootDescription(root))")
-    }
-
-    // Synced vaults whose vault file is missing. Read after the unlock, on each
-    // change of the vault list, and after each rebuild or turn-off.
-    if !sync.missingVaults.isEmpty {
-      let missing = sync.missingVaults.count
-      Button {
-        sync.sheet = .missingVaults
-      } label: {
-        SidebarWarningLabel(
-          missing == 1 ? "1 synced vault missing" : "\(missing) synced vaults missing")
-      }
-      .buttonStyle(.plain)
-      .help("Rebuild a synced vault whose file is missing, or turn off sync for it")
-    }
-
-    let hidden = model.hiddenVaultFileCount
-    if hidden > 0 {
-      Button {
-        showingDuplicates = true
-      } label: {
-        SidebarWarningLabel(
-          hidden == 1 ? "1 vault file not shown" : "\(hidden) vault files not shown"
-        )
-      }
-      .buttonStyle(.plain)
-      .help("Several vault files have the same vault id or vault key")
-    }
-
-    if let err = model.loadError {
-      SidebarWarningLabel(err)
-    } else if model.vaults.isEmpty {
+    if model.vaults.isEmpty {
       Text("No vaults")
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -240,11 +226,6 @@ struct VaultsSidebar: View {
     }
   }
 
-  /// Synced folders with pairing requests, ordered by path.
-  private var pairingRoots: [SyncRootInfo] {
-    sync.pairingCounts.keys.sorted { rootDescription($0) < rootDescription($1) }
-  }
-
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
     SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
   }
@@ -265,26 +246,6 @@ struct VaultsSidebar: View {
     default:
       Button("Turn On Sync…") {}.disabled(true)
     }
-  }
-}
-
-/// Sidebar warning with a red icon and secondary text.
-private struct SidebarWarningLabel: View {
-  let text: String
-
-  init(_ text: String) {
-    self.text = text
-  }
-
-  var body: some View {
-    Label {
-      Text(text)
-        .foregroundStyle(.secondary)
-    } icon: {
-      Image(systemName: "exclamationmark.circle.fill")
-        .foregroundStyle(.red)
-    }
-    .font(.caption)
   }
 }
 
@@ -316,7 +277,7 @@ private struct SidebarSectionHeader: View {
 /// Vault files that share a vault id or a vault key, grouped by id and then by
 /// key, with a Show in Finder button for each file. A file that shares both is
 /// in both groups.
-private struct DuplicateVaultsSheet: View {
+struct DuplicateVaultsSheet: View {
   let duplicates: [DuplicateVaultInfo]
   let duplicateKeys: [DuplicateVaultKeyInfo]
 
