@@ -320,6 +320,15 @@ impl VaultHandle {
         vault.add_or_update_item(item_key, item_title)
     }
 
+    pub fn change_item_key(
+        &mut self,
+        item_key: &str,
+        new_key: &str,
+    ) -> Result<&VaultItemOverview, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.change_item_key(item_key, new_key)
+    }
+
     pub fn delete_item(&mut self, item_key: &str) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.delete_item(item_key)

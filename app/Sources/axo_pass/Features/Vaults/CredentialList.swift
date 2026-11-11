@@ -47,6 +47,7 @@ struct CredentialList: View {
   // Section creation error. Shown separately since there is no row for it.
   @State private var listError: String? = nil
   @State private var showingNewCredentialSheet = false
+  @State private var showingRenameItemSheet = false
   // Credential whose previous values are shown.
   @State private var previousValuesTarget: PreviousValuesTarget? = nil
   // Key of the passkey the move sheet is open for.
@@ -129,6 +130,14 @@ struct CredentialList: View {
       PreviousValuesSheet(
         vaultKey: vaultKey, itemKey: item.key, credKey: target.key, title: target.title,
         onValueChanged: { refreshCachedSecret(for: target.key) })
+    }
+    .sheet(isPresented: $showingRenameItemSheet) {
+      RenameItemSheet(title: item.title, key: item.key) { title, newKey in
+        await failureMessage {
+          try await model.renameItem(
+            vaultKey: vaultKey, itemKey: item.key, title: title, newKey: newKey)
+        }
+      }
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in
@@ -229,11 +238,17 @@ struct CredentialList: View {
     }
     .help("Item key: \(item.key)")
     .contextMenu {
-      Button("Copy Item Key") {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(item.key, forType: .string)
-      }
+      Button("Rename Item…") { showingRenameItemSheet = true }
+      Button("Copy Item Key", action: copyItemKey)
+      Divider()
+      Button("New Credential…") { showingNewCredentialSheet = true }
+      Button("New Section") { newSection() }
     }
+  }
+
+  private func copyItemKey() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(item.key, forType: .string)
   }
 
   private var headerSubtitle: String {
@@ -342,6 +357,9 @@ struct CredentialList: View {
   private func menuItems(for selected: Set<CredentialEntry>) -> [OutlineMenuItem] {
     guard !selected.isEmpty else {
       return [
+        .action("Rename Item…") { showingRenameItemSheet = true },
+        .action("Copy Item Key") { copyItemKey() },
+        .divider,
         .action("New Credential…") { showingNewCredentialSheet = true },
         .action("New Section") { newSection() },
       ]

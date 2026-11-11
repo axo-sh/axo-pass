@@ -1352,6 +1352,33 @@ impl AxoPass {
         Ok(())
     }
 
+    /// Change the key of an item. Fails if another item has the key.
+    pub async fn change_item_key(
+        &self,
+        vault_key: String,
+        item_key: String,
+        new_key: String,
+    ) -> Result<(), FfiError> {
+        let key = vault_key.clone();
+        let (title, new_key, ids) = self
+            .edit_vault(vault_key, move |vw| {
+                let item = vw.change_item_key(&item_key, &new_key)?;
+                let (title, new_key) = (item.title.clone(), item.key.clone());
+                Ok((title, new_key.clone(), vw.item_ids(&new_key)?))
+            })
+            .await?;
+        change_event(
+            audit::Action::ItemUpdated,
+            &key,
+            item_subject(&key, &new_key).label(title),
+            ids,
+        )
+        .detail("changed", "key")
+        .record_async()
+        .await;
+        Ok(())
+    }
+
     /// List a vault's deleted items, most recently deleted first.
     pub async fn list_deleted_items(
         &self,

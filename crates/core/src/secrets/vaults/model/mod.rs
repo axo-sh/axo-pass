@@ -1376,6 +1376,41 @@ impl Vault {
         Ok(item_overview_ref)
     }
 
+    /// Change the key of an item. Its credentials keep their keys. Fails with
+    /// `DuplicateItemKey` if `new_key` belongs to another item.
+    pub fn change_item_key(
+        &mut self,
+        item_key: &str,
+        new_key: &str,
+    ) -> Result<&VaultItemOverview, Error> {
+        let item_id = *self.get_item_id(item_key)?;
+        let new_key =
+            normalized_key(new_key).ok_or_else(|| Error::InvalidItemKey(new_key.to_string()))?;
+        if new_key != item_key {
+            if self.item_index.contains_key(&new_key) {
+                return Err(Error::DuplicateItemKey(new_key));
+            }
+            let item = self
+                .items
+                .get_mut(&item_id)
+                .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))?;
+            item.key = new_key.clone();
+            for cred in item.credentials.values() {
+                let id = self
+                    .item_credential_index
+                    .remove(&(item_key.to_string(), cred.key.clone()));
+                if let Some(id) = id {
+                    self.item_credential_index
+                        .insert((new_key.clone(), cred.key.clone()), id);
+                }
+            }
+            self.item_index.remove(item_key);
+            self.item_index.insert(new_key, item_id);
+            self.item_blobs.remove(&item_id);
+        }
+        self.get_item_by_id(item_id)
+    }
+
     /// Set the display category of an item, such as `login`.
     pub fn set_item_category(
         &mut self,

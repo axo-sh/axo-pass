@@ -31,6 +31,7 @@ struct ItemsPane: View {
   @State private var showingNewLoginSheet = false
   @State private var searchQuery = ""
   @State private var titleSheet: TitleSheetRequest? = nil
+  @State private var renamingItem: DisplayItem? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
   // Drop highlight target. A folder id for drops into that folder, or an
@@ -122,6 +123,14 @@ struct ItemsPane: View {
           return nil
         }
         return model.actionError ?? "Failed to create item."
+      }
+    }
+    .sheet(item: $renamingItem) { display in
+      RenameItemSheet(title: display.item.title, key: display.item.key) { title, key in
+        await failureMessage {
+          try await model.renameItem(
+            vaultKey: display.vaultKey, itemKey: display.item.key, title: title, newKey: key)
+        }
       }
     }
     .sheet(isPresented: $showingNewLoginSheet) {
@@ -232,6 +241,7 @@ struct ItemsPane: View {
           .disabled(display.item.folderId == nil)
       }
     }
+    Button("Rename…") { renamingItem = display }
     Button("Delete", role: .destructive) {
       Task {
         await model.deleteItem(
@@ -397,6 +407,69 @@ private struct NewItemSheet: View {
         }
         .keyboardShortcut(.defaultAction)
         .disabled(isSubmitting || key.isEmpty || title.isEmpty)
+      }
+    }
+    .padding(20)
+    .frame(width: 320)
+  }
+}
+
+/// Sheet that edits the title and key of an item.
+struct RenameItemSheet: View {
+  let onSubmit: (_ title: String, _ key: String) async -> String?
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var title: String
+  @State private var key: String
+  @State private var isSubmitting = false
+  @State private var errorMessage: String?
+
+  init(title: String, key: String, onSubmit: @escaping (String, String) async -> String?) {
+    _title = State(initialValue: title)
+    _key = State(initialValue: key)
+    self.onSubmit = onSubmit
+  }
+
+  private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var trimmedKey: String { key.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Rename Item").font(.headline)
+      Form {
+        TextField("Title", text: $title)
+        TextField("Key", text: $key)
+        LabeledContent("") {
+          Text("Changing the key breaks references to the old key.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+        Button("Rename") {
+          Task {
+            isSubmitting = true
+            errorMessage = nil
+            if let error = await onSubmit(trimmedTitle, trimmedKey) {
+              errorMessage = error
+            } else {
+              dismiss()
+            }
+            isSubmitting = false
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(isSubmitting || trimmedKey.isEmpty || trimmedTitle.isEmpty)
       }
     }
     .padding(20)

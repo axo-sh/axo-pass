@@ -5,6 +5,35 @@ use super::support::{
 use super::*;
 
 #[test]
+fn changing_item_key_moves_credentials_and_survives_reload() {
+    let mut vault = vault_with_credentials("item", &["alpha"]);
+    let item_id = item_id_of(&vault, "item");
+    let secret = secret_of(&vault, "item", "alpha");
+
+    let item = vault.change_item_key("item", "Renamed Item").unwrap();
+    assert_eq!(item.key, "renamed-item");
+    assert!(vault.get_item("item").is_err());
+    assert!(vault.get_item_credential("item", "alpha").is_err());
+    assert_eq!(secret_of(&vault, "renamed-item", "alpha"), secret);
+
+    let vault = reload(&vault);
+    assert_eq!(item_id_of(&vault, "renamed-item"), item_id);
+    assert_eq!(secret_of(&vault, "renamed-item", "alpha"), secret);
+}
+
+#[test]
+fn changing_item_key_rejects_taken_and_invalid_keys() {
+    let mut vault = vault_with_credentials("item", &["alpha"]);
+
+    let err = vault.change_item_key("item", "other-item").unwrap_err();
+    assert!(matches!(err, Error::DuplicateItemKey(_)));
+    let err = vault.change_item_key("item", "").unwrap_err();
+    assert!(matches!(err, Error::InvalidItemKey(_)));
+    assert!(vault.change_item_key("item", "item").is_ok());
+    assert!(vault.get_item_credential("item", "alpha").is_ok());
+}
+
+#[test]
 fn deleting_item_drops_its_cached_credential_metadata() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     populate_caches(&mut vault);

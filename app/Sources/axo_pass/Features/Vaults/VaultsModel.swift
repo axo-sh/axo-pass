@@ -935,6 +935,27 @@ final class VaultsModel {
     }
   }
 
+  /// Change the title and key of an item. Unchanged values are skipped. Throws
+  /// if another item has the new key. The item stays selected under its new key.
+  func renameItem(vaultKey: String, itemKey: String, title: String, newKey: String) async throws {
+    let wasSelected = selectedItemRef == ItemRef(vaultKey: vaultKey, itemKey: itemKey)
+    var currentKey = itemKey
+    do {
+      if let item = item(vaultKey: vaultKey, itemKey: itemKey), item.title != title {
+        try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: title)
+      }
+      if newKey != itemKey {
+        try await core.changeItemKey(vaultKey: vaultKey, itemKey: itemKey, newKey: newKey)
+        currentKey = newKey
+      }
+    } catch {
+      await loadItems(for: vaultKey)
+      throw error
+    }
+    await loadItems(for: vaultKey)
+    if wasSelected { selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: currentKey) }
+  }
+
   /// Delete an item. It stays in the vault's deleted items until purged. If
   /// `undoManager` is given, an undo is registered that restores the item.
   @discardableResult
