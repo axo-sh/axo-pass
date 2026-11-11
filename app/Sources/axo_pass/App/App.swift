@@ -16,6 +16,7 @@ struct AxoPassApp: App {
       ContentView()
         .environment(appDelegate.model)
         .environment(appDelegate.sync)
+        .environment(appDelegate.issues)
         .sunshineUpdater(appDelegate.updaterUI, appName: "Axo Pass", style: .cornerIndicator)
         // warning: setting frame can cause the side nav to flicker when toggling.
         // .frame(minWidth: 400, minHeight: 400)
@@ -73,6 +74,7 @@ struct AxoPassApp: App {
       SettingsView()
         .environment(appDelegate.model)
         .environment(appDelegate.sync)
+        .environment(appDelegate.issues)
         .environmentObject(appDelegate.updaterUI)
     }
     .commands {

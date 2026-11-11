@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   let model = VaultsModel()
   /// Sync of the vaults. One instance for the app, on the core of `model`.
   private(set) lazy var sync = SyncModel(vaults: model)
+  /// Issues of the app, read from `model`, `sync`, and the SSH, GPG, shell, and
+  /// AutoFill checks.
+  private(set) lazy var issues = IssuesModel(vaults: model, sync: sync)
   let windows = WindowRequests()
 
   /// Auto-update against GitHub Releases. An update installs only if it is
@@ -59,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // The sync manager started with the core of `model`. Events sent before
     // this are only logged, except the pairing counts, which are replayed.
     sync.register()
+    issues.start()
     observeWindowClose()
     statusItem = StatusItemController(model: model, windows: windows) { [weak self] in
       guard let self else { return }
@@ -90,9 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   /// Check the agent against the bundled `ap` when the app comes to the front,
-  /// since an update replaces the binary under a running agent.
+  /// since an update replaces the binary under a running agent. Re-read the
+  /// issues, since files may have changed outside the app.
   func applicationDidBecomeActive(_ notification: Notification) {
     Task { await AgentService.shared.sync(launch: false) }
+    Task { await issues.refreshAll() }
   }
 
   /// The app always starts from a locked state, so a relaunch shows only the

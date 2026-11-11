@@ -40,7 +40,7 @@ enum SyncJoinChoice {
 }
 
 /// Vault that a sync sheet is for.
-struct SyncVaultRef: Identifiable, Equatable {
+struct SyncVaultRef: Identifiable, Hashable {
   let key: String
   let name: String
 
