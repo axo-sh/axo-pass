@@ -115,7 +115,7 @@ struct VaultVersionsSheet: View {
   private func row(_ version: RetainedVersionInfo) -> some View {
     HStack {
       Text(
-        "Replaced "
+        "Current until "
           + Date(timeIntervalSince1970: TimeInterval(version.savedAt)).formatted()
       )
       .font(.callout)
