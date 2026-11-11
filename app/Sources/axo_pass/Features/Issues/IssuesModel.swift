@@ -64,10 +64,14 @@ final class IssuesModel {
   }
 
   /// Re-read everything, including the gpg key listing and the AutoFill state.
+  /// Saved passphrases are listed only while the app is unlocked. The listing
+  /// authenticates on the shared auth thread, which the unlock also needs.
   func refreshAll() async {
     refreshChecks()
     gpgKeys = try? await core.listGpgKeys()
-    passwords = (try? await core.listPasswords()) ?? []
+    if vaults.isAppUnlocked {
+      passwords = (try? await core.listPasswords()) ?? []
+    }
     autofillEnabled = await ASCredentialIdentityStore.shared.state().isEnabled
   }
 
