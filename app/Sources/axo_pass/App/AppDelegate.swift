@@ -184,8 +184,8 @@ struct WindowAccessor: NSViewRepresentable {
 
 extension View {
   /// Merges the title bar into the content when `hidden`, leaving the window
-  /// buttons in place. The lock screen uses this so its window is a plain
-  /// panel.
+  /// buttons in place. The lock screen and pages such as Today use this so the
+  /// bar is not visible.
   func titleBarHidden(_ hidden: Bool) -> some View {
     modifier(TitleBarStyle(hidden: hidden))
   }

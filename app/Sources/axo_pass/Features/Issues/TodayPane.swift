@@ -84,7 +84,7 @@ struct TodayPane: View {
       Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
         .foregroundStyle(.secondary)
     }
-    .padding(.top, 24)
+    .padding(.top, 4)
   }
 
   // MARK: - Status

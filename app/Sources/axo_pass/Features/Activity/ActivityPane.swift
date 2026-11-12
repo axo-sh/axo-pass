@@ -46,7 +46,7 @@ struct ActivityPane: View {
       Button("Audit Log") { openWindow(id: AxoPassApp.auditWindowID) }
         .help("Show every audit event, including changes")
     }
-    .padding(.top, 24)
+    .padding(.top, 4)
   }
 
   private var filterChips: some View {

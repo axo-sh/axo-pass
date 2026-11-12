@@ -11,7 +11,7 @@ struct ContentView: View {
         LockScreen()
       }
     }
-    .titleBarHidden(!model.isAppUnlocked)
+    .titleBarHidden(!model.isAppUnlocked || model.isPageSelected)
   }
 }
 
@@ -33,15 +33,7 @@ private struct MainView: View {
       contentPane
     } detail: {
       detailPane
-        .splitColumnCollapsed(isPage, index: 1)
-    }
-  }
-
-  /// Whether the selection is a page that uses the full width.
-  private var isPage: Bool {
-    switch model.sidebarSelection {
-    case .today, .activity: return true
-    default: return false
+        .splitColumnCollapsed(model.isPageSelected, index: 1)
     }
   }
 
@@ -66,9 +58,12 @@ private struct MainView: View {
 
   @ViewBuilder
   private var contentPane: some View {
-    if isPage {
-      // Collapsed while a page is shown.
+    if model.isPageSelected {
+      // Collapsed while a page is shown. Split view shows the title of this
+      // column in the bar, and `titleVisibility` does not hide it. An empty
+      // title replaces the app name.
       Color.clear
+        .navigationTitle("")
     } else if model.selectedVaultKey != nil || model.selectedItemType != nil {
       ItemsPane()
     } else if case .ssh = model.sidebarSelection {

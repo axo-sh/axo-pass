@@ -115,6 +115,15 @@ final class VaultsModel {
   // Sidebar navigation
   private(set) var sidebarSelection: SidebarDestination? = nil
 
+  /// Whether the selection is a page that uses the full width and has no title
+  /// bar.
+  var isPageSelected: Bool {
+    switch sidebarSelection {
+    case .today, .activity: return true
+    default: return false
+    }
+  }
+
   // Where the sidebar is headed while that destination's items load. The panes
   // keep showing the current selection until the load lands, so switching to a
   // vault that has to be decrypted does not blank them first.
