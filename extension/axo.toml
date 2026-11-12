@@ -1,24 +1,26 @@
 project_name = "axo-pass-extension"
 
-# Each build empties `build/`, so the two packages are built one at a time.
 [tasks]
 install = "npm ci"
-build = "webpack --env target=ff"
+build = "webpack"
+"build:ff" = "webpack --env target=ff"
 "build:chrome" = "webpack --env target=chrome"
+
+"lint:ff" = [":check", ":build:ff", "web-ext lint --source-dir build/ff"]
+"run:ff" = [":build:ff", "web-ext run --source-dir build/ff --pref app.update.disabledForTesting=true"]
+
+watch = "webpack --watch --env target=ff"
+typecheck = ["tsc --noEmit", "tsc --noEmit -p e2e"]
+test = [":typecheck", "vitest run"]
+check = "biome check"
+fmt = "biome check --write"
+
 # Chromium for the Playwright tests. Branded Chrome ignores --load-extension.
 "e2e:install" = "playwright install chromium"
 # Manual: starts the installed Google Chrome with a temporary profile.
 "e2e:parent" = "node e2e/support/real-chrome-parent.mjs"
 "e2e:test" = "playwright test"
 e2e = [":build:chrome", ":e2e:test"]
-watch = "webpack --watch --env target=ff"
-typecheck = ["tsc --noEmit", "tsc --noEmit -p e2e"]
-test = [":typecheck", "vitest run"]
-check = "biome check"
-lint = [":check", ":build", "web-ext lint --source-dir build/ff"]
-# Update checks in the temporary profile raise macOS prompts for the updater.
-run = [":build", "web-ext run --source-dir build/ff --pref app.update.disabledForTesting=true"]
-fmt = "biome check --write"
 
 [global_packages]
 "nodejs/node" = "^26.2.0"
