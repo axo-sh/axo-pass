@@ -71,38 +71,18 @@ struct GpgPane: View {
     }
   }
 
-  /// Compact pinentry state at the foot of the list, opening the Settings tab
-  /// that configures it.
+  /// GPG issues at the foot of the list, opening the Settings tab that
+  /// configures pinentry.
   private var agentSummaryBar: some View {
-    Button {
+    SourceStatusBar(
+      source: .gpg,
+      healthyLabel: "Prompts \(GpgPinentryStyle.label(model.confStatus?.state).lowercased())",
+      healthyColor: GpgPinentryStyle.color(model.confStatus?.state),
+      help: "Configure passphrase prompts"
+    ) {
       NSApp.activate(ignoringOtherApps: true)
       openSettings()
-    } label: {
-      HStack(spacing: 6) {
-        Circle()
-          .fill(GpgPinentryStyle.color(model.confStatus?.state))
-          .frame(width: 7, height: 7)
-        Text(summary)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-      }
-      .contentShape(Rectangle())
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
     }
-    .buttonStyle(.plain)
-    .background(.bar)
-    .overlay(alignment: .top) { Divider() }
-    .help("Configure passphrase prompts")
-  }
-
-  private var summary: String {
-    "Prompts \(GpgPinentryStyle.label(model.confStatus?.state).lowercased())"
   }
 }
 

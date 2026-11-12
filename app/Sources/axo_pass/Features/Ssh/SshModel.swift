@@ -12,17 +12,18 @@ final class SshModel {
   /// How the Axo Pass agent is run. Shared, since the main window and Settings
   /// each have a model.
   let agentService = AgentService.shared
+  private let status = SetupStatus.shared
 
   var keys: [SshKeyEntry] = []
   /// SHA256 fingerprint of the key shown in the detail pane.
   var selectedFingerprint: String? = nil
-  var axoAgentStatus: SshAgentStatusResponse? = nil
-  var systemAgentStatus: SshAgentStatusResponse? = nil
+  var axoAgentStatus: SshAgentStatusResponse? { status.axoAgent }
+  var systemAgentStatus: SshAgentStatusResponse? { status.systemAgent }
   var loadError: String? = nil
   var isLoading = false
 
   /// State of the `IdentityAgent` directive in `~/.ssh/config`.
-  var confStatus: SshAgentConfStatus? = nil
+  var confStatus: SshAgentConfStatus? { status.sshConf }
   var isConfiguring = false
   var configureError: String? = nil
 
@@ -55,22 +56,20 @@ final class SshModel {
 
   /// Re-read agent state, which the CLI can change (`ap ssh-agent stop`) without the app knowing.
   func refreshAgentStatus() {
-    axoAgentStatus = core.getSshAgentStatus(agentType: .axo)
-    systemAgentStatus = core.getSshAgentStatus(agentType: .system)
-    agentService.refreshStatus()
+    status.refreshAgents()
   }
 
   /// Pick up edits made in the terminal, cheap enough to run whenever the pane appears or the app
   /// is reactivated.
   func refreshConfStatus() {
-    confStatus = core.checkSshAgentConf()
+    status.refreshSshConf()
   }
 
   func configureAgentConf() async {
     isConfiguring = true
     configureError = nil
     do {
-      confStatus = try await core.configureSshAgentConf()
+      try await status.configureSshConf()
     } catch {
       configureError = String(describing: error)
     }

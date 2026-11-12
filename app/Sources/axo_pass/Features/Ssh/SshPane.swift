@@ -71,37 +71,17 @@ struct SshPane: View {
     }
   }
 
-  /// Compact agent state at the foot of the list. The controls live in the
-  /// agent sheet this opens.
+  /// SSH issues at the foot of the list. The controls live in the agent sheet
+  /// this opens.
   private var agentSummaryBar: some View {
-    Button {
+    SourceStatusBar(
+      source: .ssh,
+      healthyLabel: "Axo agent \(SshAgentStyle.label(model.axoAgentStatus?.status).lowercased())",
+      healthyColor: SshAgentStyle.color(model.axoAgentStatus?.status),
+      help: "SSH agent status"
+    ) {
       showingAgents = true
-    } label: {
-      HStack(spacing: 6) {
-        Circle()
-          .fill(SshAgentStyle.color(model.axoAgentStatus?.status))
-          .frame(width: 7, height: 7)
-        Text(agentSummary)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-      }
-      .contentShape(Rectangle())
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
     }
-    .buttonStyle(.plain)
-    .background(.bar)
-    .overlay(alignment: .top) { Divider() }
-    .help("SSH agent status")
-  }
-
-  private var agentSummary: String {
-    "Axo agent \(SshAgentStyle.label(model.axoAgentStatus?.status).lowercased())"
   }
 }
 

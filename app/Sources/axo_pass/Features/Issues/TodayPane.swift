@@ -218,7 +218,8 @@ struct TodayPane: View {
   private func itemLocation(_ entry: UsedTodayEntry) -> (vaultKey: String, itemId: String)? {
     guard let itemId = entry.itemId else { return nil }
     let byId = entry.vaultId.flatMap { vaults.vaultKey(id: $0) }
-    let byKey = entry.vaultKey.flatMap { key in vaults.vaults.contains { $0.key == key } ? key : nil }
+    let byKey = entry.vaultKey.flatMap { key in vaults.vaults.contains { $0.key == key } ? key : nil
+    }
     guard let vaultKey = byId ?? byKey else { return nil }
     return (vaultKey, itemId)
   }
@@ -535,7 +536,7 @@ private struct IssueSeverityIcon: View {
   let severity: IssueSeverity
 
   var body: some View {
-    TodayIcon(symbol: symbol, color: color)
+    TodayIcon(symbol: symbol, color: severity.color)
   }
 
   private var symbol: String {
@@ -547,9 +548,12 @@ private struct IssueSeverityIcon: View {
     case .info: return "info"
     }
   }
+}
 
-  private var color: Color {
-    switch severity {
+extension IssueSeverity {
+  /// Severity color for icons and status dots.
+  var color: Color {
+    switch self {
     case .broken: return .red
     case .request: return .accentColor
     case .advice: return .orange

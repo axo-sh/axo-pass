@@ -8,6 +8,7 @@ final class GpgModel {
   // Doesn't touch vault state, so this can be an independent AxoPass
   // instance rather than sharing VaultsModel's.
   private let core = AxoPass()
+  private let status = SetupStatus.shared
 
   enum TestResult {
     case success
@@ -24,7 +25,7 @@ final class GpgModel {
   var testResult: TestResult? = nil
 
   /// State of the `pinentry-program` line in `gpg-agent.conf`.
-  var confStatus: GpgAgentConfStatus? = nil
+  var confStatus: GpgAgentConfStatus? { status.gpgConf }
   var isConfiguring = false
   var configureError: String? = nil
 
@@ -62,7 +63,7 @@ final class GpgModel {
   /// Pick up edits made in the terminal, cheap enough to run whenever the pane appears or the app
   /// is reactivated.
   func refreshConfStatus() {
-    confStatus = core.checkGpgAgentConf()
+    status.refreshGpgConf()
   }
 
   func configureAgentConf() async {
@@ -70,7 +71,7 @@ final class GpgModel {
     configureError = nil
     testResult = nil
     do {
-      confStatus = try await core.configureGpgAgentConf()
+      try await status.configureGpgConf()
     } catch {
       configureError = String(describing: error)
     }

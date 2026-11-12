@@ -6,8 +6,9 @@ import Observation
 /// Issues of the app, most severe first. One instance for the app.
 ///
 /// Vault and sync issues are read live from `VaultsModel` and `SyncModel`.
-/// SSH, GPG, shell, and AutoFill state is read here. File and socket checks
-/// run on a timer. The gpg key listing and the AutoFill state are read on
+/// SSH agent, ssh config, shell, and gpg-agent config state is read from
+/// `SetupStatus`. Browser and AutoFill state is read here. File and socket
+/// checks run on a timer. The gpg key listing and the AutoFill state are read on
 /// `refreshAll`, which runs at start and on each app activation.
 @Observable
 @MainActor
@@ -21,11 +22,12 @@ final class IssuesModel {
   private let vaults: VaultsModel
   private let sync: SyncModel
   private let agentService = AgentService.shared
+  private let setup = SetupStatus.shared
 
-  private(set) var agentStatus: SshAgentStatus? = nil
-  private(set) var sshConf: SshAgentConfStatus? = nil
-  private(set) var shell: ShellIntegrationStatus? = nil
-  private(set) var gpgConf: GpgAgentConfStatus? = nil
+  var agentStatus: SshAgentStatus? { setup.axoAgent?.status }
+  var sshConf: SshAgentConfStatus? { setup.sshConf }
+  var shell: ShellIntegrationStatus? { setup.shell }
+  var gpgConf: GpgAgentConfStatus? { setup.gpgConf }
   private(set) var browsers: [BrowserManifestStatus] = []
   private(set) var autofillEnabled: Bool? = nil
   /// GPG keys from the last listing. Nil if the listing failed or has not run.
@@ -55,11 +57,7 @@ final class IssuesModel {
   /// Re-read the agent status and the config files. Cheap enough for the
   /// timer.
   func refreshChecks() {
-    agentStatus = core.getSshAgentStatus(agentType: .axo).status
-    agentService.refreshStatus()
-    sshConf = core.checkSshAgentConf()
-    shell = core.checkShellIntegration()
-    gpgConf = core.checkGpgAgentConf()
+    setup.refresh()
     browsers = browserManifestStatuses()
   }
 

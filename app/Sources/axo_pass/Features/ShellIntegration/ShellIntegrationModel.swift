@@ -4,21 +4,21 @@ import Observation
 @Observable
 @MainActor
 final class ShellIntegrationModel {
-  private let core = AxoPass()
+  private let setupStatus = SetupStatus.shared
 
-  var status: ShellIntegrationStatus? = nil
+  var status: ShellIntegrationStatus? { setupStatus.shell }
   var isConfiguring = false
   var configureError: String? = nil
 
   func refreshStatus() {
-    status = core.checkShellIntegration()
+    setupStatus.refreshShell()
   }
 
   func configure() async {
     isConfiguring = true
     configureError = nil
     do {
-      status = try await core.writeShellIntegration()
+      try await setupStatus.configureShell()
     } catch {
       configureError = String(describing: error)
     }
