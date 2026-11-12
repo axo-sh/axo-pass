@@ -72,7 +72,7 @@ struct VaultsSidebar: View {
         if sourcesExpanded {
           sourceRow("SSH", source: .ssh, count: sshModel.keys.count)
             .tag(SidebarDestination.ssh)
-          sourceRow("GPG Keyring", source: .gpg, count: gpgModel.keys.count)
+          sourceRow("GPG", source: .gpg, count: gpgModel.keys.count)
             .tag(SidebarDestination.gpg)
           sourceRow("Age", source: nil, count: ageModel.keys.count)
             .tag(SidebarDestination.age)
