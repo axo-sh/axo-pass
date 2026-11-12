@@ -148,8 +148,7 @@ final class PassphrasePromptModel {
       prompt: prompt,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
-      onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) },
-      onEnterPassphrase: { [weak self] in self?.requestTypedPassphrase(prompt: prompt) }
+      onCancel: { [weak self] in self?.requestTypedPassphrase(prompt: prompt) }
     )
     panel.show(content)
   }
@@ -211,8 +210,8 @@ private struct PassphraseUnlockView: View {
   let prompt: PassphrasePrompt
   let icon: AuthenticationIcon
   let touchID: Bool
+  /// Falls back to the text field. Cancelling from there ends the request.
   let onCancel: () -> Void
-  let onEnterPassphrase: () -> Void
 
   private var title: [HeadlinePart] {
     let key =
@@ -241,8 +240,7 @@ private struct PassphraseUnlockView: View {
         PinentryTranscript(prompt: prompt)
       }
 
-      BiometricFooter(
-        icon: icon, touchID: touchID, onCancel: onCancel, onEnterPassphrase: onEnterPassphrase)
+      BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
     }
     .padding(24)
     .frame(maxWidth: .infinity)
