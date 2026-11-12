@@ -39,10 +39,11 @@ pub async fn run(prompt: String) {
     let caller = provenance.as_ref().and_then(|p| p.caller());
     let caller_chain = provenance.map(|p| p.chain_nodes()).unwrap_or_default();
 
+    let key_comment = key_comment_from_prompt(&prompt);
     let request = PassphrasePrompt {
         kind: PassphraseKind::Ssh,
         key_id: key_id.clone(),
-        description: key_comment_from_prompt(&prompt),
+        description: key_comment.clone(),
         prompt: Some(prompt),
         error_message: None,
         caller: caller.clone(),
@@ -54,7 +55,12 @@ pub async fn run(prompt: String) {
             .await
             .unwrap_or_else(|e| Err(BrokerError::Failed(format!("Task failed: {e}"))));
 
-    record_passphrase(key_id.as_deref(), caller.as_deref(), &result);
+    record_passphrase(
+        key_id.as_deref(),
+        key_comment.as_deref(),
+        caller.as_deref(),
+        &result,
+    );
 
     match result {
         Ok(passphrase) => {
@@ -87,6 +93,7 @@ pub async fn run(prompt: String) {
 /// identity.
 fn record_passphrase(
     key_id: Option<&str>,
+    key_comment: Option<&str>,
     caller: Option<&str>,
     result: &Result<secrecy::SecretString, BrokerError>,
 ) {
@@ -102,7 +109,12 @@ fn record_passphrase(
         } else {
             format!("SHA256:{id}")
         };
-        Subject::new(SubjectKind::SshKey, fingerprint.clone()).fingerprint(fingerprint)
+        let subject =
+            Subject::new(SubjectKind::SshKey, fingerprint.clone()).fingerprint(fingerprint);
+        match key_comment.filter(|c| !c.is_empty()) {
+            Some(comment) => subject.label(comment),
+            None => subject,
+        }
     });
 
     let mut event = AuditEvent::new(Source::Askpass, Action::SshPassphrase, outcome)

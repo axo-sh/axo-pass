@@ -194,6 +194,7 @@ private enum ActivityStyle {
   private static func verb(_ action: String) -> String {
     switch action {
     case "ssh.sign": return "Signed"
+    case "ssh.key_add": return "Added"
     case "ssh.passphrase", "gpg.passphrase": return "Supplied"
     case "gpg.confirm": return "Confirmed"
     case "age.decrypt": return "Decrypted"
@@ -240,6 +241,7 @@ private enum ActivityStyle {
     case "login.totp": return ("one-time code filled", "in", true)
     case "passkey.asserted": return ("passkey sign-in", "in", true)
     case "ssh.sign": return ("signed", "for", false)
+    case "ssh.key_add": return ("added to agent", "by", false)
     case "ssh.passphrase", "gpg.passphrase": return ("passphrase", "for", false)
     case "gpg.confirm": return ("confirmed", "for", false)
     case "age.decrypt": return ("decrypted", "by", false)
