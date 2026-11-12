@@ -97,17 +97,11 @@ struct ItemsPane: View {
     .searchable(text: $searchQuery, prompt: "Search")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Button {
-          newFolder()
-        } label: {
-          Label("New Folder", systemImage: "folder.badge.plus")
-        }
-        .disabled(model.selectedVault == nil)
-      }
-      ToolbarItem(placement: .primaryAction) {
         Menu {
           Button("New Login…") { showingNewLoginSheet = true }
           Button("New Item…") { showingNewItemSheet = true }
+          Divider()
+          Button("New Folder") { newFolder() }
         } label: {
           Label("New", systemImage: "plus")
         }

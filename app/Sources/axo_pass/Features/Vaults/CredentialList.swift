@@ -122,7 +122,6 @@ struct CredentialList: View {
         } label: {
           Label("Add", systemImage: "plus")
         }
-        .menuIndicator(.hidden)
         .help("New credential or section.")
       }
     }
