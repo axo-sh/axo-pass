@@ -30,9 +30,11 @@ final class ActivityModel {
   /// dropped.
   private var generation = 0
 
-  func reload() async {
+  /// Read the first page again. Listed events stay until the new page replaces
+  /// them if `clearing` is false.
+  func reload(clearing: Bool = true) async {
     generation += 1
-    events = []
+    if clearing { events = [] }
     offset = 0
     hasMore = true
     isLoading = false
@@ -61,7 +63,12 @@ final class ActivityModel {
       guard current == generation else { return }
       offset += UInt32(page.count)
       hasMore = page.count == Int(Self.pageSize)
-      events.append(contentsOf: page.compactMap(ActivityEvent.init))
+      let loaded = page.compactMap(ActivityEvent.init)
+      if offset == UInt32(page.count) {
+        events = loaded
+      } else {
+        events.append(contentsOf: loaded)
+      }
       loadError = nil
     } catch {
       guard current == generation else { return }

@@ -32,7 +32,7 @@ struct ActivityPane: View {
     // each activation.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     { _ in
-      Task { await model.reload() }
+      Task { await model.reload(clearing: false) }
     }
   }
 
