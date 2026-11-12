@@ -597,14 +597,35 @@ pub(super) async fn get_passphrase(
     if let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, peer, entry, in_flight).await {
-            SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
-            // Dismissing the biometric prompt answers the request: the user
-            // was asked and said no. Falling through to a text field instead
-            // would make cancelling take two attempts.
-            SavedPassphrase::Cancelled => return WireResponse::Cancelled,
-            // A read that failed is not an answer, so let them type it.
-            SavedPassphrase::Failed => {},
+        let mut interruptions = 0;
+        loop {
+            let saved = unlock_saved_passphrase(
+                authorizer,
+                &prompt,
+                peer.clone(),
+                entry.clone(),
+                in_flight,
+            )
+            .await;
+            match saved {
+                SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
+                // Dismissing the biometric prompt answers the request: the user
+                // was asked and said no. Falling through to a text field instead
+                // would make cancelling take two attempts.
+                SavedPassphrase::Cancelled => return WireResponse::Cancelled,
+                // The system cancels the prompt right after wake, while the
+                // screen is still locking or unlocking. Retry on a fresh
+                // context before asking for a typed passphrase.
+                SavedPassphrase::Interrupted if interruptions < INTERRUPTED_RETRIES => {
+                    interruptions += 1;
+                    let delay = tokio::time::sleep(INTERRUPTED_RETRY_DELAY);
+                    if in_flight.unless_abandoned(delay).await.is_none() {
+                        return WireResponse::Cancelled;
+                    }
+                },
+                // A read that failed is not an answer, so let them type it.
+                SavedPassphrase::Interrupted | SavedPassphrase::Failed => break,
+            }
         }
     }
 
@@ -629,10 +650,17 @@ pub(super) async fn get_passphrase(
     }
 }
 
+/// Attempts to read a saved passphrase again after the system cancels the
+/// biometric prompt.
+const INTERRUPTED_RETRIES: u32 = 5;
+const INTERRUPTED_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// How reading a saved passphrase ended.
 enum SavedPassphrase {
     Unlocked(SecretString),
     Cancelled,
+    /// The system cancelled the biometric prompt.
+    Interrupted,
     Failed,
 }
 
@@ -694,10 +722,11 @@ async fn unlock_saved_passphrase(
         Err(KeychainError::UserCancelled) => (PromptOutcome::Cancelled, SavedPassphrase::Cancelled),
         Err(e) => {
             log::debug!("Could not read the saved passphrase: {e}");
-            (
-                PromptOutcome::Failed(e.to_string()),
-                SavedPassphrase::Failed,
-            )
+            let saved = match e {
+                KeychainError::SystemCancelled => SavedPassphrase::Interrupted,
+                _ => SavedPassphrase::Failed,
+            };
+            (PromptOutcome::Failed(e.to_string()), saved)
         },
     };
     authorizer.end(prompt.clone(), outcome).await;
