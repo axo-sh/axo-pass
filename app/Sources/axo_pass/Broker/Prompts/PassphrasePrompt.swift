@@ -28,6 +28,7 @@ final class PassphrasePromptModel {
 
   private enum PromptAnswer {
     case passphrase(value: String, saveToKeychain: Bool)
+    case useSaved
     case confirmed
     case cancelled
   }
@@ -60,15 +61,23 @@ final class PassphrasePromptModel {
   }
 
   /// Ask the user to type the passphrase. Nil means they dismissed the prompt.
-  func collect(prompt: PassphrasePrompt) async -> CollectedPassphrase? {
+  /// With `canUseSaved`, the panel also offers to unlock with the saved
+  /// passphrase.
+  func collect(prompt: PassphrasePrompt, canUseSaved: Bool) async -> CollectedPassphrase? {
     showTask?.cancel()
     showTask = nil
 
-    let answer = await ask { showEntryPanel(prompt: prompt) }
-    guard case .passphrase(let value, let save) = answer else { return nil }
-    // The value crosses to the core as bytes, so the core never holds it as a
-    // Swift string it cannot zero.
-    return CollectedPassphrase(value: Data(value.utf8), saveToKeychain: save)
+    let answer = await ask { showEntryPanel(prompt: prompt, canUseSaved: canUseSaved) }
+    switch answer {
+    case .passphrase(let value, let save):
+      // The value crosses to the core as bytes, so the core never holds it as a
+      // Swift string it cannot zero.
+      return CollectedPassphrase(value: Data(value.utf8), saveToKeychain: save, useSaved: false)
+    case .useSaved:
+      return CollectedPassphrase(value: Data(), saveToKeychain: false, useSaved: true)
+    case .confirmed, .cancelled:
+      return nil
+    }
   }
 
   func confirm(prompt: ConfirmPrompt) async -> Bool {
@@ -128,14 +137,16 @@ final class PassphrasePromptModel {
     panel.show(content)
   }
 
-  private func showEntryPanel(prompt: PassphrasePrompt) {
+  private func showEntryPanel(prompt: PassphrasePrompt, canUseSaved: Bool) {
     let content = PassphraseEntryView(
       prompt: prompt,
       // Nowhere to save it without a key grip to file it under.
       canSave: prompt.keyId != nil,
+      touchID: canUseSaved ? PromptCaller.hasTouchID() : nil,
       onSubmit: { [weak self] value, save in
         self?.answer(.passphrase(value: value, saveToKeychain: save))
       },
+      onUseSaved: { [weak self] in self?.answer(.useSaved) },
       onCancel: { [weak self] in self?.answer(.cancelled) }
     )
     panel.show(content)
@@ -223,7 +234,11 @@ private struct PassphraseUnlockView: View {
 private struct PassphraseEntryView: View {
   let prompt: PassphrasePrompt
   let canSave: Bool
+  /// Non-nil if a saved passphrase can be tried again. The value is whether
+  /// the Mac has Touch ID.
+  let touchID: Bool?
   let onSubmit: (String, Bool) -> Void
+  let onUseSaved: () -> Void
   let onCancel: () -> Void
 
   @State private var value = ""
@@ -259,6 +274,9 @@ private struct PassphraseEntryView: View {
       HStack {
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
+        if let touchID {
+          Button(touchID ? "Use Touch ID" : "Use Saved Passphrase", action: onUseSaved)
+        }
         Spacer()
         Button("Unlock") { onSubmit(value, saveToKeychain && canSave) }
           .keyboardShortcut(.defaultAction)
@@ -533,8 +551,10 @@ final class PassphrasePromptBridge: PassphrasePromptDelegate {
     await model.begin(prompt: prompt, peer: peer)
   }
 
-  func collectPassphrase(prompt: PassphrasePrompt) async throws -> CollectedPassphrase? {
-    await model.collect(prompt: prompt)
+  func collectPassphrase(prompt: PassphrasePrompt, canUseSaved: Bool) async throws
+    -> CollectedPassphrase?
+  {
+    await model.collect(prompt: prompt, canUseSaved: canUseSaved)
   }
 
   func endAuthorization(prompt: PassphrasePrompt, outcome: PromptOutcome) async {

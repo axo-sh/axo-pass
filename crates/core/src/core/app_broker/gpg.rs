@@ -74,6 +74,9 @@ pub struct ConfirmPrompt {
 pub struct CollectedPassphrase {
     pub value: SecretString,
     pub save_to_keychain: bool,
+    /// The user asked to unlock with the saved passphrase instead. `value` is
+    /// empty.
+    pub use_saved: bool,
 }
 
 /// Draws the prompts `ap pinentry` asks for on gpg-agent's behalf.
@@ -91,10 +94,12 @@ pub trait PassphraseAuthorizer: Send + Sync + 'static {
 
     /// Ask the user to type the passphrase, for a key with nothing saved or one
     /// whose saved passphrase gpg has just rejected. `None` means they
-    /// dismissed the prompt.
+    /// dismissed the prompt. `can_use_saved` offers a way back to the saved
+    /// passphrase.
     async fn collect(
         &self,
         prompt: PassphrasePrompt,
+        can_use_saved: bool,
     ) -> Result<Option<CollectedPassphrase>, String>;
 
     /// The attempt finished. Called once for every [`Self::begin`].
@@ -193,7 +198,10 @@ pub(super) async fn get_passphrase(
         }
     }
 
-    let Some(collected) = in_flight.unless_abandoned(authorizer.collect(prompt)).await else {
+    let Some(collected) = in_flight
+        .unless_abandoned(authorizer.collect(prompt, false))
+        .await
+    else {
         return WireResponse::Cancelled;
     };
     match collected {

@@ -99,12 +99,14 @@ impl PassphraseAuthorizer for StubAuthorizer {
     async fn collect(
         &self,
         prompt: PassphrasePrompt,
+        _can_use_saved: bool,
     ) -> Result<Option<CollectedPassphrase>, String> {
         self.passphrase_prompts.lock().unwrap().push(prompt);
         Ok(Some(CollectedPassphrase {
             value: secrecy::SecretString::from(STUB_PASSPHRASE),
             // Nothing may touch the real keychain from a test.
             save_to_keychain: false,
+            use_saved: false,
         }))
     }
 

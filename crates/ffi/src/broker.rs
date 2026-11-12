@@ -282,6 +282,8 @@ impl From<app_broker::PassphrasePrompt> for PassphrasePrompt {
 pub struct CollectedPassphrase {
     pub value: Vec<u8>,
     pub save_to_keychain: bool,
+    /// The user chose to unlock with the saved passphrase. `value` is empty.
+    pub use_saved: bool,
 }
 
 /// gpg's `CONFIRM` question. Mirrors [`app_broker::ConfirmPrompt`]: `None`
@@ -320,9 +322,12 @@ pub trait PassphrasePromptDelegate: Send + Sync {
     ) -> Result<u64, FfiError>;
 
     /// Ask the user for the passphrase. `None` means they dismissed the prompt.
+    /// `can_use_saved` means the prompt offers a way back to the saved
+    /// passphrase.
     async fn collect_passphrase(
         &self,
         prompt: PassphrasePrompt,
+        can_use_saved: bool,
     ) -> Result<Option<CollectedPassphrase>, FfiError>;
 
     /// The attempt finished. Called once for every `begin_authorization`.
@@ -365,10 +370,11 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
     async fn collect(
         &self,
         prompt: app_broker::PassphrasePrompt,
+        can_use_saved: bool,
     ) -> Result<Option<app_broker::CollectedPassphrase>, String> {
         let collected = self
             .delegate
-            .collect_passphrase(prompt.into())
+            .collect_passphrase(prompt.into(), can_use_saved)
             .await
             .map_err(|e| e.to_string())?;
         collected
@@ -378,6 +384,7 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
                 Ok(app_broker::CollectedPassphrase {
                     value: SecretString::from(value),
                     save_to_keychain: collected.save_to_keychain,
+                    use_saved: collected.use_saved,
                 })
             })
             .transpose()

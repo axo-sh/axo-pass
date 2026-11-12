@@ -594,59 +594,71 @@ pub(super) async fn get_passphrase(
 ) -> WireResponse {
     let entry = prompt.key_id.as_deref().map(PasswordEntry::ssh);
 
-    if let Some(entry) = entry.clone()
-        && has_saved_passphrase(&entry).await
-    {
-        let mut interruptions = 0;
-        loop {
-            let saved = unlock_saved_passphrase(
-                authorizer,
-                &prompt,
-                peer.clone(),
-                entry.clone(),
-                in_flight,
-            )
-            .await;
-            match saved {
-                SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
-                // Dismissing the biometric prompt answers the request: the user
-                // was asked and said no. Falling through to a text field instead
-                // would make cancelling take two attempts.
-                SavedPassphrase::Cancelled => return WireResponse::Cancelled,
-                // The system cancels the prompt right after wake, while the
-                // screen is still locking or unlocking. Retry on a fresh
-                // context before asking for a typed passphrase.
-                SavedPassphrase::Interrupted if interruptions < INTERRUPTED_RETRIES => {
-                    interruptions += 1;
-                    let delay = tokio::time::sleep(INTERRUPTED_RETRY_DELAY);
-                    if in_flight.unless_abandoned(delay).await.is_none() {
-                        return WireResponse::Cancelled;
-                    }
-                },
-                // A read that failed is not an answer, so let them type it.
-                SavedPassphrase::Interrupted | SavedPassphrase::Failed => break,
+    loop {
+        // True if a saved passphrase exists but could not be read, so the text
+        // field offers a way back to it.
+        let mut can_use_saved = false;
+        if let Some(entry) = entry.clone()
+            && has_saved_passphrase(&entry).await
+        {
+            let mut interruptions = 0;
+            loop {
+                let saved = unlock_saved_passphrase(
+                    authorizer,
+                    &prompt,
+                    peer.clone(),
+                    entry.clone(),
+                    in_flight,
+                )
+                .await;
+                match saved {
+                    SavedPassphrase::Unlocked(passphrase) => {
+                        return passphrase_response(&passphrase);
+                    },
+                    // Dismissing the biometric prompt answers the request: the
+                    // user was asked and said no. Falling through to a text
+                    // field instead would make cancelling take two attempts.
+                    SavedPassphrase::Cancelled => return WireResponse::Cancelled,
+                    // The system cancels the prompt right after wake, while the
+                    // screen is still locking or unlocking. Retry on a fresh
+                    // context before asking for a typed passphrase.
+                    SavedPassphrase::Interrupted if interruptions < INTERRUPTED_RETRIES => {
+                        interruptions += 1;
+                        let delay = tokio::time::sleep(INTERRUPTED_RETRY_DELAY);
+                        if in_flight.unless_abandoned(delay).await.is_none() {
+                            return WireResponse::Cancelled;
+                        }
+                    },
+                    // A read that failed is not an answer, so let them type it.
+                    SavedPassphrase::Interrupted | SavedPassphrase::Failed => {
+                        can_use_saved = true;
+                        break;
+                    },
+                }
             }
         }
-    }
 
-    let Some(collected) = in_flight.unless_abandoned(authorizer.collect(prompt)).await else {
-        return WireResponse::Cancelled;
-    };
-    match collected {
-        Ok(Some(collected)) => {
-            let response = passphrase_response(&collected.value);
-            if collected.save_to_keychain
-                && let Some(entry) = entry
-            {
-                save_passphrase(entry, collected.value).await;
-            }
-            response
-        },
-        Ok(None) => WireResponse::Cancelled,
-        Err(message) => {
-            log::debug!("App broker could not collect an SSH passphrase: {message}");
-            WireResponse::Failed { message }
-        },
+        let collecting = authorizer.collect(prompt.clone(), can_use_saved);
+        let Some(collected) = in_flight.unless_abandoned(collecting).await else {
+            return WireResponse::Cancelled;
+        };
+        match collected {
+            Ok(Some(collected)) if collected.use_saved => continue,
+            Ok(Some(collected)) => {
+                let response = passphrase_response(&collected.value);
+                if collected.save_to_keychain
+                    && let Some(entry) = entry
+                {
+                    save_passphrase(entry, collected.value).await;
+                }
+                return response;
+            },
+            Ok(None) => return WireResponse::Cancelled,
+            Err(message) => {
+                log::debug!("App broker could not collect an SSH passphrase: {message}");
+                return WireResponse::Failed { message };
+            },
+        }
     }
 }
 
