@@ -39,7 +39,7 @@ struct VaultsSidebar: View {
       Section(isExpanded: $sourcesExpanded) {
         sourceRow("SSH", systemImage: "asterisk", source: .ssh)
           .tag(SidebarDestination.ssh)
-        sourceRow("GPG Keyring", systemImage: "key.fill", source: .gpg)
+        sourceRow("GPG", systemImage: "key.fill", source: .gpg)
           .tag(SidebarDestination.gpg)
         Label("Age", systemImage: "lock.rectangle.stack")
           .tag(SidebarDestination.age)

@@ -15,6 +15,8 @@ struct ContentView: View {
   }
 }
 
+/// Sidebar, list, and detail columns. Page destinations such as Today are
+/// shown in the detail column, and the list column is collapsed.
 private struct MainView: View {
   @Environment(VaultsModel.self) private var model
   // Held here rather than inside the panes so the detail column can read the
@@ -31,13 +33,20 @@ private struct MainView: View {
       contentPane
     } detail: {
       detailPane
+        .splitColumnCollapsed(isPage, index: 1)
     }
+  }
+
+  /// Whether the selection is a page that uses the full width.
+  private var isPage: Bool {
+    if case .today = model.sidebarSelection { return true }
+    return false
   }
 
   @ViewBuilder
   private var detailPane: some View {
     if case .today = model.sidebarSelection {
-      Color.clear.paneBackground()
+      TodayPane(sshModel: sshModel, gpgModel: gpgModel)
     } else if case .ssh = model.sidebarSelection {
       SshKeyDetailView(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
@@ -54,7 +63,8 @@ private struct MainView: View {
   @ViewBuilder
   private var contentPane: some View {
     if case .today = model.sidebarSelection {
-      TodayPane(sshModel: sshModel, gpgModel: gpgModel)
+      // Collapsed while Today is shown.
+      Color.clear
     } else if case .vault = model.sidebarSelection {
       ItemsPane()
     } else if case .ssh = model.sidebarSelection {

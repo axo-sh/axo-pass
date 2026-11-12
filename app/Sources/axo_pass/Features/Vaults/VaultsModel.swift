@@ -722,6 +722,18 @@ final class VaultsModel {
     if itemCache[ref.vaultKey] != nil { selectedItemRef = ref }
   }
 
+  /// Select the item with short id `itemId` in vault `vaultKey`. Loads the
+  /// vault first if it is not cached. Selects only the vault if the item is
+  /// not found.
+  func showItem(vaultKey: String, itemId: String) async {
+    if itemCache[vaultKey] == nil { await loadItems(for: vaultKey) }
+    guard let item = itemCache[vaultKey]?.first(where: { $0.id == itemId }) else {
+      selectSidebarDestination(.vault(vaultKey))
+      return
+    }
+    showItem(ItemRef(vaultKey: vaultKey, itemKey: item.key))
+  }
+
   // MARK: - Credentials
 
   /// Fetch a credential and put it on the pasteboard without keeping it.
