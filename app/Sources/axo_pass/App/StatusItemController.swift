@@ -45,6 +45,10 @@ final class StatusItemController: NSObject {
       self?.lastClose = Date()
     }
 
+    windows.togglePalette = { [weak self] anchor, screen in
+      self?.togglePalette(below: anchor, on: screen)
+    }
+
     if let button = statusItem.button {
       button.image = Self.icon()
       button.setAccessibilityLabel("Axo Pass")
@@ -102,6 +106,17 @@ final class StatusItemController: NSObject {
       panel.hide()
     } else if let button = statusItem.button {
       showPalette(below: button)
+    }
+  }
+
+  /// Toggle the palette under a rect in screen coordinates, as the search
+  /// button in the main window does.
+  private func togglePalette(below anchor: NSRect, on screen: NSScreen?) {
+    if panel.isVisible {
+      panel.hide()
+    } else if Date().timeIntervalSince(lastClose) > 0.3 {
+      palette.prepareForOpen()
+      panel.show(PaletteView(model: palette), below: anchor, on: screen)
     }
   }
 

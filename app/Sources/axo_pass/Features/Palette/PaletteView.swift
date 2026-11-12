@@ -173,14 +173,12 @@ struct PaletteView: View {
               KeyHint(key: "⇥", label: "Actions")
             } else {
               if result.completion != nil { KeyHint(key: "⇥", label: "Complete") }
-              if result.actions.count + (result.secondaryAction == nil ? 0 : 1) > 1 {
-                KeyHint(key: "⌘K", label: "Actions")
-              }
+              if result.hasActionList { KeyHint(key: "→", label: "Actions") }
             }
           }
         case .actions:
           KeyHint(key: "↩", label: "Run")
-          KeyHint(key: "esc", label: "Back")
+          KeyHint(key: "←", label: "Back")
         case .unlock:
           EmptyView()
         }
@@ -272,10 +270,14 @@ private struct ResultRow: View {
 
   var body: some View {
     HStack(spacing: 10) {
-      Image(systemName: result.systemImage)
-        .frame(width: 20)
-        .foregroundStyle(
-          result.kind == .vault ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+      if let vaultKey = result.vaultKey {
+        VaultBadge(name: result.title, key: vaultKey)
+          .frame(width: 20)
+      } else {
+        Image(systemName: result.systemImage)
+          .frame(width: 20)
+          .foregroundStyle(.secondary)
+      }
       titleText
         .lineLimit(1)
         .truncationMode(.head)

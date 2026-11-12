@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 
 /// Window-open requests raised from AppKit callbacks.
@@ -12,6 +13,10 @@ final class WindowRequests {
   private(set) var auditOpens = 0
   private(set) var keychainOpens = 0
   private(set) var settingsOpens = 0
+
+  /// Toggles the command palette under a rect in screen coordinates. Set by
+  /// `StatusItemController`.
+  var togglePalette: (NSRect, NSScreen?) -> Void = { _, _ in }
 
   func requestMain() {
     PanelAppVisibility.shared.windowRequested()

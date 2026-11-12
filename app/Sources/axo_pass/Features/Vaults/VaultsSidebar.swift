@@ -19,6 +19,7 @@ struct VaultsSidebar: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
   @Environment(IssuesModel.self) private var issues
+  @Environment(WindowRequests.self) private var windows
   @State private var showingNewVaultSheet = false
   @State private var deletingSyncedVault: SyncVaultRef? = nil
   @State private var renamingVaultKey: String? = nil
@@ -39,6 +40,14 @@ struct VaultsSidebar: View {
       get: { model.sidebarHighlight },
       set: { model.selectSidebarDestination($0) }
     )
+  }
+
+  /// Open the command palette centered under the window's toolbar.
+  private func showPalette() {
+    guard let window = NSApp.keyWindow else { return }
+    let toolbarBottom = window.frame.minY + window.contentLayoutRect.maxY
+    let anchor = NSRect(x: window.frame.midX, y: toolbarBottom, width: 0, height: 0)
+    windows.togglePalette(anchor, window.screen)
   }
 
   var body: some View {
@@ -94,10 +103,12 @@ struct VaultsSidebar: View {
           Label("Reload", systemImage: "arrow.clockwise")
         }
         Button {
-          showingNewVaultSheet = true
+          showPalette()
         } label: {
-          Label("New Vault", systemImage: "plus")
+          Label("Search", systemImage: "magnifyingglass")
         }
+        .keyboardShortcut("k")
+        .help("Search all items. ⌘K")
         // Add synced vaults to this Mac from the synced folder of the app.
         Menu {
           Button("Pair with Another Mac…") { sync.sheet = .pair(root: sync.folder, join: nil) }
@@ -436,7 +447,7 @@ private struct LibraryModePicker: View {
 
 /// Rounded square with the first letter of a vault name. The color is derived
 /// from the vault key, so it is the same on every launch.
-private struct VaultBadge: View {
+struct VaultBadge: View {
   let name: String
   let key: String
 

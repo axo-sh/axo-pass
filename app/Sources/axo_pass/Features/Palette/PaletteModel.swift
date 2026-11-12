@@ -38,6 +38,9 @@ struct PaletteResult: Identifiable {
   let title: String
   let subtitle: String?
   let systemImage: String
+  /// Key of the vault a vault result stands for. The row shows its badge in
+  /// place of `systemImage`.
+  var vaultKey: String?
   /// Further text the query matches against, ranked below the title.
   var keywords: [String] = []
   /// The first action runs on Return.
@@ -56,6 +59,9 @@ struct PaletteResult: Identifiable {
   var shortcut: String? = nil
 
   var defaultAction: PaletteAction? { actions.first }
+
+  /// Whether the row has more than its default action to choose from.
+  var hasActionList: Bool { actions.count + (secondaryAction == nil ? 0 : 1) > 1 }
 }
 
 /// The credential behind a palette row.
@@ -516,6 +522,7 @@ final class PaletteModel {
         title: vault.name ?? vault.key,
         subtitle: vault.name == nil ? nil : vault.key,
         systemImage: "archivebox",
+        vaultKey: vault.key,
         keywords: [vault.key],
         actions: [showContents(path, title: "Show Items")],
         completion: path
@@ -817,8 +824,11 @@ final class PaletteModel {
       case .commandEnter:
         guard let result = selectedResult, let action = result.secondaryAction else { return true }
         run(action, of: result)
-      case .commandK:
-        if let result = selectedResult { showActions(for: result) }
+      case .right:
+        guard let result = selectedResult, result.hasActionList else { return false }
+        showActions(for: result)
+      case .left:
+        return false
       case .tab:
         complete()
       case .shiftTab:
@@ -844,7 +854,9 @@ final class PaletteModel {
         run(actions[selectedActionIndex], of: target)
       case .commandEnter, .tab:
         break
-      case .commandK, .shiftTab, .escape, .deleteInEmptyField:
+      case .right:
+        return false
+      case .left, .shiftTab, .escape, .deleteInEmptyField:
         leaveActions()
       }
       return true

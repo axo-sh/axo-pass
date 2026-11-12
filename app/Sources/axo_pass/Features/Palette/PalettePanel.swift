@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Keys the palette handles before the search field sees them.
 enum PaletteKey {
-  case up, down, enter, commandEnter, commandK, tab, shiftTab, escape, deleteInEmptyField
+  case up, down, enter, commandEnter, left, right, tab, shiftTab, escape, deleteInEmptyField
 }
 
 /// The floating window the palette is drawn in, anchored under the status item.
@@ -36,6 +36,13 @@ final class PalettePanel {
 
   /// Show `content` under `button`.
   func show(_ content: some View, below button: NSStatusBarButton) {
+    let anchor = button.window.map { $0.convertToScreen(button.convert(button.bounds, to: nil)) }
+    show(content, below: anchor, on: button.window?.screen)
+  }
+
+  /// Show `content` under `anchor`, a rect in screen coordinates. A nil anchor
+  /// centers the panel on screen.
+  func show(_ content: some View, below anchor: NSRect?, on screen: NSScreen?) {
     if panel != nil { hide() }
 
     let host = NSHostingController(rootView: AnyView(content.frame(width: Self.width)))
@@ -63,7 +70,7 @@ final class PalettePanel {
     panel.onKey = { [weak self] key in self?.onKey?(key) ?? false }
     panel.onOptionChange = { [weak self] held in self?.onOptionChange?(held) }
 
-    place(panel, below: button, height: host.preferredContentSize.height)
+    place(panel, below: anchor, on: screen, height: host.preferredContentSize.height)
 
     sizeObservation = host.observe(\.preferredContentSize) { [weak self] host, _ in
       MainActor.assumeIsolated {
@@ -104,16 +111,17 @@ final class PalettePanel {
     panel?.makeKey()
   }
 
-  /// Centre the panel under the status item, kept inside the visible frame of
-  /// the screen the status item is on.
-  private func place(_ panel: NSPanel, below button: NSStatusBarButton, height: CGFloat) {
-    guard let buttonWindow = button.window else {
+  /// Centre the panel under the anchor, kept inside the visible frame of its
+  /// screen.
+  private func place(
+    _ panel: NSPanel, below anchor: NSRect?, on screen: NSScreen?, height: CGFloat
+  ) {
+    guard let anchor else {
       panel.center()
       top = panel.frame.maxY
       return
     }
-    let anchor = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-    let visible = (buttonWindow.screen ?? NSScreen.main)?.visibleFrame ?? anchor
+    let visible = (screen ?? NSScreen.main)?.visibleFrame ?? anchor
     top = anchor.minY - 6
     var x = anchor.midX - Self.width / 2
     x = min(max(x, visible.minX + 8), visible.maxX - Self.width - 8)
@@ -168,8 +176,23 @@ private final class KeyPanel: NSPanel {
     case 48 where flags == .shift: return .shiftTab
     case 53: return .escape
     case 51: return fieldIsEmpty ? .deleteInEmptyField : nil
-    case 40 where command: return .commandK
+    case 123 where flags.isEmpty: return cursor(at: .start) ? .left : nil
+    case 124 where flags.isEmpty: return cursor(at: .end) ? .right : nil
     default: return nil
+    }
+  }
+
+  private enum CursorEdge { case start, end }
+
+  /// Whether the focused text field's cursor, with nothing selected, is at
+  /// the given edge of its text.
+  private func cursor(at edge: CursorEdge) -> Bool {
+    guard let editor = firstResponder as? NSTextView else { return false }
+    let range = editor.selectedRange()
+    guard range.length == 0 else { return false }
+    switch edge {
+    case .start: return range.location == 0
+    case .end: return range.location == (editor.string as NSString).length
     }
   }
 

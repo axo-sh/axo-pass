@@ -29,7 +29,6 @@ struct ItemsPane: View {
   @Environment(\.undoManager) private var undoManager
   @State private var showingNewItemSheet = false
   @State private var showingNewLoginSheet = false
-  @State private var searchQuery = ""
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var renamingItem: DisplayItem? = nil
   @State private var moveError: String? = nil
@@ -46,28 +45,11 @@ struct ItemsPane: View {
     return model.folders(for: key)
   }
 
-  private var isSearching: Bool {
-    !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-  }
-
-  /// Items matching the search, without folder grouping.
-  private var searchResults: [DisplayItem] {
-    model.displayItems.filter { $0.item.matches(searchQuery: searchQuery) }
-  }
-
   var body: some View {
     @Bindable var model = model
     Group {
       if model.isLoadingSelectedItems {
         DelayedProgressView()
-      } else if isSearching, model.selectedVault != nil || model.isAllVaults {
-        if searchResults.isEmpty {
-          ContentUnavailableView.search(text: searchQuery)
-        } else {
-          List(selection: $model.selectedItemRef) {
-            itemRows(searchResults)
-          }
-        }
       } else if (model.selectedVault != nil || model.isAllVaults)
         && !(model.displayItems.isEmpty && folders.isEmpty)
       {
@@ -94,7 +76,6 @@ struct ItemsPane: View {
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
     .navigationTitle(model.itemListTitle)
-    .searchable(text: $searchQuery, prompt: "Search")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {
