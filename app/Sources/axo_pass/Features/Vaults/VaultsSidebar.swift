@@ -56,9 +56,9 @@ struct VaultsSidebar: View {
       Label {
         Text("Activity")
       } icon: {
-        Image(systemName: "waveform.path.ecg")
-          .foregroundStyle(.pink)
+        Image(systemName: "water.waves")
       }
+      .tint(.blue)
       .tag(SidebarDestination.activity)
 
       Section {
@@ -191,14 +191,21 @@ struct VaultsSidebar: View {
         Text("Today")
       } icon: {
         Image(systemName: "sun.max.fill")
-          .foregroundStyle(.orange)
       }
+      .tint(.orange)
       Spacer(minLength: 0)
       let count = issues.countedIssues.count
       if count > 0 {
+        let broken = issues.worstSeverity == .broken
         Text("\(count)")
+          .font(.caption.weight(.semibold))
           .monospacedDigit()
-          .foregroundStyle(issues.worstSeverity == .broken ? Color.red : Color.secondary)
+          .foregroundStyle(broken ? Color.white : Color.secondary)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 1)
+          .background(
+            Capsule().fill(broken ? Color.red : Color.secondary.opacity(0.2))
+          )
       }
     }
     .tag(SidebarDestination.today)
