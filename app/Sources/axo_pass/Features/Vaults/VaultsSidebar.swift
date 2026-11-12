@@ -230,7 +230,7 @@ struct VaultsSidebar: View {
       Text("All Secrets")
     } icon: {
       Image(systemName: "square.stack.3d.up.fill")
-        .foregroundStyle(.tint)
+        .foregroundStyle(.secondary)
     }
     .tag(SidebarDestination.vault(allSecretsKey))
   }
@@ -251,7 +251,12 @@ struct VaultsSidebar: View {
     allSecretsRow
     ForEach(ItemType.allCases, id: \.self) { type in
       HStack(spacing: 4) {
-        Label(type.title, systemImage: type.systemImage)
+        Label {
+          Text(type.title)
+        } icon: {
+          Image(systemName: type.systemImage)
+            .foregroundStyle(.secondary)
+        }
         Spacer(minLength: 0)
         if model.isPendingSelection(.itemType(type)) {
           DelayedProgressView(size: .mini, expands: false)
