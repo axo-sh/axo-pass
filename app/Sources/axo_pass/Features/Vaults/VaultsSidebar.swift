@@ -248,8 +248,8 @@ struct VaultsSidebar: View {
       Text("All Secrets")
     } icon: {
       Image(systemName: "square.stack.3d.up.fill")
-        .foregroundStyle(.secondary)
     }
+    .tint(.secondary)
     .tag(SidebarDestination.vault(allSecretsKey))
   }
 
@@ -273,8 +273,8 @@ struct VaultsSidebar: View {
           Text(type.title)
         } icon: {
           Image(systemName: type.systemImage)
-            .foregroundStyle(.secondary)
         }
+        .tint(.secondary)
         Spacer(minLength: 0)
         if model.isPendingSelection(.itemType(type)) {
           DelayedProgressView(size: .mini, expands: false)
@@ -336,9 +336,13 @@ struct VaultsSidebar: View {
         .buttonStyle(.plain)
       }
 
-      Label("Recently Deleted", systemImage: "trash")
-        .foregroundStyle(.secondary)
-        .tag(SidebarDestination.recentlyDeleted)
+      Label {
+        Text("Recently Deleted")
+      } icon: {
+        Image(systemName: "trash")
+      }
+      .tint(.secondary)
+      .tag(SidebarDestination.recentlyDeleted)
 
       Button {
         showingNewVaultSheet = true
