@@ -66,6 +66,18 @@ enum UsedTodayKind {
   }
 }
 
+/// Key or item named by an audit event. Rows open the subject from it.
+struct AuditSubjectRef {
+  let kind: UsedTodayKind
+  /// Audit subject id. The site for logins and passkeys.
+  let subjectId: String
+  /// Short vault id and vault key, if recorded.
+  let vaultId: String?
+  let vaultKey: String?
+  /// Short item id, if recorded.
+  let itemId: String?
+}
+
 /// Uses of one subject today.
 struct UsedTodayEntry: Identifiable {
   let kind: UsedTodayKind
@@ -87,6 +99,12 @@ struct UsedTodayEntry: Identifiable {
   let itemId: String?
 
   var id: String { "\(kind)-\(subjectId)" }
+
+  /// Key or item of the last use.
+  var ref: AuditSubjectRef {
+    AuditSubjectRef(
+      kind: kind, subjectId: subjectId, vaultId: vaultId, vaultKey: vaultKey, itemId: itemId)
+  }
 
   /// Kind to show. A site used only through passkey sign-ins shows as a
   /// passkey.
@@ -127,7 +145,7 @@ struct UsedTodayEntry: Identifiable {
   /// Kind, grouping id, label, and action of an event. Browser login requests
   /// name a login record with no label, so they are grouped by site instead.
   /// Nil if the event has no subject.
-  private static func subject(
+  static func subject(
     of event: AuditEventRecord
   ) -> (kind: UsedTodayKind, id: String, label: String, action: String)? {
     if let request = event.detail["login_request"], let host = event.detail["service_host"] {
@@ -144,14 +162,14 @@ struct UsedTodayEntry: Identifiable {
   }
 
   /// Short item id of the event. The first id if the event names several.
-  private static func itemId(of event: AuditEventRecord) -> String? {
+  static func itemId(of event: AuditEventRecord) -> String? {
     if let id = event.detail["item_id"], !id.isEmpty { return id }
     return event.detail["item_ids"]?.split(separator: ",").first.map(String.init)
   }
 
   /// Program name of the event: the caller, or the file name of the
   /// executable.
-  private static func callerName(_ event: AuditEventRecord) -> String? {
+  static func callerName(_ event: AuditEventRecord) -> String? {
     if let caller = event.caller, !caller.isEmpty { return caller }
     guard let path = event.actorExecutable, !path.isEmpty else { return nil }
     return URL(fileURLWithPath: path).lastPathComponent

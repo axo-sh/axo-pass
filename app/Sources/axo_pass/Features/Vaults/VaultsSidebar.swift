@@ -29,6 +29,8 @@ struct VaultsSidebar: View {
   var body: some View {
     List(selection: selectionBinding) {
       todayRow
+      Label("Activity", systemImage: "waveform.path.ecg")
+        .tag(SidebarDestination.activity)
 
       Section(isExpanded: $secretsExpanded) {
         vaultItems

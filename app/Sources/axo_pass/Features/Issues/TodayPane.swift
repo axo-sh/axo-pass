@@ -177,65 +177,19 @@ struct TodayPane: View {
     .padding(.vertical, 10)
     .contentShape(.rect)
 
-    if canOpen(entry) {
+    let opener = SubjectOpener(
+      vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
+    if opener.canOpen(entry.ref) {
       Button {
-        open(entry)
+        opener.open(entry.ref)
       } label: {
         content
       }
       .buttonStyle(.plain)
-      .help(entry.kind == .sshKey || entry.kind == .gpgKey ? "Show this key" : "Show this item")
+      .help(opener.help(entry.ref))
     } else {
       content
     }
-  }
-
-  /// Whether the row opens a key or an item. SSH keys open by SHA256
-  /// fingerprint and GPG keys by keygrip. Other entries open the item of the
-  /// last use if the audit event recorded it.
-  private func canOpen(_ entry: UsedTodayEntry) -> Bool {
-    switch entry.kind {
-    case .sshKey: return true
-    case .gpgKey: return gpgFingerprint(keygrip: entry.subjectId) != nil
-    default: return itemLocation(entry) != nil
-    }
-  }
-
-  private func open(_ entry: UsedTodayEntry) {
-    switch entry.kind {
-    case .sshKey:
-      // Audit events name the key as `SHA256:<hash>`. Key entries hold the
-      // hash only.
-      let prefix = "SHA256:"
-      let id = entry.subjectId
-      sshModel.selectedFingerprint = id.hasPrefix(prefix) ? String(id.dropFirst(prefix.count)) : id
-      vaults.selectSidebarDestination(.ssh)
-    case .gpgKey:
-      gpgModel.selectedFingerprint = gpgFingerprint(keygrip: entry.subjectId)
-      vaults.selectSidebarDestination(.gpg)
-    default:
-      guard let location = itemLocation(entry) else { return }
-      Task { await vaults.showItem(vaultKey: location.vaultKey, itemId: location.itemId) }
-    }
-  }
-
-  /// Vault key and short item id of the last use of `entry`. The vault is
-  /// looked up by short id first, then by the recorded vault key.
-  private func itemLocation(_ entry: UsedTodayEntry) -> (vaultKey: String, itemId: String)? {
-    guard let itemId = entry.itemId else { return nil }
-    let byId = entry.vaultId.flatMap { vaults.vaultKey(id: $0) }
-    let byKey = entry.vaultKey.flatMap { key in vaults.vaults.contains { $0.key == key } ? key : nil
-    }
-    guard let vaultKey = byId ?? byKey else { return nil }
-    return (vaultKey, itemId)
-  }
-
-  /// Fingerprint of the GPG key that holds `keygrip` as its primary key or a
-  /// subkey.
-  private func gpgFingerprint(keygrip: String) -> String? {
-    issues.gpgKeys?.first { key in
-      key.keygrip == keygrip || key.subkeys.contains { $0.keygrip == keygrip }
-    }?.fingerprint
   }
 
   // MARK: - Issues
@@ -411,8 +365,68 @@ private enum TodaySheet: String, Identifiable {
   var id: String { rawValue }
 }
 
+/// Opens the key or item named by an audit event.
+@MainActor
+struct SubjectOpener {
+  let vaults: VaultsModel
+  let issues: IssuesModel
+  let sshModel: SshModel
+  let gpgModel: GpgModel
+
+  /// Whether `ref` opens a key or an item. SSH keys open by SHA256
+  /// fingerprint and GPG keys by keygrip. Other subjects open the item if the
+  /// audit event recorded it.
+  func canOpen(_ ref: AuditSubjectRef) -> Bool {
+    switch ref.kind {
+    case .sshKey: return true
+    case .gpgKey: return gpgFingerprint(keygrip: ref.subjectId) != nil
+    default: return itemLocation(ref) != nil
+    }
+  }
+
+  func help(_ ref: AuditSubjectRef) -> String {
+    ref.kind == .sshKey || ref.kind == .gpgKey ? "Show this key" : "Show this item"
+  }
+
+  func open(_ ref: AuditSubjectRef) {
+    switch ref.kind {
+    case .sshKey:
+      // Audit events name the key as `SHA256:<hash>`. Key entries hold the
+      // hash only.
+      let prefix = "SHA256:"
+      let id = ref.subjectId
+      sshModel.selectedFingerprint = id.hasPrefix(prefix) ? String(id.dropFirst(prefix.count)) : id
+      vaults.selectSidebarDestination(.ssh)
+    case .gpgKey:
+      gpgModel.selectedFingerprint = gpgFingerprint(keygrip: ref.subjectId)
+      vaults.selectSidebarDestination(.gpg)
+    default:
+      guard let location = itemLocation(ref) else { return }
+      Task { await vaults.showItem(vaultKey: location.vaultKey, itemId: location.itemId) }
+    }
+  }
+
+  /// Vault key and short item id of `ref`. The vault is looked up by short id
+  /// first, then by the recorded vault key.
+  private func itemLocation(_ ref: AuditSubjectRef) -> (vaultKey: String, itemId: String)? {
+    guard let itemId = ref.itemId else { return nil }
+    let byId = ref.vaultId.flatMap { vaults.vaultKey(id: $0) }
+    let byKey = ref.vaultKey.flatMap { key in vaults.vaults.contains { $0.key == key } ? key : nil }
+    guard let vaultKey = byId ?? byKey else { return nil }
+    return (vaultKey, itemId)
+  }
+
+  /// Fingerprint of the GPG key that holds `keygrip` as its primary key or a
+  /// subkey.
+  private func gpgFingerprint(keygrip: String) -> String? {
+    issues.gpgKeys?.first { key in
+      key.keygrip == keygrip || key.subkeys.contains { $0.keygrip == keygrip }
+    }?.fingerprint
+  }
+}
+
 /// Uppercase section title of the Today page, with an optional count badge.
-private struct TodaySectionHeader: View {
+struct TodaySectionHeader: View {
   let title: String
   let count: Int?
   let tint: Color
@@ -445,7 +459,7 @@ private struct TodaySectionHeader: View {
 }
 
 /// Rounded card of the Today page.
-private struct TodayCard<Content: View>: View {
+struct TodayCard<Content: View>: View {
   let content: Content
 
   init(@ViewBuilder content: () -> Content) {
@@ -465,7 +479,7 @@ private struct TodayCard<Content: View>: View {
 }
 
 /// One line of secondary text in a card.
-private struct TodayNoteRow: View {
+struct TodayNoteRow: View {
   let text: String
   let color: Color
 
@@ -486,7 +500,7 @@ private struct TodayNoteRow: View {
 }
 
 /// White symbol on a rounded square of `color`.
-private struct TodayIcon: View {
+struct TodayIcon: View {
   let symbol: String
   let color: Color
 
@@ -500,7 +514,7 @@ private struct TodayIcon: View {
 }
 
 /// Presentation of a used-today entry.
-private enum UsedTodayStyle {
+enum UsedTodayStyle {
   static func symbol(_ kind: UsedTodayKind) -> String {
     switch kind {
     case .sshKey: return "key.horizontal.fill"

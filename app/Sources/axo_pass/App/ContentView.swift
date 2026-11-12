@@ -39,14 +39,18 @@ private struct MainView: View {
 
   /// Whether the selection is a page that uses the full width.
   private var isPage: Bool {
-    if case .today = model.sidebarSelection { return true }
-    return false
+    switch model.sidebarSelection {
+    case .today, .activity: return true
+    default: return false
+    }
   }
 
   @ViewBuilder
   private var detailPane: some View {
     if case .today = model.sidebarSelection {
       TodayPane(sshModel: sshModel, gpgModel: gpgModel)
+    } else if case .activity = model.sidebarSelection {
+      ActivityPane(sshModel: sshModel, gpgModel: gpgModel)
     } else if case .ssh = model.sidebarSelection {
       SshKeyDetailView(model: sshModel)
     } else if case .gpg = model.sidebarSelection {
@@ -62,8 +66,8 @@ private struct MainView: View {
 
   @ViewBuilder
   private var contentPane: some View {
-    if case .today = model.sidebarSelection {
-      // Collapsed while Today is shown.
+    if isPage {
+      // Collapsed while a page is shown.
       Color.clear
     } else if case .vault = model.sidebarSelection {
       ItemsPane()

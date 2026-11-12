@@ -8,6 +8,7 @@ import Observation
 
 enum SidebarDestination: Hashable {
   case today
+  case activity
   case vault(String)
   case ssh
   case gpg
