@@ -3,11 +3,15 @@ import SwiftUI
 
 /// The menu bar icon. A click opens the command palette under it; an Option
 /// click or a right click opens a menu instead. The shortcut set in Settings
-/// also opens the palette.
+/// also opens the palette. A dot on the icon shows counted issues, and the
+/// menu lists them.
 @MainActor
 final class StatusItemController: NSObject {
   private let model: VaultsModel
+  private let issues: IssuesModel
   private let windows: WindowRequests
+  /// Dot over the icon, in the color of the worst counted issue.
+  private let issueDot = NSView()
   private let checkForUpdates: () -> Void
   private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
   private let panel = PalettePanel()
@@ -20,8 +24,12 @@ final class StatusItemController: NSObject {
   /// should close the palette would reopen it.
   private var lastClose = Date.distantPast
 
-  init(model: VaultsModel, windows: WindowRequests, checkForUpdates: @escaping () -> Void) {
+  init(
+    model: VaultsModel, issues: IssuesModel, windows: WindowRequests,
+    checkForUpdates: @escaping () -> Void
+  ) {
     self.model = model
+    self.issues = issues
     self.windows = windows
     self.checkForUpdates = checkForUpdates
     palette = PaletteModel(vaults: model, windows: windows, checkForUpdates: checkForUpdates)
@@ -43,10 +51,48 @@ final class StatusItemController: NSObject {
       button.target = self
       button.action = #selector(clicked)
       button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+      let size = Self.dotSize
+      issueDot.frame = NSRect(
+        x: button.bounds.maxX - size - 2,
+        y: button.isFlipped ? 2 : button.bounds.maxY - size - 2,
+        width: size, height: size)
+      issueDot.autoresizingMask =
+        button.isFlipped ? [.minXMargin, .maxYMargin] : [.minXMargin, .minYMargin]
+      issueDot.wantsLayer = true
+      issueDot.layer?.cornerRadius = size / 2
+      issueDot.isHidden = true
+      button.addSubview(issueDot)
     }
+    observeIssues()
 
     GlobalHotKey.shared.action = { [weak self] in self?.hotKeyPressed() }
     GlobalHotKey.shared.start()
+  }
+
+  private static let dotSize: CGFloat = 6
+
+  /// Update the dot now and again each time the counted issues change.
+  private func observeIssues() {
+    let severity = withObservationTracking {
+      issues.worstSeverity
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.observeIssues() }
+    }
+    issueDot.isHidden = severity == nil
+    issueDot.layer?.backgroundColor = severity.map(Self.nsColor)?.cgColor
+    let count = issues.countedIssues.count
+    statusItem.button?.setAccessibilityLabel(
+      count == 0 ? "Axo Pass" : count == 1 ? "Axo Pass, 1 issue" : "Axo Pass, \(count) issues")
+  }
+
+  private static func nsColor(_ severity: IssueSeverity) -> NSColor {
+    switch severity {
+    case .broken: return .systemRed
+    case .request: return .controlAccentColor
+    case .advice: return .systemOrange
+    case .setup, .info: return .systemGray
+    }
   }
 
   /// The shortcut from Settings toggles the palette, as a click on the icon
@@ -87,11 +133,22 @@ final class StatusItemController: NSObject {
   }
 
   private func makeMenu() -> NSMenu {
-    palette.sshModel.refreshAgentStatus()
+    SetupStatus.shared.refreshAgents()
     let unlocked = model.isAppUnlocked
-    let agentRunning = palette.sshModel.axoAgentStatus?.status == .running
+    let agentRunning = issues.agentStatus == .running
     let menu = NSMenu()
     menu.autoenablesItems = false
+
+    let counted = issues.countedIssues
+    if !counted.isEmpty {
+      menu.addItem(.label(counted.count == 1 ? "1 Issue" : "\(counted.count) Issues"))
+      for issue in counted {
+        let item = ClosureMenuItem(issue.title) { [weak self] in self?.showToday() }
+        item.image = Self.issueImage(issue.severity)
+        menu.addItem(item)
+      }
+      menu.addItem(.separator())
+    }
 
     menu.addItem(.label(unlocked ? "Unlocked" : "Locked"))
     if unlocked {
@@ -128,6 +185,20 @@ final class StatusItemController: NSObject {
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem("Quit Axo Pass") { NSApp.terminate(nil) })
     return menu
+  }
+
+  /// Open the main window on the Today page.
+  private func showToday() {
+    model.selectSidebarDestination(.today)
+    windows.requestMain()
+  }
+
+  /// Filled circle in the severity color, for issue menu items.
+  private static func issueImage(_ severity: IssueSeverity) -> NSImage? {
+    let config = NSImage.SymbolConfiguration(pointSize: 8, weight: .regular)
+      .applying(NSImage.SymbolConfiguration(paletteColors: [nsColor(severity)]))
+    return NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
+      .withSymbolConfiguration(config)
   }
 
   /// Open the palette after the menu has closed and its tracking has ended.

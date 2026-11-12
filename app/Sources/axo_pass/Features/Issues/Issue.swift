@@ -138,6 +138,9 @@ enum Issue: Hashable, Identifiable {
     }
   }
 
+  /// Whether the user can dismiss or snooze the issue. Advice issues only.
+  var isDismissible: Bool { severity == .advice }
+
   /// Sidebar source of the issue. Nil for vault, sync, and AutoFill issues.
   var source: IssueSource? {
     switch self {

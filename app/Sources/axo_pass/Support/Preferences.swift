@@ -30,6 +30,9 @@ enum Preferences {
     /// Path of the synced folder of the app. Vaults turned on later sync with
     /// it. Unset until the user chooses one.
     static let syncFolder = "sync.folder"
+    /// Dismissed advice issues, as `Issue.id` to the end of the snooze in
+    /// seconds since 1970. A dismissal without an end is stored as 0.
+    static let dismissedIssues = "issues.dismissed"
   }
 
   static let defaultAutoLockMinutes = 5

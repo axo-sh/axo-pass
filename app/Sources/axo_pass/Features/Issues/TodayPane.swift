@@ -6,7 +6,8 @@ import SwiftUI
 /// Home page of the app. Lists the issues with one fix button for each, then
 /// the keys and credentials used today. Counted issues are listed under "Needs
 /// you" and setup issues under "Not set up". Info issues are left out. If no
-/// counted issue exists, a summary line lists the checks that pass.
+/// counted issue exists, a summary line lists the checks that pass. Advice
+/// issues can be snoozed or dismissed, and are then listed under "Dismissed".
 struct TodayPane: View {
   let sshModel: SshModel
   let gpgModel: GpgModel
@@ -22,6 +23,7 @@ struct TodayPane: View {
   var body: some View {
     let counted = issues.countedIssues
     let setup = issues.issues.filter { $0.severity == .setup }
+    let dismissed = issues.dismissedIssues
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
@@ -37,6 +39,10 @@ struct TodayPane: View {
         if !setup.isEmpty {
           TodaySectionHeader("Not set up")
           issueCard(setup)
+        }
+        if !dismissed.isEmpty {
+          TodaySectionHeader("Dismissed")
+          issueCard(dismissed, dismissed: true)
         }
         TodaySectionHeader("Used today")
         usedTodayCard
@@ -234,26 +240,27 @@ struct TodayPane: View {
 
   // MARK: - Issues
 
-  /// Card of issue rows with dividers between rows.
-  private func issueCard(_ list: [Issue]) -> some View {
+  /// Card of issue rows with dividers between rows. Rows of dismissed issues
+  /// have a Restore button in place of the fix.
+  private func issueCard(_ list: [Issue], dismissed: Bool = false) -> some View {
     TodayCard {
       ForEach(Array(list.enumerated()), id: \.element.id) { index, issue in
         if index > 0 {
           Divider()
         }
-        row(issue)
+        row(issue, dismissed: dismissed)
       }
     }
   }
 
-  private func row(_ issue: Issue) -> some View {
+  private func row(_ issue: Issue, dismissed: Bool) -> some View {
     HStack(spacing: 12) {
       IssueSeverityIcon(severity: issue.severity)
       VStack(alignment: .leading, spacing: 2) {
         Text(issue.title)
           .fontWeight(.medium)
           .fixedSize(horizontal: false, vertical: true)
-        if let detail = detail(issue) {
+        if let detail = dismissed ? Optional(snoozeDetail(issue)) : detail(issue) {
           Text(detail)
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -262,13 +269,48 @@ struct TodayPane: View {
         }
       }
       Spacer(minLength: 12)
-      if let label = fixLabel(issue) {
-        Button(label) { fix(issue) }
-          .disabled(isFixing(issue))
+      if dismissed {
+        Button("Restore") { issues.restore(issue) }
+      } else {
+        if let label = fixLabel(issue) {
+          Button(label) { fix(issue) }
+            .disabled(isFixing(issue))
+        }
+        if issue.isDismissible {
+          dismissMenu(issue)
+        }
       }
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
+    .opacity(dismissed ? 0.6 : 1)
+  }
+
+  /// Snooze and dismiss choices of an advice issue.
+  private func dismissMenu(_ issue: Issue) -> some View {
+    Menu {
+      Button("Snooze for 1 Day") { snooze(issue, days: 1) }
+      Button("Snooze for 1 Week") { snooze(issue, days: 7) }
+      Divider()
+      Button("Dismiss") { issues.dismiss(issue) }
+    } label: {
+      Image(systemName: "ellipsis")
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Snooze or dismiss")
+  }
+
+  private func snooze(_ issue: Issue, days: Int) {
+    let until = Calendar.current.date(byAdding: .day, value: days, to: Date())
+    issues.dismiss(issue, until: until ?? Date().addingTimeInterval(Double(days) * 86_400))
+  }
+
+  /// Second line of a dismissed issue row: the end of the snooze.
+  private func snoozeDetail(_ issue: Issue) -> String {
+    guard let until = issues.snoozedUntil(issue) else { return "Dismissed" }
+    return "Snoozed until \(until.formatted(date: .abbreviated, time: .shortened))"
   }
 
   /// Second line of an issue row: an error message or the file to change. Nil

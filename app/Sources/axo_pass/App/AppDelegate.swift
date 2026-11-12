@@ -64,7 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     sync.register()
     issues.start()
     observeWindowClose()
-    statusItem = StatusItemController(model: model, windows: windows) { [weak self] in
+    statusItem = StatusItemController(model: model, issues: issues, windows: windows) {
+      [weak self] in
       guard let self else { return }
       // The result shows in the main window.
       self.windows.requestMain()

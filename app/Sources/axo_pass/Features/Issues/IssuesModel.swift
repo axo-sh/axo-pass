@@ -34,11 +34,18 @@ final class IssuesModel {
   private(set) var gpgKeys: [GpgKeyEntry]? = nil
   private(set) var passwords: [PasswordEntryInfo] = []
 
+  /// Dismissed issues, as `Issue.id` to the end of the snooze. Nil for a
+  /// dismissal without an end.
+  private(set) var dismissals: [String: Date?] = [:]
+  /// Time of the last check. Expired snoozes end at the next check.
+  private(set) var now = Date()
+
   private var pollTask: Task<Void, Never>? = nil
 
   init(vaults: VaultsModel, sync: SyncModel) {
     self.vaults = vaults
     self.sync = sync
+    dismissals = Self.loadDismissals()
   }
 
   /// Read all state, then poll the file and socket checks. Call once at
@@ -57,6 +64,7 @@ final class IssuesModel {
   /// Re-read the agent status and the config files. Cheap enough for the
   /// timer.
   func refreshChecks() {
+    now = Date()
     setup.refresh()
     browsers = browserManifestStatuses()
   }
@@ -75,9 +83,18 @@ final class IssuesModel {
 
   // MARK: - Issues
 
-  /// All issues, most severe first. Order within a severity follows the order
-  /// of the checks.
+  /// Issues that are not dismissed, most severe first. Order within a severity
+  /// follows the order of the checks.
   var issues: [Issue] {
+    allIssues.filter { !isDismissed($0) }
+  }
+
+  /// Dismissed and snoozed issues whose condition still holds.
+  var dismissedIssues: [Issue] {
+    allIssues.filter { isDismissed($0) }
+  }
+
+  private var allIssues: [Issue] {
     let all = vaultIssues + sshIssues + shellIssues + gpgIssues + autofillIssues
     return all.sorted { $0.severity < $1.severity }
   }
@@ -91,6 +108,58 @@ final class IssuesModel {
   var worstSeverity: IssueSeverity? {
     countedIssues.first?.severity
   }
+
+  // MARK: - Dismissal
+
+  /// Whether `issue` is dismissed, or snoozed until after the last check.
+  func isDismissed(_ issue: Issue) -> Bool {
+    guard issue.isDismissible, let entry = dismissals[issue.id] else { return false }
+    guard let until = entry else { return true }
+    return until > now
+  }
+
+  /// End of the snooze of `issue`. Nil if the issue is dismissed without an
+  /// end or not dismissed.
+  func snoozedUntil(_ issue: Issue) -> Date? {
+    dismissals[issue.id] ?? nil
+  }
+
+  /// Hide `issue` until `until`, or until restored if `until` is nil.
+  func dismiss(_ issue: Issue, until: Date? = nil) {
+    guard issue.isDismissible else { return }
+    now = Date()
+    dismissals[issue.id] = .some(until)
+    saveDismissals()
+  }
+
+  /// Show a dismissed or snoozed issue again.
+  func restore(_ issue: Issue) {
+    dismissals[issue.id] = nil
+    saveDismissals()
+  }
+
+  /// Dismissals from `UserDefaults`. Snoozes that have ended are dropped.
+  private static func loadDismissals() -> [String: Date?] {
+    let stored =
+      UserDefaults.standard.dictionary(forKey: Preferences.Key.dismissedIssues)
+      as? [String: Double] ?? [:]
+    var result: [String: Date?] = [:]
+    for (id, seconds) in stored {
+      if seconds == 0 {
+        result[id] = .some(nil)
+      } else if seconds > Date().timeIntervalSince1970 {
+        result[id] = Date(timeIntervalSince1970: seconds)
+      }
+    }
+    return result
+  }
+
+  private func saveDismissals() {
+    let stored = dismissals.mapValues { $0?.timeIntervalSince1970 ?? 0 }
+    UserDefaults.standard.set(stored, forKey: Preferences.Key.dismissedIssues)
+  }
+
+  // MARK: - Checks
 
   private var vaultIssues: [Issue] {
     var list: [Issue] = []
