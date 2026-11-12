@@ -217,8 +217,8 @@ final class VaultsModel {
       itemLoadFailures = itemLoadFailures.filter { keys.contains($0.key) }
       if case .vault(let key) = sidebarSelection, key != allSecretsKey, !keys.contains(key) {
         selectSidebarDestination(vaults.first.map { .vault($0.key) })
-      } else if sidebarSelection == nil, let key = vaults.first?.key {
-        selectSidebarDestination(.vault(key))
+      } else if sidebarSelection == nil {
+        selectSidebarDestination(.today)
       }
     } catch {
       vaults = []

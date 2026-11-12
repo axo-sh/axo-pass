@@ -118,11 +118,12 @@ struct VaultsSidebar: View {
     // Read the sync state of each vault after the unlock and when the list
     // changes.
     .task(id: model.vaults) {
-      let start = model.sidebarHighlight
       await sync.reloadAll()
       // Saved passphrases are not listed while locked, so read them now.
-      if !checkedStartSelection { await issues.refreshAll() }
-      selectTodayAfterUnlock(ifStill: start)
+      if !checkedStartSelection {
+        checkedStartSelection = true
+        await issues.refreshAll()
+      }
     }
   }
 
@@ -155,16 +156,6 @@ struct VaultsSidebar: View {
           .help(broken.title)
       }
     }
-  }
-
-  /// Select Today once after the unlock if any counted issue exists. Runs after
-  /// the first sync read, so vault and sync issues are included. Leaves the
-  /// selection alone if the user changed it from `start` in the meantime.
-  private func selectTodayAfterUnlock(ifStill start: SidebarDestination?) {
-    guard !checkedStartSelection else { return }
-    checkedStartSelection = true
-    guard model.sidebarHighlight == start, !issues.countedIssues.isEmpty else { return }
-    model.selectSidebarDestination(.today)
   }
 
   @ViewBuilder
