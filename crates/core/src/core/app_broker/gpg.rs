@@ -102,6 +102,12 @@ pub trait PassphraseAuthorizer: Send + Sync + 'static {
         can_use_saved: bool,
     ) -> Result<Option<CollectedPassphrase>, String>;
 
+    /// Whether the user dismissed the biometric prompt to type the passphrase
+    /// instead. Reading the value clears it.
+    async fn take_typed_request(&self) -> bool {
+        false
+    }
+
     /// The attempt finished. Called once for every [`Self::begin`].
     async fn end(&self, prompt: PassphrasePrompt, outcome: PromptOutcome);
 
@@ -187,8 +193,11 @@ pub(super) async fn get_passphrase(
         && let Some(entry) = entry.clone()
         && has_saved_passphrase(&entry).await
     {
-        match unlock_saved_passphrase(authorizer, &prompt, peer, entry, in_flight).await {
+        let saved = unlock_saved_passphrase(authorizer, &prompt, peer, entry, in_flight).await;
+        match saved {
             SavedPassphrase::Unlocked(passphrase) => return passphrase_response(&passphrase),
+            // The user chose to type the passphrase instead.
+            _ if authorizer.take_typed_request().await => {},
             // Dismissing the biometric prompt answers the request: the user was
             // asked and said no. Falling through to a text field instead would
             // make cancelling take two attempts.

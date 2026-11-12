@@ -330,6 +330,10 @@ pub trait PassphrasePromptDelegate: Send + Sync {
         can_use_saved: bool,
     ) -> Result<Option<CollectedPassphrase>, FfiError>;
 
+    /// Whether the user dismissed the biometric prompt to type the passphrase
+    /// instead. Reading the value clears it.
+    async fn take_typed_passphrase_request(&self) -> bool;
+
     /// The attempt finished. Called once for every `begin_authorization`.
     async fn end_authorization(&self, prompt: PassphrasePrompt, outcome: PromptOutcome);
 
@@ -388,6 +392,10 @@ impl app_broker::PassphraseAuthorizer for DelegatingPassphraseAuthorizer {
                 })
             })
             .transpose()
+    }
+
+    async fn take_typed_request(&self) -> bool {
+        self.delegate.take_typed_passphrase_request().await
     }
 
     async fn end(&self, prompt: app_broker::PassphrasePrompt, outcome: app_broker::PromptOutcome) {

@@ -18,6 +18,7 @@ final class PassphrasePromptModel {
   /// serially.
   private var pending: (id: UInt64, continuation: CheckedContinuation<PromptAnswer, Never>)?
   private var nextPromptID: UInt64 = 0
+  private var typedPassphraseRequested = false
 
   /// Where the prompts are drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
@@ -38,6 +39,7 @@ final class PassphrasePromptModel {
   /// Prepare a context to read the saved passphrase on, and put the biometric
   /// prompt on screen.
   func begin(prompt: PassphrasePrompt, peer: RequestActor) -> UInt64 {
+    typedPassphraseRequested = false
     let grant = grants.begin(Self.grantKey(prompt), peer: peer)
 
     // A context that is still authenticated reads the keychain with no prompt
@@ -120,6 +122,20 @@ final class PassphrasePromptModel {
     grants.forget(Self.grantKey(prompt))
   }
 
+  /// Dismiss the biometric prompt and ask the broker for the text field
+  /// instead.
+  func requestTypedPassphrase(prompt: PassphrasePrompt) {
+    typedPassphraseRequested = true
+    cancelUnlock(prompt: prompt)
+  }
+
+  /// Whether the user chose to type the passphrase instead of using the saved
+  /// one. Reading the value clears it.
+  func takeTypedPassphraseRequest() -> Bool {
+    defer { typedPassphraseRequested = false }
+    return typedPassphraseRequested
+  }
+
   /// Drop every passphrase authorization, so the next request prompts again.
   func forgetAll() {
     grants.forgetAll()
@@ -132,7 +148,8 @@ final class PassphrasePromptModel {
       prompt: prompt,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
-      onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) }
+      onCancel: { [weak self] in self?.cancelUnlock(prompt: prompt) },
+      onEnterPassphrase: { [weak self] in self?.requestTypedPassphrase(prompt: prompt) }
     )
     panel.show(content)
   }
@@ -195,6 +212,7 @@ private struct PassphraseUnlockView: View {
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
+  let onEnterPassphrase: () -> Void
 
   private var title: [HeadlinePart] {
     let key =
@@ -223,7 +241,8 @@ private struct PassphraseUnlockView: View {
         PinentryTranscript(prompt: prompt)
       }
 
-      BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
+      BiometricFooter(
+        icon: icon, touchID: touchID, onCancel: onCancel, onEnterPassphrase: onEnterPassphrase)
     }
     .padding(24)
     .frame(maxWidth: .infinity)
@@ -275,7 +294,7 @@ private struct PassphraseEntryView: View {
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
         if let touchID {
-          Button(touchID ? "Use Touch ID" : "Use Saved Passphrase", action: onUseSaved)
+          Button(touchID ? "Use Touch ID" : "Use Saved", action: onUseSaved)
         }
         Spacer()
         Button("Unlock") { onSubmit(value, saveToKeychain && canSave) }
@@ -555,6 +574,10 @@ final class PassphrasePromptBridge: PassphrasePromptDelegate {
     -> CollectedPassphrase?
   {
     await model.collect(prompt: prompt, canUseSaved: canUseSaved)
+  }
+
+  func takeTypedPassphraseRequest() async -> Bool {
+    await model.takeTypedPassphraseRequest()
   }
 
   func endAuthorization(prompt: PassphrasePrompt, outcome: PromptOutcome) async {

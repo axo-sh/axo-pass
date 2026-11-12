@@ -615,6 +615,11 @@ pub(super) async fn get_passphrase(
                     SavedPassphrase::Unlocked(passphrase) => {
                         return passphrase_response(&passphrase);
                     },
+                    // The user chose to type the passphrase instead.
+                    _ if authorizer.take_typed_request().await => {
+                        can_use_saved = true;
+                        break;
+                    },
                     // Dismissing the biometric prompt answers the request: the
                     // user was asked and said no. Falling through to a text
                     // field instead would make cancelling take two attempts.

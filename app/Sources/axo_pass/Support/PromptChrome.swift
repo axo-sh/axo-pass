@@ -268,11 +268,16 @@ struct BiometricFooter: View {
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
+  /// Offers a button that skips the biometric prompt, if set.
+  var onEnterPassphrase: (() -> Void)? = nil
 
   var body: some View {
     HStack(spacing: 8) {
       Button("Cancel", action: onCancel)
         .keyboardShortcut(.cancelAction)
+      if let onEnterPassphrase {
+        Button("Use Passphrase", action: onEnterPassphrase)
+      }
       Spacer()
       Text(touchID ? LocalizedStringKey("Authorize with **Touch ID**") : "Authorize")
         .foregroundStyle(.primary)
