@@ -60,8 +60,9 @@ struct PaletteResult: Identifiable {
 
   var defaultAction: PaletteAction? { actions.first }
 
-  /// Whether the row has more than its default action to choose from.
-  var hasActionList: Bool { actions.count + (secondaryAction == nil ? 0 : 1) > 1 }
+  /// Whether the row has actions beyond its Return and Command-Return keys.
+  /// A vault or item row only has those, so it has no action list.
+  var hasActionList: Bool { actions.count > 1 }
 }
 
 /// The credential behind a palette row.
@@ -446,9 +447,12 @@ final class PaletteModel {
   /// Complete the query from the results, the way zsh completes a path: first
   /// to the longest prefix every completion shares, and once that adds
   /// nothing, to the selected row. A credential is the end of a path, so on a
-  /// credential row this shows its actions instead.
+  /// credential row this shows its actions instead. So does a row with
+  /// actions and no completion, such as a key.
   func complete() {
-    if let selected = selectedResult, selected.credential != nil {
+    if let selected = selectedResult, selected.hasActionList,
+      selected.credential != nil || selected.completion == nil
+    {
       showActions(for: selected)
       return
     }
@@ -824,11 +828,6 @@ final class PaletteModel {
       case .commandEnter:
         guard let result = selectedResult, let action = result.secondaryAction else { return true }
         run(action, of: result)
-      case .right:
-        guard let result = selectedResult, result.hasActionList else { return false }
-        showActions(for: result)
-      case .left:
-        return false
       case .tab:
         complete()
       case .shiftTab:
@@ -854,9 +853,7 @@ final class PaletteModel {
         run(actions[selectedActionIndex], of: target)
       case .commandEnter, .tab:
         break
-      case .right:
-        return false
-      case .left, .shiftTab, .escape, .deleteInEmptyField:
+      case .shiftTab, .escape, .deleteInEmptyField:
         leaveActions()
       }
       return true

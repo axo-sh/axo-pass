@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Keys the palette handles before the search field sees them.
 enum PaletteKey {
-  case up, down, enter, commandEnter, left, right, tab, shiftTab, escape, deleteInEmptyField
+  case up, down, enter, commandEnter, tab, shiftTab, escape, deleteInEmptyField
 }
 
 /// The floating window the palette is drawn in, anchored under the status item.
@@ -176,23 +176,7 @@ private final class KeyPanel: NSPanel {
     case 48 where flags == .shift: return .shiftTab
     case 53: return .escape
     case 51: return fieldIsEmpty ? .deleteInEmptyField : nil
-    case 123 where flags.isEmpty: return cursor(at: .start) ? .left : nil
-    case 124 where flags.isEmpty: return cursor(at: .end) ? .right : nil
     default: return nil
-    }
-  }
-
-  private enum CursorEdge { case start, end }
-
-  /// Whether the focused text field's cursor, with nothing selected, is at
-  /// the given edge of its text.
-  private func cursor(at edge: CursorEdge) -> Bool {
-    guard let editor = firstResponder as? NSTextView else { return false }
-    let range = editor.selectedRange()
-    guard range.length == 0 else { return false }
-    switch edge {
-    case .start: return range.location == 0
-    case .end: return range.location == (editor.string as NSString).length
     }
   }
 

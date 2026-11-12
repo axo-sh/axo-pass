@@ -169,16 +169,15 @@ struct PaletteView: View {
             }
             if let action = result.secondaryAction { KeyHint(key: "⌘↩", label: action.title) }
             if result.credential?.concealed == true { KeyHint(key: "⌥", label: "Reveal") }
-            if result.credential != nil {
+            if result.hasActionList, result.credential != nil || result.completion == nil {
               KeyHint(key: "⇥", label: "Actions")
-            } else {
-              if result.completion != nil { KeyHint(key: "⇥", label: "Complete") }
-              if result.hasActionList { KeyHint(key: "→", label: "Actions") }
+            } else if result.completion != nil {
+              KeyHint(key: "⇥", label: "Complete")
             }
           }
         case .actions:
           KeyHint(key: "↩", label: "Run")
-          KeyHint(key: "←", label: "Back")
+          KeyHint(key: "esc", label: "Back")
         case .unlock:
           EmptyView()
         }
@@ -229,7 +228,7 @@ struct PaletteView: View {
 
 // MARK: - Pieces
 
-/// The search field. Arrow keys, Return, Escape and Command-K are taken by the
+/// The search field. Arrow keys, Return, Tab, and Escape are taken by the
 /// panel before they reach it.
 private struct PaletteField: View {
   let prompt: String
