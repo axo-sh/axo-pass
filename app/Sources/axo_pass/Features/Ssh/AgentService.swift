@@ -33,6 +33,9 @@ final class AgentService {
   /// Whether the agent starts at login. Changed through `setStartsOnLogin`.
   private(set) var startsOnLogin: Bool
 
+  /// Time of the last `stop` call. Nil if the app has not stopped the agent.
+  private(set) var lastStopRequest: Date? = nil
+
   private init() {
     status = service.status
     startsOnLogin = UserDefaults.standard.bool(forKey: Preferences.Key.sshStartOnLogin)
@@ -51,6 +54,7 @@ final class AgentService {
   /// Stop the running agent. The service stays registered, so launchd starts
   /// the agent again at the next login if "start on login" is on.
   func stop() async throws {
+    lastStopRequest = Date()
     try await core.stopSshAgent()
   }
 

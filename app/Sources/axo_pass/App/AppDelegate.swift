@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// AutoFill checks.
   private(set) lazy var issues = IssuesModel(vaults: model, sync: sync)
   let windows = WindowRequests()
+  /// Notifications for urgent issues.
+  private lazy var issueNotifier = IssueNotifier(issues: issues, vaults: model, windows: windows)
 
   /// Auto-update against GitHub Releases. An update installs only if it is
   /// signed by the same Developer ID Team as the running app.
@@ -63,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // this are only logged, except the pairing counts, which are replayed.
     sync.register()
     issues.start()
+    issueNotifier.start()
     observeWindowClose()
     statusItem = StatusItemController(model: model, issues: issues, windows: windows) {
       [weak self] in
