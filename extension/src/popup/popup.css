@@ -247,7 +247,8 @@ button.code:focus-visible {
 }
 
 /* Neutral notices have no box. Text aligns with the list rows. */
-.card:not(.accent, .warn) {
+.card:not(.accent, .warn),
+.card.plain {
   margin: 0;
   padding: 8px var(--gutter) 6px;
   border: 0;
@@ -271,7 +272,8 @@ button.code:focus-visible {
 }
 
 .card .actions {
-  margin: 12px 0 0 calc(var(--icon) + var(--icon-gap));
+  justify-content: flex-end;
+  margin: 12px 0 0;
 }
 
 .message {

@@ -222,8 +222,12 @@ const card = (opts: {
   title: string;
   lines?: (string | null)[];
   buttons?: Button[];
+  plain?: boolean;
 }): HTMLElement => {
   const box = el('section', opts.tone ? `card ${opts.tone}` : 'card');
+  if (opts.plain) {
+    box.classList.add('plain');
+  }
   const head = el('div', 'hd');
   head.append(icon(opts.icon), el('span', undefined, opts.title));
   box.append(head);
@@ -462,8 +466,13 @@ const render = (view: View | null, loading = 'Loading…'): void => {
         card({
           tone: 'warn',
           icon: 'warn',
-          title: view.message,
-          buttons: [{label: 'Try Again', onClick: () => void load(false)}],
+          title: 'Something went wrong',
+          lines: [
+            /[.!?]$/.test(view.message) ? view.message : `${view.message}.`,
+            'Check that Axo Pass is running and unlocked, then try again. If this keeps happening, restart Axo Pass.',
+          ],
+          buttons: [{label: 'Try Again', kind: 'primary', onClick: () => void load(false)}],
+          plain: true,
         })
       );
       return;
