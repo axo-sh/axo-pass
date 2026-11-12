@@ -115,8 +115,8 @@ export const captureDetail = (capture: CaptureSummary): string => {
     .join(' · ');
 };
 
-/** Heading of the matches list: "Matches for <host>", with the top-level host of a frame. */
-export const matchesHeading = (target: PopupTarget): string => {
-  const inside = target.topHost ? ` inside ${target.topHost}` : '';
-  return `Matches for ${target.host}${inside}`;
+/** Line shown if no login matches the site. Notes the full list if it follows. */
+export const noMatchesText = (target: PopupTarget, others: OtherLogin[] | null): string => {
+  const text = `No logins saved for ${target.host}.`;
+  return others?.length ? `${text} Showing all logins below.` : text;
 };

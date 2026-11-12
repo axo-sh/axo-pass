@@ -1,65 +1,117 @@
 :root {
+  --bg: #f7f7f8;
+  --card: #fff;
   --fg: #1d1d1f;
   --muted: #6e6e73;
-  --line: rgb(0 0 0 / 10%);
+  --line: rgb(0 0 0 / 8%);
   --hover: rgb(0 0 0 / 5%);
-  --accent: #0a66d8;
+  --btn: rgb(0 0 0 / 6%);
+  --btn-hover: rgb(0 0 0 / 10%);
+  --accent: #5e6ad2;
+  --accent-hover: #6b77dc;
+  --accent-tint: rgb(94 106 210 / 9%);
+  --accent-line: rgb(94 106 210 / 45%);
+  --on-accent: #fff;
+  --amber: #b26a00;
+  --amber-tint: rgb(255 159 10 / 10%);
+  --amber-line: rgb(255 159 10 / 50%);
+  --green: #248a3d;
+
+  /* Type scale. 13px is the smallest text size. */
+  --text: 14px;
+  --text-sm: 13px;
+
+  /* Spacing and shape. */
+  --gutter: 16px;
+  --list-inset: 6px;
+  --row-pad: 6px 8px;
+  --radius-sm: 6px;
+  --radius-row: 7px;
+  --radius-card: 10px;
+  --icon: 15px;
+  --icon-gap: 8px;
+  --tile: 28px;
+
   font:
-    13px/1.4 -apple-system,
+    var(--text) / 1.45 -apple-system,
     BlinkMacSystemFont,
     system-ui,
     sans-serif;
   -webkit-font-smoothing: antialiased;
   color: var(--fg);
+  background: var(--bg);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --fg: #f5f5f7;
-    --muted: #a1a1a6;
-    --line: rgb(255 255 255 / 12%);
-    --hover: rgb(255 255 255 / 7%);
-    --accent: #4c9bff;
-    background: #232326;
+    --bg: #1f1f22;
+    --card: #26262a;
+    --fg: #e6e6e8;
+    --muted: #8a8a90;
+    --line: #2c2c30;
+    --hover: #2a2a2e;
+    --btn: #2e2e32;
+    --btn-hover: #38383d;
+    --accent-tint: rgb(94 106 210 / 14%);
+    --accent-line: rgb(94 106 210 / 55%);
+    --amber: #ff9f0a;
+    --amber-tint: rgb(255 159 10 / 8%);
+    --amber-line: rgb(255 159 10 / 45%);
+    --green: #32d74b;
   }
 }
 
+/* Chrome sets `font-size: 75%` on the body of extension popups. */
 body {
   margin: 0;
-  width: 320px;
+  width: 340px;
+  font-size: var(--text);
+}
+
+svg.i {
+  width: var(--icon);
+  height: var(--icon);
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 main {
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
-h2 {
-  margin: 8px 14px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
+/* Login rows */
 
 ul {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 var(--list-inset);
 }
 
 li {
   display: flex;
   align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-row);
+}
+
+li:hover,
+li:focus-within {
+  background: var(--hover);
 }
 
 .login {
   display: flex;
   flex: 1;
-  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
-  padding: 6px 14px;
+  padding: var(--row-pad);
   border: 0;
+  border-radius: var(--radius-row);
   background: none;
   color: inherit;
   font: inherit;
@@ -67,42 +119,163 @@ li {
   cursor: default;
 }
 
-.login:hover,
 .login:focus-visible {
-  background: var(--hover);
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.login .title {
-  font-weight: 500;
+.ic {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--tile);
+  height: var(--tile);
+  border-radius: var(--radius-row);
+  color: var(--on-accent);
+  font-size: var(--text);
+  font-weight: 650;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 8%);
 }
 
-.login .detail {
+.tx {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tx .title,
+.tx .detail {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tx .title {
+  font-weight: 550;
+}
+
+.tx .detail {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 
 button.code {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: none;
-  margin-right: 10px;
+  margin-right: var(--list-inset);
   padding: 2px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: none;
-  color: var(--accent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--btn);
+  color: var(--fg);
   font: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+}
+
+button.code svg.i {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
 }
 
 button.code:hover,
 button.code:focus-visible {
-  background: var(--hover);
+  background: var(--btn-hover);
+  outline: none;
+}
+
+/* Generate row */
+
+.generate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 2 * var(--list-inset));
+  margin: 2px var(--list-inset) 4px;
+  padding: var(--row-pad);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-row);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 550;
+  text-align: left;
+}
+
+.generate:hover,
+.generate:focus-visible {
+  border-style: solid;
+  border-color: var(--accent-line);
+  background: var(--accent-tint);
+  outline: none;
+}
+
+.generate .ic {
+  background: var(--accent);
+}
+
+/* Cards for the save offer and states */
+
+.card {
+  --tone: var(--muted);
+  --tone-line: var(--line);
+  --tone-tint: transparent;
+  margin: 6px 10px 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--tone-line);
+  border-radius: var(--radius-card);
+  background: linear-gradient(var(--tone-tint), var(--tone-tint)), var(--card);
+}
+
+.card.accent {
+  --tone: var(--accent);
+  --tone-line: var(--accent-line);
+  --tone-tint: var(--accent-tint);
+}
+
+.card.warn {
+  --tone: var(--amber);
+  --tone-line: var(--amber-line);
+  --tone-tint: var(--amber-tint);
+}
+
+.card.ok {
+  --tone: var(--green);
+}
+
+/* Neutral notices have no box. Text aligns with the list rows. */
+.card:not(.accent, .warn) {
+  margin: 0;
+  padding: 8px var(--gutter) 6px;
+  border: 0;
+  background: none;
+}
+
+.card .hd {
+  display: flex;
+  align-items: center;
+  gap: var(--icon-gap);
+  font-weight: 600;
+}
+
+.card .hd svg.i {
+  color: var(--tone);
+}
+
+/* Card text and buttons align with the title, after the icon. */
+.card .message {
+  margin: 4px 0 0 calc(var(--icon) + var(--icon-gap));
+}
+
+.card .actions {
+  margin: 12px 0 0 calc(var(--icon) + var(--icon-gap));
 }
 
 .message {
-  margin: 6px 14px;
+  margin: 6px var(--gutter);
   text-wrap: pretty;
 }
 
@@ -110,29 +283,89 @@ button.code:focus-visible {
   color: var(--muted);
 }
 
+/* Buttons */
+
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 8px 14px 4px;
+  margin: 6px var(--gutter) 4px;
 }
 
 button.action {
-  padding: 4px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: none;
-  color: var(--accent);
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--btn);
+  color: var(--fg);
   font: inherit;
-  font-weight: 500;
 }
 
-button.action:hover {
+button.action:hover,
+button.action:focus-visible {
+  background: var(--btn-hover);
+  outline: none;
+}
+
+button.action.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+button.action.primary:hover,
+button.action.primary:focus-visible {
+  background: var(--accent-hover);
+}
+
+button.action.ghost {
+  background: none;
+  color: var(--muted);
+}
+
+button.action.ghost:hover,
+button.action.ghost:focus-visible {
   background: var(--hover);
+  color: var(--fg);
+}
+
+/* Show All Logins row */
+
+.more {
+  display: flex;
+  align-items: center;
+  gap: var(--icon-gap);
+  width: calc(100% - 2 * var(--list-inset));
+  margin: 0 var(--list-inset);
+  padding: var(--row-pad);
+  border: 0;
+  border-radius: var(--radius-row);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+}
+
+.more:hover,
+.more:focus-visible {
+  background: var(--hover);
+  color: var(--fg);
+  outline: none;
+}
+
+.more svg.i:last-child {
+  width: 9px;
+  height: 9px;
+  margin-left: auto;
+  stroke-width: 2.2;
 }
 
 hr {
   border: 0;
   border-top: 1px solid var(--line);
-  margin: 8px 0;
+  margin: 6px 0;
+}
+
+.empty {
+  margin: 2px var(--gutter);
+  color: var(--muted);
 }

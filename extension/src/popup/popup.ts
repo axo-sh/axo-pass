@@ -14,7 +14,7 @@ import type {LoginSummary, OtherLogin} from '@/lib/protocol';
 import type {SaveView, View} from '@/popup/state';
 import {
   captureDetail,
-  matchesHeading,
+  noMatchesText,
   saveHeading,
   viewForCapture,
   viewForList,
@@ -85,7 +85,7 @@ const saveCapture = async (capture: CaptureSummary, login: LoginSummary | null) 
     account: login ? (login.username ?? login.title) : null,
   });
   if (reply.state === 'saved') {
-    saveRoot.replaceChildren(message('Saved in Axo Pass.', true), el('hr'));
+    saveRoot.replaceChildren(card({tone: 'ok', icon: 'check', title: 'Saved in Axo Pass.'}));
     return;
   }
   if (reply.state === 'host' && reply.result.status === 'cancelled') {
@@ -99,9 +99,12 @@ const saveCapture = async (capture: CaptureSummary, login: LoginSummary | null) 
         ? reply.result.message
         : `Unexpected reply from Axo Pass: ${reply.result.status}`;
   saveRoot.replaceChildren(
-    message(text),
-    actions([['Try Again', () => void loadCapture(false)]]),
-    el('hr')
+    card({
+      tone: 'warn',
+      icon: 'warn',
+      title: text,
+      buttons: [{label: 'Try Again', onClick: () => void loadCapture(false)}],
+    })
   );
 };
 
@@ -121,25 +124,34 @@ const renderSave = (view: SaveView | null, progress = 'Loading…'): void => {
     return;
   }
   const {capture, choice} = view;
-  saveRoot.append(el('h2', undefined, saveHeading(view)), message(captureDetail(capture), true));
-  if (view.note) {
-    saveRoot.append(message(view.note, true));
-  }
-  const buttons: [string, () => void][] = [];
+  const buttons: Button[] = [];
   if (choice.kind === 'update') {
     for (const login of choice.logins) {
-      buttons.push([`Update ${login.title}`, () => void saveCapture(capture, login)]);
+      buttons.push({
+        label: `Update ${login.title}`,
+        onClick: () => void saveCapture(capture, login),
+        kind: 'primary',
+      });
     }
   }
-  buttons.push([
-    choice.kind === 'save' ? 'Save' : 'Save as New',
-    () => void saveCapture(capture, null),
-  ]);
+  buttons.push({
+    label: choice.kind === 'save' ? 'Save' : 'Save as New',
+    onClick: () => void saveCapture(capture, null),
+    kind: choice.kind === 'update' ? undefined : 'primary',
+  });
   if (choice.kind === 'unknown') {
-    buttons.push(['Find Existing Login', () => void loadCapture(true)]);
+    buttons.push({label: 'Find Existing Login', onClick: () => void loadCapture(true)});
   }
-  buttons.push(['Not Now', () => void dismiss(capture)]);
-  saveRoot.append(actions(buttons), el('hr'));
+  buttons.push({label: 'Not Now', onClick: () => void dismiss(capture), kind: 'ghost'});
+  saveRoot.append(
+    card({
+      tone: 'accent',
+      icon: choice.kind === 'update' ? 'sync' : 'key',
+      title: saveHeading(view),
+      lines: [captureDetail(capture), view.note],
+      buttons,
+    })
+  );
 };
 
 /** Send a fill or code request and show its outcome. A fill closes the popup. */
@@ -182,18 +194,80 @@ const message = (text: string, muted = false): HTMLElement => {
   return el('p', muted ? 'message muted' : 'message', text);
 };
 
-const actions = (buttons: [string, () => void][]): HTMLElement => {
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+type Icon = 'check' | 'chev' | 'globe' | 'key' | 'lock' | 'sync' | 'touch' | 'warn';
+
+/** Icon from the symbols in popup.html. */
+const icon = (name: Icon): SVGSVGElement => {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'i');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(SVG_NS, 'use');
+  use.setAttribute('href', `#i-${name}`);
+  svg.append(use);
+  return svg;
+};
+
+type Button = {label: string; onClick: () => void; kind?: 'primary' | 'ghost'};
+
+const actions = (buttons: Button[]): HTMLElement => {
   const wrap = el('div', 'actions');
-  for (const [label, onClick] of buttons) {
-    const button = el('button', 'action', label);
+  for (const {label, onClick, kind} of buttons) {
+    const button = el('button', kind ? `action ${kind}` : 'action', label);
     button.addEventListener('click', onClick);
     wrap.append(button);
   }
   return wrap;
 };
 
-const action = (label: string, onClick: () => void): HTMLElement => {
-  return actions([[label, onClick]]);
+/** Boxed notice with an icon, a title, muted lines, and buttons. */
+const card = (opts: {
+  tone?: 'accent' | 'warn' | 'ok';
+  icon: Icon;
+  title: string;
+  lines?: (string | null)[];
+  buttons?: Button[];
+}): HTMLElement => {
+  const box = el('section', opts.tone ? `card ${opts.tone}` : 'card');
+  const head = el('div', 'hd');
+  head.append(icon(opts.icon), el('span', undefined, opts.title));
+  box.append(head);
+  for (const line of opts.lines ?? []) {
+    if (line) {
+      box.append(message(line, true));
+    }
+  }
+  if (opts.buttons?.length) {
+    box.append(actions(opts.buttons));
+  }
+  return box;
+};
+
+const AVATAR_COLORS = [
+  '#5e6ad2',
+  '#2f6fe4',
+  '#0f8b6f',
+  '#8a5cf0',
+  '#c2410c',
+  '#b26a00',
+  '#d93a30',
+  '#3a7d44',
+  '#0e7490',
+  '#be185d',
+];
+
+/** Letter tile for a login, colored by its title. */
+const avatar = (title: string): HTMLElement => {
+  const letter = title.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? '?';
+  let hash = 0;
+  for (const ch of title) {
+    hash = (hash * 31 + (ch.codePointAt(0) ?? 0)) >>> 0;
+  }
+  const tile = el('span', 'ic', letter);
+  tile.style.background = AVATAR_COLORS[hash % AVATAR_COLORS.length] ?? '';
+  tile.setAttribute('aria-hidden', 'true');
+  return tile;
 };
 
 const loginList = (
@@ -204,18 +278,21 @@ const loginList = (
   const list = el('ul');
   for (const login of logins) {
     const button = el('button', 'login');
-    button.append(el('span', 'title', login.title));
+    const text = el('span', 'tx');
+    text.append(el('span', 'title', login.title));
     const detail = [login.username, 'matched' in login ? `Matched ${login.matched.host}` : null]
       .filter(Boolean)
       .join(' · ');
     if (detail) {
-      button.append(el('span', 'detail', detail));
+      text.append(el('span', 'detail', detail));
     }
+    button.append(avatar(login.title), text);
     button.addEventListener('click', () => void fill(target, login, unmatched));
     const item = el('li');
     item.append(button);
     if (offersCode(login)) {
-      const code = el('button', 'code', 'Code');
+      const code = el('button', 'code');
+      code.append(icon('lock'), 'Code');
       code.title = 'Fill one-time code';
       code.setAttribute('aria-label', `Fill one-time code for ${login.username ?? login.title}`);
       code.addEventListener('click', () => void fillCode(target, login));
@@ -226,6 +303,15 @@ const loginList = (
   return list;
 };
 
+const generateButton = (target: PopupTarget): HTMLElement => {
+  const button = el('button', 'generate');
+  const tile = el('span', 'ic');
+  tile.append(icon('key'));
+  button.append(tile, el('span', undefined, 'Generate Password'));
+  button.addEventListener('click', () => void generate(target));
+  return button;
+};
+
 /** Draw `view`, or a loading line if it is `null`. */
 const render = (view: View | null, loading = 'Loading…'): void => {
   root.replaceChildren();
@@ -234,93 +320,132 @@ const render = (view: View | null, loading = 'Loading…'): void => {
     return;
   }
   if ('target' in view && view.target.field === 'new-password') {
-    const target = view.target;
-    root.append(action('Generate Password', () => void generate(target)));
+    root.append(generateButton(view.target));
   }
   switch (view.kind) {
     case 'permissions':
       root.append(
-        message('Axo Pass needs access to websites to find and fill login forms.'),
-        action('Allow Access', () => {
-          // Called directly from the click, which Firefox requires.
-          void browser.permissions.request(ALL_SITES).then((granted) => {
-            if (granted) {
-              void load(false);
-            }
-          });
+        card({
+          tone: 'warn',
+          icon: 'globe',
+          title: 'Website access is off.',
+          lines: ['Axo Pass needs access to websites to find and fill login forms.'],
+          buttons: [
+            {
+              label: 'Allow Access',
+              kind: 'primary',
+              onClick: () => {
+                // Called directly from the click, which Firefox requires.
+                void browser.permissions.request(ALL_SITES).then((granted) => {
+                  if (granted) {
+                    void load(false);
+                  }
+                });
+              },
+            },
+          ],
         })
       );
       return;
     case 'no-page':
-      root.append(message('AutoFill works on http and https pages.', true));
+      root.append(
+        card({
+          icon: 'globe',
+          title: 'Nothing to fill on this page.',
+          lines: ['AutoFill works on http and https pages.'],
+        })
+      );
       return;
     case 'host-not-installed':
       root.append(
-        message('Axo Pass is not set up for this browser.'),
-        message('Open Axo Pass, then Settings > AutoFill, and turn on this browser.', true)
+        card({
+          tone: 'warn',
+          icon: 'warn',
+          title: 'Axo Pass is not set up for this browser.',
+          lines: ['Open Axo Pass, then Settings > AutoFill, and turn on this browser.'],
+        })
       );
       return;
     case 'app-unavailable':
       root.append(
-        message('Axo Pass is not running and could not be started.'),
-        action('Try Again', () => void load(false))
+        card({
+          tone: 'warn',
+          icon: 'warn',
+          title: 'Axo Pass is not running and could not be started.',
+          buttons: [{label: 'Try Again', onClick: () => void load(false)}],
+        })
       );
       return;
     case 'update-needed':
       root.append(
-        message('This version of the extension does not work with this version of Axo Pass.'),
-        message(
-          view.update === 'extension'
-            ? 'Update the Axo Pass extension.'
-            : 'Update the Axo Pass app.',
-          true
-        )
+        card({
+          tone: 'warn',
+          icon: 'sync',
+          title:
+            view.update === 'extension'
+              ? 'Update the Axo Pass extension.'
+              : 'Update the Axo Pass app.',
+          lines: ['This version of the extension does not work with this version of Axo Pass.'],
+        })
       );
       return;
     case 'unverified':
       root.append(
-        el('h2', undefined, matchesHeading(view.target)),
-        message(
-          'Axo Pass could not verify this browser. Each listing asks for your approval in Axo Pass.',
-          true
-        ),
-        action('Find Logins', () => void load(true))
+        card({
+          icon: 'touch',
+          title: 'Browser not verified.',
+          lines: [
+            'Axo Pass could not verify this browser. Each listing asks for your approval in Axo Pass.',
+          ],
+          buttons: [{label: 'Find Logins', kind: 'primary', onClick: () => void load(true)}],
+        })
       );
       return;
     case 'locked':
       root.append(
-        el('h2', undefined, matchesHeading(view.target)),
-        message('Axo Pass is locked.', true),
-        action('Unlock', () => void load(true))
+        card({
+          icon: 'lock',
+          title: 'Axo Pass is locked.',
+          buttons: [{label: 'Unlock', kind: 'primary', onClick: () => void load(true)}],
+        })
       );
       return;
     case 'cancelled':
       root.append(
-        el('h2', undefined, matchesHeading(view.target)),
-        message('Cancelled.', true),
-        action('Try Again', () => void load(true))
+        card({
+          icon: 'warn',
+          title: 'Cancelled.',
+          buttons: [{label: 'Try Again', onClick: () => void load(true)}],
+        })
       );
       return;
-    case 'logins':
-      root.append(el('h2', undefined, matchesHeading(view.target)));
+    case 'logins': {
       root.append(
         view.matches.length
           ? loginList(view.target, view.matches, false)
-          : message('No logins are saved for this site.', true)
+          : el('p', 'empty', noMatchesText(view.target, view.others))
       );
-      root.append(el('hr'), el('h2', undefined, 'All logins'));
+      root.append(el('hr'));
       if (view.others === null) {
-        root.append(action('Show All Logins', () => void load(true)));
+        const more = el('button', 'more');
+        more.append(icon('lock'), el('span', undefined, 'Show All Logins'), icon('chev'));
+        more.addEventListener('click', () => void load(true));
+        root.append(more);
       } else if (view.others.length) {
         root.append(loginList(view.target, view.others, true));
       } else {
-        root.append(message('No other logins.', true));
+        root.append(el('p', 'empty', 'No other logins.'));
       }
       return;
+    }
     case 'error':
       root.append(
-        message(view.message),
-        action('Try Again', () => void load(false))
+        card({
+          tone: 'warn',
+          icon: 'warn',
+          title: view.message,
+          buttons: [{label: 'Try Again', onClick: () => void load(false)}],
+        })
       );
       return;
   }
