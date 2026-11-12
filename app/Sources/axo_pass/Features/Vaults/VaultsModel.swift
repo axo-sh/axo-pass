@@ -10,6 +10,7 @@ enum SidebarDestination: Hashable {
   case today
   case activity
   case vault(String)
+  case itemType(ItemType)
   case ssh
   case gpg
   case age
@@ -597,9 +598,9 @@ final class VaultsModel {
   /// frame renders the new vault with nothing selected.
   private func commitSelection(_ dest: SidebarDestination?) {
     pendingSelection = nil
-    let prevVaultKey = selectedVaultKey
+    let prevItemList = itemListSelection
     sidebarSelection = dest
-    guard selectedVaultKey != prevVaultKey else { return }
+    guard itemListSelection != prevItemList else { return }
     selectedItemRef = displayItems.first?.id
     // A vault added or imported since the last load still needs its items.
     if isAppUnlocked { Task { await loadItemsForSelection() } }
@@ -607,11 +608,24 @@ final class VaultsModel {
 
   // MARK: - Items
 
-  /// Which vault keys a destination covers: every vault for "All Secrets", the
-  /// one vault otherwise, and none for the tool sections.
+  /// Which vault keys a destination covers: every vault for "All Secrets" and
+  /// the item types, the one vault for a vault, and none for the tool sections.
   private func vaultKeys(for dest: SidebarDestination?) -> [String] {
-    guard case .vault(let key) = dest else { return [] }
-    return key == allSecretsKey ? vaults.map { $0.key } : [key]
+    switch dest {
+    case .vault(let key): return key == allSecretsKey ? vaults.map { $0.key } : [key]
+    case .itemType: return vaults.map { $0.key }
+    default: return []
+    }
+  }
+
+  /// Number of items of `type` in all vaults. Nil until every vault is loaded.
+  func itemCount(of type: ItemType) -> Int? {
+    var count = 0
+    for vault in vaults {
+      guard let items = itemCache[vault.key] else { return nil }
+      count += items.filter(type.contains).count
+    }
+    return count
   }
 
   /// Which vault keys the current selection covers.
@@ -1810,15 +1824,42 @@ final class VaultsModel {
   /// True when the sidebar's "All Secrets" row is selected.
   var isAllSecrets: Bool { selectedVaultKey == allSecretsKey }
 
+  var selectedItemType: ItemType? {
+    if case .itemType(let type) = sidebarSelection { return type }
+    return nil
+  }
+
+  /// True when the selection lists items from every vault: "All Secrets" or an
+  /// item type.
+  var isAllVaults: Bool { isAllSecrets || selectedItemType != nil }
+
+  /// Selection if it lists items. Nil for the tool sections and pages.
+  private var itemListSelection: SidebarDestination? {
+    switch sidebarSelection {
+    case .vault, .itemType: return sidebarSelection
+    default: return nil
+    }
+  }
+
+  /// Title of the item list for the current selection.
+  var itemListTitle: String {
+    if let vault = selectedVault { return vault.name ?? vault.key }
+    if let type = selectedItemType { return type.title }
+    return isAllSecrets ? "All Secrets" : ""
+  }
+
   /// The items to show for the current selection, each tagged with its vault.
-  /// "All Secrets" merges every vault and sorts by title.
+  /// "All Secrets" and the item types merge every vault and sort by title.
   var displayItems: [DisplayItem] {
-    guard selectedVaultKey != nil else { return [] }
-    if isAllSecrets {
+    guard itemListSelection != nil else { return [] }
+    if isAllVaults {
+      let type = selectedItemType
       return
         vaults
         .flatMap { vault in
-          (itemCache[vault.key] ?? []).map { DisplayItem(vaultKey: vault.key, item: $0) }
+          (itemCache[vault.key] ?? [])
+            .filter { type?.contains($0) ?? true }
+            .map { DisplayItem(vaultKey: vault.key, item: $0) }
         }
         .sorted {
           $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending
@@ -1837,11 +1878,11 @@ final class VaultsModel {
   /// use this to show a loading state instead of an empty "select" placeholder.
   /// A vault whose load failed counts as finished.
   var isLoadingSelectedItems: Bool {
-    guard isAppUnlocked, selectedVaultKey != nil else { return false }
+    guard isAppUnlocked, itemListSelection != nil else { return false }
     let isPending = { (key: String) in
       self.itemCache[key] == nil && self.itemLoadFailures[key] == nil
     }
-    if isAllSecrets {
+    if isAllVaults {
       return !vaults.isEmpty && vaults.contains { isPending($0.key) }
     }
     guard let key = selectedVaultKey else { return false }

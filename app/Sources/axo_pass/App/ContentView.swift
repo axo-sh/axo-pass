@@ -28,7 +28,7 @@ private struct MainView: View {
 
   var body: some View {
     NavigationSplitView {
-      VaultsSidebar()
+      VaultsSidebar(sshModel: sshModel, gpgModel: gpgModel, ageModel: ageModel)
     } content: {
       contentPane
     } detail: {
@@ -69,7 +69,7 @@ private struct MainView: View {
     if isPage {
       // Collapsed while a page is shown.
       Color.clear
-    } else if case .vault = model.sidebarSelection {
+    } else if model.selectedVaultKey != nil || model.selectedItemType != nil {
       ItemsPane()
     } else if case .ssh = model.sidebarSelection {
       SshPane(model: sshModel)

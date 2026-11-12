@@ -39,10 +39,10 @@ struct ItemsPane: View {
   // unfiled item's `unfiledDropID`.
   @State private var dropTarget: String? = nil
 
-  /// Folders in the selected vault. Empty for "All Secrets", which lists items
-  /// from all vaults without grouping.
+  /// Folders in the selected vault. Empty for "All Secrets" and the item types,
+  /// which list items from all vaults without grouping.
   private var folders: [FolderInfo] {
-    guard !model.isAllSecrets, let key = model.selectedVaultKey else { return [] }
+    guard !model.isAllVaults, let key = model.selectedVaultKey else { return [] }
     return model.folders(for: key)
   }
 
@@ -60,7 +60,7 @@ struct ItemsPane: View {
     Group {
       if model.isLoadingSelectedItems {
         DelayedProgressView()
-      } else if isSearching, model.selectedVault != nil || model.isAllSecrets {
+      } else if isSearching, model.selectedVault != nil || model.isAllVaults {
         if searchResults.isEmpty {
           ContentUnavailableView.search(text: searchQuery)
         } else {
@@ -68,7 +68,7 @@ struct ItemsPane: View {
             itemRows(searchResults)
           }
         }
-      } else if (model.selectedVault != nil || model.isAllSecrets)
+      } else if (model.selectedVault != nil || model.isAllVaults)
         && !(model.displayItems.isEmpty && folders.isEmpty)
       {
         List(selection: $model.selectedItemRef) {
@@ -93,10 +93,7 @@ struct ItemsPane: View {
     }
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
-    .navigationTitle(
-      model.selectedVault.map { $0.name ?? $0.key }
-        ?? (model.isAllSecrets ? "All Secrets" : "")
-    )
+    .navigationTitle(model.itemListTitle)
     .searchable(text: $searchQuery, prompt: "Search")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {

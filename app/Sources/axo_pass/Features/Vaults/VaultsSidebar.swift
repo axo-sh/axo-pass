@@ -2,7 +2,20 @@ import AppKit
 import AxoPassFFI
 import SwiftUI
 
+/// Number of vaults listed before "Show more".
+private let collapsedVaultLimit = 8
+
+/// Grouping of the Library section.
+private enum LibraryMode: String {
+  case vaults
+  case types
+}
+
 struct VaultsSidebar: View {
+  let sshModel: SshModel
+  let gpgModel: GpgModel
+  let ageModel: AgeModel
+
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
   @Environment(IssuesModel.self) private var issues
@@ -11,8 +24,10 @@ struct VaultsSidebar: View {
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
-  @State private var secretsExpanded = true
-  @State private var sourcesExpanded = true
+  @AppStorage("sidebarLibraryExpanded") private var libraryExpanded = true
+  @AppStorage("sidebarSourcesExpanded") private var sourcesExpanded = true
+  @AppStorage("sidebarLibraryMode") private var libraryMode = LibraryMode.vaults
+  @AppStorage("sidebarShowAllVaults") private var showAllVaults = false
   // Whether the selection after the unlock was checked. The sidebar is
   // created again at each unlock.
   @State private var checkedStartSelection = false
@@ -29,25 +44,45 @@ struct VaultsSidebar: View {
   var body: some View {
     List(selection: selectionBinding) {
       todayRow
-      Label("Activity", systemImage: "waveform.path.ecg")
-        .tag(SidebarDestination.activity)
-
-      Section(isExpanded: $secretsExpanded) {
-        vaultItems
-      } header: {
-        SidebarSectionHeader("Secrets") { withAnimation { secretsExpanded.toggle() } }
+      Label {
+        Text("Activity")
+      } icon: {
+        Image(systemName: "waveform.path.ecg")
+          .foregroundStyle(.pink)
       }
+      .tag(SidebarDestination.activity)
 
-      Section(isExpanded: $sourcesExpanded) {
-        sourceRow("SSH", systemImage: "asterisk", source: .ssh)
-          .tag(SidebarDestination.ssh)
-        sourceRow("GPG", systemImage: "key.fill", source: .gpg)
-          .tag(SidebarDestination.gpg)
-        Label("Age", systemImage: "lock.rectangle.stack")
-          .tag(SidebarDestination.age)
+      Section {
+        if libraryExpanded {
+          LibraryModePicker(mode: $libraryMode)
+          switch libraryMode {
+          case .vaults: vaultItems
+          case .types: typeItems
+          }
+        }
       } header: {
-        SidebarSectionHeader("Sources") { withAnimation { sourcesExpanded.toggle() } }
+        SidebarSectionHeader("Library", isExpanded: libraryExpanded) {
+          withAnimation(.snappy(duration: 0.2)) { libraryExpanded.toggle() }
+        }
       }
+      // The header has its own chevron, so hide the system disclosure button.
+      .collapsible(false)
+
+      Section {
+        if sourcesExpanded {
+          sourceRow("SSH", source: .ssh, count: sshModel.keys.count)
+            .tag(SidebarDestination.ssh)
+          sourceRow("GPG Keyring", source: .gpg, count: gpgModel.keys.count)
+            .tag(SidebarDestination.gpg)
+          sourceRow("Age", source: nil, count: ageModel.keys.count)
+            .tag(SidebarDestination.age)
+        }
+      } header: {
+        SidebarSectionHeader("Sources", isExpanded: sourcesExpanded) {
+          withAnimation(.snappy(duration: 0.2)) { sourcesExpanded.toggle() }
+        }
+      }
+      .collapsible(false)
     }
     .listStyle(.sidebar)
     .navigationSplitViewColumnWidth(min: 160, ideal: 200)
@@ -125,7 +160,15 @@ struct VaultsSidebar: View {
       if !checkedStartSelection {
         checkedStartSelection = true
         await issues.refreshAll()
+        // Source rows show key counts before their panes are opened.
+        await sshModel.reload()
+        await gpgModel.reload()
+        await ageModel.reload()
       }
+    }
+    // Item type counts need the items of every vault.
+    .task(id: TypeCountsTrigger(mode: libraryMode, vaults: model.vaults)) {
+      if libraryMode == .types { await model.loadAllItems() }
     }
   }
 
@@ -133,7 +176,12 @@ struct VaultsSidebar: View {
   /// issue is broken.
   private var todayRow: some View {
     HStack(spacing: 4) {
-      Label("Today", systemImage: "sun.max")
+      Label {
+        Text("Today")
+      } icon: {
+        Image(systemName: "sun.max.fill")
+          .foregroundStyle(.orange)
+      }
       Spacer(minLength: 0)
       let count = issues.countedIssues.count
       if count > 0 {
@@ -145,18 +193,75 @@ struct VaultsSidebar: View {
     .tag(SidebarDestination.today)
   }
 
-  /// Source row with a red dot if a broken issue belongs to `source`.
-  private func sourceRow(_ title: String, systemImage: String, source: IssueSource) -> some View {
-    let broken = issues.issues.first { $0.source == source && $0.severity == .broken }
-    return HStack(spacing: 4) {
-      Label(title, systemImage: systemImage)
+  /// Source row with a status dot and the key count. The dot is red for a
+  /// broken issue, orange for another counted issue, and green if the source
+  /// has keys and no counted issue.
+  private func sourceRow(
+    _ title: String, source: IssueSource?, count: Int
+  ) -> some View {
+    let issue = source.flatMap { source in
+      issues.countedIssues.first { $0.source == source }
+    }
+    let dotColor: Color?
+    if let issue {
+      dotColor = issue.severity == .broken ? .red : .orange
+    } else {
+      dotColor = count > 0 ? .green : nil
+    }
+    return HStack(spacing: 6) {
+      Text(title)
       Spacer(minLength: 0)
-      if let broken {
+      if let dotColor {
         Circle()
-          .fill(.red)
+          .fill(dotColor)
           .frame(width: 6, height: 6)
-          .help(broken.title)
+          .help(issue?.title ?? "")
       }
+      if count > 0 {
+        Text("\(count)")
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var allSecretsRow: some View {
+    Label {
+      Text("All Secrets")
+    } icon: {
+      Image(systemName: "square.stack.3d.up.fill")
+        .foregroundStyle(.tint)
+    }
+    .tag(SidebarDestination.vault(allSecretsKey))
+  }
+
+  /// Vaults listed while the list is collapsed. The selected vault is always
+  /// listed.
+  private var visibleVaults: [VaultInfo] {
+    guard !showAllVaults, model.vaults.count > collapsedVaultLimit else { return model.vaults }
+    let shown = Array(model.vaults.prefix(collapsedVaultLimit))
+    if let selected = model.selectedVault, !shown.contains(where: { $0.key == selected.key }) {
+      return shown + [selected]
+    }
+    return shown
+  }
+
+  @ViewBuilder
+  private var typeItems: some View {
+    allSecretsRow
+    ForEach(ItemType.allCases, id: \.self) { type in
+      HStack(spacing: 4) {
+        Label(type.title, systemImage: type.systemImage)
+        Spacer(minLength: 0)
+        if model.isPendingSelection(.itemType(type)) {
+          DelayedProgressView(size: .mini, expands: false)
+        } else if let count = model.itemCount(of: type), count > 0 {
+          Text("\(count)")
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+        }
+      }
+      .tag(SidebarDestination.itemType(type))
     }
   }
 
@@ -167,20 +272,14 @@ struct VaultsSidebar: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     } else {
-      Label {
-        Text("All Secrets")
-      } icon: {
-        Image(systemName: "square.stack.3d.up.fill")
-          .foregroundStyle(.tint)
-      }
-      .tag(SidebarDestination.vault("all"))
+      allSecretsRow
 
-      ForEach(model.vaults, id: \.key) { vault in
+      ForEach(visibleVaults, id: \.key) { vault in
         HStack(spacing: 4) {
           Label {
             Text(vault.name ?? vault.key)
           } icon: {
-            Image(systemName: "circle.fill").hidden()
+            VaultBadge(name: vault.name ?? vault.key, key: vault.key)
           }
           Spacer(minLength: 0)
           VaultSyncSymbol(vault: syncRef(vault))
@@ -204,14 +303,24 @@ struct VaultsSidebar: View {
         }
       }
 
+      if model.vaults.count > collapsedVaultLimit {
+        Button {
+          withAnimation(.snappy(duration: 0.2)) { showAllVaults.toggle() }
+        } label: {
+          Label(showAllVaults ? "Show fewer" : "Show more", systemImage: "ellipsis")
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+      }
+
       Label("Recently Deleted", systemImage: "trash")
+        .foregroundStyle(.secondary)
         .tag(SidebarDestination.recentlyDeleted)
 
       Button {
         showingNewVaultSheet = true
       } label: {
         Label("New Vault", systemImage: "plus")
-          .font(.callout)
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
@@ -242,28 +351,106 @@ struct VaultsSidebar: View {
   }
 }
 
+/// Task id for loading the item type counts.
+private struct TypeCountsTrigger: Equatable {
+  let mode: LibraryMode
+  let vaults: [VaultInfo]
+}
+
+/// Section title with a chevron. A tap expands or collapses the section.
 private struct SidebarSectionHeader: View {
   let title: String
+  let isExpanded: Bool
   let onTap: () -> Void
 
-  init(_ title: String, onTap: @escaping () -> Void = {}) {
+  init(_ title: String, isExpanded: Bool, onTap: @escaping () -> Void) {
     self.title = title
+    self.isExpanded = isExpanded
     self.onTap = onTap
   }
 
   var body: some View {
     HStack(spacing: 4) {
       Text(title)
-        .font(.caption2)
-        .fontWeight(.semibold)
-        .textCase(.uppercase)
-        .kerning(0.6)
+        .font(.subheadline)
+        .fontWeight(.medium)
+      Image(systemName: "chevron.down")
+        .font(.caption2.weight(.semibold))
+        .rotationEffect(.degrees(isExpanded ? 0 : -90))
       Spacer(minLength: 0)
     }
-    .foregroundStyle(.tertiary)
+    .foregroundStyle(.secondary)
     .contentShape(.rect)
     .padding(.top, 6)
     .onTapGesture(perform: onTap)
+    .accessibilityAddTraits(.isButton)
+    .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+  }
+}
+
+/// Segmented control that switches the Library section between vaults and
+/// item types.
+private struct LibraryModePicker: View {
+  @Binding var mode: LibraryMode
+  @Namespace private var selection
+
+  var body: some View {
+    HStack(spacing: 2) {
+      segment(.vaults, title: "Vaults", systemImage: "archivebox")
+      segment(.types, title: "Types", systemImage: "square.3.layers.3d")
+    }
+    .padding(2)
+    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
+    .padding(.vertical, 4)
+  }
+
+  private func segment(_ value: LibraryMode, title: String, systemImage: String) -> some View {
+    let isSelected = mode == value
+    return Button {
+      withAnimation(.snappy(duration: 0.2)) { mode = value }
+    } label: {
+      Label(title, systemImage: systemImage)
+        .font(.callout)
+        .foregroundStyle(isSelected ? .primary : .secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+        .background {
+          if isSelected {
+            RoundedRectangle(cornerRadius: 6)
+              .fill(Color.primary.opacity(0.1))
+              .matchedGeometryEffect(id: "selection", in: selection)
+          }
+        }
+        .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
+  }
+}
+
+/// Rounded square with the first letter of a vault name. The color is derived
+/// from the vault key, so it is the same on every launch.
+private struct VaultBadge: View {
+  let name: String
+  let key: String
+
+  private static let colors: [Color] = [
+    .purple, .orange, .indigo, .pink, .red, .blue, .green, .brown, .gray, .teal, .mint, .cyan,
+  ]
+
+  private var color: Color {
+    let sum = key.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+    return Self.colors[sum % Self.colors.count]
+  }
+
+  var body: some View {
+    Text(name.first.map { String($0).uppercased() } ?? "?")
+      .font(.system(size: 10, weight: .bold))
+      .foregroundStyle(.white)
+      .frame(width: 16, height: 16)
+      .background(color.gradient, in: RoundedRectangle(cornerRadius: 4))
+      .accessibilityHidden(true)
   }
 }
 
