@@ -532,7 +532,8 @@ enum UsedTodayStyle {
     switch kind {
     case .sshKey: return .teal
     case .gpgKey: return .purple
-    case .login, .passkey: return .green
+    case .login: return Color(red: 66 / 255, green: 96 / 255, blue: 119 / 255)
+    case .passkey: return .green
     case .credential, .item: return .blue
     case .vault: return .gray
     case .ageIdentity: return .indigo
