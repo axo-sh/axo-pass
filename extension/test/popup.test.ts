@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 
 import type {PopupTarget} from '@/lib/messages';
 import type {HostResult, OtherLogin} from '@/lib/protocol';
-import {noMatchesText, viewForList} from '@/popup/state';
+import {filterLogins, viewForList} from '@/popup/state';
 
 const TARGET: PopupTarget = {
   frameUrl: 'https://github.com/login',
@@ -43,12 +43,14 @@ describe('popup states', () => {
     expect(locked.kind === 'logins' && locked.others).toBeNull();
   });
 
-  it('notes the full list below if no login matches', () => {
-    const other: OtherLogin = {record_id: 'r1', title: 'Zulip', username: null, has_totp: false};
-    expect(noMatchesText(TARGET, [other])).toBe(
-      'No logins saved for github.com. Showing all logins below.'
-    );
-    expect(noMatchesText(TARGET, [])).toBe('No logins saved for github.com.');
-    expect(noMatchesText(TARGET, null)).toBe('No logins saved for github.com.');
+  it('filters logins by title or username, ignoring case', () => {
+    const login = (title: string, username: string | null): OtherLogin => {
+      return {record_id: title, title, username, has_totp: false};
+    };
+    const logins = [login('Zulip', 'tp@octavore.com'), login('github.com', 'octavore')];
+    expect(filterLogins(logins, '  ')).toEqual(logins);
+    expect(filterLogins(logins, 'ZUL').map((l) => l.title)).toEqual(['Zulip']);
+    expect(filterLogins(logins, 'octavore').map((l) => l.title)).toEqual(['Zulip', 'github.com']);
+    expect(filterLogins(logins, 'cloudflare')).toEqual([]);
   });
 });

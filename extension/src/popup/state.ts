@@ -115,8 +115,13 @@ export const captureDetail = (capture: CaptureSummary): string => {
     .join(' · ');
 };
 
-/** Line shown if no login matches the site. Notes the full list if it follows. */
-export const noMatchesText = (target: PopupTarget, others: OtherLogin[] | null): string => {
-  const text = `No logins saved for ${target.host}.`;
-  return others?.length ? `${text} Showing all logins below.` : text;
+/** Logins whose title or username contains `query`, ignoring case. */
+export const filterLogins = <T extends OtherLogin>(logins: T[], query: string): T[] => {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return logins;
+  }
+  return logins.filter((login) =>
+    [login.title, login.username].some((text) => text?.toLowerCase().includes(needle))
+  );
 };

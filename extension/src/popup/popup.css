@@ -365,6 +365,40 @@ hr {
   margin: 6px 0;
 }
 
+/* Search field for all logins */
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--icon-gap);
+  height: 32px;
+  /* No bottom margin. Row padding and the centered tile already add about 12px below. */
+  margin: 12px var(--gutter) 0;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-row);
+  color: var(--muted);
+}
+
+.search:focus-within {
+  border-color: var(--accent-line);
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+
+.search input::placeholder {
+  color: var(--muted);
+}
+
 .empty {
   margin: 2px var(--gutter);
   color: var(--muted);

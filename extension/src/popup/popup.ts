@@ -12,13 +12,7 @@ import type {
 } from '@/lib/messages';
 import type {LoginSummary, OtherLogin} from '@/lib/protocol';
 import type {SaveView, View} from '@/popup/state';
-import {
-  captureDetail,
-  noMatchesText,
-  saveHeading,
-  viewForCapture,
-  viewForList,
-} from '@/popup/state';
+import {captureDetail, filterLogins, saveHeading, viewForCapture, viewForList} from '@/popup/state';
 
 // The popup asks the background script for everything, so a fill or a save
 // continues if the popup closes while the app shows its prompt. Captured
@@ -196,7 +190,7 @@ const message = (text: string, muted = false): HTMLElement => {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-type Icon = 'check' | 'chev' | 'globe' | 'key' | 'lock' | 'sync' | 'touch' | 'warn';
+type Icon = 'check' | 'chev' | 'globe' | 'key' | 'lock' | 'search' | 'sync' | 'touch' | 'warn';
 
 /** Icon from the symbols in popup.html. */
 const icon = (name: Icon): SVGSVGElement => {
@@ -301,6 +295,29 @@ const loginList = (
     list.append(item);
   }
   return list;
+};
+
+/** Search field above a list of all logins. Typing filters the list. */
+const searchableList = (target: PopupTarget, logins: OtherLogin[]): HTMLElement[] => {
+  const field = el('label', 'search');
+  const input = el('input');
+  input.type = 'search';
+  input.placeholder = 'Search all logins…';
+  input.setAttribute('aria-label', 'Search all logins');
+  field.append(icon('search'), input);
+  // Focus once the caller has inserted the field.
+  queueMicrotask(() => input.focus());
+
+  const results = el('div');
+  const update = () => {
+    const shown = filterLogins(logins, input.value);
+    results.replaceChildren(
+      shown.length ? loginList(target, shown, true) : el('p', 'empty', 'No logins match.')
+    );
+  };
+  input.addEventListener('input', update);
+  update();
+  return [field, results];
 };
 
 const generateButton = (target: PopupTarget): HTMLElement => {
@@ -423,10 +440,12 @@ const render = (view: View | null, loading = 'Loading…'): void => {
       root.append(
         view.matches.length
           ? loginList(view.target, view.matches, false)
-          : el('p', 'empty', noMatchesText(view.target, view.others))
+          : el('p', 'empty', `No logins saved for ${view.target.host}.`),
+        el('hr')
       );
-      root.append(el('hr'));
-      if (view.others === null) {
+      if (!view.matches.length && view.others?.length) {
+        root.append(...searchableList(view.target, view.others));
+      } else if (view.others === null) {
         const more = el('button', 'more');
         more.append(icon('lock'), el('span', undefined, 'Show All Logins'), icon('chev'));
         more.addEventListener('click', () => void load(true));
