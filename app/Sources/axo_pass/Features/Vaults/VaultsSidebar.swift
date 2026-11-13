@@ -95,13 +95,10 @@ struct VaultsSidebar: View {
     }
     .listStyle(.sidebar)
     .navigationSplitViewColumnWidth(min: 160, ideal: 200)
-    .safeAreaInset(edge: .bottom) {
-      HStack(spacing: 8) {
-        Button {
-          model.reload()
-        } label: {
-          Label("Reload", systemImage: "arrow.clockwise")
-        }
+    .toolbar {
+      ToolbarItemGroup(placement: .primaryAction) {
+        // Push the search button to the trailing edge of the sidebar toolbar.
+        Spacer()
         Button {
           showPalette()
         } label: {
@@ -109,6 +106,15 @@ struct VaultsSidebar: View {
         }
         .keyboardShortcut("k")
         .help("Search all items. ⌘K")
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      HStack(spacing: 8) {
+        Button {
+          model.reload()
+        } label: {
+          Label("Reload", systemImage: "arrow.clockwise")
+        }
         // Add synced vaults to this Mac from the synced folder of the app.
         Menu {
           Button("Pair with Another Mac…") { sync.sheet = .pair(root: sync.folder, join: nil) }
@@ -338,6 +344,7 @@ struct VaultsSidebar: View {
 
       Label {
         Text("Recently Deleted")
+          .foregroundStyle(.secondary)
       } icon: {
         Image(systemName: "trash")
       }
