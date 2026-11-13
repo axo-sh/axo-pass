@@ -16,9 +16,7 @@ struct RecentlyDeletedPane: View {
         } else {
           ContentUnavailableView(
             "Nothing deleted", systemImage: "trash",
-            description: Text(
-              "Deleted items and credentials stay here, with their values, until you delete them permanently."
-            ))
+            description: Text("Deleted items appear here."))
         }
       } else {
         List(selection: $model.selection) {
@@ -104,7 +102,7 @@ struct RecentlyDeletedDetailView: View {
         // The id resets reveal state when the selection changes.
         RecentlyDeletedDetail(model: model, entry: entry)
           .id(entry.id)
-      } else {
+      } else if !model.entries.isEmpty {
         ContentUnavailableView("Select a deleted item", systemImage: "trash")
       }
     }
