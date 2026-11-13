@@ -14,6 +14,8 @@ struct ActivityPane: View {
   @Environment(IssuesModel.self) private var issues
   @Environment(\.openWindow) private var openWindow
   @State private var model = ActivityModel()
+  /// First event ids of merged runs that are expanded.
+  @State private var expanded: Set<String> = []
 
   var body: some View {
     ScrollView {
@@ -74,11 +76,22 @@ struct ActivityPane: View {
       ForEach(days, id: \.day) { group in
         TodaySectionHeader(dayTitle(group.day))
         TodayCard {
-          ForEach(Array(group.events.enumerated()), id: \.element.id) { index, event in
+          ForEach(Array(collapsed(group.events).enumerated()), id: \.element[0].id) {
+            index, events in
             if index > 0 {
               Divider()
             }
-            row(event)
+            row(events)
+            if events.count > 1, expanded.contains(events[0].id) {
+              VStack(alignment: .leading, spacing: 0) {
+                let showsHosts = Set(events.compactMap(\.host)).count > 1
+                ForEach(Self.minutes(events), id: \.[0].id) { minute in
+                  childRow(minute, showsHosts: showsHosts)
+                }
+              }
+              .padding(.top, -4)
+              .padding(.bottom, 6)
+            }
           }
         }
       }
@@ -94,27 +107,91 @@ struct ActivityPane: View {
   // MARK: - Rows
 
   @ViewBuilder
-  private func row(_ event: ActivityEvent) -> some View {
-    let status = ActivityStyle.status(event)
+  private func row(_ events: [ActivityEvent]) -> some View {
+    let event = events[0]
     let content = HStack(spacing: 12) {
-      Text(event.date?.formatted(date: .omitted, time: .shortened) ?? "")
+      Text(Self.time(event))
         .foregroundStyle(.secondary)
         .monospacedDigit()
-        .frame(width: 64, alignment: .leading)
+        .frame(width: Self.timeWidth, alignment: .leading)
       TodayIcon(
         symbol: UsedTodayStyle.symbol(event.displayKind),
         color: UsedTodayStyle.color(event.displayKind))
-      Text(ActivityStyle.sentence(event))
+      Text(ActivityStyle.sentence(events))
         .lineLimit(1)
         .truncationMode(.tail)
+      if events.count > 1 {
+        Text("\(events.count)")
+          .font(.caption)
+          .monospacedDigit()
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 1)
+          .background(.quaternary, in: Capsule())
+          .fixedSize()
+      }
       Spacer(minLength: 12)
-      Text(status.text)
-        .foregroundStyle(status.color)
+      if let status = ActivityStyle.status(event) {
+        Text(status.text)
+          .foregroundStyle(status.color)
+      }
+      // Chevron width is reserved on every row so statuses line up.
+      Image(systemName: expanded.contains(event.id) ? "chevron.down" : "chevron.right")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 12)
+        .opacity(events.count > 1 ? 1 : 0)
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
     .contentShape(.rect)
 
+    if events.count > 1 {
+      Button {
+        if !expanded.insert(event.id).inserted { expanded.remove(event.id) }
+      } label: {
+        content
+      }
+      .buttonStyle(.plain)
+      .help(expanded.contains(event.id) ? "Hide signatures" : "Show signatures")
+    } else {
+      opening(event, content)
+    }
+  }
+
+  /// Compact row of the events of one minute in an expanded run. Time is
+  /// aligned with the parent sentence. Hosts are listed if `showsHosts` is
+  /// true.
+  private func childRow(_ events: [ActivityEvent], showsHosts: Bool) -> some View {
+    let event = events[0]
+    var hosts: [String] = []
+    for host in events.compactMap(\.host) where !hosts.contains(host) { hosts.append(host) }
+    let content = HStack(spacing: 12) {
+      Text(Self.time(event))
+        .monospacedDigit()
+        .frame(width: Self.timeWidth, alignment: .leading)
+      Text(events.count == 1 ? "1 signature" : "\(events.count) signatures")
+        .monospacedDigit()
+      if showsHosts, !hosts.isEmpty {
+        Text("to \(hosts.joined(separator: ", "))")
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      Spacer(minLength: 12)
+    }
+    .font(.callout)
+    .foregroundStyle(.secondary)
+    .padding(.leading, 14 + Self.timeWidth + 12 + 28 + 12)
+    .padding(.trailing, 14)
+    .padding(.vertical, 3)
+    .contentShape(.rect)
+    return opening(event, content)
+  }
+
+  /// Content wrapped in a button that opens the event subject, if it can be
+  /// found.
+  @ViewBuilder
+  private func opening(_ event: ActivityEvent, _ content: some View) -> some View {
     let opener = SubjectOpener(
       vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
     if opener.canOpen(event.ref) {
@@ -130,7 +207,44 @@ struct ActivityPane: View {
     }
   }
 
+  /// Events of a run split into runs with the same displayed minute.
+  private static func minutes(_ events: [ActivityEvent]) -> [[ActivityEvent]] {
+    var groups: [[ActivityEvent]] = []
+    for event in events {
+      if let last = groups.last?.first, time(last) == time(event) {
+        groups[groups.count - 1].append(event)
+      } else {
+        groups.append([event])
+      }
+    }
+    return groups
+  }
+
+  private static let timeWidth: CGFloat = 64
+
+  private static func time(_ event: ActivityEvent) -> String {
+    event.date?.formatted(date: .omitted, time: .shortened) ?? ""
+  }
+
   // MARK: - Days
+
+  /// Events with runs of matching SSH signatures merged. A run has the same
+  /// key, program, and outcome with no other event between. Each run is
+  /// listed newest first.
+  private func collapsed(_ events: [ActivityEvent]) -> [[ActivityEvent]] {
+    var runs: [[ActivityEvent]] = []
+    for event in events {
+      if let last = runs.last?.first, event.action == "ssh.sign",
+        last.action == event.action, last.label == event.label, last.caller == event.caller,
+        last.record.outcome == event.record.outcome
+      {
+        runs[runs.count - 1].append(event)
+      } else {
+        runs.append([event])
+      }
+    }
+    return runs
+  }
 
   /// Events grouped by the start of their day, newest day first. Events come
   /// newest first.
@@ -181,40 +295,24 @@ private struct ActivityChip: View {
 
 /// Presentation of an activity row.
 private enum ActivityStyle {
-  /// Outcome label and color. A successful use shows its past-tense verb.
-  static func status(_ event: ActivityEvent) -> (text: String, color: Color) {
+  /// Outcome label and color. Nil for a successful use, since the sentence
+  /// already states it.
+  static func status(_ event: ActivityEvent) -> (text: String, color: Color)? {
     switch event.record.outcome {
     case .denied: return ("Denied", .red)
     case .cancelled: return ("Cancelled", .secondary)
     case .failed: return ("Failed", .orange)
-    case .succeeded: return (verb(event.action), .green)
-    }
-  }
-
-  private static func verb(_ action: String) -> String {
-    switch action {
-    case "ssh.sign": return "Signed"
-    case "ssh.key_add": return "Added"
-    case "ssh.passphrase", "gpg.passphrase": return "Supplied"
-    case "gpg.confirm": return "Confirmed"
-    case "age.decrypt": return "Decrypted"
-    case "age.encrypt": return "Encrypted"
-    case "vault.exported": return "Exported"
-    case "credential.read": return "Read"
-    case "credential.exec": return "Passed"
-    case "credential.inject": return "Injected"
-    case "passkey.asserted": return "Signed in"
-    case "login.fill", "login.totp": return "Filled"
-    default: return "Allowed"
+    case .succeeded: return nil
     }
   }
 
   /// Row text, such as "github.com key signed for git to github.com". Subject
   /// and programs are in the primary color. Programs are monospaced. Uses
   /// that did not succeed read as requests.
-  static func sentence(_ event: ActivityEvent) -> AttributedString {
+  static func sentence(_ events: [ActivityEvent]) -> AttributedString {
+    let event = events[0]
     let phrase = phrase(event)
-    var text = AttributedString(event.label)
+    var text = subject(event)
     text += secondary(" \(phrase.verb)")
     let program = phrase.isBrowser ? event.browser ?? event.caller : event.caller
     if let program {
@@ -223,9 +321,15 @@ private enum ActivityStyle {
       if !phrase.isBrowser || event.browser == nil { name.font = .body.monospaced() }
       text += name
     }
-    if event.displayKind == .sshKey, let host = event.host {
-      text += secondary(" to ")
-      text += AttributedString(host)
+    if event.displayKind == .sshKey {
+      var hosts: [String] = []
+      for host in events.compactMap(\.host) where !hosts.contains(host) { hosts.append(host) }
+      if hosts.count == 1 {
+        text += secondary(" to ")
+        text += AttributedString(hosts[0])
+      } else if hosts.count > 1 {
+        text += secondary(" to \(hosts.count) hosts")
+      }
     }
     return text
   }
@@ -252,6 +356,20 @@ private enum ActivityStyle {
     case "credential.inject": return ("injected", "by", false)
     default: return ("used", "by", false)
     }
+  }
+
+  /// Subject label. An SSH key labeled by fingerprint shows as "SSH key" with
+  /// the fingerprint shortened in secondary monospaced text.
+  private static func subject(_ event: ActivityEvent) -> AttributedString {
+    let label = event.label
+    guard event.kind == .sshKey, label.hasPrefix("SHA256:"), label.count > 18 else {
+      return AttributedString(label)
+    }
+    var text = AttributedString("SSH key ")
+    var fingerprint = secondary("\(label.prefix(11))…\(label.suffix(4))")
+    fingerprint.font = .body.monospaced()
+    text += fingerprint
+    return text
   }
 
   private static func secondary(_ string: String) -> AttributedString {

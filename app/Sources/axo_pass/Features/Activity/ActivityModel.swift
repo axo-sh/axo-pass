@@ -89,7 +89,7 @@ enum ActivityFilter: CaseIterable {
   var label: String {
     switch self {
     case .all: return "All"
-    case .browser: return "Browser fills"
+    case .browser: return "Browser"
     case .cli: return "CLI"
     case .ssh: return "SSH"
     case .gpg: return "GPG"
