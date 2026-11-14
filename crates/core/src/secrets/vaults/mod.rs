@@ -7,6 +7,7 @@ pub mod model;
 pub mod passkey;
 pub mod storage;
 pub mod sync;
+pub mod vault_import;
 
 pub use autofill::item::{CATEGORY_LOGIN, ItemAutofill, MatchKind, Website};
 pub use autofill::{
