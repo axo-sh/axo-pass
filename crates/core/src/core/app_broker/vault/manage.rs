@@ -22,7 +22,7 @@ pub(super) fn export_vaults(
     let Some(VaultPayload::Export(export)) = payload else {
         return Err("Missing export payload".to_string());
     };
-    vaults
+    let report = vaults
         .export(
             vault_keys,
             &export.dest_path,
@@ -41,6 +41,7 @@ pub(super) fn export_vaults(
     Ok(Served::new(
         WireResponse::VaultsExported {
             count: vault_keys.len() as u32,
+            missing_blobs: report.missing_blobs.len() as u32,
         },
         AccessIds::Many(ids),
     ))

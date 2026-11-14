@@ -86,21 +86,27 @@ impl VaultExportCommand {
             .to_string_lossy()
             .to_string();
 
-        match app_broker::request_export_vaults(
+        let summary = match app_broker::request_export_vaults(
             &vault_keys,
             &export_path_str,
             wire_export_mode(&export_mode),
             !self.exclude_passkeys,
             caller.as_deref(),
         ) {
-            Ok(_) => {},
+            Ok(summary) => summary,
             Err(e) => return Err(format!("Failed to export vaults: {e}")),
-        }
+        };
 
         let count = vault_keys.len();
         let noun = if count == 1 { "vault" } else { "vaults" };
         let path = export_path.display();
         cprintln!("Exported <blue>{count}</blue> {noun} to <blue>{path}</blue>");
+        if summary.missing_blobs > 0 {
+            let missing = summary.missing_blobs;
+            cprintln!(
+                "<yellow>{missing} file blobs were not available and are not in the export.</yellow>"
+            );
+        }
         Ok(())
     }
 }

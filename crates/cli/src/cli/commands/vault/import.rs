@@ -96,7 +96,29 @@ impl VaultImportCommand {
         for info in &selected {
             let mut key = self.resolve_target_key(info);
             let mut action = ImportAction::Default;
+            if info.missing_files > 0 {
+                let label = bundle_label(info);
+                let (missing, files) = (info.missing_files, info.files);
+                cprintln!(
+                    "<yellow>{label}: {missing} of {files} files are not in the bundle. \
+                     Their records are imported and the files read as missing.</yellow>"
+                );
+            }
             if existing.contains(&info.id) {
+                // The blobs of a file are bound to the vault id, so a copy
+                // cannot read them. Core refuses the copy as well.
+                if info.files > 0 {
+                    if self.existing == Some(ExistingChoice::Skip) {
+                        continue;
+                    }
+                    let label = bundle_label(info);
+                    let files = info.files;
+                    return Err(format!(
+                        "{label} holds {files} files and its id exists on this Mac, so it cannot \
+                         be imported as a copy. Leave it out with --existing skip, or remove \
+                         the vault on this Mac first."
+                    ));
+                }
                 if self.existing_choice(info)? == ExistingChoice::Skip {
                     continue;
                 }

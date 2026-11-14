@@ -67,11 +67,11 @@ pub use ssh::{
     request_authorize_key_use, request_signature, request_ssh_passphrase,
 };
 pub use vault::{
-    BrokerCredential, BrokerVaultItem, ClientIdentity, LoginPage, PasskeyAccountChoice,
-    ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer, VaultRef,
-    WireLogin, request_add_external_vault, request_assert_passkey, request_create_passkey,
-    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
-    request_vault_secret, request_write_vault_secret,
+    BrokerCredential, BrokerVaultItem, ClientIdentity, ExportSummary, LoginPage,
+    PasskeyAccountChoice, ResolvePurpose, VaultAccessPrompt, VaultAction, VaultAuthorization,
+    VaultAuthorizer, VaultRef, WireLogin, request_add_external_vault, request_assert_passkey,
+    request_create_passkey, request_export_vaults, request_import_vaults, request_resolve_secrets,
+    request_vault_items, request_vault_secret, request_write_vault_secret,
 };
 pub use wire::{WireExportMode, WireImportIdentity, WireImportSelection};
 

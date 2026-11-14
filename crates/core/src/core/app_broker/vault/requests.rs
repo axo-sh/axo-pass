@@ -117,6 +117,16 @@ pub fn request_write_vault_secret(
     })
 }
 
+/// Outcome of an export the app served.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportSummary {
+    /// Vaults written into the bundle.
+    pub vaults: u32,
+    /// File blobs that the bundle lacks. Their files are in the bundle as
+    /// records only.
+    pub missing_blobs: u32,
+}
+
 /// Ask the app to unlock every named vault and write an encrypted bundle to
 /// `dest_path`. Blocking, same as [`request_vault_items`].
 pub fn request_export_vaults(
@@ -125,7 +135,7 @@ pub fn request_export_vaults(
     mode: WireExportMode,
     include_passkeys: bool,
     caller: Option<&str>,
-) -> Result<u32, BrokerError> {
+) -> Result<ExportSummary, BrokerError> {
     let request = WireRequest::ExportVaults {
         vault_keys: vault_keys.to_vec(),
         dest_path: dest_path.to_string(),
@@ -134,7 +144,13 @@ pub fn request_export_vaults(
         caller: caller.map(String::from),
     };
     exchange(&request, "vault export", |response| match response {
-        WireResponse::VaultsExported { count } => Ok(Some(count)),
+        WireResponse::VaultsExported {
+            count,
+            missing_blobs,
+        } => Ok(Some(ExportSummary {
+            vaults: count,
+            missing_blobs,
+        })),
         _ => Ok(None),
     })
 }

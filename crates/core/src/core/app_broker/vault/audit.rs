@@ -183,8 +183,14 @@ pub(super) fn access_event(
         Some(WireResponse::VaultWritten { created }) => {
             event = event.detail("created", created.to_string());
         },
-        Some(WireResponse::VaultsExported { count }) => {
+        Some(WireResponse::VaultsExported {
+            count,
+            missing_blobs,
+        }) => {
             event = event.detail("vault_count", count.to_string());
+            if *missing_blobs > 0 {
+                event = event.detail("missing_blobs", missing_blobs.to_string());
+            }
         },
         Some(WireResponse::VaultsImported { keys }) => {
             event = event.detail("vault_count", keys.len().to_string());

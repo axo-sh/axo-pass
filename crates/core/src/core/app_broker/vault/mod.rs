@@ -45,7 +45,7 @@ mod tests;
 pub(super) use logins::{list_logins_locked, vault_choices};
 pub(super) use passkeys::{list_passkeys_locked, passkey_choices, record_passkey_report};
 pub use requests::{
-    request_add_external_vault, request_assert_passkey, request_create_passkey,
+    ExportSummary, request_add_external_vault, request_assert_passkey, request_create_passkey,
     request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
     request_vault_secret, request_write_vault_secret,
 };

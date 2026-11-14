@@ -655,9 +655,13 @@ pub(super) enum WireResponse {
     VaultWritten {
         created: bool,
     },
-    /// Number of vaults written into the export bundle.
+    /// Number of vaults written into the export bundle, and the number of
+    /// file blobs the export could not include. A client that predates
+    /// `missing_blobs` reads it as zero.
     VaultsExported {
         count: u32,
+        #[serde(default)]
+        missing_blobs: u32,
     },
     /// Keys of the vaults imported from the bundle.
     VaultsImported {
@@ -909,5 +913,40 @@ impl TryFrom<WireImportIdentity> for ImportIdentity {
                     .map_err(|e| format!("Invalid age identity: {e}"))
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exported_response_of_an_older_app_reads_no_missing_blobs() {
+        let json = r#"{"status":"vaults_exported","count":2}"#;
+
+        let response: WireResponse = serde_json::from_str(json).unwrap();
+
+        assert!(matches!(
+            response,
+            WireResponse::VaultsExported {
+                count: 2,
+                missing_blobs: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn exported_response_carries_missing_blobs() {
+        let response = WireResponse::VaultsExported {
+            count: 1,
+            missing_blobs: 3,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"status":"vaults_exported","count":1,"missing_blobs":3}"#
+        );
     }
 }
