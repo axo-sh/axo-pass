@@ -262,6 +262,7 @@ final class VaultUnlockPromptModel {
   private static func secrets(for prompt: VaultAccessPrompt) -> [String] {
     switch prompt.action {
     case .readSecret(let itemKey, let credentialKey),
+      .readFile(let itemKey, let credentialKey, _),
       .writeSecret(let itemKey, let credentialKey):
       return ["\(itemKey)/\(credentialKey)"]
     case .resolveSecrets(_, let refs):
@@ -328,6 +329,8 @@ final class VaultUnlockPromptModel {
     switch prompt.action {
     case .readSecret:
       what = "read a secret from vault \(prompt.vaultKey)"
+    case .readFile(let itemKey, let credentialKey, let destPath):
+      what = "save the file \(itemKey)/\(credentialKey) to \(destPath)"
     case .resolveSecrets(let purpose, let refs):
       let verb = purpose == .read ? "read" : "resolve"
       let count = refs.count
@@ -367,8 +370,9 @@ final class VaultUnlockPromptModel {
   /// every request. A listing does not.
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
-    case .readSecret, .resolveSecrets, .writeSecret, .exportVaults, .importVaults, .addVault,
-      .createPasskey, .assertPasskey, .fillLogin, .generateTotp, .saveLogin, .updateLoginPassword:
+    case .readSecret, .readFile, .resolveSecrets, .writeSecret, .exportVaults, .importVaults,
+      .addVault, .createPasskey, .assertPasskey, .fillLogin, .generateTotp, .saveLogin,
+      .updateLoginPassword:
       return true
     case .listItems, .listLogins: return false
     }
@@ -404,6 +408,7 @@ final class VaultUnlockPromptModel {
   private static func scope(for action: VaultAction) -> String {
     switch action {
     case .readSecret: return "read"
+    case .readFile: return "read-file"
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
     case .listLogins(let page, _): return "list-logins:\(page.domain)"
@@ -429,6 +434,7 @@ final class VaultUnlockPromptModel {
   private static func headline(for action: VaultAction) -> [HeadlinePart] {
     switch action {
     case .readSecret: return [.plain("read a secret")]
+    case .readFile(_, _, let destPath): return [.plain("save a file to "), .bold(destPath)]
     case .resolveSecrets(let purpose, let refs):
       let verb = purpose == .read ? "read" : "resolve"
       let count = refs.count

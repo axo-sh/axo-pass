@@ -45,9 +45,9 @@ mod tests;
 pub(super) use logins::{list_logins_locked, vault_choices};
 pub(super) use passkeys::{list_passkeys_locked, passkey_choices, record_passkey_report};
 pub use requests::{
-    ExportSummary, request_add_external_vault, request_assert_passkey, request_create_passkey,
-    request_export_vaults, request_import_vaults, request_resolve_secrets, request_vault_items,
-    request_vault_secret, request_write_vault_secret,
+    ExportSummary, FileReadSummary, request_add_external_vault, request_assert_passkey,
+    request_create_passkey, request_export_vaults, request_import_vaults, request_read_vault_file,
+    request_resolve_secrets, request_vault_items, request_vault_secret, request_write_vault_secret,
 };
 pub(super) use serve::{authorize_and_serve, authorize_and_serve_logins};
 
@@ -94,6 +94,14 @@ pub enum VaultAction {
     ReadSecret {
         item_key: String,
         credential_key: String,
+    },
+
+    /// `ap item read --output`: decrypt one file credential to `dest_path`.
+    /// The app writes the file, so the contents never cross the socket.
+    ReadFile {
+        item_key: String,
+        credential_key: String,
+        dest_path: String,
     },
 
     /// The logins that match a page, across every vault, with usernames but no

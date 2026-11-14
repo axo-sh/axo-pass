@@ -179,6 +179,18 @@ pub(super) enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap item read --output`: unlock a vault and decrypt one file credential
+    /// to `dest_path`. The app writes the file and refuses an existing path.
+    ReadVaultFile {
+        vault_key: String,
+        item_key: String,
+        credential_key: String,
+        dest_path: String,
+        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// The logins that match `frame_url`, across every vault. Each carries its
     /// record id, username, title, and the stored website that matched. No
     /// password is included. See [`WireRequest::FillLogin`].
@@ -540,6 +552,7 @@ impl WireRequest {
             | WireRequest::SaveLogin { caller, .. }
             | WireRequest::UpdateLoginPassword { caller, .. }
             | WireRequest::ReadVaultSecret { caller, .. }
+            | WireRequest::ReadVaultFile { caller, .. }
             | WireRequest::ResolveSecrets { caller, .. }
             | WireRequest::WriteVaultSecret { caller, .. }
             | WireRequest::ExportVaults { caller, .. }
@@ -645,6 +658,12 @@ pub(super) enum WireResponse {
     /// `None` when the credential does not exist.
     VaultSecret {
         value: Option<String>,
+    },
+    /// A file credential was decrypted to the request's `dest_path`.
+    VaultFileRead {
+        name: String,
+        mime: Option<String>,
+        size: u64,
     },
     /// Positionally matched to the request's `refs`. `None` where a reference
     /// does not resolve.

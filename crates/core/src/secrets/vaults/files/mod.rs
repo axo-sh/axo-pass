@@ -18,10 +18,11 @@
 //! history entry drops the record, and the next save deletes the blob.
 //!
 //! The app reaches these calls through `VaultsManager::add_file`,
-//! `replace_file`, `delete_file`, and `read_file`. The broker and CLI do not
-//! read or write file contents, and the broker refuses to read, resolve, or
-//! overwrite a file credential as text. [`is_local`] tells a listing whether
-//! the contents are on this Mac.
+//! `replace_file`, `delete_file`, and `read_file`. The broker decrypts a file
+//! only to a destination path, for `ap item read --output`. It refuses to
+//! read, resolve, or overwrite a file credential as text. The CLI does not
+//! write file contents. [`is_local`] tells a listing whether the contents are
+//! on this Mac.
 //!
 //! In a synced vault, a file record syncs as the value of its credential.
 //! The publish uploads its blob to the synced folder before any state file

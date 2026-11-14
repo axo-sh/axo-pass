@@ -399,6 +399,35 @@ pub(super) async fn serve_request(
                 )
                 .await
             },
+            WireRequest::ReadVaultFile {
+                vault_key,
+                item_key,
+                credential_key,
+                dest_path,
+                caller,
+            } => {
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
+                    action: vault::VaultAction::ReadFile {
+                        item_key,
+                        credential_key,
+                        dest_path,
+                    },
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    None,
+                    &in_flight,
+                )
+                .await
+            },
             WireRequest::ResolveSecrets {
                 refs,
                 purpose,

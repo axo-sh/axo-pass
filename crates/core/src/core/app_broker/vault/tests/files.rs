@@ -88,3 +88,83 @@ fn broker_write_over_file_credential_refused() {
         Some(record.expose_secret().as_str())
     );
 }
+
+fn read_doc_file(dest: &std::path::Path) -> VaultAction {
+    VaultAction::ReadFile {
+        item_key: "item".to_string(),
+        credential_key: "doc".to_string(),
+        dest_path: dest.to_string_lossy().to_string(),
+    }
+}
+
+#[test]
+fn file_read_writes_contents_to_destination() {
+    let fx = Fixture::new();
+    add_file(&fx);
+    let dest = tempfile::tempdir().unwrap();
+    let path = dest.path().join("out.txt");
+
+    let served = fx.serve("personal", read_doc_file(&path), None).unwrap();
+
+    assert!(matches!(
+        served.response,
+        WireResponse::VaultFileRead { ref name, size: 8, .. } if name == "doc.txt"
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), b"contents");
+}
+
+#[test]
+fn file_read_refuses_existing_destination() {
+    let fx = Fixture::new();
+    add_file(&fx);
+    let dest = tempfile::tempdir().unwrap();
+    let path = dest.path().join("out.txt");
+    std::fs::write(&path, b"keep").unwrap();
+
+    let result = fx.serve("personal", read_doc_file(&path), None);
+
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"keep");
+}
+
+#[test]
+fn file_read_refuses_relative_destination() {
+    let fx = Fixture::new();
+    add_file(&fx);
+
+    let result = fx.serve(
+        "personal",
+        read_doc_file(std::path::Path::new("out.txt")),
+        None,
+    );
+
+    assert!(matches!(&result, Err(e) if e.contains("absolute")));
+}
+
+#[test]
+fn file_read_refuses_text_credential() {
+    let fx = Fixture::new();
+    add_file(&fx);
+    fx.app_write("personal", |vw| {
+        vw.add_secret(
+            "item",
+            "token",
+            "Token",
+            FieldKind::default(),
+            "secret".into(),
+        )
+        .map(|_| ())
+    });
+    let dest = tempfile::tempdir().unwrap();
+    let path = dest.path().join("out.txt");
+    let action = VaultAction::ReadFile {
+        item_key: "item".to_string(),
+        credential_key: "token".to_string(),
+        dest_path: path.to_string_lossy().to_string(),
+    };
+
+    let result = fx.serve("personal", action, None);
+
+    assert!(matches!(&result, Err(e) if e.contains("not a file")));
+    assert!(!path.exists());
+}

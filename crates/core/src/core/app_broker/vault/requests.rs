@@ -66,6 +66,39 @@ pub fn request_vault_secret(
     })
 }
 
+/// Details of a file the app decrypted to the requested path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileReadSummary {
+    pub name: String,
+    pub mime: Option<String>,
+    /// Plaintext size in bytes.
+    pub size: u64,
+}
+
+/// Ask the app to decrypt one file credential to `dest_path`, which must be
+/// absolute and must not exist. Blocking, same as [`request_vault_items`].
+pub fn request_read_vault_file(
+    vault_key: &str,
+    item_key: &str,
+    credential_key: &str,
+    dest_path: &str,
+    caller: Option<&str>,
+) -> Result<FileReadSummary, BrokerError> {
+    let request = WireRequest::ReadVaultFile {
+        vault_key: vault_key.to_string(),
+        item_key: item_key.to_string(),
+        credential_key: credential_key.to_string(),
+        dest_path: dest_path.to_string(),
+        caller: caller.map(String::from),
+    };
+    exchange(&request, "vault file read", |response| match response {
+        WireResponse::VaultFileRead { name, mime, size } => {
+            Ok(Some(FileReadSummary { name, mime, size }))
+        },
+        _ => Ok(None),
+    })
+}
+
 /// Ask the app to resolve many `axo://` references at once, behind one prompt.
 /// The returned vector is positionally matched to `refs`; `None` means that
 /// reference does not resolve. Blocking, same as [`request_vault_items`].

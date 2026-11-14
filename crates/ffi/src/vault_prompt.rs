@@ -14,6 +14,12 @@ pub enum VaultAction {
         item_key: String,
         credential_key: String,
     },
+    /// `ap item read --output`: decrypt one file credential to `dest_path`.
+    ReadFile {
+        item_key: String,
+        credential_key: String,
+        dest_path: String,
+    },
     /// The AutoFill extension is listing the logins that match `page`, without
     /// their passwords.
     ListLogins {
@@ -272,6 +278,15 @@ impl From<app_broker::VaultAction> for VaultAction {
             } => Self::ReadSecret {
                 item_key,
                 credential_key,
+            },
+            app_broker::VaultAction::ReadFile {
+                item_key,
+                credential_key,
+                dest_path,
+            } => Self::ReadFile {
+                item_key,
+                credential_key,
+                dest_path,
             },
             app_broker::VaultAction::ListLogins { page, all } => Self::ListLogins {
                 page: page.into(),

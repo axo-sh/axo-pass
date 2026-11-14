@@ -9,7 +9,9 @@ use super::manage::{add_external_vault, export_vaults, import_vaults};
 use super::passkeys::{
     Ended, SignedPasskey, assert_passkey, choose_account, choose_placement, create_passkey,
 };
-use super::secrets::{list_items, read_secret, resolve_secrets, write_vault_secret};
+use super::secrets::{
+    list_items, read_secret, read_vault_file, resolve_secrets, write_vault_secret,
+};
 use super::{
     ClientIdentity, VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer,
     VaultPayload,
@@ -361,6 +363,19 @@ pub(super) fn serve_on_context(
             &vault_key,
             &item_key,
             &credential_key,
+            payload,
+            context,
+        ),
+        VaultAction::ReadFile {
+            item_key,
+            credential_key,
+            dest_path,
+        } => read_vault_file(
+            vaults,
+            &vault_key,
+            &item_key,
+            &credential_key,
+            &dest_path,
             payload,
             context,
         ),

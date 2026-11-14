@@ -60,6 +60,17 @@ pub(super) fn access_event(
                 format!("{vault_key}/{item_key}/{credential_key}"),
             ),
         ),
+        VaultAction::ReadFile {
+            item_key,
+            credential_key,
+            ..
+        } => (
+            Action::CredentialFileRead,
+            Subject::new(
+                SubjectKind::Credential,
+                format!("{vault_key}/{item_key}/{credential_key}"),
+            ),
+        ),
         VaultAction::ListLogins { page, .. } => (
             Action::ItemListed,
             Subject::new(SubjectKind::Vault, page.host.clone()),
@@ -175,6 +186,9 @@ pub(super) fn access_event(
         },
         Some(WireResponse::VaultSecret { value }) => {
             event = event.detail("found", value.is_some().to_string());
+        },
+        Some(WireResponse::VaultFileRead { size, .. }) => {
+            event = event.detail("size", size.to_string());
         },
         Some(WireResponse::ResolvedSecrets { values }) => {
             let resolved = values.iter().filter(|v| v.is_some()).count();

@@ -408,6 +408,8 @@ pub enum Action {
 
     #[serde(rename = "credential.read")]
     CredentialRead,
+    #[serde(rename = "credential.file_read")]
+    CredentialFileRead,
     #[serde(rename = "credential.exec")]
     CredentialExec,
     #[serde(rename = "credential.inject")]
@@ -501,6 +503,7 @@ impl Action {
             Action::ItemWebsitesChanged => "item.websites_changed",
             Action::ItemConverted => "item.converted",
             Action::CredentialRead => "credential.read",
+            Action::CredentialFileRead => "credential.file_read",
             Action::CredentialExec => "credential.exec",
             Action::CredentialInject => "credential.inject",
             Action::CredentialCreated => "credential.created",
@@ -525,7 +528,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 65] = [
+    pub const ALL: [Action; 66] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -572,6 +575,7 @@ impl Action {
         Action::ItemWebsitesChanged,
         Action::ItemConverted,
         Action::CredentialRead,
+        Action::CredentialFileRead,
         Action::CredentialExec,
         Action::CredentialInject,
         Action::CredentialCreated,
@@ -665,6 +669,9 @@ impl Action {
             Action::CredentialRead => {
                 "Read a credential value, such as with ap read, an AutoFill fill, or a one-time code."
             },
+            Action::CredentialFileRead => {
+                "Decrypted a file credential to a file on this Mac, such as with ap item read --output."
+            },
             Action::CredentialExec => "Read credential values for a command run with ap exec.",
             Action::CredentialInject => {
                 "Read credential values for a template filled with ap inject."
@@ -746,6 +753,7 @@ impl Action {
             | Action::ItemWebsitesChanged
             | Action::ItemConverted => Category::Item,
             Action::CredentialRead
+            | Action::CredentialFileRead
             | Action::CredentialExec
             | Action::CredentialInject
             | Action::CredentialCreated
@@ -781,6 +789,7 @@ impl Action {
             | Action::VaultExported
             | Action::ItemListed
             | Action::CredentialRead
+            | Action::CredentialFileRead
             | Action::CredentialExec
             | Action::CredentialInject
             | Action::PasskeyAsserted => ActionKind::Access,

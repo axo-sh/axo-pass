@@ -1,11 +1,12 @@
 use std::io::{IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use axo_pass_core::core::app_broker::{self, ResolvePurpose, VaultRef, WireLogin};
 use axo_pass_core::core::provenance::Provenance;
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::DEFAULT_VAULT;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueHint};
 use clml::{cformat, cprintln};
 use inquire::Password;
 use regex::Regex;
@@ -122,6 +123,11 @@ enum ItemSubcommand {
         /// escapes)
         #[arg(long, short = 'd', default_value = "\\n")]
         delimiter: String,
+
+        /// Write a file credential to this path. Takes one reference. The path
+        /// must not exist
+        #[arg(long, short = 'o', value_hint = ValueHint::FilePath)]
+        output: Option<PathBuf>,
     },
 
     /// Set secret value by reference or {item_key}/{credential_key}.
@@ -159,7 +165,8 @@ impl ItemCommand {
             ItemSubcommand::Read {
                 item_reference,
                 delimiter,
-            } => self.cmd_read_item(item_reference, delimiter),
+                output,
+            } => self.cmd_read_item(item_reference, delimiter, output.as_deref()),
             ItemSubcommand::List => self.cmd_list_items(),
             ItemSubcommand::Set {
                 item_reference,
@@ -267,8 +274,61 @@ impl ItemCommand {
         &self,
         item_references: &[ItemReference],
         delimiter: &str,
+        output: Option<&Path>,
     ) -> Result<(), String> {
-        Self::cmd_read(item_references, self.vault.clone(), delimiter)
+        match output {
+            Some(output) => self.cmd_read_file(item_references, output),
+            None => Self::cmd_read(item_references, self.vault.clone(), delimiter),
+        }
+    }
+
+    /// Decrypt one file credential to `output` through the app broker. The app
+    /// writes the file, so the path is made absolute here. The app prompts for
+    /// this separately from a text read and refuses an existing path.
+    fn cmd_read_file(
+        &self,
+        item_references: &[ItemReference],
+        output: &Path,
+    ) -> Result<(), String> {
+        let [item_reference] = item_references else {
+            return Err("--output takes exactly one reference".to_string());
+        };
+        let item_reference = item_reference.clone();
+        let Some(credential_key) = item_reference.credential else {
+            return Err("Credential key must be specified".to_string());
+        };
+        let vault_key = item_reference
+            .vault
+            .or_else(|| self.vault.clone())
+            .unwrap_or_else(|| DEFAULT_VAULT.to_string());
+
+        if output.exists() {
+            return Err(format!(
+                "File already exists: {}. Choose a different path or remove it first.",
+                output.display()
+            ));
+        }
+        let output_abs = std::path::absolute(output)
+            .map_err(|e| format!("Invalid output path {}: {e}", output.display()))?;
+
+        let caller = Provenance::resolve_current_parent()
+            .inspect(|provenance| log::debug!("read caller: {provenance:#?}"))
+            .and_then(|provenance| provenance.caller());
+
+        let summary = app_broker::request_read_vault_file(
+            &vault_key,
+            &item_reference.item,
+            &credential_key,
+            &output_abs.to_string_lossy(),
+            caller.as_deref(),
+        )
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+        let name = &summary.name;
+        let size = summary.size;
+        let path = output.display();
+        cprintln!("Wrote <blue>{name}</blue> ({size} bytes) to <blue>{path}</blue>");
+        Ok(())
     }
 
     /// Read one or more secrets through the app broker. `ap` holds no

@@ -1,3 +1,8 @@
+use std::fs::{self, OpenOptions};
+use std::io::{BufWriter, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+
 use secrecy::ExposeSecret;
 
 use super::super::wire::WireResponse;
@@ -5,11 +10,12 @@ use super::serve::{AccessIds, Served, open_vault};
 use super::{BrokerCredential, BrokerVaultItem, VaultPayload, VaultRef, WriteSecretPayload};
 use crate::audit::SubjectIds;
 use crate::core::auth::ForeignContext;
-use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill};
+use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill, files};
 
 /// Whether credential `credential_key` of item `item_key` is a file. Its
 /// value is a record with the file key, so the broker neither reads nor
-/// overwrites it. The broker does not read or write file contents.
+/// overwrites it as text. It decrypts the contents only to a destination file
+/// (`read_vault_file`).
 fn is_file(vh: &VaultHandle, item_key: &str, credential_key: &str) -> bool {
     matches!(
         vh.get_secret_overview(item_key, credential_key),
@@ -67,6 +73,63 @@ pub(super) fn read_secret(
         WireResponse::VaultSecret { value },
         AccessIds::One(vh.credential_ids(item_key, credential_key)?),
     ))
+}
+
+/// Serve a [`VaultAction::ReadFile`]: decrypt one file credential to
+/// `dest_path`. The destination must be absolute and must not exist. The file
+/// is created with mode 0600 and removed again if the read fails.
+pub(super) fn read_vault_file(
+    vaults: &VaultCatalog,
+    vault_key: &str,
+    item_key: &str,
+    credential_key: &str,
+    dest_path: &str,
+    payload: Option<VaultPayload>,
+    context: ForeignContext,
+) -> Result<Served, String> {
+    write_payload(payload)?;
+    let dest = Path::new(dest_path);
+    if !dest.is_absolute() {
+        return Err(format!("Destination path must be absolute: {dest_path}"));
+    }
+    let vh = open_vault(vaults, vault_key, context)?;
+    if !is_file(&vh, item_key, credential_key) {
+        return Err(format!("{item_key}/{credential_key} is not a file"));
+    }
+    let ids = vh.credential_ids(item_key, credential_key)?;
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(dest)
+        .map_err(|e| format!("Failed to create {dest_path}: {e}"))?;
+    let mut out = BufWriter::new(file);
+    let read = files::read_file(vaults.files(), &vh, item_key, credential_key, &mut out)
+        .map_err(|e| format!("Failed to read file: {e}"));
+    let flushed = read.and_then(|summary| {
+        out.flush()
+            .and_then(|()| out.get_ref().sync_all())
+            .map(|()| summary)
+            .map_err(|e| format!("Failed to write {dest_path}: {e}"))
+    });
+    match flushed {
+        Ok(summary) => Ok(Served::new(
+            WireResponse::VaultFileRead {
+                name: summary.name,
+                mime: summary.mime,
+                size: summary.size,
+            },
+            AccessIds::One(ids),
+        )),
+        Err(message) => {
+            drop(out);
+            if let Err(e) = fs::remove_file(dest) {
+                log::error!("Failed to remove partial file {dest_path}: {e}");
+            }
+            Err(message)
+        },
+    }
 }
 
 /// Serve a [`VaultAction::WriteSecret`]: write one credential's secret value in

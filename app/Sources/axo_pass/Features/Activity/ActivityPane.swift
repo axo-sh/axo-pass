@@ -372,6 +372,7 @@ private enum ActivityStyle {
     case "age.encrypt": return ("encrypted", "by", false)
     case "vault.exported": return ("exported", "by", false)
     case "credential.read": return ("read", "by", false)
+    case "credential.file_read": return ("saved to disk", "by", false)
     case "credential.exec": return ("passed", "to", false)
     case "credential.inject": return ("injected", "by", false)
     default: return ("used", "by", false)
