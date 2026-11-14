@@ -77,9 +77,11 @@ pub struct LocalSyncState {
     pub staged_context: Option<CausalContext>,
     /// Content hash of the staged file if it was not yet published.
     pub staged_hash: Option<StateHash>,
-    /// File blobs to upload before the staged file is copied
-    /// (`sync/blobs.rs`). Empty once the staged file is published. A local
-    /// state without the field reads as empty.
+    /// File blobs that the staged state references and that the local store
+    /// held when the staged file was written (`sync/blobs.rs`). The upload
+    /// before the staged file is copied writes those that the folder lacks.
+    /// Local garbage collection keeps them. Empty once the staged file is
+    /// published. A local state without the field reads as empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub staged_blobs: Vec<FileHash>,
     /// Build that stopped sync for the vault.

@@ -11,8 +11,10 @@
 //! names. A vault that is not synced, is being disabled, or has a sync state
 //! of a newer format has no status.
 //!
-//! The file blobs of a trusted sync state are reported as waiting for upload
-//! and as missing on this Mac. A blob missing on this Mac does not pause
+//! The file blobs of a trusted sync state are reported as waiting for upload,
+//! as missing on this Mac, and as unreferenced in the synced folder. The
+//! folder is listed once, and a listing failure gives no unreferenced count
+//! and does not fail the report. A blob missing on this Mac does not pause
 //! sync, since the file is fetched when it is read.
 //!
 //! A synced vault whose sidecar has no root has no folder to sync with, and
@@ -22,14 +24,17 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use uuid::Uuid;
+
+use super::blobs;
 use super::crdt::ReplicaId;
 use super::load::{SyncLoad, TrustedState};
-use super::local_state::LocalSyncState;
+use super::model::SyncState;
 use super::recovery::RecoveryRecipients;
 use super::repair::Repair;
 use super::sidecar::Sidecar;
 use super::status::SyncStatus;
-use super::transport::TransportRoot;
+use super::transport::{SyncTransport, TransportRoot};
 use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
@@ -57,8 +62,8 @@ pub struct SyncReport {
     /// Number of differences the user override would show as conflicts, if
     /// the override is offered.
     pub override_preview: Option<usize>,
-    /// File blobs waiting for upload and missing on this Mac. Zero unless
-    /// the sync state is trusted.
+    /// File blobs waiting for upload, missing on this Mac, and unreferenced
+    /// in the folder. Zero or `None` unless the sync state is trusted.
     pub blobs: BlobStatus,
     /// Root of the synced folder in the sidecar. `None` for a synced vault
     /// whose sidecar has no root, and for a vault that is not synced.
@@ -68,42 +73,64 @@ pub struct SyncReport {
 /// File blobs of a synced vault in the sync report.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlobStatus {
-    /// Blobs to upload before the staged file is copied. Zero once the
-    /// sidecar records the staged file as published.
+    /// Blobs that the joined state references, that the local blob store
+    /// holds, and that the folder does not list. The next transaction with a
+    /// transport uploads them. Zero if the folder cannot be listed.
     pub uploads_pending: usize,
     /// Blobs that the vault references, including trash and history, and
     /// that the local blob store lacks. Each is fetched when its file is
     /// read. It does not pause sync.
     pub missing_locally: usize,
+    /// Blobs in the folder that the joined state does not reference. `None`
+    /// if the folder cannot be listed. They are never deleted.
+    pub unreferenced: Option<UnreferencedBlobs>,
+}
+
+/// Blobs in the synced folder that no record of the joined state references.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnreferencedBlobs {
+    pub count: usize,
+    /// Total size of the blobs in bytes, as the folder reports it.
+    pub bytes: u64,
 }
 
 impl BlobStatus {
-    /// Status of `vault`, with the local blob store `store`, the local sync
-    /// state `local`, and the sidecar `sidecar`. Decrypts the values of the
-    /// file credentials only if the vault holds one.
+    /// Status of `vault`, with the local blob store `store`, the joined sync
+    /// state `state`, and the folder `transport`, if the vault has one.
+    /// Decrypts every value of the vault. A listing failure is logged and
+    /// gives no unreferenced count.
     fn of(
+        vault_id: Uuid,
         vault: &Vault,
         store: &BlobStore,
-        local: &LocalSyncState,
-        sidecar: &Sidecar,
+        state: &SyncState,
+        transport: Option<&dyn SyncTransport>,
     ) -> Result<Self, Error> {
-        let published = local.staged_hash.is_none() || sidecar.last_publish == local.staged_hash;
-        let uploads_pending = if published {
-            0
-        } else {
-            local.staged_blobs.len()
-        };
-        let missing_locally = if vault.holds_files() {
-            let referenced = vault.file_blobs()?;
-            let local: BTreeSet<FileHash> = store.list()?.into_iter().collect();
-            referenced.difference(&local).count()
-        } else {
-            0
-        };
-        Ok(Self {
-            uploads_pending,
+        let local: BTreeSet<FileHash> = store.list()?.into_iter().collect();
+        let missing_locally = vault.file_blobs()?.difference(&local).count();
+        let mut status = Self {
             missing_locally,
-        })
+            ..Self::default()
+        };
+        let Some(transport) = transport else {
+            return Ok(status);
+        };
+        let listed = match transport.list_blob_sizes(vault_id) {
+            Ok(listed) => listed,
+            Err(e) => {
+                log::warn!("Failed to list the file blobs of vault {vault_id}: {e}");
+                return Ok(status);
+            },
+        };
+        let referenced = blobs::referenced(state);
+        let is_listed = |blob: &FileHash| listed.iter().any(|(name, _)| name == blob);
+        status.uploads_pending = referenced
+            .iter()
+            .filter(|blob| local.contains(blob) && !is_listed(blob))
+            .count();
+        let (count, bytes) = blobs::unreferenced(&listed, &referenced);
+        status.unreferenced = Some(UnreferencedBlobs { count, bytes });
+        Ok(status)
     }
 }
 
@@ -210,7 +237,18 @@ impl SyncReport {
             RecoveryRecipients::of_key(&trusted.state.store, local.key_id, keyring).is_empty()
         });
         let vault = Vault::from_unlocked_key(&file_key, vault)?;
-        report.blobs = BlobStatus::of(&vault, &BlobStore::of(vault_path, id), local, &sidecar)?;
+        let transport = writer
+            .transport_of(sidecar.transport.as_ref())
+            .inspect_err(|e| log::warn!("Failed to resolve the transport of vault {id}: {e}"))
+            .ok()
+            .flatten();
+        report.blobs = BlobStatus::of(
+            id,
+            &vault,
+            &BlobStore::of(vault_path, id),
+            &trusted.state.store,
+            transport.as_deref(),
+        )?;
         if let Some(trusted) = Repair::override_state(&report.case, Some(trusted)) {
             report.override_preview = match Repair::preview(trusted, &vault) {
                 Ok(count) => Some(count),

@@ -29,47 +29,16 @@ pub(super) fn check_kind_change(
     Ok(())
 }
 
-/// Whether credentials of `kind` are scanned for blob references. An unknown
-/// kind is scanned too, since a newer build may store a file under it.
-fn may_reference_blobs(kind: &FieldKind) -> bool {
-    matches!(kind, FieldKind::File | FieldKind::Unknown(_))
-}
-
 impl Vault {
-    /// Whether any live, deleted, or deleted item credential is a file.
-    pub(crate) fn holds_files(&self) -> bool {
-        let is_file = |kind: &FieldKind| matches!(kind, FieldKind::File);
-        let live = self
-            .items
-            .values()
-            .flat_map(|item| item.credentials.values());
-        let deleted = self
-            .deleted
-            .values()
-            .map(|entry| &entry.overview.credential);
-        let deleted_items = self.deleted_items.values().flat_map(|entry| {
-            let item = &entry.item;
-            item.overview
-                .credentials
-                .values()
-                .chain(item.deleted.values().map(|e| &e.overview.credential))
-        });
-        live.chain(deleted)
-            .chain(deleted_items)
-            .any(|cred| is_file(&cred.kind))
-    }
-
-    /// Blobs named by the values and history values of file credentials,
-    /// live, deleted, and in deleted items, and of credentials of unknown
-    /// kinds. A value that is not a file record names no blob. A value that
-    /// fails to decrypt fails the call.
+    /// Blobs named by the values and history values of every credential,
+    /// live, deleted, and in deleted items, whatever its kind. A credential
+    /// whose `kind` register a concurrent purge emptied shows as the default
+    /// kind, so no kind decides the scan. A value that is not a file record
+    /// names no blob. A value that fails to decrypt fails the call.
     pub(crate) fn file_blobs(&self) -> Result<BTreeSet<FileHash>, Error> {
         let mut blobs = BTreeSet::new();
         for item in self.items.values() {
             for cred in item.credentials.values() {
-                if !may_reference_blobs(&cred.kind) {
-                    continue;
-                }
                 let history = self.history.get(&cred.id).map(Vec::as_slice);
                 self.credential_blobs(
                     item.id,
@@ -86,9 +55,6 @@ impl Vault {
             .flat_map(|entry| entry.item.deleted.values());
         for entry in self.deleted.values().chain(deleted_items) {
             let cred = &entry.overview.credential;
-            if !may_reference_blobs(&cred.kind) {
-                continue;
-            }
             let blobs_of = &entry.blobs.credential;
             self.credential_blobs(
                 entry.overview.item_id,
@@ -101,10 +67,6 @@ impl Vault {
         for entry in self.deleted_items.values() {
             let item = &entry.item;
             for (cred_id, cred) in &item.credentials {
-                let kind = item.overview.credentials.get(cred_id).map(|c| &c.kind);
-                if !kind.is_some_and(may_reference_blobs) {
-                    continue;
-                }
                 self.credential_blobs(
                     item.overview.id,
                     *cred_id,

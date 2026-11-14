@@ -76,6 +76,11 @@ pub trait SyncTransport: fmt::Debug + Send + Sync {
     /// not, ordered by name. Only names that [`FileHash::parse`] accepts are
     /// listed.
     fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error>;
+    /// Blobs listed by [`Self::list_blobs`], each with its size in bytes.
+    /// The size is read from the directory entry, so a blob that is not local
+    /// is not downloaded and not coordinated. A blob whose size the provider
+    /// does not report has size 0.
+    fn list_blob_sizes(&self, vault_id: Uuid) -> Result<Vec<(FileHash, u64)>, Error>;
     /// Read blob `blob` of vault `vault_id`. Returns `Remote` if the blob
     /// exists but is not local yet. The bytes are not checked against the
     /// name.

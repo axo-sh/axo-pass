@@ -125,6 +125,9 @@ pub(crate) struct SyncTxn {
     peers_listed: bool,
     /// Local blob store of the vault. `None` for a vault with no vault file.
     blob_store: Option<BlobStore>,
+    /// Whether the publish listed the folder blobs and uploaded the missing
+    /// ones, so [`Self::heal_blobs`] has nothing more to do.
+    blobs_uploaded: bool,
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
 }
@@ -162,6 +165,7 @@ impl SyncTxn {
             remote: 0,
             peers_listed: false,
             blob_store: None,
+            blobs_uploaded: false,
             #[cfg(test)]
             apply_fault: None,
         }
@@ -995,26 +999,13 @@ impl SyncTxn {
         self.header_changed = true;
     }
 
-    /// Set `staged_blobs` to the blobs that the state references, that the
-    /// blob store holds, and that `transport` does not list. With no
-    /// listing, every referenced blob that the store holds. With no blob
-    /// store, none.
-    fn set_staged_blobs(&mut self, transport: Option<&dyn SyncTransport>) {
-        let vault_id = self.vault_id();
+    /// Set `staged_blobs` to the blobs that the state references and that
+    /// the blob store holds. The folder is not listed. [`blobs::upload`]
+    /// lists it when the blobs are uploaded and skips the blobs it has. With
+    /// no blob store, none.
+    fn set_staged_blobs(&mut self) {
         let pending = match &self.blob_store {
-            Some(store) => {
-                let referenced = blobs::referenced(&self.state.store);
-                let listed = match transport.filter(|_| !referenced.is_empty()) {
-                    Some(transport) => transport
-                        .list_blobs(vault_id)
-                        .inspect_err(|e| {
-                            log::warn!("Failed to list the file blobs of vault {vault_id}: {e}");
-                        })
-                        .ok(),
-                    None => None,
-                };
-                blobs::pending(&referenced, store, listed.as_deref())
-            },
+            Some(store) => blobs::pending(&blobs::referenced(&self.state.store), store),
             None => Vec::new(),
         };
         if self.local.staged_blobs != pending {
@@ -1035,13 +1026,11 @@ impl SyncTxn {
     /// and the transaction saves without a publish.
     ///
     /// A staged file that is copied again, or written, sets `staged_blobs`
-    /// to the blobs it needs uploaded, listed through `transport` if set
-    /// ([`Self::set_staged_blobs`]).
-    pub(crate) fn stage(
-        &mut self,
-        root: &Path,
-        transport: Option<&dyn SyncTransport>,
-    ) -> Result<(), Error> {
+    /// to every blob that the state references and the local store holds
+    /// ([`Self::set_staged_blobs`]). A copy uploads those that the folder
+    /// lacks. A transaction that does not publish leaves `staged_blobs` as it
+    /// was.
+    pub(crate) fn stage(&mut self, root: &Path) -> Result<(), Error> {
         self.settle_staged(root);
         let (last_publish, own_files) = match &self.own_files {
             Some(own_files) => (self.sidecar.last_publish.as_ref(), &own_files[..]),
@@ -1059,7 +1048,7 @@ impl SyncTxn {
             && let Some(hash) = self.local.staged_hash
             && let Some(staged) = Staged::existing(root, vault_id, hash)
         {
-            self.set_staged_blobs(transport);
+            self.set_staged_blobs();
             self.staged = Some(staged);
             return Ok(());
         }
@@ -1070,7 +1059,7 @@ impl SyncTxn {
                 self.local.staged_context = Some(self.state.context.clone());
                 self.local.staged_hash = Some(staged.hash);
                 self.header_changed = true;
-                self.set_staged_blobs(transport);
+                self.set_staged_blobs();
                 self.staged = Some(staged);
             },
             Err(e) => log::error!("Failed to write the staged file of vault {vault_id}: {e}"),
@@ -1087,13 +1076,13 @@ impl SyncTxn {
         }
     }
 
-    /// Upload the blobs of `staged_blobs`, then copy the staged file to the
-    /// synced folder through `transport`, after the vault is saved. On
-    /// success the sidecar records its hash as the last publish and as
-    /// joined, and each older own file that was joined is deleted. A failed
-    /// upload or copy is logged and leaves the staged file in place, named by
-    /// `staged_hash`, for the next transaction to copy. A failed upload
-    /// copies no state file.
+    /// Upload the blobs of `staged_blobs` that the folder lacks, then copy
+    /// the staged file to the synced folder through `transport`, after the
+    /// vault is saved. On success the sidecar records its hash as the last
+    /// publish and as joined, and each older own file that was joined is
+    /// deleted. A failed upload or copy is logged and leaves the staged file
+    /// in place, named by `staged_hash`, for the next transaction to copy. A
+    /// failed upload copies no state file.
     pub(crate) fn publish(&mut self, transport: &dyn SyncTransport) {
         let Some(staged) = self.staged.take() else {
             return;
@@ -1107,6 +1096,7 @@ impl SyncTxn {
             self.found.publish_failed = Some(e.to_string());
             return;
         }
+        self.blobs_uploaded = self.blob_store.is_some();
         let own_files = self.own_files.take().unwrap_or_default();
         if let Err(e) = staged.copy(transport, vault_id, replica, &own_files) {
             log::warn!("Failed to publish the staged file of vault {vault_id}: {e}");
@@ -1125,6 +1115,30 @@ impl SyncTxn {
                 let name = name.file_name(vault_id);
                 log::warn!("Failed to delete own state file {name} of vault {vault_id}: {e}");
             }
+        }
+    }
+
+    /// Upload each blob that the joined state references, that the local
+    /// store holds, and that the folder of `transport` lacks, after the
+    /// vault is saved. Runs in a transaction that did not publish. A publish
+    /// that uploaded its blobs already did this, and a failed publish is
+    /// retried by the next transaction, so neither runs it. The folder is not
+    /// listed if the state references no blob that the store holds.
+    ///
+    /// A failure is logged. It does not pause sync, record a cause, or fail
+    /// the save. The local sync state and the sidecar are not changed, since
+    /// no signed save follows the vault save.
+    pub(crate) fn heal_blobs(&self, transport: &dyn SyncTransport) {
+        let Some(store) = &self.blob_store else {
+            return;
+        };
+        if self.blobs_uploaded || self.found.publish_failed.is_some() {
+            return;
+        }
+        let vault_id = self.vault_id();
+        let referenced = blobs::referenced(&self.state.store);
+        if let Err(e) = blobs::heal(transport, vault_id, store, &referenced) {
+            log::warn!("Failed to upload the missing file blobs of vault {vault_id}: {e}");
         }
     }
 

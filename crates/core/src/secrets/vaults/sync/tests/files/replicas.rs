@@ -1,9 +1,12 @@
 //! File records between two Macs that sync through one folder, and the
 //! upload of the blobs of a vault that holds files at setup and join.
 
-use super::super::join_sync::{MAC_B, Mac, enable, file_key, recovered, root};
+use std::collections::BTreeSet;
+
+use super::super::join_sync::{MAC_B, Mac, enable, file_key, opened, recovered, root};
 use super::*;
 use crate::secrets::vaults::sync::join_sync::JoinInto;
+use crate::secrets::vaults::sync::setup::SyncSetup;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 
 /// Mac A with the vault of a fixture that holds item `item` and syncs
@@ -13,6 +16,8 @@ struct TwoMacs {
     b: Mac,
     /// Vault of Mac B.
     b_vault: VaultHandle,
+    setup: SyncSetup,
+    transport: Arc<FakeTransport>,
 }
 
 impl TwoMacs {
@@ -26,7 +31,24 @@ impl TwoMacs {
             .join(&join, JoinInto::New, MAC_B, &file_key(a.id(), 2))
             .unwrap()
             .vault;
-        Self { a, b, b_vault }
+        Self {
+            a,
+            b,
+            b_vault,
+            setup,
+            transport: transport.clone(),
+        }
+    }
+
+    /// Third Mac that joins the vault as a new vault, and its vault.
+    fn join_c(&self) -> (Mac, VaultHandle) {
+        let c = Mac::new(self.transport.clone());
+        let join = recovered(&self.setup, &*self.transport);
+        let vault = c
+            .join(&join, JoinInto::New, "Studio Mac", &file_key(self.id(), 3))
+            .unwrap()
+            .vault;
+        (c, vault)
     }
 
     fn id(&self) -> uuid::Uuid {
@@ -140,7 +162,6 @@ fn replace_and_trash_on_one_mac_show_on_other() {
         Err(Error::InvalidCredentialKey(_))
     ));
     let b_saved = b_vault.get_unlocked_vault().unwrap();
-    assert!(b_saved.holds_files());
     assert_eq!(b_saved.file_blobs().unwrap(), [first, second].into());
     // The trash holds both records, so Mac B keeps both blobs.
     let mut kept = store(&b_vault).list().unwrap();
@@ -158,13 +179,7 @@ fn mac_that_has_not_fetched_blob_reports_it_missing_and_still_syncs() {
     macs.sync_b();
 
     let b_files = macs.b.catalog.files();
-    assert_eq!(
-        report(b_files, &macs.b_vault).blobs,
-        BlobStatus {
-            uploads_pending: 0,
-            missing_locally: 1,
-        }
-    );
+    assert_eq!(report(b_files, &macs.b_vault).blobs, status(0, 1));
 
     // Mac B publishes an edit without the blob, and Mac A applies it.
     let committed = macs
@@ -177,7 +192,7 @@ fn mac_that_has_not_fetched_blob_reports_it_missing_and_still_syncs() {
     assert!(saved_vault(&macs.a).get_item("home").is_ok());
 
     assert_eq!(macs.read_b("doc").unwrap(), b"contents");
-    assert_eq!(report(b_files, &macs.b_vault).blobs, BlobStatus::default());
+    assert_eq!(report(b_files, &macs.b_vault).blobs, status(0, 0));
 }
 
 #[test]
@@ -243,4 +258,105 @@ fn join_of_existing_vault_that_holds_files_uploads_blobs_and_other_mac_reads_the
         read_file(a.catalog.files(), &a.vault, "doc").unwrap(),
         b"from b"
     );
+}
+
+#[test]
+fn mac_that_holds_blob_uploads_it_again_and_mac_that_lacks_it_does_not() {
+    let transport = Arc::new(FakeTransport::default());
+    let macs = TwoMacs::new(&transport);
+    add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
+    let b_vault = macs.sync_b();
+    let blob = record(&b_vault, "doc").blob;
+    let bytes = transport.blob(macs.id(), blob).unwrap();
+    transport.remove_blob(macs.id(), blob);
+
+    // Mac B lacks the blob, so it uploads nothing.
+    macs.sync_b();
+    assert!(transport.blob_names(macs.id()).is_empty());
+
+    // Mac B holds the blob after a read, and its next transaction uploads it.
+    store(&b_vault).put(&blob, &bytes).unwrap();
+    macs.sync_b();
+    assert_eq!(transport.blob(macs.id(), blob), Some(bytes));
+}
+
+#[test]
+fn purge_concurrent_with_replace_keeps_both_blobs_referenced_and_local() {
+    let transport = Arc::new(FakeTransport::default());
+    let macs = TwoMacs::new(&transport);
+    let (a_files, a_vault) = (macs.a.catalog.files(), &macs.a.vault);
+    let added = add_file(a_files, a_vault, "doc", b"first").unwrap();
+    let cred = added.value.credential_id.unwrap();
+    macs.sync_b();
+    assert_eq!(macs.read_b("doc").unwrap(), b"first");
+    let first = record(&on_disk(a_vault), "doc").blob;
+
+    // Mac A purges the file and Mac B replaces it, each unaware of the other.
+    transport.set_unavailable(true);
+    trash_file(a_files, a_vault, "doc");
+    macs.a
+        .write(|vh| vh.purge_item_credential("item", cred))
+        .unwrap();
+    replace_file(macs.b.catalog.files(), &macs.b_vault, "doc", b"second").unwrap();
+    let second = record(&on_disk(&macs.b_vault), "doc").blob;
+    transport.set_unavailable(false);
+
+    // Mac B applies the purge with no error. Mac A then applies the replace,
+    // and Mac C joins the joined state.
+    let committed = macs.b.write(&macs.b_vault, |_| Ok(())).unwrap();
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    let committed = macs.a.write(|_| Ok(())).unwrap();
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    let committed = macs.b.write(&macs.b_vault, |_| Ok(())).unwrap();
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    let (c, c_vault) = macs.join_c();
+    let both: BTreeSet<FileHash> = [first, second].into();
+    assert_eq!(
+        transport
+            .blob_names(macs.id())
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        both
+    );
+
+    for (root, vault) in [
+        (&macs.a.root, on_disk(a_vault)),
+        (&macs.b.root, on_disk(&macs.b_vault)),
+        (&c.root, on_disk(&c_vault)),
+    ] {
+        // The purge emptied the kind register, so the credential shows the
+        // default kind and is not live. Its value and history remain.
+        let (_, state) = opened(root, macs.id());
+        let kinds = state
+            .store
+            .credentials
+            .iter()
+            .map(|(_, c)| c.kind.values().count());
+        assert_eq!(kinds.collect::<Vec<_>>(), [0]);
+        assert_eq!(blobs::referenced(&state.store), both);
+        let vault = vault.get_unlocked_vault().unwrap();
+        assert!(vault.get_item_credential("item", "doc").is_err());
+        assert_eq!(vault.file_blobs().unwrap(), both);
+    }
+
+    // Local garbage collection keeps both blobs on each Mac. Mac B holds
+    // them. Mac A and Mac C are given both by hand. Each Mac then runs a
+    // transaction that changes the vault.
+    let (a_store, b_store, c_store) = (store(a_vault), store(&macs.b_vault), store(&c_vault));
+    for store in [&a_store, &c_store] {
+        for blob in [first, second] {
+            store
+                .put(&blob, &transport.blob(macs.id(), blob).unwrap())
+                .unwrap();
+        }
+    }
+    let add_item = |vh: &mut VaultHandle| vh.add_item("other", "Other").map(|_| ());
+    assert!(macs.a.write(add_item).unwrap().changed);
+    assert!(macs.b.write(&macs.b_vault, add_item).unwrap().changed);
+    assert!(c.write(&c_vault, add_item).unwrap().changed);
+    for store in [&a_store, &b_store, &c_store] {
+        let mut held = store.list().unwrap();
+        held.sort();
+        assert_eq!(held, both.iter().copied().collect::<Vec<_>>());
+    }
 }

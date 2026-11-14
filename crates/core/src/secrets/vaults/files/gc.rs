@@ -1,12 +1,15 @@
 //! Local garbage collection of file blobs.
 //!
 //! A blob is deleted once no record references it in the vault file,
-//! including trash and history, or in any retained vault version, and a
-//! synced vault does not list it to upload. It runs
-//! under the vault locks after a transaction saves (`storage/txn.rs`), so no
-//! save adds a reference meanwhile. A blob staged for a transaction is a temp
-//! file until the transaction renames it under the locks, so it is never a
-//! candidate.
+//! including trash and history, or in any retained vault version, and the
+//! staged blobs of a synced vault do not list it. Every credential is scanned
+//! for references, whatever its kind. It runs under the vault locks after a
+//! transaction saves (`storage/txn.rs`), so no save adds a reference
+//! meanwhile. A blob staged for a transaction is a temp file until the
+//! transaction renames it under the locks, so it is never a candidate.
+//!
+//! Only local blobs are deleted. A blob in the synced folder is never
+//! deleted.
 
 use std::collections::BTreeSet;
 use std::time::SystemTime;
@@ -19,12 +22,12 @@ use crate::secrets::vaults::model::Vault;
 /// Delete the blobs of `store` that neither `keep`, `vault`, nor any vault
 /// of `retained` references. Stale temp files are deleted first.
 ///
-/// `keep` holds the blobs that a synced vault has not uploaded yet
-/// (`sync/blobs.rs`). `retained` is called only if a blob is unreferenced in
-/// `vault`, and its vaults are read only until every candidate is
-/// referenced. A retained vault that fails to read fails the call before
-/// anything is deleted, so a blob it might reference is kept. Returns the
-/// number of blobs deleted.
+/// `keep` holds the staged blobs of a synced vault, the referenced blobs of
+/// the staged state that the local store held (`sync/blobs.rs`). `retained` is
+/// called only if a blob is unreferenced in `vault`, and its vaults are read
+/// only until every candidate is referenced. A retained vault that fails to
+/// read fails the call before anything is deleted, so a blob it might reference
+/// is kept. Returns the number of blobs deleted.
 pub(crate) fn collect<I>(
     store: &BlobStore,
     keep: &[FileHash],

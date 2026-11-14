@@ -93,7 +93,6 @@ fn file_credentials_recorded_and_applied_to_other_vault_find_no_edits() {
     VaultView::of(&state).apply(&mut other).unwrap();
     assert_no_edits(&state, &other, 2);
     assert_eq!(other.file_blobs().unwrap(), blobs);
-    assert!(other.holds_files());
 }
 
 #[test]

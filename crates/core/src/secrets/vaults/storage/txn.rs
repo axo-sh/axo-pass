@@ -62,9 +62,12 @@
 //!
 //! A transaction that saves then deletes the local file blobs of the vault
 //! that no record references in the saved vault or in a retained version,
-//! and that the saved sync state does not list to upload, under the locks
-//! (`files/gc.rs`). A publish uploads the file blobs that the staged file
-//! needs before it copies the staged file (`sync/blobs.rs`).
+//! and that the saved sync state does not stage, under the locks
+//! (`files/gc.rs`). A publish uploads the staged file blobs that the folder
+//! lacks before it copies the staged file (`sync/blobs.rs`). A transaction
+//! with a transport that did not publish uploads the referenced blobs that
+//! the local store holds and the folder lacks, after the vault is saved. A
+//! failure is logged and changes no local state. No synced blob is deleted.
 //! [`VaultWriter::fetch_blob`] fetches a blob that the local store lacks.
 //!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
@@ -1152,7 +1155,7 @@ impl VaultWriter {
                 // The staged file is written before the sync state that names
                 // it. A stopped sync publishes nothing.
                 if sync.syncs() {
-                    sync.stage(&self.root, transport.as_deref())?;
+                    sync.stage(&self.root)?;
                 }
 
                 // The sync state is saved before the vault, whenever it or
@@ -1206,9 +1209,14 @@ impl VaultWriter {
                     }
                 }
                 // No signed save follows the vault save. A failed copy does
-                // not fail the save.
+                // not fail the save. A transaction that did not publish
+                // uploads the referenced blobs that the folder lacks, and
+                // changes no local state.
                 if let Some(transport) = &transport {
                     sync.publish(&**transport);
+                    if sync.syncs() {
+                        sync.heal_blobs(&**transport);
+                    }
                 }
                 sync.settle_status();
                 sync.save_sidecar(&self.root);
@@ -1739,7 +1747,7 @@ impl VaultWriter {
                     let session = locked.state.session(sync.replica(), sync.loaded());
                     sync.leave(session, now)?;
                     vault.set_sync(sync.next_generation(), None);
-                    sync.stage(&self.root, None)?;
+                    sync.stage(&self.root)?;
                     Disabled::Waiting
                 }
             },
@@ -1859,7 +1867,7 @@ impl VaultWriter {
                 let now = Timestamp::now().as_second() + self.clock_offset;
                 let session = locked.state.session(sync.replica(), sync.loaded());
                 sync.leave(session, now)?;
-                sync.stage(&self.root, None)?;
+                sync.stage(&self.root)?;
                 let saved = sync.save(&self.root, &*self.signer, true);
                 if saved.is_err() {
                     sync.discard_staged(&self.root);
@@ -2181,7 +2189,7 @@ impl VaultWriter {
         // The root is saved before the sync state, so it is kept if the
         // process stops after the saves.
         sync.save_sidecar(&self.root);
-        sync.stage(&self.root, Some(&*transport))?;
+        sync.stage(&self.root)?;
         let mut saved = None;
         let result = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
             self.retain(id, old);
@@ -2379,7 +2387,7 @@ impl VaultWriter {
         // The root is saved before the sync state, so it is kept if the
         // process stops after the saves.
         sync.save_sidecar(&self.root);
-        sync.stage(&self.root, Some(&*transport))?;
+        sync.stage(&self.root)?;
         let mut saved = None;
         let result = match &contents {
             Some(contents) => vault_file::commit(&path, contents, &vh, &*self.signer, |old| {
@@ -2489,7 +2497,7 @@ impl VaultWriter {
         // generation, so the next transaction runs the `v > s` repair. A
         // change of the pins alone saves the sync state header at `s`.
         let generation = if sync.state_changed() {
-            sync.stage(&self.root, transport.as_deref())?;
+            sync.stage(&self.root)?;
             sync.next_generation()
         } else if sync.is_vault_only() {
             locked.state.end_actor();
@@ -2520,6 +2528,9 @@ impl VaultWriter {
         if let Some(transport) = &transport {
             let _ = sync.write_key_file(&**transport, None);
             sync.publish(&**transport);
+            if sync.syncs() {
+                sync.heal_blobs(&**transport);
+            }
         }
         sync.settle_status();
         sync.save_sidecar(&self.root);
@@ -2788,8 +2799,8 @@ impl VaultWriter {
     /// failure is logged and does not fail the save.
     ///
     /// The blobs of `staged_blobs` of the saved sync state are kept, since
-    /// they are not uploaded yet. A synced vault whose sync state fails to
-    /// load deletes nothing.
+    /// the staged state references them. A synced vault whose sync state fails
+    /// to load deletes nothing.
     fn collect_blobs(&self, id: Uuid, vh: &VaultHandle) {
         let collect = || -> Result<usize, Error> {
             let vault = vh.get_unlocked_vault()?;

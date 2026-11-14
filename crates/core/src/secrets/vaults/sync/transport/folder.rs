@@ -427,6 +427,28 @@ impl SyncTransport for FolderTransport {
         Ok(blobs)
     }
 
+    /// Sizes from `symlink_metadata`. A dataless file reports its full size,
+    /// and the call does not start a download. A blob deleted since the
+    /// listing is left out.
+    fn list_blob_sizes(&self, vault_id: Uuid) -> Result<Vec<(FileHash, u64)>, Error> {
+        self.check_root()?;
+        let dir = self.blob_dir(vault_id);
+        let mut blobs = Vec::new();
+        for name in Self::file_names(&dir)? {
+            let Some(blob) = FileHash::parse(&name) else {
+                continue;
+            };
+            let path = dir.join(&name);
+            match fs::symlink_metadata(&path) {
+                Ok(meta) => blobs.push((blob, meta.len())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                Err(e) => return Err(Self::error("read", &path, e)),
+            }
+        }
+        blobs.sort();
+        Ok(blobs)
+    }
+
     fn read_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<ReadResult, Error> {
         self.check_root()?;
         self.read_file(&self.blob_path(vault_id, blob), u64::MAX)

@@ -665,6 +665,23 @@ impl SyncTransport for FakeTransport {
             .collect())
     }
 
+    fn list_blob_sizes(&self, vault_id: Uuid) -> Result<Vec<(FileHash, u64)>, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        Ok(folder
+            .blobs
+            .iter()
+            .filter(|((v, _), _)| *v == vault_id)
+            .map(|((_, blob), file)| {
+                let size = match file {
+                    FakeFile::Local(bytes) | FakeFile::Remote(Some(bytes)) => bytes.len(),
+                    FakeFile::Remote(None) => 0,
+                };
+                (*blob, size as u64)
+            })
+            .collect())
+    }
+
     fn read_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<ReadResult, Error> {
         let mut folder = self.folder();
         Self::check_available(&folder)?;

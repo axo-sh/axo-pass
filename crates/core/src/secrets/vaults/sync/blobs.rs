@@ -6,12 +6,24 @@
 //! (`sync/publish.rs`). A blob is copied as it is, after its hash is checked.
 //! Nothing is decrypted or encrypted again.
 //!
+//! Every credential is scanned for references, whatever its kind
+//! ([`referenced`]).
+//!
 //! The blobs to upload are recorded in `staged_blobs` of the local sync
 //! state when the staged file is written, so a copy with no key uploads them
-//! (`VaultWriter::copy_staged`). They are the blobs that the staged state
-//! references, that the local store holds, and that the folder did not list.
-//! A referenced blob that the local store lacks is uploaded by the replica
-//! that added it, and does not hold back a publish.
+//! (`VaultWriter::copy_staged`). They are every blob that the staged state
+//! references and that the local store holds. [`upload`] lists the folder
+//! and writes only the blobs it lacks. A referenced blob that the local
+//! store lacks is uploaded by a replica that holds it, and does not hold back
+//! a publish.
+//!
+//! A transaction with a transport also uploads the referenced blobs that the
+//! local store holds and the folder lacks, after its publish ([`heal`]). It
+//! changes no local state, and a failure does not pause sync.
+//!
+//! Blobs in the folder that the joined state does not reference are counted
+//! for the sync report ([`unreferenced`]). No blob is deleted from the
+//! folder.
 //!
 //! A blob that the local store lacks is fetched when the file is read
 //! ([`fetch`]).
@@ -26,22 +38,14 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::files::record::BlobRef;
 use crate::secrets::vaults::files::store::BlobStore;
-use crate::secrets::vaults::model::fields::FieldKind;
 
-/// Blobs named by the values and history values of the credentials of
-/// `state` whose `kind` register holds a file kind or an unknown kind, live
-/// or trashed. An unknown kind is scanned, since a newer build may store a
-/// file under it.
+/// Blobs named by the values and history values of every credential of
+/// `state`, live or trashed, whatever its `kind` register holds. A credential
+/// whose `kind` register a concurrent purge emptied is scanned too, and so is
+/// one of a kind that a newer build wrote.
 pub(crate) fn referenced(state: &SyncState) -> BTreeSet<FileHash> {
     let mut blobs = BTreeSet::new();
     for (_, cred) in state.credentials.iter() {
-        let may_reference = cred
-            .kind
-            .values()
-            .any(|(_, kind)| matches!(kind.value, FieldKind::File | FieldKind::Unknown(_)));
-        if !may_reference {
-            continue;
-        }
         let values = cred.value.values().map(|(_, value)| &value.value);
         let history = cred
             .history
@@ -55,19 +59,38 @@ pub(crate) fn referenced(state: &SyncState) -> BTreeSet<FileHash> {
     blobs
 }
 
-/// Blobs of `referenced` that `store` holds and that `listed` lacks, in
-/// order. With no listing, every blob of `referenced` that `store` holds.
-pub(crate) fn pending(
-    referenced: &BTreeSet<FileHash>,
-    store: &BlobStore,
-    listed: Option<&[FileHash]>,
-) -> Vec<FileHash> {
+/// Blobs of `referenced` that `store` holds, in order. Each may be missing
+/// from the folder. [`upload`] lists the folder and skips the blobs it has.
+pub(crate) fn pending(referenced: &BTreeSet<FileHash>, store: &BlobStore) -> Vec<FileHash> {
     referenced
         .iter()
         .filter(|blob| store.contains(blob))
-        .filter(|blob| !listed.is_some_and(|listed| listed.contains(blob)))
         .copied()
         .collect()
+}
+
+/// Upload each blob of `referenced` that `store` holds and that the folder
+/// of `transport` lacks, for vault `vault_id`. The folder is not listed if
+/// `store` holds no referenced blob. Returns the number of blobs written.
+pub(crate) fn heal(
+    transport: &dyn SyncTransport,
+    vault_id: Uuid,
+    store: &BlobStore,
+    referenced: &BTreeSet<FileHash>,
+) -> Result<usize, Error> {
+    upload(transport, vault_id, store, &pending(referenced, store))
+}
+
+/// Count and total size in bytes of the blobs of `listed`, as returned by
+/// `SyncTransport::list_blob_sizes`, that `referenced` lacks.
+pub(crate) fn unreferenced(
+    listed: &[(FileHash, u64)],
+    referenced: &BTreeSet<FileHash>,
+) -> (usize, u64) {
+    let unreferenced = listed.iter().filter(|(blob, _)| !referenced.contains(blob));
+    unreferenced.fold((0, 0), |(count, total), (_, size)| {
+        (count + 1, total + size)
+    })
 }
 
 /// Upload each blob of `pending` that `transport` does not list, from

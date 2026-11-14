@@ -18,7 +18,7 @@ use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::txn::{Committed, StagedCopy, Target, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::blobs;
-use crate::secrets::vaults::sync::report::{BlobStatus, SyncReport};
+use crate::secrets::vaults::sync::report::{BlobStatus, SyncReport, UnreferencedBlobs};
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::{Error, VaultHandle};
@@ -119,6 +119,15 @@ fn store(vh: &VaultHandle) -> BlobStore {
 fn report(writer: &VaultWriter, vh: &VaultHandle) -> SyncReport {
     let key = || vh.unlocked_key().unwrap();
     SyncReport::read(writer, &Target::of(vh), Unlock::Test(&key)).unwrap()
+}
+
+/// Blob status of a synced vault whose folder lists no unreferenced blob.
+fn status(uploads_pending: usize, missing_locally: usize) -> BlobStatus {
+    BlobStatus {
+        uploads_pending,
+        missing_locally,
+        unreferenced: Some(UnreferencedBlobs::default()),
+    }
 }
 
 /// Assert that the write log of `transport` holds one upload of `blob`,

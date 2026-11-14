@@ -1,9 +1,12 @@
-//! Upload of file blobs on publish.
+//! Upload of file blobs on publish, upload of blobs the folder lost in any
+//! transaction, and the blob status of the sync report.
 
 use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
+use crate::secrets::vaults::sync::local_state::LocalSyncState;
+use crate::secrets::vaults::sync::sidecar::Sidecar;
 
 /// Synced vault with item `item`, published through `transport`.
 fn synced_with_item(transport: &Arc<FakeTransport>) -> Fixture {
@@ -39,10 +42,7 @@ fn blob_uploaded_as_stored_before_state_file_that_references_it() {
         transport.blob(fx.id(), blob),
         Some(store(&fx.vault).read_bytes(&blob).unwrap())
     );
-    assert_eq!(
-        report(fx.catalog.files(), &fx.vault).blobs,
-        BlobStatus::default()
-    );
+    assert_eq!(report(fx.catalog.files(), &fx.vault).blobs, status(0, 0));
 }
 
 #[test]
@@ -60,13 +60,7 @@ fn failed_upload_copies_no_state_file_pauses_sync_and_next_transaction_completes
     assert!(transport.blob_names(fx.id()).is_empty());
     assert_eq!(published(&transport, &fx), listed);
     assert_eq!(saved(&fx).0.staged_blobs, vec![blob]);
-    assert_eq!(
-        report(fx.catalog.files(), &fx.vault).blobs,
-        BlobStatus {
-            uploads_pending: 1,
-            missing_locally: 0,
-        }
-    );
+    assert_eq!(report(fx.catalog.files(), &fx.vault).blobs, status(1, 0));
 
     // A change while the upload fails publishes nothing, and garbage
     // collection keeps the blob.
@@ -87,10 +81,7 @@ fn failed_upload_copies_no_state_file_pauses_sync_and_next_transaction_completes
     assert_eq!(published(&transport, &fx), vec![hash]);
     assert_eq!(transport.blob_names(fx.id()), vec![blob]);
     assert_uploaded_before(&transport, fx.id(), blob, hash);
-    assert_eq!(
-        report(fx.catalog.files(), &fx.vault).blobs,
-        BlobStatus::default()
-    );
+    assert_eq!(report(fx.catalog.files(), &fx.vault).blobs, status(0, 0));
 }
 
 #[test]
@@ -130,7 +121,9 @@ fn blob_listed_in_folder_not_uploaded_again() {
 
     let hash = last_publish(&fx).unwrap();
     assert!(blobs::referenced(&decode(&transport, &fx, hash).store).contains(&blob));
-    assert!(saved(&fx).0.staged_blobs.is_empty());
+    // The staged blobs hold every referenced blob that the store holds,
+    // listed or not. The upload skips the listed ones.
+    assert_eq!(saved(&fx).0.staged_blobs, vec![blob]);
     let uploads = |transport: &FakeTransport| {
         let name = format!("blobs/{blob}");
         transport.write_log().iter().filter(|n| **n == name).count()
@@ -156,7 +149,9 @@ fn blob_listed_in_folder_not_uploaded_again() {
     assert!(publish_failed(&committed), "{:?}", committed.sync_status);
     assert!(!armed.load(Ordering::SeqCst));
     let second = record(&on_disk(&fx.vault), "second").blob;
-    assert_eq!(saved(&fx).0.staged_blobs, vec![second]);
+    let mut staged_blobs = vec![blob, second];
+    staged_blobs.sort();
+    assert_eq!(saved(&fx).0.staged_blobs, staged_blobs);
     let staged = saved(&fx).0.staged_hash.unwrap();
     transport.set_failing_writes(false);
     let log = transport.write_log();
@@ -173,4 +168,130 @@ fn blob_listed_in_folder_not_uploaded_again() {
         [StateFile::name(fx.id(), staged)]
     );
     assert_eq!(uploads(&transport), 1);
+}
+
+/// Contents of the local sync state and the sidecar of `fx`. A save signs the
+/// local sync state again, so the bytes are not compared.
+fn local_files(fx: &Fixture) -> (LocalSyncState, Sidecar) {
+    (saved(fx).0, Sidecar::load(&fx.root, fx.id()))
+}
+
+#[test]
+fn transaction_that_does_not_publish_uploads_blob_the_folder_lost() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced_with_item(&transport);
+    add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
+    let blob = record(&on_disk(&fx.vault), "doc").blob;
+    let bytes = transport.blob(fx.id(), blob).unwrap();
+    // This transaction settles the staged file of the publish.
+    fx.write(|_| Ok(())).unwrap();
+    let listed = published(&transport, &fx);
+    transport.remove_blob(fx.id(), blob);
+    let before = local_files(&fx);
+
+    let committed = fx.write(|_| Ok(())).unwrap();
+
+    assert!(!committed.changed);
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    assert_eq!(transport.blob(fx.id(), blob), Some(bytes));
+    // Nothing was published, and no local state changed.
+    assert_eq!(published(&transport, &fx), listed);
+    assert_eq!(local_files(&fx), before);
+}
+
+#[test]
+fn failed_heal_does_not_fail_the_save_or_pause_sync() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced_with_item(&transport);
+    add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
+    let blob = record(&on_disk(&fx.vault), "doc").blob;
+    // This transaction settles the staged file of the publish.
+    fx.write(|_| Ok(())).unwrap();
+    transport.remove_blob(fx.id(), blob);
+    transport.set_failing_blob_writes(true);
+    let before = local_files(&fx);
+
+    let committed = fx.write(|_| Ok(())).unwrap();
+
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    assert!(transport.blob_names(fx.id()).is_empty());
+    assert_eq!(local_files(&fx), before);
+
+    // The next transaction uploads it.
+    transport.set_failing_blob_writes(false);
+    fx.write(|_| Ok(())).unwrap();
+    assert_eq!(transport.blob_names(fx.id()), vec![blob]);
+}
+
+#[test]
+fn publish_uploads_blob_the_folder_lost_that_the_state_already_referenced() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced_with_item(&transport);
+    add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
+    let blob = record(&on_disk(&fx.vault), "doc").blob;
+    transport.remove_blob(fx.id(), blob);
+
+    fx.write(|vh| vh.add_item("other", "Other").map(|_| ()))
+        .unwrap();
+
+    assert_eq!(transport.blob_names(fx.id()), vec![blob]);
+}
+
+#[test]
+fn report_counts_blobs_to_upload_and_unreferenced_blobs_in_folder() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced_with_item(&transport);
+    let files = fx.catalog.files();
+    let cred = add_file(files, &fx.vault, "doc", b"contents")
+        .unwrap()
+        .value
+        .credential_id
+        .unwrap();
+    let blob = record(&on_disk(&fx.vault), "doc").blob;
+    assert_eq!(report(files, &fx.vault).blobs, status(0, 0));
+
+    // A blob the folder lost is waiting for upload.
+    transport.remove_blob(fx.id(), blob);
+    assert_eq!(report(files, &fx.vault).blobs, status(1, 0));
+    fx.write(|_| Ok(())).unwrap();
+    assert_eq!(report(files, &fx.vault).blobs, status(0, 0));
+
+    // A purge drops the reference, and the blob stays in the folder.
+    trash_file(files, &fx.vault, "doc");
+    fx.write(|vh| vh.purge_item_credential("item", cred))
+        .unwrap();
+    let size = transport.blob(fx.id(), blob).unwrap().len() as u64;
+    let blobs = report(files, &fx.vault).blobs;
+    assert_eq!(
+        blobs.unreferenced,
+        Some(UnreferencedBlobs {
+            count: 1,
+            bytes: size
+        })
+    );
+    assert_eq!(transport.blob_names(fx.id()), vec![blob]);
+
+    // Another blob adds to the count and the size.
+    transport.put_blob(fx.id(), FileHash::of(b"stray"), b"stray");
+    let blobs = report(files, &fx.vault).blobs;
+    assert_eq!(
+        blobs.unreferenced,
+        Some(UnreferencedBlobs {
+            count: 2,
+            bytes: size + 5
+        })
+    );
+}
+
+#[test]
+fn report_gives_no_unreferenced_count_if_folder_cannot_be_listed() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced_with_item(&transport);
+    let files = fx.catalog.files();
+    add_file(files, &fx.vault, "doc", b"contents").unwrap();
+    transport.set_unavailable(true);
+
+    let blobs = report(files, &fx.vault).blobs;
+
+    assert_eq!(blobs, BlobStatus::default());
 }
