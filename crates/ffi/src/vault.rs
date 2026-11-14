@@ -1022,10 +1022,11 @@ impl AxoPass {
     ) -> Result<Vec<u8>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
-                .get_vault(&vault_key)
-                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
             match vault
                 .get_secret(&item_key, &cred_key)
                 .map_err(FfiError::from)?
@@ -1102,10 +1103,11 @@ impl AxoPass {
     ) -> Result<Vec<u8>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
-                .get_vault(&vault_key)
-                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
             let secret = vault
                 .get_history_value(&item_key, &cred_key, parse_id(&history_id)?)
                 .map_err(FfiError::from)?;
@@ -1182,10 +1184,11 @@ impl AxoPass {
     ) -> Result<Option<Vec<u8>>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
-                .get_vault(&vault_key)
-                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
             match vault
                 .get_secret(&item_key, &cred_key)
                 .map_err(FfiError::from)?
@@ -1843,10 +1846,11 @@ impl AxoPass {
     ) -> Result<Vec<u8>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
-                .get_vault(&vault_key)
-                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
             let secret = vault
                 .get_deleted_secret(parse_id(&item_id)?, parse_id(&cred_id)?)
                 .map_err(FfiError::from)?;
@@ -2014,10 +2018,11 @@ impl AxoPass {
     ) -> Result<TotpCodeInfo, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {
-            let m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let vault = m
-                .get_vault(&vault_key)
-                .ok_or_else(|| FfiError::NotFound(vault_key.clone()))?;
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
             let secret = vault
                 .get_secret(&item_key, &cred_key)
                 .map_err(FfiError::from)?
