@@ -87,6 +87,8 @@ pub struct ItemView {
     pub username: Option<CredentialId>,
     pub password: Option<CredentialId>,
     pub totp: Option<CredentialId>,
+    /// Zero if the register holds no value.
+    pub created_at: i64,
     pub trashed: Option<TrashValue>,
     /// Live and trashed credentials of the item. Default section first, then
     /// each section in list order. List order within each section.
@@ -134,6 +136,8 @@ pub struct CredentialView {
     pub history: Vec<HistoryView>,
     /// Latest time across replicas.
     pub last_used_day_at: Option<i64>,
+    /// Zero if the register holds no value.
+    pub created_at: i64,
     pub trashed: Option<TrashValue>,
 }
 
@@ -283,6 +287,7 @@ impl ItemView {
             username,
             password,
             totp,
+            created_at,
             trashed,
         } = item;
         let mut asks = Asks::new(Entity::Item(id), conflicts);
@@ -380,6 +385,7 @@ impl ItemView {
             username,
             password,
             totp,
+            created_at: created_at.shown().copied().unwrap_or(0),
             trashed: trashed.shown_trash(),
             credentials: item_credentials,
         }
@@ -402,6 +408,7 @@ impl CredentialView {
             value,
             history,
             last_used_day_at,
+            created_at,
             trashed,
         } = credential;
         let mut asks = Asks::new(Entity::Credential(id), conflicts);
@@ -449,6 +456,7 @@ impl CredentialView {
             value: asks.value(AskRegister::Value, value),
             history: history_views,
             last_used_day_at,
+            created_at: created_at.shown().copied().unwrap_or(0),
             trashed: trashed.shown_trash(),
         }
     }

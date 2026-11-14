@@ -63,6 +63,7 @@ fn each_register_has_policy_of_plan() {
         username,
         password,
         totp,
+        created_at,
         trashed,
     } = &SyncItem::default();
     let item = [
@@ -75,11 +76,14 @@ fn each_register_has_policy_of_plan() {
         policy(username),
         policy(password),
         policy(totp),
+        policy(created_at),
         policy(trashed),
     ];
     assert_eq!(
         item,
-        [Ask, Ask, Ask, Order, Order, Order, Ask, Ask, Ask, Trash]
+        [
+            Ask, Ask, Ask, Order, Order, Order, Ask, Ask, Ask, Order, Trash
+        ]
     );
 
     let SyncCredential {
@@ -91,6 +95,7 @@ fn each_register_has_policy_of_plan() {
         value,
         history,
         last_used_day_at,
+        created_at,
         trashed,
     } = &SyncCredential::default();
     let credential = [
@@ -102,11 +107,12 @@ fn each_register_has_policy_of_plan() {
         policy(value),
         entry_policy(history),
         entry_policy(last_used_day_at),
+        policy(created_at),
         policy(trashed),
     ];
     assert_eq!(
         credential,
-        [Order, Ask, Ask, Ask, Order, Ask, Order, Own, Trash]
+        [Order, Ask, Ask, Ask, Order, Ask, Order, Own, Order, Trash]
     );
 }
 
@@ -185,7 +191,7 @@ const STATE_WRITES: [Write<SyncState>; 10] = [
 ];
 
 /// One write to every register and map of `SyncItem`, in field order.
-const ITEM_WRITES: [Write<SyncItem>; 10] = [
+const ITEM_WRITES: [Write<SyncItem>; 11] = [
     ("title", |s, m, alt| s.title.write(m, text(alt))),
     ("category", |s, m, alt| s.category.write(m, Some(text(alt)))),
     ("key", |s, m, alt| s.key.write(m, text(alt))),
@@ -215,11 +221,14 @@ const ITEM_WRITES: [Write<SyncItem>; 10] = [
     ("username", |s, m, alt| s.username.write(m, slot(alt))),
     ("password", |s, m, alt| s.password.write(m, slot(alt))),
     ("totp", |s, m, alt| s.totp.write(m, slot(alt))),
+    ("created_at", |s, m, alt| {
+        s.created_at.write(m, NOW + i64::from(alt));
+    }),
     ("trashed", |s, m, alt| s.trashed.write(m, trash(alt))),
 ];
 
 /// One write to every register and map of `SyncCredential`, in field order.
-const CREDENTIAL_WRITES: [Write<SyncCredential>; 9] = [
+const CREDENTIAL_WRITES: [Write<SyncCredential>; 10] = [
     ("item", |s, m, alt| s.item.write(m, id(1 + u128::from(alt)))),
     ("title", |s, m, alt| s.title.write(m, text(alt))),
     ("kind", |s, m, alt| {
@@ -251,6 +260,9 @@ const CREDENTIAL_WRITES: [Write<SyncCredential>; 9] = [
     ("last_used_day_at", |s, m, alt| {
         let day = NOW + i64::from(alt);
         s.last_used_day_at.entry(ReplicaId(id(1))).write(m, day);
+    }),
+    ("created_at", |s, m, alt| {
+        s.created_at.write(m, NOW + i64::from(alt));
     }),
     ("trashed", |s, m, alt| s.trashed.write(m, trash(alt))),
 ];

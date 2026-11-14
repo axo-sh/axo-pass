@@ -95,6 +95,8 @@ pub struct SyncItem {
     pub username: MvRegister<Option<CredentialId>, Ask>,
     pub password: MvRegister<Option<CredentialId>, Ask>,
     pub totp: MvRegister<Option<CredentialId>, Ask>,
+    /// Creation time as Unix seconds.
+    pub created_at: MvRegister<i64, Order>,
     pub trashed: MvRegister<Option<TrashValue>, Trash>,
 }
 
@@ -115,6 +117,8 @@ pub struct SyncCredential {
     /// replica writes only its own. Cleanup removes the entry of a cleaned
     /// replica after folding its time into the cleaning replica's own.
     pub last_used_day_at: OrMap<ReplicaId, MvRegister<i64, Own>>,
+    /// Creation time as Unix seconds.
+    pub created_at: MvRegister<i64, Order>,
     pub trashed: MvRegister<Option<TrashValue>, Trash>,
 }
 
@@ -175,6 +179,7 @@ causal_store!(SyncItem {
     username,
     password,
     totp,
+    created_at,
     trashed,
 });
 
@@ -187,6 +192,7 @@ causal_store!(SyncCredential {
     value,
     history,
     last_used_day_at,
+    created_at,
     trashed,
 });
 

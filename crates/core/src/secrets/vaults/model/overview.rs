@@ -16,6 +16,15 @@ use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::normalized_key;
 
+/// Current time in Unix seconds. Zero if the clock is before the epoch.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .unwrap_or(0)
+}
+
 /// Sort key for folders, sections, and credentials. Entries with a position
 /// come first, ordered by position, then the rest by title.
 pub fn display_order(position: Option<u32>, title: &str) -> (u32, &str) {
@@ -87,6 +96,8 @@ pub struct VaultItemOverview {
     pub category: Option<String>,
     pub autofill: ItemAutofill,
     pub credentials: BTreeMap<Uuid, VaultItemCredentialOverview>,
+    /// Unix seconds of creation.
+    pub created_at: i64,
 }
 
 impl VaultItemOverview {
@@ -101,6 +112,7 @@ impl VaultItemOverview {
             category: None,
             autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
+            created_at: now_unix(),
         })
     }
 
@@ -126,6 +138,7 @@ impl VaultItemOverview {
             category: metadata.category.clone(),
             autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
+            created_at: metadata.created_at,
         }
     }
 
@@ -144,6 +157,7 @@ impl VaultItemOverview {
                 })
                 .collect(),
             category: self.category.clone(),
+            created_at: self.created_at,
         }
     }
 }
@@ -164,6 +178,8 @@ pub struct VaultItemCredentialOverview {
     /// credentials whose use is recorded. Only passkey sign-ins set it. It
     /// names the day of last use, not the time.
     pub last_used_day_at: Option<i64>,
+    /// Unix seconds of creation.
+    pub created_at: i64,
 }
 
 impl VaultItemCredentialOverview {
@@ -178,6 +194,7 @@ impl VaultItemCredentialOverview {
             position: None,
             section: None,
             last_used_day_at: None,
+            created_at: now_unix(),
         })
     }
 
@@ -190,6 +207,7 @@ impl VaultItemCredentialOverview {
             position: metadata.position,
             section: metadata.section,
             last_used_day_at: metadata.last_used_day_at,
+            created_at: metadata.created_at,
         }
     }
 
@@ -201,6 +219,7 @@ impl VaultItemCredentialOverview {
             position: self.position,
             section: self.section,
             last_used_day_at: self.last_used_day_at,
+            created_at: self.created_at,
         }
     }
 }
@@ -303,6 +322,8 @@ pub struct VaultItemMetadata {
     pub sections: Vec<VaultSectionMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Unix seconds of creation.
+    pub created_at: i64,
 }
 
 #[serde_as]
@@ -338,4 +359,6 @@ pub struct VaultCredentialMetadata {
     /// until the first recorded use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_day_at: Option<i64>,
+    /// Unix seconds of creation.
+    pub created_at: i64,
 }

@@ -306,7 +306,13 @@ impl SyncWriter<'_> {
 
     /// Add a live item with no folder, sections, category, autofill data, or
     /// credentials. Fails if the id is taken.
-    pub(crate) fn add_item(&mut self, id: ItemId, title: &str, key: &str) -> Result<(), Error> {
+    pub(crate) fn add_item(
+        &mut self,
+        id: ItemId,
+        title: &str,
+        key: &str,
+        created_at: i64,
+    ) -> Result<(), Error> {
         let vault = &mut *self.vault;
         if vault.items.contains_key(&id) || vault.deleted_items.contains_key(&id) {
             return Err(Error::InvalidItemKey(format!("item {id} exists")));
@@ -320,6 +326,7 @@ impl SyncWriter<'_> {
             category: None,
             autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
+            created_at,
         };
         vault.item_index.insert(key.to_string(), id);
         vault.items.insert(id, overview);
@@ -329,6 +336,13 @@ impl SyncWriter<'_> {
     pub(crate) fn set_item_title(&mut self, id: ItemId, title: &str) -> Result<(), Error> {
         self.edit_item(id, ItemBlob::Metadata, |item| {
             item.title = title.to_string();
+            Ok(())
+        })
+    }
+
+    pub(crate) fn set_item_created_at(&mut self, id: ItemId, at: i64) -> Result<(), Error> {
+        self.edit_item(id, ItemBlob::Metadata, |item| {
+            item.created_at = at;
             Ok(())
         })
     }
@@ -546,6 +560,7 @@ impl SyncWriter<'_> {
         key: &str,
         kind: FieldKind,
         value: &str,
+        created_at: i64,
     ) -> Result<(), Error> {
         if self.place(id).is_ok() {
             return Err(Error::InvalidCredentialKey(format!(
@@ -563,6 +578,7 @@ impl SyncWriter<'_> {
                 position: None,
                 section: None,
                 last_used_day_at: None,
+                created_at,
             },
             metadata: None,
             value: Some(self.vault.cipher.encrypt_cred_value(item, id, value)?),
@@ -608,6 +624,14 @@ impl SyncWriter<'_> {
             cred.section = section;
             cred.position = position;
         })
+    }
+
+    pub(crate) fn set_credential_created_at(
+        &mut self,
+        id: CredentialId,
+        at: i64,
+    ) -> Result<(), Error> {
+        self.edit_credential(id, |cred| cred.created_at = at)
     }
 
     pub(crate) fn set_last_used(&mut self, id: CredentialId, at: Option<i64>) -> Result<(), Error> {

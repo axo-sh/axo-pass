@@ -119,6 +119,7 @@ pub(crate) enum ItemWrite {
     Username(Option<CredentialId>),
     Password(Option<CredentialId>),
     Totp(Option<CredentialId>),
+    CreatedAt(i64),
     Trashed(Option<TrashValue>),
 }
 
@@ -131,6 +132,7 @@ pub(crate) enum CredentialWrite {
     Key(String),
     Placement(Placement),
     Value(SecretText),
+    CreatedAt(i64),
     Trashed(Option<TrashValue>),
 }
 
@@ -508,6 +510,7 @@ impl ItemWrite {
             Self::Username(slot) => Takes::value(item.map(|i| &i.username), slot),
             Self::Password(slot) => Takes::value(item.map(|i| &i.password), slot),
             Self::Totp(slot) => Takes::value(item.map(|i| &i.totp), slot),
+            Self::CreatedAt(at) => Takes::value(item.map(|i| &i.created_at), at),
             Self::Trashed(trashed) => Takes::trash(item.map(|i| &i.trashed), trashed),
         }
     }
@@ -521,6 +524,7 @@ impl ItemWrite {
             Self::Username(slot) => item.username.put(mint, slot, kind),
             Self::Password(slot) => item.password.put(mint, slot, kind),
             Self::Totp(slot) => item.totp.put(mint, slot, kind),
+            Self::CreatedAt(at) => item.created_at.put(mint, at, kind),
             Self::Trashed(trashed) => item.trashed.put(mint, trashed, kind),
         }
     }
@@ -538,6 +542,7 @@ impl CredentialWrite {
             Self::Key(key) => Takes::key(c.map(|c| &c.key), key, CREDENTIAL_KEY_PREFIX, id),
             Self::Placement(placement) => Takes::value(c.map(|c| &c.placement), placement),
             Self::Value(value) => Takes::value(c.map(|c| &c.value), value),
+            Self::CreatedAt(at) => Takes::value(c.map(|c| &c.created_at), at),
             Self::Trashed(trashed) => Takes::trash(c.map(|c| &c.trashed), trashed),
         }
     }
@@ -550,6 +555,7 @@ impl CredentialWrite {
             Self::Key(key) => credential.key.put(mint, key, kind),
             Self::Placement(placement) => credential.placement.put(mint, placement, kind),
             Self::Value(value) => credential.value.put(mint, value, kind),
+            Self::CreatedAt(at) => credential.created_at.put(mint, at, kind),
             Self::Trashed(trashed) => credential.trashed.put(mint, trashed, kind),
         }
     }
@@ -718,6 +724,10 @@ impl<'a> Diff<'a> {
         }
         if shown_slots.map(|s| s[2]) != Some(totp) {
             writes.push(ItemWrite::Totp(totp));
+        }
+
+        if shown.map(|s| s.created_at) != Some(item.created_at) {
+            writes.push(ItemWrite::CreatedAt(item.created_at));
         }
 
         let trashed = entry.trashed.as_ref().map(TrashValue::of);
@@ -922,6 +932,10 @@ impl<'a> Diff<'a> {
         let value = entry.value.expose_secret();
         if shown.map(|s| s.value.0.as_str()) != Some(value.as_str()) {
             writes.push(CredentialWrite::Value(SecretText::new(value.as_str())));
+        }
+
+        if shown.map(|s| s.created_at) != Some(credential.created_at) {
+            writes.push(CredentialWrite::CreatedAt(credential.created_at));
         }
 
         let trashed = entry.trashed.as_ref().map(TrashValue::of);

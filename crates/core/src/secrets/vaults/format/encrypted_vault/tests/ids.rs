@@ -40,6 +40,7 @@ fn blob_plaintext_with_hyphenated_ids_loads_and_saves_short_ids() {
     let item: VaultItemMetadata = serde_json::from_value(json!({
         "title": "Item",
         "key": "item",
+        "created_at": 5,
         "folder": folder,
         "sections": [{ "id": section, "title": "Section" }],
     }))
@@ -52,6 +53,7 @@ fn blob_plaintext_with_hyphenated_ids_loads_and_saves_short_ids() {
     let credential: VaultCredentialMetadata = serde_json::from_value(json!({
         "title": "Password",
         "key": "password",
+        "created_at": 5,
         "section": section,
     }))
     .unwrap();

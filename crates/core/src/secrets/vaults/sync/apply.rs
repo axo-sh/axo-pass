@@ -256,7 +256,8 @@ impl Apply<'_, '_> {
         let view = self.view;
         for (id, shown) in &view.items {
             if !self.stored.items.contains_key(id) {
-                self.writer.add_item(*id, &shown.title, &shown.key)?;
+                self.writer
+                    .add_item(*id, &shown.title, &shown.key, shown.created_at)?;
                 self.added.insert(Entity::Item(*id));
                 self.changed(Entity::Item(*id));
                 let added = StoredItem {
@@ -269,6 +270,7 @@ impl Apply<'_, '_> {
                         category: None,
                         autofill: ItemAutofill::default(),
                         credentials: BTreeMap::new(),
+                        created_at: shown.created_at,
                     },
                     trashed: None,
                 };
@@ -299,6 +301,10 @@ impl Apply<'_, '_> {
         }
         if stored.folder != shown.folder {
             self.writer.set_item_folder(id, shown.folder)?;
+            changed = true;
+        }
+        if stored.created_at != shown.created_at {
+            self.writer.set_item_created_at(id, shown.created_at)?;
             changed = true;
         }
         if stored.key != shown.key {
@@ -372,6 +378,7 @@ impl Apply<'_, '_> {
                     &shown.key,
                     shown.kind.clone(),
                     shown.value.0.as_str(),
+                    shown.created_at,
                 )?;
                 self.added.insert(Entity::Credential(*id));
                 self.changed(Entity::Credential(*id));
@@ -385,6 +392,7 @@ impl Apply<'_, '_> {
                         position: None,
                         section: None,
                         last_used_day_at: None,
+                        created_at: shown.created_at,
                     },
                     trashed: None,
                     value: shown.value.clone(),
@@ -431,6 +439,11 @@ impl Apply<'_, '_> {
         }
         if overview.last_used_day_at != shown.last_used_day_at {
             self.writer.set_last_used(id, shown.last_used_day_at)?;
+            changed = true;
+        }
+        if overview.created_at != shown.created_at {
+            self.writer
+                .set_credential_created_at(id, shown.created_at)?;
             changed = true;
         }
         if stored.value != shown.value {

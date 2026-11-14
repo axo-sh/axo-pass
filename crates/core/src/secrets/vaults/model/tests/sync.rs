@@ -588,9 +588,10 @@ fn entries_added_and_purged_by_id() {
             "new-field",
             FieldKind::default(),
             "value",
+            100,
         )
         .unwrap();
-    writer.add_item(added_item, "Added", "added").unwrap();
+    writer.add_item(added_item, "Added", "added", 101).unwrap();
     writer
         .add_credential(
             added_item,
@@ -599,9 +600,10 @@ fn entries_added_and_purged_by_id() {
             "field",
             FieldKind::default(),
             "other",
+            102,
         )
         .unwrap();
-    assert!(writer.add_item(added_item, "Again", "again").is_err());
+    assert!(writer.add_item(added_item, "Again", "again", 103).is_err());
     assert!(
         writer
             .add_credential(
@@ -610,7 +612,8 @@ fn entries_added_and_purged_by_id() {
                 "Again",
                 "again",
                 FieldKind::default(),
-                ""
+                "",
+                104
             )
             .is_err()
     );

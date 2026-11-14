@@ -162,6 +162,7 @@ fn item_metadata() -> Vec<VaultItemMetadata> {
             },
         ],
         category: Some("login".to_string()),
+        created_at: 1_700_000_001,
     };
     let minimal = VaultItemMetadata {
         title: "Item".to_string(),
@@ -169,6 +170,7 @@ fn item_metadata() -> Vec<VaultItemMetadata> {
         folder: None,
         sections: Vec::new(),
         category: None,
+        created_at: 1_700_000_001,
     };
     vec![full, minimal]
 }
@@ -244,6 +246,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         position: None,
         section: None,
         last_used_day_at: None,
+        created_at: 1_700_000_002,
     };
     let full = VaultCredentialMetadata {
         title: "Password".to_string(),
@@ -254,6 +257,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         position: Some(2),
         section: Some(id(15)),
         last_used_day_at: Some(1_700_000_000),
+        created_at: 1_700_000_002,
     };
     let mut samples = vec![full, minimal(FieldKind::default())];
     samples.extend(kinds.into_iter().map(minimal));

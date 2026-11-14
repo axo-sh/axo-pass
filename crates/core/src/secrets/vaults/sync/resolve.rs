@@ -223,7 +223,9 @@ impl Edit {
                     ItemWrite::Username(_) => AskRegister::Username,
                     ItemWrite::Password(_) => AskRegister::Password,
                     ItemWrite::Totp(_) => AskRegister::Totp,
-                    ItemWrite::Folder(_) | ItemWrite::Trashed(_) => return None,
+                    ItemWrite::Folder(_) | ItemWrite::CreatedAt(_) | ItemWrite::Trashed(_) => {
+                        return None;
+                    },
                 };
                 (Entity::Item(*id), register)
             },
@@ -235,6 +237,7 @@ impl Edit {
                     CredentialWrite::Value(_) => AskRegister::Value,
                     CredentialWrite::Item(_)
                     | CredentialWrite::Placement(_)
+                    | CredentialWrite::CreatedAt(_)
                     | CredentialWrite::Trashed(_) => return None,
                 };
                 (Entity::Credential(*id), register)

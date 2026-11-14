@@ -11,12 +11,14 @@ fn cred_metadata(title: &str, key: &str, kind: FieldKind) -> VaultCredentialMeta
         position: None,
         section: None,
         last_used_day_at: None,
+        created_at: 0,
     }
 }
 
 #[test]
 fn legacy_item_metadata_loads_with_defaults() {
-    let meta: VaultItemMetadata = serde_json::from_str(r#"{"title":"Item","key":"item"}"#).unwrap();
+    let meta: VaultItemMetadata =
+        serde_json::from_str(r#"{"title":"Item","key":"item","created_at":5}"#).unwrap();
     assert_eq!(meta.category, None);
     assert_eq!(meta.folder, None);
     assert!(meta.sections.is_empty());
@@ -37,7 +39,7 @@ fn default_kind_omitted_from_json() {
 #[test]
 fn legacy_credential_metadata_loads_with_defaults() {
     let meta: VaultCredentialMetadata =
-        serde_json::from_str(r#"{"title":"Password","key":"password"}"#).unwrap();
+        serde_json::from_str(r#"{"title":"Password","key":"password","created_at":5}"#).unwrap();
     assert_eq!(meta.kind, FieldKind::default());
     assert_eq!(meta.position, None);
     assert_eq!(meta.section, None);
@@ -77,7 +79,7 @@ fn folder_and_section_metadata_refuse_unknown_fields() {
     let folder = serde_json::json!({"id": id, "title": "Folder"});
     let section = serde_json::json!({"id": id, "title": "Section"});
     let metadata = |folder: &serde_json::Value| serde_json::json!({"folders": [folder]});
-    let item = |section: &serde_json::Value| serde_json::json!({"title": "Item", "key": "item", "sections": [section]});
+    let item = |section: &serde_json::Value| serde_json::json!({"title": "Item", "key": "item", "created_at": 5, "sections": [section]});
     assert!(serde_json::from_value::<VaultMetadata>(metadata(&folder)).is_ok());
     assert!(serde_json::from_value::<VaultItemMetadata>(item(&section)).is_ok());
 

@@ -252,6 +252,7 @@ fn unknown_kind_survives_round_trip() {
             ("title".to_string(), serde_json::json!("Wifi")),
             ("key".to_string(), serde_json::json!("wifi")),
             ("kind".to_string(), kind.clone()),
+            ("created_at".to_string(), serde_json::json!(5)),
         ]),
     };
     let blob = vault
