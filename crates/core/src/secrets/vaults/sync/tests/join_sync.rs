@@ -50,7 +50,7 @@ mod relink;
 const MAC_A: &str = "Work Mac";
 
 /// Display name of the Mac that joins.
-const MAC_B: &str = "Home Mac";
+pub(super) const MAC_B: &str = "Home Mac";
 
 /// Display name of a third Mac.
 const MAC_C: &str = "Studio Mac";
@@ -192,7 +192,7 @@ impl Mac {
     }
 
     /// Run `f` in a transaction on the vault `vh` of this Mac.
-    fn write(
+    pub(super) fn write(
         &self,
         vh: &VaultHandle,
         f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
@@ -205,7 +205,7 @@ impl Mac {
 
     /// Join `join` into `into` as the Mac named `name`, with the file key
     /// `file_key`.
-    fn join(
+    pub(super) fn join(
         &self,
         join: &JoinKey,
         into: JoinInto,

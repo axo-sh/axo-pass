@@ -186,8 +186,8 @@ pub enum Error {
     #[error("Failed to delete file blob: {0}")]
     FileDeleteError(#[source] std::io::Error),
 
-    #[error("Files cannot be stored in a synced vault yet")]
-    FileInSyncedVault,
+    #[error("File blob {0} is downloading to this Mac")]
+    FilePending(String),
 
     #[error("Item {0} holds files and cannot move to another vault")]
     FileMoveRefused(String),

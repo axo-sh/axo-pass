@@ -18,8 +18,11 @@ use super::state_file::{VAULT, WRITER};
 use super::transport::{self, SyncedFolder, request};
 use super::txn::saved;
 use crate::secrets::vaults::Error;
+use crate::secrets::vaults::files::FileHash;
+use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::storage::txn::AppTransports;
+use crate::secrets::vaults::sync::blobs;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -118,6 +121,12 @@ impl Folder {
     fn replica_dir(&self, vault_id: Uuid, replica: ReplicaId) -> PathBuf {
         self.vault_dir(vault_id)
             .join(ShortId::encode_uuid(replica.0))
+    }
+
+    fn blob_path(&self, vault_id: Uuid, blob: FileHash) -> PathBuf {
+        self.vault_dir(vault_id)
+            .join("blobs")
+            .join(blob.to_string())
     }
 
     fn pairing_path(&self, request: RequestId) -> PathBuf {

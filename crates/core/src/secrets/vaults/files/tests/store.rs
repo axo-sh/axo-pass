@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use secrecy::{ExposeSecret, SecretString};
 
 use super::{Fixture, contents, save_temp_path};
+use crate::secrets::vaults::files::gc;
 use crate::secrets::vaults::files::record::FileRecord;
 use crate::secrets::vaults::files::stream::CHUNK_SIZE;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
@@ -196,6 +197,28 @@ fn purge_of_credential_deletes_blob() {
     fx.erase_versions();
     fx.touch();
 
+    assert!(fx.blobs().is_empty());
+}
+
+#[test]
+fn blob_listed_to_keep_not_collected_while_unreferenced() {
+    let fx = Fixture::new();
+    fx.add("doc", b"contents").unwrap();
+    let blob = fx.record("doc").blob;
+    // A vault that references no blob.
+    let vault = Vault::new_for_test();
+    let no_versions = || Ok(std::iter::empty());
+
+    assert_eq!(
+        gc::collect(&fx.store(), &[blob], &vault, no_versions).unwrap(),
+        0
+    );
+    assert_eq!(fx.blobs(), vec![blob]);
+
+    assert_eq!(
+        gc::collect(&fx.store(), &[], &vault, no_versions).unwrap(),
+        1
+    );
     assert!(fx.blobs().is_empty());
 }
 

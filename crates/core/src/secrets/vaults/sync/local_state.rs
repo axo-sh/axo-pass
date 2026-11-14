@@ -31,6 +31,7 @@ use super::state_file::{FormatVersion, StateFile, StateHash};
 use super::view::VIEW_VERSION;
 use crate::core::files::write_atomic;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::{self, VaultSigner};
 
@@ -76,6 +77,11 @@ pub struct LocalSyncState {
     pub staged_context: Option<CausalContext>,
     /// Content hash of the staged file if it was not yet published.
     pub staged_hash: Option<StateHash>,
+    /// File blobs to upload before the staged file is copied
+    /// (`sync/blobs.rs`). Empty once the staged file is published. A local
+    /// state without the field reads as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged_blobs: Vec<FileHash>,
     /// Build that stopped sync for the vault.
     pub stopped_build: Option<String>,
     /// Build on which the user last used the drift override.
@@ -169,6 +175,7 @@ impl LocalSyncState {
             published_context: CausalContext::default(),
             staged_context: None,
             staged_hash: None,
+            staged_blobs: Vec::new(),
             stopped_build: None,
             override_build: None,
             leaving: false,

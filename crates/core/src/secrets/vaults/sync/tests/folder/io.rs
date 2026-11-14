@@ -292,6 +292,125 @@ fn file_marked_as_not_local_is_remote_and_not_read() {
 }
 
 #[test]
+fn blob_written_listed_and_read_and_existing_blob_kept() {
+    for folder in Folder::each() {
+        let transport = &folder.transport;
+        let blob = FileHash::of(b"blob");
+        let other = FileHash::of(b"other");
+        assert!(transport.list_blobs(VAULT).unwrap().is_empty());
+        assert_eq!(
+            transport.read_blob(VAULT, blob).unwrap(),
+            ReadResult::Missing
+        );
+
+        transport.write_blob(VAULT, blob, b"blob").unwrap();
+        transport.write_blob(VAULT, other, b"other").unwrap();
+        // A second write under a name keeps the bytes of the first.
+        transport.write_blob(VAULT, blob, b"second").unwrap();
+        // Conflict copies, temp files, and `.DS_Store` are not blobs.
+        for name in [
+            format!("{blob} 2"),
+            format!("{blob}.sync-conflict-20261103-120000-ABCDEFG"),
+            format!(".{blob}.tmp"),
+            ".DS_Store".to_string(),
+        ] {
+            fs::write(
+                folder.blob_path(VAULT, blob).with_file_name(name),
+                b"planted",
+            )
+            .unwrap();
+        }
+
+        let mut expected = vec![blob, other];
+        expected.sort();
+        assert_eq!(transport.list_blobs(VAULT).unwrap(), expected);
+        assert_eq!(
+            transport.read_blob(VAULT, blob).unwrap(),
+            ReadResult::Local(b"blob".to_vec())
+        );
+        assert!(transport.is_blob_local(VAULT, blob).unwrap());
+        assert!(
+            !transport
+                .is_blob_local(VAULT, FileHash::of(b"absent"))
+                .unwrap()
+        );
+        // `blobs/` is not a replica directory.
+        assert!(transport.list_replicas(VAULT).unwrap().is_empty());
+        assert_eq!(transport.list_vaults().unwrap(), vec![VAULT]);
+    }
+}
+
+#[test]
+fn blob_not_local_is_remote_not_read_and_download_requested() {
+    let folder = Folder::plain();
+    let transport = &folder.transport;
+    let io = folder.plain_io();
+    let blob = FileHash::of(b"blob");
+    transport.write_blob(VAULT, blob, b"blob").unwrap();
+    let path = folder.blob_path(VAULT, blob);
+    io.set_remote(&path, true);
+
+    assert_eq!(transport.list_blobs(VAULT).unwrap(), vec![blob]);
+    assert_eq!(
+        transport.read_blob(VAULT, blob).unwrap(),
+        ReadResult::Remote
+    );
+    assert!(!transport.is_blob_local(VAULT, blob).unwrap());
+    // A write under the name of a blob that is not local keeps it.
+    transport.write_blob(VAULT, blob, b"blob").unwrap();
+    assert_eq!(io.reads(), 0);
+
+    transport.request_blob_download(VAULT, blob).unwrap();
+    // A local or missing blob is not requested.
+    let local = FileHash::of(b"local");
+    transport.write_blob(VAULT, local, b"local").unwrap();
+    transport.request_blob_download(VAULT, local).unwrap();
+    transport
+        .request_blob_download(VAULT, FileHash::of(b"absent"))
+        .unwrap();
+    assert_eq!(io.downloads(), vec![vec![path]]);
+    assert_eq!(io.reads(), 0);
+}
+
+#[test]
+fn blob_that_does_not_hash_to_its_name_not_fetched_into_local_store() {
+    for folder in Folder::each() {
+        let transport = &folder.transport;
+        let store = BlobStore::of(&folder.dir.path().join("vault.json"), VAULT);
+        let blob = FileHash::of(b"blob");
+        transport.write_blob(VAULT, blob, b"tampered").unwrap();
+
+        let err = blobs::fetch(transport, VAULT, &store, blob).unwrap_err();
+
+        assert!(matches!(err, Error::FileBlobMismatch(_)), "{err}");
+        assert!(!store.contains(&blob));
+        let fetched = FileHash::of(b"fetched");
+        transport.write_blob(VAULT, fetched, b"fetched").unwrap();
+        blobs::fetch(transport, VAULT, &store, fetched).unwrap();
+        assert_eq!(store.read_bytes(&fetched).unwrap(), b"fetched");
+        let err = blobs::fetch(transport, VAULT, &store, FileHash::of(b"absent")).unwrap_err();
+        assert!(matches!(err, Error::FileMissing(_)), "{err}");
+    }
+}
+
+#[test]
+fn delete_blob_deletes_blob_and_missing_blob_is_no_op() {
+    for folder in Folder::each() {
+        let transport = &folder.transport;
+        let blob = FileHash::of(b"blob");
+        // Neither the vault directory nor the blob exists.
+        transport.delete_blob(VAULT, blob).unwrap();
+
+        transport.write_blob(VAULT, blob, b"blob").unwrap();
+        transport.delete_blob(VAULT, blob).unwrap();
+        transport.delete_blob(VAULT, blob).unwrap();
+
+        assert!(transport.list_blobs(VAULT).unwrap().is_empty());
+        assert!(!folder.blob_path(VAULT, blob).exists());
+    }
+}
+
+#[test]
 fn missing_root_fails_every_call_and_not_created() {
     for folder in Folder::each() {
         let missing = folder.dir.path().join("Missing");
@@ -318,6 +437,13 @@ fn missing_root_fails_every_call_and_not_created() {
         assert!(transport.read_pairing(request(1)).is_err());
         assert!(transport.write_pairing(request(1), b"request").is_err());
         assert!(transport.delete_pairing(request(1)).is_err());
+        let blob = FileHash::of(b"blob");
+        assert!(transport.list_blobs(VAULT).is_err());
+        assert!(transport.read_blob(VAULT, blob).is_err());
+        assert!(transport.write_blob(VAULT, blob, b"blob").is_err());
+        assert!(transport.is_blob_local(VAULT, blob).is_err());
+        assert!(transport.delete_blob(VAULT, blob).is_err());
+        assert!(transport.request_blob_download(VAULT, blob).is_err());
         assert!(!missing.exists());
 
         // A file in place of the root fails too.

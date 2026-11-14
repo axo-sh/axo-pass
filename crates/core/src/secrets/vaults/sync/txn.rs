@@ -16,6 +16,8 @@
 //!
 //! A transaction that publishes writes the staged file before the sync state,
 //! and copies it to the synced folder after the vault (`sync/publish.rs`).
+//! The file blobs that the staged file needs are uploaded first
+//! (`sync/blobs.rs`).
 //! Before the copy, the own `key.json` is read and written once, with the
 //! `Device` wrapping of a pairing grant and the missing `Age` wrappings of the
 //! recovery recipients (`sync/recovery.rs`).
@@ -51,6 +53,7 @@ use zeroize::Zeroizing;
 
 #[cfg(test)]
 use super::apply::ApplyFault;
+use super::blobs;
 use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
 use super::join::{FileJoin, StateJoin};
@@ -72,6 +75,7 @@ use super::transport::{FileName, SyncTransport, TransportRoot};
 use super::view::VaultView;
 use super::wrapping::{DeviceWrapping, KeyFile};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::{UnlockedKey, Vault};
 
@@ -119,6 +123,8 @@ pub(crate) struct SyncTxn {
     /// Whether the peer join listed the replica directories and every peer
     /// directory.
     peers_listed: bool,
+    /// Local blob store of the vault. `None` for a vault with no vault file.
+    blob_store: Option<BlobStore>,
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
 }
@@ -155,9 +161,16 @@ impl SyncTxn {
             found: FoundCauses::default(),
             remote: 0,
             peers_listed: false,
+            blob_store: None,
             #[cfg(test)]
             apply_fault: None,
         }
+    }
+
+    /// Set the local blob store of the vault, whose blobs the publish
+    /// uploads.
+    pub(crate) fn set_blob_store(&mut self, store: BlobStore) {
+        self.blob_store = Some(store);
     }
 
     /// Transaction on the first state of a sync setup: `local`, a sync state
@@ -978,7 +991,36 @@ impl SyncTxn {
         self.local.published_context = context.clone();
         self.local.staged_context = None;
         self.local.staged_hash = None;
+        self.local.staged_blobs.clear();
         self.header_changed = true;
+    }
+
+    /// Set `staged_blobs` to the blobs that the state references, that the
+    /// blob store holds, and that `transport` does not list. With no
+    /// listing, every referenced blob that the store holds. With no blob
+    /// store, none.
+    fn set_staged_blobs(&mut self, transport: Option<&dyn SyncTransport>) {
+        let vault_id = self.vault_id();
+        let pending = match &self.blob_store {
+            Some(store) => {
+                let referenced = blobs::referenced(&self.state.store);
+                let listed = match transport.filter(|_| !referenced.is_empty()) {
+                    Some(transport) => transport
+                        .list_blobs(vault_id)
+                        .inspect_err(|e| {
+                            log::warn!("Failed to list the file blobs of vault {vault_id}: {e}");
+                        })
+                        .ok(),
+                    None => None,
+                };
+                blobs::pending(&referenced, store, listed.as_deref())
+            },
+            None => Vec::new(),
+        };
+        if self.local.staged_blobs != pending {
+            self.local.staged_blobs = pending;
+            self.header_changed = true;
+        }
     }
 
     /// Settle the staged file of an earlier publish, then write the staged
@@ -991,7 +1033,15 @@ impl SyncTxn {
     /// is copied again as it is. Otherwise a new staged file is written and
     /// named in `staged_context` and `staged_hash`. A failed write is logged,
     /// and the transaction saves without a publish.
-    pub(crate) fn stage(&mut self, root: &Path) -> Result<(), Error> {
+    ///
+    /// A staged file that is copied again, or written, sets `staged_blobs`
+    /// to the blobs it needs uploaded, listed through `transport` if set
+    /// ([`Self::set_staged_blobs`]).
+    pub(crate) fn stage(
+        &mut self,
+        root: &Path,
+        transport: Option<&dyn SyncTransport>,
+    ) -> Result<(), Error> {
         self.settle_staged(root);
         let (last_publish, own_files) = match &self.own_files {
             Some(own_files) => (self.sidecar.last_publish.as_ref(), &own_files[..]),
@@ -1009,6 +1059,7 @@ impl SyncTxn {
             && let Some(hash) = self.local.staged_hash
             && let Some(staged) = Staged::existing(root, vault_id, hash)
         {
+            self.set_staged_blobs(transport);
             self.staged = Some(staged);
             return Ok(());
         }
@@ -1019,6 +1070,7 @@ impl SyncTxn {
                 self.local.staged_context = Some(self.state.context.clone());
                 self.local.staged_hash = Some(staged.hash);
                 self.header_changed = true;
+                self.set_staged_blobs(transport);
                 self.staged = Some(staged);
             },
             Err(e) => log::error!("Failed to write the staged file of vault {vault_id}: {e}"),
@@ -1035,17 +1087,26 @@ impl SyncTxn {
         }
     }
 
-    /// Copy the staged file to the synced folder through `transport`, after
-    /// the vault is saved. On success the sidecar records its hash as the
-    /// last publish and as joined, and each older own file that was joined is
-    /// deleted. A failed copy is logged and leaves the staged file in place,
-    /// named by `staged_hash`, for the next transaction to copy.
+    /// Upload the blobs of `staged_blobs`, then copy the staged file to the
+    /// synced folder through `transport`, after the vault is saved. On
+    /// success the sidecar records its hash as the last publish and as
+    /// joined, and each older own file that was joined is deleted. A failed
+    /// upload or copy is logged and leaves the staged file in place, named by
+    /// `staged_hash`, for the next transaction to copy. A failed upload
+    /// copies no state file.
     pub(crate) fn publish(&mut self, transport: &dyn SyncTransport) {
         let Some(staged) = self.staged.take() else {
             return;
         };
         let vault_id = self.vault_id();
         let replica = self.replica();
+        if let Some(store) = &self.blob_store
+            && let Err(e) = blobs::upload(transport, vault_id, store, &self.local.staged_blobs)
+        {
+            log::warn!("Failed to upload the file blobs of vault {vault_id}: {e}");
+            self.found.publish_failed = Some(e.to_string());
+            return;
+        }
         let own_files = self.own_files.take().unwrap_or_default();
         if let Err(e) = staged.copy(transport, vault_id, replica, &own_files) {
             log::warn!("Failed to publish the staged file of vault {vault_id}: {e}");

@@ -11,12 +11,20 @@
 //! names. A vault that is not synced, is being disabled, or has a sync state
 //! of a newer format has no status.
 //!
+//! The file blobs of a trusted sync state are reported as waiting for upload
+//! and as missing on this Mac. A blob missing on this Mac does not pause
+//! sync, since the file is fetched when it is read.
+//!
 //! A synced vault whose sidecar has no root has no folder to sync with, and
 //! is shown as needing its folder chosen again, not as active (P28 of doc
 //! 16, D18 of doc 18).
 
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use super::crdt::ReplicaId;
 use super::load::{SyncLoad, TrustedState};
+use super::local_state::LocalSyncState;
 use super::recovery::RecoveryRecipients;
 use super::repair::Repair;
 use super::sidecar::Sidecar;
@@ -24,6 +32,8 @@ use super::status::SyncStatus;
 use super::transport::TransportRoot;
 use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
+use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::txn::{LockedRead, Target, Unlock, VaultWriter};
 
@@ -47,9 +57,54 @@ pub struct SyncReport {
     /// Number of differences the user override would show as conflicts, if
     /// the override is offered.
     pub override_preview: Option<usize>,
+    /// File blobs waiting for upload and missing on this Mac. Zero unless
+    /// the sync state is trusted.
+    pub blobs: BlobStatus,
     /// Root of the synced folder in the sidecar. `None` for a synced vault
     /// whose sidecar has no root, and for a vault that is not synced.
     pub root: Option<TransportRoot>,
+}
+
+/// File blobs of a synced vault in the sync report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlobStatus {
+    /// Blobs to upload before the staged file is copied. Zero once the
+    /// sidecar records the staged file as published.
+    pub uploads_pending: usize,
+    /// Blobs that the vault references, including trash and history, and
+    /// that the local blob store lacks. Each is fetched when its file is
+    /// read. It does not pause sync.
+    pub missing_locally: usize,
+}
+
+impl BlobStatus {
+    /// Status of `vault`, with the local blob store `store`, the local sync
+    /// state `local`, and the sidecar `sidecar`. Decrypts the values of the
+    /// file credentials only if the vault holds one.
+    fn of(
+        vault: &Vault,
+        store: &BlobStore,
+        local: &LocalSyncState,
+        sidecar: &Sidecar,
+    ) -> Result<Self, Error> {
+        let published = local.staged_hash.is_none() || sidecar.last_publish == local.staged_hash;
+        let uploads_pending = if published {
+            0
+        } else {
+            local.staged_blobs.len()
+        };
+        let missing_locally = if vault.holds_files() {
+            let referenced = vault.file_blobs()?;
+            let local: BTreeSet<FileHash> = store.list()?.into_iter().collect();
+            referenced.difference(&local).count()
+        } else {
+            0
+        };
+        Ok(Self {
+            uploads_pending,
+            missing_locally,
+        })
+    }
 }
 
 /// Quarantined state file, with the display name of its Mac.
@@ -86,7 +141,7 @@ impl SyncReport {
     /// reported as `KeyMissing`. Fails as a transaction fails to load the
     /// vault, its sync state, or its sidecar.
     pub fn read(writer: &VaultWriter, target: &Target, unlock: Unlock<'_>) -> Result<Self, Error> {
-        writer.read_locked(target, unlock, |read| Self::of(writer, read))
+        writer.read_locked(target, unlock, |read| Self::of(writer, read, &target.path))
     }
 
     /// Whether the vault syncs with no folder, as its sidecar has no root.
@@ -95,8 +150,9 @@ impl SyncReport {
         self.case.builds_txn() && self.root.is_none()
     }
 
-    /// Report of `read`, under the vault locks of `writer`.
-    fn of(writer: &VaultWriter, read: LockedRead) -> Result<Self, Error> {
+    /// Report of `read`, the vault file at `vault_path`, under the vault
+    /// locks of `writer`.
+    fn of(writer: &VaultWriter, read: LockedRead, vault_path: &Path) -> Result<Self, Error> {
         let LockedRead {
             id,
             file_key,
@@ -135,6 +191,7 @@ impl SyncReport {
             known_macs: Vec::new(),
             recovery_kit_missing: false,
             override_preview: None,
+            blobs: BlobStatus::default(),
             root: sidecar.transport.clone(),
             case,
         };
@@ -152,8 +209,9 @@ impl SyncReport {
         report.recovery_kit_missing = keyring.as_ref().is_none_or(|keyring| {
             RecoveryRecipients::of_key(&trusted.state.store, local.key_id, keyring).is_empty()
         });
+        let vault = Vault::from_unlocked_key(&file_key, vault)?;
+        report.blobs = BlobStatus::of(&vault, &BlobStore::of(vault_path, id), local, &sidecar)?;
         if let Some(trusted) = Repair::override_state(&report.case, Some(trusted)) {
-            let vault = Vault::from_unlocked_key(&file_key, vault)?;
             report.override_preview = match Repair::preview(trusted, &vault) {
                 Ok(count) => Some(count),
                 Err(e) => {

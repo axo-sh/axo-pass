@@ -17,9 +17,10 @@
 //! the trash, which keeps the blob. Purging it from the trash or purging its
 //! history entry drops the record, and the next save deletes the blob.
 //!
-//! File credentials do not sync yet. A synced vault refuses them, and sync
-//! cannot be enabled or joined for a vault that holds one
-//! (`storage/txn.rs`).
+//! In a synced vault, a file record syncs as the value of its credential.
+//! The publish uploads its blob to the synced folder before any state file
+//! that references it, and a Mac that lacks the blob fetches it when the
+//! file is read (`sync/blobs.rs`).
 
 pub(crate) mod gc;
 pub mod record;
@@ -76,9 +77,8 @@ pub fn summary(value: &str) -> Option<FileSummary> {
 
 /// Add the file `input` to item `item_key` as a new credential `cred_key`
 /// titled `title`, in a transaction on the vault `target`. Fails with
-/// `DuplicateCredentialKey` if the item already has the key, and with
-/// `FileInSyncedVault` for a synced vault. Returns the audit ids of the new
-/// credential.
+/// `DuplicateCredentialKey` if the item already has the key. Returns the
+/// audit ids of the new credential.
 pub fn add_file<R: Read>(
     writer: &VaultWriter,
     target: &Target,
@@ -126,8 +126,15 @@ pub fn replace_file<R: Read>(
 /// unlocked vault `vh` to `output`. The blob is verified against the record
 /// (`stream.rs`). `output` holds partial contents on any error, and the
 /// caller discards it. Fails with `InvalidCredentialKey` if the credential
-/// is not a file, and with `FileMissing` if its blob is not on this Mac.
+/// is not a file.
+///
+/// A blob that is not on this Mac is fetched from the synced folder of a
+/// synced vault through `writer` first (`sync/blobs.rs`). A blob that the
+/// folder holds but that is not local yet is requested for download, and
+/// the call fails with `FilePending`, which the caller shows as pending. A
+/// blob that neither holds fails with `FileMissing`.
 pub fn read_file(
+    writer: &VaultWriter,
     vh: &VaultHandle,
     item_key: &str,
     cred_key: &str,
@@ -135,7 +142,12 @@ pub fn read_file(
 ) -> Result<FileSummary, Error> {
     let record = read_record(vh, item_key, cred_key)?;
     let vault_id = vh.vault_id()?;
-    BlobStore::of(&vh.path, vault_id).read(&record, vault_id, output)?;
+    let store = BlobStore::of(&vh.path, vault_id);
+    let synced = vh.get_unlocked_vault()?.replica_id().is_some();
+    if synced && !store.contains(&record.blob) {
+        writer.fetch_blob(vault_id, &vh.path, record.blob)?;
+    }
+    store.read(&record, vault_id, output)?;
     Ok(FileSummary::of(&record))
 }
 
@@ -184,12 +196,8 @@ fn file_credential<'a>(
 /// Encrypt `contents` to a temp file in the store of the vault `target`.
 /// Returns the vault id the blob is bound to. The id is read from the file
 /// header without verifying it. The transaction checks it under the locks.
-/// A synced vault fails with `FileInSyncedVault` before anything is written.
 fn stage(target: &Target, contents: impl Read) -> Result<(Uuid, StagedBlob), Error> {
     let vault_id = VaultHeader::peek(&target.path)?.id;
-    if VaultHeader::peek_replica_id(&target.path)?.is_some() {
-        return Err(Error::FileInSyncedVault);
-    }
     let staged = BlobStore::of(&target.path, vault_id).stage(vault_id, contents)?;
     Ok((vault_id, staged))
 }

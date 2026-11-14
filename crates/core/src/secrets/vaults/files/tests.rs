@@ -131,7 +131,7 @@ impl Fixture {
     /// Contents of the file credential `cred_key` of the vault on disk.
     fn read(&self, cred_key: &str) -> Result<Vec<u8>, Error> {
         let mut out = Vec::new();
-        read_file(&self.on_disk(), "item", cred_key, &mut out)?;
+        read_file(&self.writer, &self.on_disk(), "item", cred_key, &mut out)?;
         Ok(out)
     }
 

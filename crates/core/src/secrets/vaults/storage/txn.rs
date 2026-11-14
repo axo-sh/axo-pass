@@ -62,10 +62,10 @@
 //!
 //! A transaction that saves then deletes the local file blobs of the vault
 //! that no record references in the saved vault or in a retained version,
-//! under the locks (`files/gc.rs`). A change that adds the first file
-//! credential to a synced vault is refused. Sync is not enabled or joined
-//! for a vault that holds one, and a retained version that holds one is not
-//! restored over a refused synced vault.
+//! and that the saved sync state does not list to upload, under the locks
+//! (`files/gc.rs`). A publish uploads the file blobs that the staged file
+//! needs before it copies the staged file (`sync/blobs.rs`).
+//! [`VaultWriter::fetch_blob`] fetches a blob that the local store lacks.
 //!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file. A read runs a transaction with no
@@ -92,8 +92,8 @@ use crate::core::dirs::app_data_dir;
 use crate::core::files::write_atomic;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::files::gc;
 use crate::secrets::vaults::files::store::BlobStore;
+use crate::secrets::vaults::files::{FileHash, gc};
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader, VerifiedVault};
 use crate::secrets::vaults::format::short_id::ShortId;
 #[cfg(test)]
@@ -106,6 +106,7 @@ use crate::secrets::vaults::storage::handle::{
 use crate::secrets::vaults::storage::resign::Resigned;
 #[cfg(test)]
 use crate::secrets::vaults::sync::apply::ApplyFault;
+use crate::secrets::vaults::sync::blobs;
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinKey};
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
@@ -976,6 +977,7 @@ impl VaultWriter {
             (Some(trusted), Some(keyring), Some(hash)) if rebuild || loads => {
                 let sidecar = Sidecar::read(&self.root, id)?;
                 let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                sync.set_blob_store(BlobStore::of(&path, id));
                 if let SyncLoad::NewerVault { vault, .. } = case {
                     sync.set_newer_vault(vault);
                 }
@@ -1105,16 +1107,7 @@ impl VaultWriter {
         let mut vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, keyring);
 
         // Apply the change. An error leaves the files unchanged.
-        let held_files = vh.get_unlocked_vault()?.holds_files();
         let value = f(&mut vh)?;
-
-        // File credentials do not sync yet. A change that adds the first one
-        // to a synced vault is refused before any save. A synced vault that
-        // already holds one is not refused, so it can still be saved.
-        let synced = sync.is_some() || vh.get_unlocked_vault()?.replica_id().is_some();
-        if synced && !held_files && vh.get_unlocked_vault()?.holds_files() {
-            return Err(Error::FileInSyncedVault.into());
-        }
 
         let mut sync_status = SyncStatus::of_case(&case);
         let changed = match (&mut sync, session) {
@@ -1159,7 +1152,7 @@ impl VaultWriter {
                 // The staged file is written before the sync state that names
                 // it. A stopped sync publishes nothing.
                 if sync.syncs() {
-                    sync.stage(&self.root)?;
+                    sync.stage(&self.root, transport.as_deref())?;
                 }
 
                 // The sync state is saved before the vault, whenever it or
@@ -1423,7 +1416,8 @@ impl VaultWriter {
             // state. Its differences against the view are recorded.
             (SyncLoad::OlderVault { .. }, Some(trusted), Some(keyring), Some(hash)) => {
                 let sidecar = Sidecar::read(&self.root, id)?;
-                let sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                sync.set_blob_store(BlobStore::of(&target.path, id));
                 let path = target.path.clone();
                 return self.restore_refused_synced(
                     &entry,
@@ -1461,7 +1455,9 @@ impl VaultWriter {
     /// copied unless the sync state is not stopped and holds a staged hash
     /// that the sidecar does not record as the last publish, and unless the
     /// sidecar gives a transport. A staged file whose bytes do not hash to
-    /// the staged hash is refused (D14). A file already listed under the
+    /// the staged hash is refused (D14). The file blobs of `staged_blobs` are
+    /// uploaded from the blob store beside `path` first, and a failed upload
+    /// copies nothing and returns its error. A file already listed under the
     /// hash is not written again. On success the sidecar records the hash as
     /// the last publish and as joined, and drops a `PublishFailed` cause. No
     /// file is decrypted and no own file is deleted. The next transaction
@@ -1481,7 +1477,7 @@ impl VaultWriter {
             return Ok(StagedCopy::NotStaged);
         }
         if local.leaving {
-            return self.copy_left(&local);
+            return self.copy_left(&local, path);
         }
         if local.stopped_build.is_some() {
             return Ok(StagedCopy::NotStaged);
@@ -1501,6 +1497,14 @@ impl VaultWriter {
             return Ok(StagedCopy::NotStaged);
         };
         let replica = local.replica_id;
+        if let Some(path) = path {
+            blobs::upload(
+                &*transport,
+                id,
+                &BlobStore::of(path, id),
+                &local.staged_blobs,
+            )?;
+        }
         let listed = transport.list_states(id, replica).unwrap_or_default();
         if !listed.contains(&hash) {
             staged.copy(&*transport, id, replica, &[])?;
@@ -1527,7 +1531,13 @@ impl VaultWriter {
     /// are deleted. A staged file that does not hash to the staged hash is
     /// refused and kept. A copy that fails returns its error, and the files
     /// are kept for the next copy.
-    fn copy_left(&self, local: &LocalSyncState) -> Result<StagedCopy, Error> {
+    ///
+    /// The file blobs of `staged_blobs` are uploaded from the blob store
+    /// beside `path` before the copy, and a failed upload copies nothing and
+    /// returns its error. With no `path` there is no blob store. A final file
+    /// with blobs to upload is then not copied, as with no folder, and the
+    /// files are deleted.
+    fn copy_left(&self, local: &LocalSyncState, path: Option<&Path>) -> Result<StagedCopy, Error> {
         let id = local.vault_id;
         let replica = local.replica_id;
         let mut sidecar = Sidecar::read(&self.root, id)?;
@@ -1538,8 +1548,19 @@ impl VaultWriter {
                 log::warn!("Final file of vault {id} does not hash to {hash}, so it is not copied");
                 return Ok(StagedCopy::Refused);
             };
-            match self.transports.resolve(sidecar.transport.as_ref())? {
+            let transport = match (path, local.staged_blobs.is_empty()) {
+                (None, false) => {
+                    log::warn!("Vault {id} has no file blob store to upload for its final file");
+                    None
+                },
+                _ => self.transports.resolve(sidecar.transport.as_ref())?,
+            };
+            match transport {
                 Some(transport) => {
+                    if let Some(path) = path {
+                        let store = BlobStore::of(path, id);
+                        blobs::upload(&*transport, id, &store, &local.staged_blobs)?;
+                    }
                     let listed = transport.list_states(id, replica).unwrap_or_default();
                     if !listed.contains(&hash) {
                         staged.copy(&*transport, id, replica, &[])?;
@@ -1681,6 +1702,7 @@ impl VaultWriter {
             (Some(trusted), Some(keyring), Some(hash)) if writes_final => {
                 let sidecar = Sidecar::read(&self.root, id)?;
                 let mut sync = SyncTxn::new(trusted, keyring, hash, sidecar);
+                sync.set_blob_store(BlobStore::of(&path, id));
                 if let SyncLoad::NewerVault { vault, .. } = case {
                     sync.set_newer_vault(vault);
                 }
@@ -1717,7 +1739,7 @@ impl VaultWriter {
                     let session = locked.state.session(sync.replica(), sync.loaded());
                     sync.leave(session, now)?;
                     vault.set_sync(sync.next_generation(), None);
-                    sync.stage(&self.root)?;
+                    sync.stage(&self.root, None)?;
                     Disabled::Waiting
                 }
             },
@@ -1837,7 +1859,7 @@ impl VaultWriter {
                 let now = Timestamp::now().as_second() + self.clock_offset;
                 let session = locked.state.session(sync.replica(), sync.loaded());
                 sync.leave(session, now)?;
-                sync.stage(&self.root)?;
+                sync.stage(&self.root, None)?;
                 let saved = sync.save(&self.root, &*self.signer, true);
                 if saved.is_err() {
                     sync.discard_staged(&self.root);
@@ -2117,10 +2139,6 @@ impl VaultWriter {
             return Err(Error::SyncFolderHasVault);
         }
         let mut vault = Vault::from_unlocked_key(&file_key, enc_vault)?;
-        // File credentials do not sync yet.
-        if vault.holds_files() {
-            return Err(Error::FileInSyncedVault);
-        }
 
         // The bytes of `meta.json` are a function of the vault id, so a file
         // left by a failed setup is the file of the next one.
@@ -2140,6 +2158,7 @@ impl VaultWriter {
             ..Sidecar::default()
         };
         let mut sync = SyncTxn::first(local, keyring, sidecar);
+        sync.set_blob_store(BlobStore::of(&path, id));
         #[cfg(test)]
         sync.set_apply_fault(self.apply_fault);
         let now = Timestamp::now().as_second() + self.clock_offset;
@@ -2162,7 +2181,7 @@ impl VaultWriter {
         // The root is saved before the sync state, so it is kept if the
         // process stops after the saves.
         sync.save_sidecar(&self.root);
-        sync.stage(&self.root)?;
+        sync.stage(&self.root, Some(&*transport))?;
         let mut saved = None;
         let result = vault_file::commit(&path, &contents, &vh, &*self.signer, |old| {
             self.retain(id, old);
@@ -2284,10 +2303,6 @@ impl VaultWriter {
                 )?;
                 let generation = enc_vault.generation;
                 let vault = Box::new(Vault::from_unlocked_key(&file_key, enc_vault)?);
-                // File credentials do not sync yet.
-                if vault.holds_files() {
-                    return Err(Error::FileInSyncedVault);
-                }
                 let loaded = JoinLoaded::Existing {
                     contents,
                     vault,
@@ -2316,6 +2331,7 @@ impl VaultWriter {
             ..Sidecar::default()
         };
         let mut sync = SyncTxn::first(local, keyring, sidecar);
+        sync.set_blob_store(BlobStore::of(&path, id));
         #[cfg(test)]
         sync.set_apply_fault(self.apply_fault);
         // The sync state starts at 0, so an existing vault at `v` is saved at
@@ -2363,7 +2379,7 @@ impl VaultWriter {
         // The root is saved before the sync state, so it is kept if the
         // process stops after the saves.
         sync.save_sidecar(&self.root);
-        sync.stage(&self.root)?;
+        sync.stage(&self.root, Some(&*transport))?;
         let mut saved = None;
         let result = match &contents {
             Some(contents) => vault_file::commit(&path, contents, &vh, &*self.signer, |old| {
@@ -2454,11 +2470,6 @@ impl VaultWriter {
         mut sync: SyncTxn,
         previous_key: String,
     ) -> Result<Committed<()>, Error> {
-        // File credentials do not sync yet, so a version that holds one is
-        // not recorded.
-        if vault.holds_files() {
-            return Err(Error::FileInSyncedVault);
-        }
         #[cfg(test)]
         sync.set_apply_fault(self.apply_fault);
         let session = locked.state.session(sync.replica(), sync.loaded());
@@ -2478,7 +2489,7 @@ impl VaultWriter {
         // generation, so the next transaction runs the `v > s` repair. A
         // change of the pins alone saves the sync state header at `s`.
         let generation = if sync.state_changed() {
-            sync.stage(&self.root)?;
+            sync.stage(&self.root, transport.as_deref())?;
             sync.next_generation()
         } else if sync.is_vault_only() {
             locked.state.end_actor();
@@ -2750,15 +2761,46 @@ impl VaultWriter {
         }
     }
 
+    /// Fetch blob `blob` of vault `id`, whose vault file is at `vault_path`,
+    /// from the synced folder into the local blob store (`sync/blobs.rs`).
+    /// Takes no lock, since the blob is written by temp file and rename and
+    /// its name fixes its bytes. The folder is resolved from the root in the
+    /// sidecar. A vault with no root fails with `FileMissing`, and a root
+    /// that cannot be resolved with its error.
+    pub(crate) fn fetch_blob(
+        &self,
+        id: Uuid,
+        vault_path: &Path,
+        blob: FileHash,
+    ) -> Result<(), Error> {
+        let sidecar = Sidecar::read(&self.root, id)?;
+        let Some(transport) = self.transports.resolve(sidecar.transport.as_ref())? else {
+            return Err(Error::FileMissing(blob.to_string()));
+        };
+        blobs::fetch(&*transport, id, &BlobStore::of(vault_path, id), blob)
+    }
+
     /// Delete the local file blobs of vault `id` that no record references
     /// in `vh`, as saved, or in a retained version (`files/gc.rs`). Runs
     /// under the vault locks, after the save and the retention. A retained
     /// version is read with the file key of `vh`. A version that fails to
     /// read, such as one under an earlier file key, keeps every blob. A
     /// failure is logged and does not fail the save.
+    ///
+    /// The blobs of `staged_blobs` of the saved sync state are kept, since
+    /// they are not uploaded yet. A synced vault whose sync state fails to
+    /// load deletes nothing.
     fn collect_blobs(&self, id: Uuid, vh: &VaultHandle) {
         let collect = || -> Result<usize, Error> {
             let vault = vh.get_unlocked_vault()?;
+            let keep = match vault.replica_id() {
+                Some(_) => {
+                    LocalSyncState::load(&self.root, id, &*self.signer)
+                        .map_err(|e| Error::SyncStateEncodeError(e.to_string()))?
+                        .staged_blobs
+                },
+                None => Vec::new(),
+            };
             let store = BlobStore::of(&vh.path, id);
             let retained = || {
                 let versions = self.versions(id);
@@ -2770,7 +2812,7 @@ impl VaultWriter {
                     Vault::from_unlocked_key(&file_key, enc_vault)
                 }))
             };
-            gc::collect(&store, vault, retained)
+            gc::collect(&store, &keep, vault, retained)
         };
         match collect() {
             Ok(0) => {},

@@ -1,110 +1,144 @@
-//! File credentials do not sync yet: a synced vault refuses them, sync is
-//! not enabled for a vault that holds one, and the vault still syncs its
-//! other changes.
+//! File credentials in a synced vault: the upload of each blob before the
+//! state file that references it, the fetch of a missing blob on read, the
+//! blob status of the sync report, and the sync of file records between
+//! Macs.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use secrecy::SecretString;
-
-use super::load::{Fixture, GENERATION, sync_files};
+use super::load::Fixture;
+use super::publish::{decode, last_publish, published};
 use super::transport::FakeTransport;
-use super::txn::{saved, synced};
-use crate::secrets::vaults::files::{self, FileInput};
-use crate::secrets::vaults::model::fields::FieldKind;
-use crate::secrets::vaults::storage::txn::{Target, Unlock};
-use crate::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
-use crate::secrets::vaults::sync::transport::TransportRoot;
+use super::txn::{saved, saved_vault, synced};
+use crate::audit::SubjectIds;
+use crate::secrets::vaults::files::record::FileRecord;
+use crate::secrets::vaults::files::store::BlobStore;
+use crate::secrets::vaults::files::{self, FileHash, FileInput};
+use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
+use crate::secrets::vaults::format::signing::TestSigner;
+use crate::secrets::vaults::model::Vault;
+use crate::secrets::vaults::storage::txn::{Committed, StagedCopy, Target, Unlock, VaultWriter};
+use crate::secrets::vaults::sync::blobs;
+use crate::secrets::vaults::sync::report::{BlobStatus, SyncReport};
+use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
+use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::{Error, VaultHandle};
 
-/// Add item `item` with a file credential `doc` whose value is `value`,
-/// written directly, without a blob.
-fn add_file_credential(vh: &mut VaultHandle, value: &str) -> Result<(), Error> {
-    vh.add_item("item", "Item")?;
-    vh.add_new_secret(
-        "item",
-        "doc",
-        "Doc",
-        FieldKind::File,
-        SecretString::from(value.to_string()),
-    )
+mod model;
+mod publish;
+mod replicas;
+
+/// File input named `{cred_key}.bin` with `contents`.
+fn input<'a>(cred_key: &str, contents: &'a [u8]) -> FileInput<&'a [u8]> {
+    FileInput {
+        name: format!("{cred_key}.bin"),
+        mime: None,
+        contents,
+    }
 }
 
-#[test]
-fn synced_vault_refuses_file_credential_and_still_syncs_other_changes() {
-    let transport = Arc::new(FakeTransport::default());
-    let fx = synced(&transport);
-    let before = fx.on_disk();
-
-    let err = fx.write(|vh| add_file_credential(vh, "{}")).err().unwrap();
-
-    assert!(matches!(err, Error::FileInSyncedVault), "{err}");
-    assert_eq!(fx.on_disk(), before);
-
-    fx.add_item().unwrap();
-    let (local, _) = saved(&fx);
-    assert_eq!(local.generation, GENERATION + 1);
-}
-
-#[test]
-fn add_file_to_synced_vault_refused_before_any_blob_is_written() {
-    let transport = Arc::new(FakeTransport::default());
-    let fx = synced(&transport);
-    fx.add_item().unwrap();
-    let key = || fx.vault.unlocked_key().unwrap();
-
-    let err = files::add_file(
-        fx.catalog.files(),
-        &Target::of(&fx.vault),
+/// Add file credential `cred_key` holding `contents` to item `item` of the
+/// vault `vh`, through `writer`.
+fn add_file(
+    writer: &VaultWriter,
+    vh: &VaultHandle,
+    cred_key: &str,
+    contents: &[u8],
+) -> Result<Committed<SubjectIds>, Error> {
+    let key = || vh.unlocked_key().unwrap();
+    files::add_file(
+        writer,
+        &Target::of(vh),
         Unlock::Test(&key),
         "item",
-        "doc",
+        cred_key,
         "Doc",
-        FileInput {
-            name: "doc.txt".to_string(),
-            mime: None,
-            contents: &b"contents"[..],
-        },
+        input(cred_key, contents),
     )
-    .err()
-    .unwrap();
-
-    assert!(matches!(err, Error::FileInSyncedVault), "{err}");
-    let store = fx.vaults_dir.read_dir().unwrap();
-    let names: Vec<PathBuf> = store.map(|entry| entry.unwrap().path()).collect();
-    assert_eq!(names, vec![fx.vault.path.clone()], "no store directory");
 }
 
-#[test]
-fn sync_not_enabled_for_vault_that_holds_file() {
-    let transport = Arc::new(FakeTransport::default());
-    let fx = Fixture::with_transport(0, None, transport.clone());
-    fx.write(|vh| add_file_credential(vh, "{}")).unwrap();
-    // A file in the trash counts too.
-    fx.write(|vh| vh.delete_item_credential("item", "doc"))
-        .unwrap();
-    let before = fx.on_disk();
-    let root = TransportRoot::Folder {
-        path: PathBuf::from("/files/Vaults"),
-    };
-    let setup = match SyncSetup::prepare(fx.catalog.files(), &Target::of(&fx.vault), root, "Mac")
-        .unwrap()
-    {
-        SetupStart::Kit(setup) => setup,
-        SetupStart::Join(root) => panic!("setup offered the join of {root}"),
-    };
-    let key = || fx.vault.unlocked_key().unwrap();
+/// Replace the file of credential `cred_key` of item `item` of the vault
+/// `vh` with `contents`, through `writer`.
+fn replace_file(
+    writer: &VaultWriter,
+    vh: &VaultHandle,
+    cred_key: &str,
+    contents: &[u8],
+) -> Result<Committed<SubjectIds>, Error> {
+    let key = || vh.unlocked_key().unwrap();
+    files::replace_file(
+        writer,
+        &Target::of(vh),
+        Unlock::Test(&key),
+        "item",
+        cred_key,
+        input(cred_key, contents),
+    )
+}
 
-    let err = setup
-        .confirm(
-            fx.catalog.files(),
-            &Target::of(&fx.vault),
-            Unlock::Test(&key),
-        )
-        .err()
-        .unwrap();
+/// Move file credential `cred_key` of item `item` of the vault `vh` to the
+/// trash, through `writer`.
+fn trash_file(writer: &VaultWriter, vh: &VaultHandle, cred_key: &str) -> Committed<()> {
+    let key = || vh.unlocked_key().unwrap();
+    files::delete_file(
+        writer,
+        &Target::of(vh),
+        Unlock::Test(&key),
+        "item",
+        cred_key,
+    )
+    .unwrap()
+}
 
-    assert!(matches!(err, Error::FileInSyncedVault), "{err}");
-    assert_eq!(fx.on_disk(), before);
-    assert_eq!(sync_files(&fx), [false; 3]);
+/// Vault `vh` as saved, unlocked with its file key. Runs no transaction.
+fn on_disk(vh: &VaultHandle) -> VaultHandle {
+    let file = EncryptedVault::load(&vh.path, &TestSigner::device()).unwrap();
+    let vault = Vault::from_unlocked_key(&vh.unlocked_key().unwrap(), file).unwrap();
+    VaultHandle::unlocked(vh.path.clone(), vault)
+}
+
+/// Contents of file credential `cred_key` of item `item` of the vault `vh`
+/// as saved, read through `writer`.
+fn read_file(writer: &VaultWriter, vh: &VaultHandle, cred_key: &str) -> Result<Vec<u8>, Error> {
+    let vh = on_disk(vh);
+    let mut out = Vec::new();
+    files::read_file(writer, &vh, "item", cred_key, &mut out)?;
+    Ok(out)
+}
+
+/// Record of file credential `cred_key` of item `item` of the vault `vh`.
+fn record(vh: &VaultHandle, cred_key: &str) -> FileRecord {
+    files::read_record(vh, "item", cred_key).unwrap()
+}
+
+/// Local blob store of the vault `vh`.
+fn store(vh: &VaultHandle) -> BlobStore {
+    BlobStore::of(&vh.path, vh.vault_id().unwrap())
+}
+
+/// Sync report of the vault `vh`, read through `writer`.
+fn report(writer: &VaultWriter, vh: &VaultHandle) -> SyncReport {
+    let key = || vh.unlocked_key().unwrap();
+    SyncReport::read(writer, &Target::of(vh), Unlock::Test(&key)).unwrap()
+}
+
+/// Assert that the write log of `transport` holds one upload of `blob`,
+/// written before the state file `hash` of vault `vault_id`.
+fn assert_uploaded_before(
+    transport: &FakeTransport,
+    vault_id: uuid::Uuid,
+    blob: FileHash,
+    hash: StateHash,
+) {
+    let log = transport.write_log();
+    let blob_name = format!("blobs/{blob}");
+    let uploads: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| **name == blob_name)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(uploads.len(), 1, "{log:?}");
+    let state_name = StateFile::name(vault_id, hash);
+    let state = log.iter().position(|name| *name == state_name).unwrap();
+    assert!(uploads[0] < state, "{log:?}");
 }

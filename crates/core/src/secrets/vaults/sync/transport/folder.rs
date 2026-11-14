@@ -4,12 +4,14 @@
 //! OneDrive, Google Drive, or Syncthing folder, or a network share. Its
 //! layout is `{root}/{short_vault_id}/meta.json`,
 //! `{root}/{short_vault_id}/{short_replica_id}/key.json` and
-//! `{vault_id}.{hash}.apstate`, and `{root}/pairing/{request_id}.json`.
+//! `{vault_id}.{hash}.apstate`, `{root}/{short_vault_id}/blobs/{blob}`, and
+//! `{root}/pairing/{request_id}.json`.
 //!
 //! Every file in the folder is untrusted. Only directories named by the exact
 //! short id of a UUID are listed as vaults and replicas, so `pairing/` is
-//! never a vault. Only the exact names of [`FileName`], `meta.json`, and
-//! [`RequestId`] are listed or read, so conflict copies, temp files, and
+//! never a vault and `blobs/` is never a replica. Only the exact names of
+//! [`FileName`], `meta.json`, [`FileHash`], and [`RequestId`] are listed or
+//! read, so conflict copies, temp files, and
 //! `.DS_Store` are ignored. A symlink is never listed or read, and no write
 //! goes through a symlinked directory. A file that is not local is `Remote`
 //! and is not read, so no transaction waits on the network. The root is never
@@ -31,6 +33,7 @@ use super::{
     FileName, MAX_PAIRING_SIZE, PairingEntry, ReadResult, RequestId, SyncTransport, WatchHandle,
 };
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::state_file::StateHash;
@@ -40,6 +43,9 @@ const META_FILE: &str = "meta.json";
 
 /// Directory of the pairing requests under the root.
 const PAIRING_DIR: &str = "pairing";
+
+/// Directory of the file blobs in each vault directory.
+const BLOB_DIR: &str = "blobs";
 
 /// Transport of a folder the user picked. Files are read and written through
 /// a [`FolderIo`].
@@ -90,6 +96,14 @@ impl FolderTransport {
 
     fn meta_path(&self, vault_id: Uuid) -> PathBuf {
         self.vault_dir(vault_id).join(META_FILE)
+    }
+
+    fn blob_dir(&self, vault_id: Uuid) -> PathBuf {
+        self.vault_dir(vault_id).join(BLOB_DIR)
+    }
+
+    fn blob_path(&self, vault_id: Uuid, blob: FileHash) -> PathBuf {
+        self.blob_dir(vault_id).join(blob.to_string())
     }
 
     fn pairing_dir(&self) -> PathBuf {
@@ -401,5 +415,70 @@ impl SyncTransport for FolderTransport {
     /// `pairing/`. `None` if the root is missing.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
         FolderWatch::start(&self.root, Path::new(PAIRING_DIR), notify)
+    }
+
+    fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error> {
+        self.check_root()?;
+        let mut blobs: Vec<FileHash> = Self::file_names(&self.blob_dir(vault_id))?
+            .iter()
+            .filter_map(|name| FileHash::parse(name))
+            .collect();
+        blobs.sort();
+        Ok(blobs)
+    }
+
+    fn read_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<ReadResult, Error> {
+        self.check_root()?;
+        self.read_file(&self.blob_path(vault_id, blob), u64::MAX)
+    }
+
+    /// Write a blob with a new name. A blob that exists under the name, local
+    /// or not, is kept, and so is one that another writer creates during the
+    /// write.
+    fn write_blob(&self, vault_id: Uuid, blob: FileHash, data: &[u8]) -> Result<(), Error> {
+        self.check_root()?;
+        let path = self.blob_path(vault_id, blob);
+        let exists = |path: &Path| -> Result<bool, Error> {
+            let status = self
+                .io
+                .status(path)
+                .map_err(|e| Self::error("read", path, e))?;
+            Ok(status != FileStatus::Missing)
+        };
+        if exists(&path)? {
+            return Ok(());
+        }
+        Self::create_dir(&self.vault_dir(vault_id))?;
+        Self::create_dir(&self.blob_dir(vault_id))?;
+        match self.write_file(&path, data, WriteMode::New) {
+            Err(_) if exists(&path)? => Ok(()),
+            result => result,
+        }
+    }
+
+    fn is_blob_local(&self, vault_id: Uuid, blob: FileHash) -> Result<bool, Error> {
+        self.check_root()?;
+        let path = self.blob_path(vault_id, blob);
+        let status = self
+            .io
+            .status(&path)
+            .map_err(|e| Self::error("read", &path, e))?;
+        Ok(status == FileStatus::Local)
+    }
+
+    fn delete_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error> {
+        self.check_root()?;
+        self.delete_path(&self.blob_path(vault_id, blob))
+    }
+
+    /// Start a coordinated read of the blob if it is not local, and return
+    /// without waiting.
+    fn request_blob_download(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error> {
+        self.check_root()?;
+        let path = self.blob_path(vault_id, blob);
+        if self.is_remote(&path)? {
+            self.io.download(vec![path]);
+        }
+        Ok(())
     }
 }

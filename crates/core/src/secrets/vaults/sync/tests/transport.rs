@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::state_file::{VAULT, WRITER};
 use crate::secrets::vaults::Error;
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::transport::{
@@ -83,6 +84,15 @@ pub(super) struct FakeTransport {
 #[derive(Debug, Default)]
 struct FakeFolder {
     files: BTreeMap<(Uuid, ReplicaId, String), FakeFile>,
+    /// File blobs by vault id and name.
+    blobs: BTreeMap<(Uuid, FileHash), FakeFile>,
+    /// Whether every blob write fails, while other writes succeed.
+    failing_blob_writes: bool,
+    /// Names of the successful writes of blobs and replica files, in write
+    /// order. A blob is `blobs/{blob}`.
+    write_log: Vec<String>,
+    /// Blobs of the `request_blob_download` calls, in call order.
+    blob_downloads: Vec<(Uuid, FileHash)>,
     /// `meta.json` of each vault directory.
     meta: BTreeMap<Uuid, Vec<u8>>,
     pairings: BTreeMap<RequestId, FakePairing>,
@@ -167,17 +177,80 @@ impl FakeTransport {
     /// of files made local.
     pub(super) fn complete_downloads(&self, vault_id: Uuid) -> usize {
         let mut folder = self.folder();
+        let folder = &mut *folder;
+        let files = folder
+            .files
+            .iter_mut()
+            .filter(|((v, _, _), _)| *v == vault_id)
+            .map(|(_, file)| file);
+        let blobs = folder
+            .blobs
+            .iter_mut()
+            .filter(|((v, _), _)| *v == vault_id)
+            .map(|(_, file)| file);
         let mut completed = 0;
-        for ((v, _, _), file) in folder.files.iter_mut() {
-            if *v != vault_id {
-                continue;
-            }
+        for file in files.chain(blobs) {
             if let FakeFile::Remote(Some(bytes)) = file {
                 *file = FakeFile::Local(std::mem::take(bytes));
                 completed += 1;
             }
         }
         completed
+    }
+
+    /// Put `bytes` as blob `blob` of vault `vault_id`, with any bytes.
+    pub(super) fn put_blob(&self, vault_id: Uuid, blob: FileHash, bytes: &[u8]) {
+        self.folder()
+            .blobs
+            .insert((vault_id, blob), FakeFile::Local(bytes.to_vec()));
+    }
+
+    /// Put blob `blob` of vault `vault_id` as not local yet, holding `bytes`
+    /// once [`Self::complete_downloads`] runs, if set.
+    pub(super) fn put_blob_remote(&self, vault_id: Uuid, blob: FileHash, bytes: Option<&[u8]>) {
+        self.folder().blobs.insert(
+            (vault_id, blob),
+            FakeFile::Remote(bytes.map(<[u8]>::to_vec)),
+        );
+    }
+
+    /// Bytes of blob `blob` of vault `vault_id`, local or not yet local.
+    pub(super) fn blob(&self, vault_id: Uuid, blob: FileHash) -> Option<Vec<u8>> {
+        match self.folder().blobs.get(&(vault_id, blob))? {
+            FakeFile::Local(bytes) => Some(bytes.clone()),
+            FakeFile::Remote(bytes) => bytes.clone(),
+        }
+    }
+
+    /// Blobs of vault `vault_id`, local or not.
+    pub(super) fn blob_names(&self, vault_id: Uuid) -> Vec<FileHash> {
+        self.folder()
+            .blobs
+            .keys()
+            .filter(|(v, _)| *v == vault_id)
+            .map(|(_, blob)| *blob)
+            .collect()
+    }
+
+    /// Remove blob `blob` of vault `vault_id`, as a folder that lost it.
+    pub(super) fn remove_blob(&self, vault_id: Uuid, blob: FileHash) {
+        self.folder().blobs.remove(&(vault_id, blob));
+    }
+
+    /// Make every blob write fail, while other writes succeed.
+    pub(super) fn set_failing_blob_writes(&self, failing: bool) {
+        self.folder().failing_blob_writes = failing;
+    }
+
+    /// Names of the successful writes of blobs and replica files, in write
+    /// order. A blob is `blobs/{blob}`.
+    pub(super) fn write_log(&self) -> Vec<String> {
+        self.folder().write_log.clone()
+    }
+
+    /// Blobs of the `request_blob_download` calls, in call order.
+    pub(super) fn blob_download_requests(&self) -> Vec<(Uuid, FileHash)> {
+        self.folder().blob_downloads.clone()
     }
 
     /// Vaults of the `request_download` calls, in call order.
@@ -491,6 +564,7 @@ impl SyncTransport for FakeTransport {
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
         let key = (vault_id, replica, name.file_name(vault_id));
+        folder.write_log.push(key.2.clone());
         folder.files.insert(key, FakeFile::Local(data.to_vec()));
         folder.writes += 1;
         Ok(())
@@ -578,6 +652,73 @@ impl SyncTransport for FakeTransport {
 
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
         Some(self.add_watch(None, notify))
+    }
+
+    fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        Ok(folder
+            .blobs
+            .keys()
+            .filter(|(v, _)| *v == vault_id)
+            .map(|(_, blob)| *blob)
+            .collect())
+    }
+
+    fn read_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<ReadResult, Error> {
+        let mut folder = self.folder();
+        Self::check_available(&folder)?;
+        let result = match folder.blobs.get(&(vault_id, blob)) {
+            None => ReadResult::Missing,
+            Some(FakeFile::Remote(_)) => ReadResult::Remote,
+            Some(FakeFile::Local(bytes)) => ReadResult::Local(bytes.clone()),
+        };
+        if matches!(result, ReadResult::Local(_)) {
+            folder.reads += 1;
+        }
+        Ok(result)
+    }
+
+    fn write_blob(&self, vault_id: Uuid, blob: FileHash, data: &[u8]) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        if folder.failing_blob_writes {
+            return Err(Error::SyncTransportError("blob write failed".to_string()));
+        }
+        if folder.blobs.contains_key(&(vault_id, blob)) {
+            return Ok(());
+        }
+        folder
+            .blobs
+            .insert((vault_id, blob), FakeFile::Local(data.to_vec()));
+        folder.write_log.push(format!("blobs/{blob}"));
+        folder.writes += 1;
+        Ok(())
+    }
+
+    fn is_blob_local(&self, vault_id: Uuid, blob: FileHash) -> Result<bool, Error> {
+        let folder = self.folder();
+        Self::check_available(&folder)?;
+        Ok(matches!(
+            folder.blobs.get(&(vault_id, blob)),
+            Some(FakeFile::Local(_))
+        ))
+    }
+
+    fn delete_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error> {
+        self.run_write_hook(vault_id);
+        let mut folder = self.folder();
+        Self::check_writable(&folder)?;
+        folder.blobs.remove(&(vault_id, blob));
+        Ok(())
+    }
+
+    fn request_blob_download(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_available(&folder)?;
+        folder.blob_downloads.push((vault_id, blob));
+        Ok(())
     }
 }
 

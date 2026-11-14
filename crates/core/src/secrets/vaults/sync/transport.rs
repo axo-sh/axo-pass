@@ -1,5 +1,11 @@
 //! Transport of the synced folder: `meta.json` of each vault directory, the
-//! state files and `key.json` of each replica, and pairing requests.
+//! state files and `key.json` of each replica, the file blobs of each vault,
+//! and pairing requests.
+//!
+//! File blobs are in `blobs/` of the vault directory. It is shared by every
+//! replica, the one exception to the rule that each replica writes only its
+//! own directory. A blob is named by the SHA-256 of its bytes, so two writers
+//! never write different bytes under one name.
 //!
 //! The root of a vault's transport is in its sidecar. [`SyncTransports`]
 //! resolves a root to a transport. [`folder::FolderTransport`] is the local
@@ -18,6 +24,7 @@ use uuid::Uuid;
 use super::crdt::ReplicaId;
 use super::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::short_id::ShortId;
 
 /// Storage of the synced folder. Each replica writes only its own directory.
@@ -65,6 +72,27 @@ pub trait SyncTransport: fmt::Debug + Send + Sync {
     /// Call `notify` when a pairing request changes. `None` if the transport
     /// has no watch. The watch ends when the handle drops.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle>;
+    /// Blobs under `blobs/` of the directory of vault `vault_id`, local or
+    /// not, ordered by name. Only names that [`FileHash::parse`] accepts are
+    /// listed.
+    fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error>;
+    /// Read blob `blob` of vault `vault_id`. Returns `Remote` if the blob
+    /// exists but is not local yet. The bytes are not checked against the
+    /// name.
+    fn read_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<ReadResult, Error>;
+    /// Write `data` as blob `blob` of vault `vault_id`. An existing blob of
+    /// that name is kept, since a name holds one content. The caller checks
+    /// that `data` hashes to `blob`.
+    fn write_blob(&self, vault_id: Uuid, blob: FileHash, data: &[u8]) -> Result<(), Error>;
+    /// Whether blob `blob` of vault `vault_id` exists and is local. Reads no
+    /// bytes.
+    fn is_blob_local(&self, vault_id: Uuid, blob: FileHash) -> Result<bool, Error>;
+    /// Delete blob `blob` of vault `vault_id`. A missing blob is not an
+    /// error.
+    fn delete_blob(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error>;
+    /// Ask the provider to make blob `blob` of vault `vault_id` local. Does
+    /// not wait.
+    fn request_blob_download(&self, vault_id: Uuid, blob: FileHash) -> Result<(), Error>;
 }
 
 /// Result of a read from the synced folder.

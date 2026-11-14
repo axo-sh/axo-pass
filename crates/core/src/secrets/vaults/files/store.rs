@@ -58,9 +58,7 @@ impl BlobStore {
     /// [`StagedBlob::commit`].
     pub(crate) fn stage(&self, vault_id: Uuid, input: impl io::Read) -> Result<StagedBlob, Error> {
         fs::create_dir_all(&self.dir).map_err(Error::FileWriteError)?;
-        let temp = self
-            .dir
-            .join(format!(".{}{TEMP_SUFFIX}", Uuid::new_v4().simple()));
+        let temp = self.temp_path();
         let file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -93,6 +91,55 @@ impl BlobStore {
     ) -> Result<(), Error> {
         let file = self.open(&record.blob)?;
         stream::decrypt(record, vault_id, io::BufReader::new(file), output)
+    }
+
+    /// Ciphertext of blob `blob`, checked against its name. A missing blob
+    /// fails with `FileMissing`, and one whose bytes do not hash to its name
+    /// fails with `FileBlobMismatch`.
+    pub(crate) fn read_bytes(&self, blob: &FileHash) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut self.open(blob)?, &mut bytes).map_err(Error::FileReadError)?;
+        if FileHash::of(&bytes) != *blob {
+            return Err(Error::FileBlobMismatch(blob.to_string()));
+        }
+        Ok(bytes)
+    }
+
+    /// Write `bytes` as blob `blob`, through a temp file renamed to the blob
+    /// name, and sync the directory. Fails with `FileBlobMismatch` and writes
+    /// nothing if `bytes` do not hash to `blob`. An existing blob is
+    /// replaced by the same bytes.
+    pub(crate) fn put(&self, blob: &FileHash, bytes: &[u8]) -> Result<(), Error> {
+        if FileHash::of(bytes) != *blob {
+            return Err(Error::FileBlobMismatch(blob.to_string()));
+        }
+        fs::create_dir_all(&self.dir).map_err(Error::FileWriteError)?;
+        let temp = self.temp_path();
+        let write = || -> io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            fs::rename(&temp, self.path(blob))?;
+            File::open(&self.dir)?.sync_all()
+        };
+        write().map_err(|e| {
+            let _ = fs::remove_file(&temp);
+            Error::FileWriteError(e)
+        })
+    }
+
+    /// Whether blob `blob` is in the store.
+    pub(crate) fn contains(&self, blob: &FileHash) -> bool {
+        self.path(blob).is_file()
+    }
+
+    /// Path of a new hidden temp file in the store.
+    fn temp_path(&self) -> PathBuf {
+        self.dir
+            .join(format!(".{}{TEMP_SUFFIX}", Uuid::new_v4().simple()))
     }
 
     fn open(&self, blob: &FileHash) -> Result<File, Error> {
