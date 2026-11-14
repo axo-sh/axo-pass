@@ -1656,6 +1656,25 @@ final class VaultsModel {
     return events.map(AuditLogRow.init)
   }
 
+  /// Audit change events of one item, newest first. Events name the item by
+  /// its id, which is unchanged by a rename. Reads of values are left out.
+  func itemHistory(itemId: String, limit: UInt32, offset: UInt32) async throws -> [AuditLogRow] {
+    let filter = AuditFilterInput(
+      sinceRfc3339: nil,
+      untilRfc3339: nil,
+      actions: [],
+      categories: [],
+      kind: .change,
+      requesters: [],
+      outcomes: [],
+      query: nil,
+      detailId: AuditDetailIdInput(key: "item_id", id: itemId),
+      limit: limit,
+      offset: offset
+    )
+    return try await core.listAuditEvents(filter: filter).map(AuditLogRow.init)
+  }
+
   /// The items of a vault as last loaded, without loading. Empty when the
   /// vault is not cached.
   func cachedItems(in vaultKey: String) -> [ItemInfo] {

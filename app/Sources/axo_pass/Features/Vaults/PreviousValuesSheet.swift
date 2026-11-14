@@ -10,8 +10,8 @@ struct PreviousValuesTarget: Identifiable {
   var id: String { key }
 }
 
-/// Previous values of one credential. A replaced value stays in the vault until
-/// it is deleted permanently here.
+/// Current and previous values of one credential. A replaced value stays in the
+/// vault until it is deleted permanently here.
 struct PreviousValuesSheet: View {
   @Environment(VaultsModel.self) private var model
   @Environment(\.dismiss) private var dismiss
@@ -25,30 +25,25 @@ struct PreviousValuesSheet: View {
 
   @State private var entries: [HistoryEntryInfo]? = nil
   @State private var revealed: [String: SymmetricKey] = [:]
+  @State private var currentRevealed: SymmetricKey? = nil
   @State private var errorMessage: String? = nil
   @State private var copiedId: String? = nil
   @State private var confirmingPurge: HistoryEntryInfo? = nil
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Previous Values of \(title)").font(.headline)
+      Text("History of \(title)").font(.headline)
 
-      Group {
-        if let entries {
-          if entries.isEmpty {
-            Text("No previous values")
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else {
-            List(entries, id: \.id) { entry in
-              row(entry)
-            }
-          }
-        } else {
-          ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+      if let entries {
+        // The list is as tall as its rows, and scrolls past the maximum height.
+        ViewThatFits(in: .vertical) {
+          valueList(entries)
+          ScrollView { valueList(entries) }
         }
+        .frame(maxHeight: 280)
+      } else {
+        ProgressView().frame(maxWidth: .infinity, minHeight: 80)
       }
-      .frame(height: 280)
 
       Text(
         "Replaced values stay in the vault until you delete them permanently."
@@ -89,6 +84,43 @@ struct PreviousValuesSheet: View {
     }
   }
 
+  private func valueList(_ entries: [HistoryEntryInfo]) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      currentRow
+      Divider()
+      if entries.isEmpty {
+        Text("No previous values")
+          .foregroundStyle(.secondary)
+          .padding(.vertical, 8)
+      } else {
+        ForEach(entries, id: \.id) { entry in
+          row(entry)
+          if entry.id != entries.last?.id { Divider() }
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var currentRow: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Text("Current")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+        Spacer(minLength: 0)
+        Button(copiedId == Self.currentId ? "Copied" : "Copy") { Task { await copyCurrent() } }
+      }
+      .controlSize(.small)
+      SecretBox(
+        revealed: Self.text(of: currentRevealed),
+        lineLimit: 1,
+        onToggle: { currentRevealed == nil ? revealCurrent() : hideCurrent() }
+      )
+    }
+    .padding(.vertical, 8)
+  }
+
   private func row(_ entry: HistoryEntryInfo) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack {
@@ -110,12 +142,60 @@ struct PreviousValuesSheet: View {
         onToggle: { revealed[entry.id] == nil ? reveal(entry) : hide(entry) }
       )
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, 8)
   }
 
+  /// Copy id of the current value. It differs from every history entry id.
+  private static let currentId = "current"
+
   private func revealedText(_ entry: HistoryEntryInfo) -> String? {
-    guard let secret = revealed[entry.id] else { return nil }
+    Self.text(of: revealed[entry.id])
+  }
+
+  private static func text(of secret: SymmetricKey?) -> String? {
+    guard let secret else { return nil }
     return secret.withUnsafeBytes { String(bytes: $0, encoding: .utf8) ?? "(binary data)" }
+  }
+
+  private func fetchCurrent() async throws -> SymmetricKey {
+    try await model.credentialSecret(vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
+  }
+
+  private func revealCurrent() {
+    errorMessage = nil
+    Task {
+      do {
+        currentRevealed = try await fetchCurrent()
+      } catch {
+        errorMessage = String(describing: error)
+      }
+    }
+  }
+
+  private func hideCurrent() {
+    currentRevealed = nil
+  }
+
+  /// Copy without revealing the value on screen.
+  private func copyCurrent() async {
+    errorMessage = nil
+    do {
+      let value: SymmetricKey
+      if let secret = currentRevealed {
+        value = secret
+      } else {
+        value = try await fetchCurrent()
+      }
+      if secureCopy(value) {
+        copiedId = Self.currentId
+        try? await Task.sleep(for: .seconds(1.2))
+        if copiedId == Self.currentId { copiedId = nil }
+      } else {
+        errorMessage = "The value is not text."
+      }
+    } catch {
+      errorMessage = String(describing: error)
+    }
   }
 
   private func load() async {
@@ -179,6 +259,7 @@ struct PreviousValuesSheet: View {
           vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, historyId: entry.id)
       }
       revealed = [:]
+      currentRevealed = nil
       if errorMessage == nil { onValueChanged() }
       await load()
     }

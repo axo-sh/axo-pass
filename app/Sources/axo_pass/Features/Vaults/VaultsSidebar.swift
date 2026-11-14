@@ -320,7 +320,7 @@ struct VaultsSidebar: View {
         .contextMenu {
           Button("Rename…") { renamingVaultKey = vault.key }
           Button("Export Backup…") { exportingVaultKey = vault.key }
-          Button("Previous Versions…") { versionsVaultKey = vault.key }
+          Button("History…") { versionsVaultKey = vault.key }
           syncMenuItem(vault)
           Button("Delete", role: .destructive) {
             if sync.state(vault.key)?.isOn == true {

@@ -21,7 +21,7 @@ struct VaultVersionsSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Previous Versions of \(vaultName)").font(.headline)
+      Text("History of \(vaultName)").font(.headline)
 
       if refused == true {
         Label(
@@ -33,22 +33,20 @@ struct VaultVersionsSheet: View {
         .fixedSize(horizontal: false, vertical: true)
       }
 
-      Group {
-        if let versions {
-          if versions.isEmpty {
-            Text("No previous versions")
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else {
-            List(versions, id: \.name) { version in
-              row(version)
-            }
-          }
+      if let versions {
+        if versions.isEmpty {
+          Text("No previous versions").foregroundStyle(.secondary)
         } else {
-          ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+          // The list is as tall as its rows, and scrolls past the maximum height.
+          ViewThatFits(in: .vertical) {
+            versionList(versions)
+            ScrollView { versionList(versions) }
+          }
+          .frame(maxHeight: 280)
         }
+      } else {
+        ProgressView().frame(maxWidth: .infinity, minHeight: 80)
       }
-      .frame(height: 280)
 
       Text(
         "A copy of the vault is kept before each save. Copies from the last hour and the last copy of each day are kept for up to 30 days."
@@ -112,6 +110,16 @@ struct VaultVersionsSheet: View {
       "The vault is replaced with this version. The current vault is kept as a previous version."
   }
 
+  private func versionList(_ versions: [RetainedVersionInfo]) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(versions, id: \.name) { version in
+        row(version)
+        if version.name != versions.last?.name { Divider() }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
   private func row(_ version: RetainedVersionInfo) -> some View {
     HStack {
       Text(
@@ -124,7 +132,7 @@ struct VaultVersionsSheet: View {
         .controlSize(.small)
         .disabled(refused == nil)
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, 8)
   }
 
   /// List the versions, and check whether the vault file loads.

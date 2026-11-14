@@ -131,7 +131,7 @@ struct CredentialRow: View {
       Button("Rename") { onStartRename(.title) }
       Button("Change ID") { onStartRename(.key) }
       Divider()
-      Button("Previous Values…", action: onShowPreviousValues)
+      Button("History…", action: onShowPreviousValues)
       Divider()
       roleMenu
       Divider()

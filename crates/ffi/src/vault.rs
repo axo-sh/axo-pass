@@ -72,6 +72,8 @@ pub struct CredentialInfo {
     /// Unix seconds of the first use on the most recent day of use. Only
     /// passkey sign-ins set it. It names the day of last use, not the time.
     pub last_used_day_at: Option<i64>,
+    /// Unix seconds of creation.
+    pub created_at: i64,
     /// Only present for passkeys; contains passkey credential details for
     /// display.
     pub passkey: Option<PasskeyInfo>,
@@ -787,6 +789,7 @@ impl AxoPass {
                                 section_id: c.section.map(ShortId::encode_uuid),
                                 role: role.map(str::to_string),
                                 last_used_day_at: c.last_used_day_at,
+                                created_at: c.created_at,
                                 passkey,
                             }
                         })

@@ -50,6 +50,8 @@ struct CredentialList: View {
   @State private var showingRenameItemSheet = false
   // Credential whose previous values are shown.
   @State private var previousValuesTarget: PreviousValuesTarget? = nil
+  // Item whose history is shown.
+  @State private var historyTarget: ItemHistoryTarget? = nil
   // Key of the passkey the move sheet is open for.
   @State private var movingPasskey: String? = nil
   // Key of the selected login card credential. Selecting a card row clears the
@@ -123,7 +125,17 @@ struct CredentialList: View {
           Label("Add", systemImage: "plus")
         }
         .help("New credential or section.")
+
+        Button {
+          historyTarget = ItemHistoryTarget(item)
+        } label: {
+          Label("History", systemImage: "clock.arrow.circlepath")
+        }
+        .help("Show item history.")
       }
+    }
+    .sheet(item: $historyTarget) { target in
+      ItemHistorySheet(target: target)
     }
     .sheet(item: $previousValuesTarget) { target in
       PreviousValuesSheet(
@@ -239,6 +251,7 @@ struct CredentialList: View {
     .contextMenu {
       Button("Rename Item…") { showingRenameItemSheet = true }
       Button("Copy Item Key", action: copyItemKey)
+      Button("History…") { historyTarget = ItemHistoryTarget(item) }
       Divider()
       Button("New Credential…") { showingNewCredentialSheet = true }
       Button("New Section") { newSection() }
@@ -402,7 +415,7 @@ struct CredentialList: View {
         .action("Rename") { renaming = .credential(key, .title) },
         .action("Change ID") { renaming = .credential(key, .key) },
         .divider,
-        .action("Previous Values…") {
+        .action("History…") {
           previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
         },
       ]

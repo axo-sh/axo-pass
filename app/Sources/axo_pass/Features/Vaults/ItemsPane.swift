@@ -31,6 +31,7 @@ struct ItemsPane: View {
   @State private var showingNewLoginSheet = false
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var renamingItem: DisplayItem? = nil
+  @State private var historyTarget: ItemHistoryTarget? = nil
   @State private var moveError: String? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
@@ -131,6 +132,9 @@ struct ItemsPane: View {
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
     }
+    .sheet(item: $historyTarget) { target in
+      ItemHistorySheet(target: target)
+    }
   }
 
   private func itemRows(_ items: [DisplayItem]) -> some View {
@@ -223,6 +227,7 @@ struct ItemsPane: View {
       }
     }
     Button("Rename…") { renamingItem = display }
+    Button("History…") { historyTarget = ItemHistoryTarget(display.item) }
     let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
     if !otherVaults.isEmpty {
       Menu("Move to Vault") {
