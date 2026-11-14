@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axo_pass_core::core::auth::AuthContext;
 use axo_pass_core::secrets::vaults::bundle::{
-    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ImportAction, ImportIdentity,
+    BundleVaultInfo as CoreBundleVaultInfo, ExportMode, ExportReport, ImportAction, ImportIdentity,
     ImportSelection, ImportableBundle, WorkFactor as CoreWorkFactor,
 };
 use axo_pass_core::secrets::vaults::{ExportProgress as CoreExportProgress, ShortId};
@@ -21,6 +21,14 @@ pub struct BundleVaultInfo {
     /// under its id is refused, so the caller asks for a copy or leaves the
     /// vault out.
     pub id_exists: bool,
+    /// Files in the vault, history included. A vault with files cannot be
+    /// imported as a copy, since its blobs are bound to the vault id. If
+    /// `id_exists` is set and this is above zero, the caller leaves the vault
+    /// out.
+    pub files: u32,
+    /// Files whose blobs the bundle lacks. An import writes their records,
+    /// and the files read as missing locally.
+    pub missing_files: u32,
 }
 
 impl BundleVaultInfo {
@@ -30,6 +38,43 @@ impl BundleVaultInfo {
             name: v.name,
             default_key: v.default_key,
             id_exists,
+            files: v.files as u32,
+            missing_files: v.missing_files as u32,
+        }
+    }
+}
+
+/// File blob that an export could not include.
+#[derive(uniffi::Record)]
+pub struct MissingFileBlob {
+    /// Id of the vault that references the blob, as a short id.
+    pub vault_id: String,
+    /// Blob name, 64 lowercase hex characters.
+    pub blob: String,
+    /// Why the blob could not be read or fetched.
+    pub reason: String,
+}
+
+/// Outcome of a bundle export.
+#[derive(uniffi::Record)]
+pub struct VaultExportReport {
+    /// Blobs that exported records name and the bundle lacks. The export
+    /// still wrote every other blob.
+    pub missing_blobs: Vec<MissingFileBlob>,
+}
+
+impl From<ExportReport> for VaultExportReport {
+    fn from(report: ExportReport) -> Self {
+        VaultExportReport {
+            missing_blobs: report
+                .missing_blobs
+                .into_iter()
+                .map(|missing| MissingFileBlob {
+                    vault_id: ShortId::encode_uuid(missing.vault_id),
+                    blob: missing.blob.to_string(),
+                    reason: missing.reason,
+                })
+                .collect(),
         }
     }
 }
@@ -124,6 +169,10 @@ impl AxoPass {
     /// `work_factor` sets the passphrase key-derivation cost. `progress`, when
     /// given, is called on a background thread as the export moves through its
     /// stages.
+    ///
+    /// The bundle holds the file blobs that exported records name. A blob that
+    /// cannot be read or fetched is listed in the report, and the export still
+    /// succeeds.
     pub async fn export_vault_bundle(
         &self,
         vault_keys: Vec<String>,
@@ -132,7 +181,7 @@ impl AxoPass {
         work_factor: ExportWorkFactor,
         include_passkeys: bool,
         progress: Option<Arc<dyn VaultExportProgressDelegate>>,
-    ) -> Result<(), FfiError> {
+    ) -> Result<VaultExportReport, FfiError> {
         let store = self
             .manager
             .lock()
@@ -168,9 +217,7 @@ impl AxoPass {
                         }
                     },
                 )
-                // The report of blobs left out is logged and audited by the
-                // export. The app does not show it yet.
-                .map(|_report| ())
+                .map(VaultExportReport::from)
                 .map_err(FfiError::from)
         })
         .await
@@ -214,7 +261,8 @@ impl AxoPass {
     /// Import the selected vaults from a bundle file. Returns the keys of the
     /// newly created vaults. A vault
     /// imported under an id that exists on this Mac fails the whole import
-    /// before anything is written.
+    /// before anything is written. So does a copy of a vault that holds
+    /// files (`BundleVaultInfo::files`).
     pub async fn import_vault_bundle(
         &self,
         src_path: String,
@@ -245,5 +293,35 @@ impl AxoPass {
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axo_pass_core::secrets::vaults::bundle::MissingBlob;
+    use axo_pass_core::secrets::vaults::files::FileHash;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn export_report_lists_each_missing_blob_with_short_vault_id() {
+        let vault_id = Uuid::new_v4();
+        let report = ExportReport {
+            missing_blobs: vec![MissingBlob {
+                vault_id,
+                blob: FileHash([0xab; 32]),
+                reason: "File blob is missing".to_string(),
+            }],
+        };
+
+        let report = VaultExportReport::from(report);
+
+        let [missing] = &report.missing_blobs[..] else {
+            panic!("{} missing blobs", report.missing_blobs.len());
+        };
+        assert_eq!(missing.vault_id, ShortId::encode_uuid(vault_id));
+        assert_eq!(missing.blob, "ab".repeat(32));
+        assert_eq!(missing.reason, "File blob is missing");
     }
 }
