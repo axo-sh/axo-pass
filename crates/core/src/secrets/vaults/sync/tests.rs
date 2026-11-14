@@ -8,6 +8,7 @@ mod disable;
 mod edit_rule;
 mod failures;
 mod faults;
+mod files;
 mod folder;
 mod generators;
 mod guard;

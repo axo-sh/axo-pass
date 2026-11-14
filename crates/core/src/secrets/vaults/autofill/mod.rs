@@ -632,7 +632,7 @@ pub fn set_role(
                 Role::Totp => matches!(cred.kind, FieldKind::Totp),
                 Role::Username | Role::Password => !matches!(
                     cred.kind,
-                    FieldKind::Passkey | FieldKind::Totp | FieldKind::Unknown(_)
+                    FieldKind::Passkey | FieldKind::File | FieldKind::Totp | FieldKind::Unknown(_)
                 ),
             };
             if !usable {

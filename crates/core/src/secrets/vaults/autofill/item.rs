@@ -95,7 +95,7 @@ impl ItemAutofill {
     ) -> Option<&'a VaultItemCredentialOverview> {
         let cred = item.credentials.get(&slot?)?;
         match cred.kind {
-            FieldKind::Passkey | FieldKind::Totp | FieldKind::Unknown(_) => None,
+            FieldKind::Passkey | FieldKind::File | FieldKind::Totp | FieldKind::Unknown(_) => None,
             _ => Some(cred),
         }
     }

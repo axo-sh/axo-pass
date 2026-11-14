@@ -11,6 +11,7 @@ use serde_json::json;
 use super::*;
 use crate::schema_snapshot::SchemaSnapshot;
 use crate::secrets::vaults::autofill::item::{MatchKind, Role, Website};
+use crate::secrets::vaults::files::record::{FileHash, FileKey, FileRecord};
 use crate::secrets::vaults::model::fields::{FieldKind, TextField};
 use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::model::{VaultFolderMetadata, VaultSectionMetadata};
@@ -223,6 +224,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         | FieldKind::Date
         | FieldKind::Totp
         | FieldKind::Passkey
+        | FieldKind::File
         | FieldKind::Unknown(_) => {},
     };
     let kinds = [
@@ -240,6 +242,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         FieldKind::Date,
         FieldKind::Totp,
         FieldKind::Passkey,
+        FieldKind::File,
         FieldKind::Unknown(json!({"type": "wifi", "ssid": "home"})),
     ];
     let minimal = |kind: FieldKind| VaultCredentialMetadata {
@@ -308,6 +311,27 @@ fn deleted_info() -> Vec<DeletedInfo> {
         .collect()
 }
 
+/// Full and minimal file records, the value of a file credential.
+fn file_records() -> Vec<FileRecord> {
+    let full = FileRecord {
+        blob: FileHash([0xab; 32]),
+        key: FileKey::from_bytes([7; 32]),
+        sha256: FileHash([0x01; 32]),
+        size: 12,
+        name: "notes.txt".to_string(),
+        mime: Some("text/plain".to_string()),
+    };
+    let minimal = FileRecord {
+        blob: FileHash([0xcd; 32]),
+        key: FileKey::from_bytes([8; 32]),
+        sha256: FileHash([0x02; 32]),
+        size: 0,
+        name: "empty".to_string(),
+        mime: None,
+    };
+    vec![full, minimal]
+}
+
 /// Samples of the vault file and of every blob plaintext struct.
 fn vault_snapshot() -> SchemaSnapshot {
     let mut snapshot = SchemaSnapshot::new(SCHEMA, VAULT_FORMAT);
@@ -326,6 +350,7 @@ fn vault_snapshot() -> SchemaSnapshot {
     // An object with a history kind this build does not know is kept as is.
     snapshot.add("history-metadata", &history_metadata(), &["kind"]);
     snapshot.add("deleted-info", &deleted_info(), &[]);
+    snapshot.add("file-record", &file_records(), &[]);
     snapshot
 }
 

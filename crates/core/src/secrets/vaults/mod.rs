@@ -1,6 +1,7 @@
 pub mod autofill;
 pub mod bundle;
 mod errors;
+pub mod files;
 pub mod format;
 pub mod model;
 pub mod passkey;

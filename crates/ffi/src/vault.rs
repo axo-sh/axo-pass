@@ -299,14 +299,16 @@ pub struct CredentialPlacementInfo {
 }
 
 /// Flattened view of `FieldKind` for the UI. `kind` is the discriminator:
-/// "text", "email", "url", "phone", "date", "totp", "passkey", or "unknown".
-/// `multiline` applies only to "text"; it is false for every other kind, and
-/// `concealed` is true for "text" that conceals its value and for "passkey".
+/// "text", "email", "url", "phone", "date", "totp", "passkey", "file", or
+/// "unknown". `multiline` applies only to "text"; it is false for every other
+/// kind, and `concealed` is true for "text" that conceals its value, for
+/// "passkey", and for "file".
 ///
 /// The write path (`add_or_update_credential`) accepts every discriminator
-/// except "unknown", which cannot be reconstructed, and "passkey", whose value
-/// is a structured record only the authenticator may write. When the caller
-/// wants to leave an existing credential's kind untouched it passes `None`.
+/// except "unknown", which cannot be reconstructed, and "passkey" and "file",
+/// whose values are structured records written only by their own code paths.
+/// When the caller wants to leave an existing credential's kind untouched it
+/// passes `None`.
 #[derive(uniffi::Record, Clone)]
 pub struct FieldKindInfo {
     pub kind: String,
@@ -325,6 +327,7 @@ impl From<&FieldKind> for FieldKindInfo {
             FieldKind::Date => ("date", false, false),
             FieldKind::Totp => ("totp", false, false),
             FieldKind::Passkey => ("passkey", true, false),
+            FieldKind::File => ("file", true, false),
             FieldKind::Unknown(_) => ("unknown", false, false),
         };
         Self {
@@ -357,7 +360,8 @@ impl TryFrom<FieldKindInfo> for FieldKind {
             "totp" => FieldKind::Totp,
             // "passkey" is deliberately absent: a passkey's value is a
             // structured record the CTAP2 authenticator owns, so it is never
-            // written through the generic credential path.
+            // written through the generic credential path. "file" is absent
+            // for the same reason.
             other => {
                 return Err(FfiError::InvalidInput(format!(
                     "cannot set field kind {other:?}"

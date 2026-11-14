@@ -1,4 +1,5 @@
 pub mod fields;
+mod files;
 pub mod history;
 pub mod last_used;
 mod overview;
@@ -1410,9 +1411,17 @@ impl Vault {
 
     /// Plaintext copy of a live item for [`Self::import_item`] on another
     /// vault. It holds the credential values and previous values. The item's
-    /// deleted credentials are not copied.
+    /// deleted credentials are not copied. An item with a file credential
+    /// fails with `FileMoveRefused`, since its blobs belong to this vault.
     pub fn export_item(&self, item_key: &str) -> Result<ItemTransfer, Error> {
         let overview = self.get_item(item_key)?.clone();
+        if overview
+            .credentials
+            .values()
+            .any(|cred| matches!(cred.kind, FieldKind::File))
+        {
+            return Err(Error::FileMoveRefused(item_key.to_string()));
+        }
         let item_id = overview.id;
         let mut values = BTreeMap::new();
         let mut history = BTreeMap::new();
@@ -2014,10 +2023,13 @@ impl Vault {
     ) -> Result<&VaultItemCredentialOverview, Error> {
         // get existing cred by key or create new one
         let cred_overview = match self.get_item_credential(item_key, cred_key) {
-            Ok(existing) => VaultItemCredentialOverview {
-                title: cred_title.to_string(),
-                kind: cred_kind,
-                ..existing.clone()
+            Ok(existing) => {
+                files::check_kind_change(&existing.key, &existing.kind, &cred_kind)?;
+                VaultItemCredentialOverview {
+                    title: cred_title.to_string(),
+                    kind: cred_kind,
+                    ..existing.clone()
+                }
             },
             Err(Error::InvalidCredentialKey(_)) => {
                 VaultItemCredentialOverview::try_new(cred_title, cred_key, cred_kind)?
@@ -2096,6 +2108,9 @@ impl Vault {
             .get_mut(&cred_id)
             .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
 
+        if let Some(kind) = &update.kind {
+            files::check_kind_change(&cred.key, &cred.kind, kind)?;
+        }
         if let Some(title) = update.title {
             cred.title = title.trim().to_string();
         }

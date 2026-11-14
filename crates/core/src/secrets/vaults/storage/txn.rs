@@ -60,6 +60,13 @@
 //! [`VaultWriter::join_sync`] joins a sync key into an existing vault or a
 //! new one, with the recovery merge, under the locks (`sync/join_sync.rs`).
 //!
+//! A transaction that saves then deletes the local file blobs of the vault
+//! that no record references in the saved vault or in a retained version,
+//! under the locks (`files/gc.rs`). A change that adds the first file
+//! credential to a synced vault is refused. Sync is not enabled or joined
+//! for a vault that holds one, and a retained version that holds one is not
+//! restored over a refused synced vault.
+//!
 //! Reads do not lock. Saves replace the file by renaming, so a read sees
 //! either the old or the new file. A read runs a transaction with no
 //! requested change first if [`VaultWriter::read_joins`] holds
@@ -85,6 +92,8 @@ use crate::core::dirs::app_data_dir;
 use crate::core::files::write_atomic;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::gc;
+use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader, VerifiedVault};
 use crate::secrets::vaults::format::short_id::ShortId;
 #[cfg(test)]
@@ -1096,7 +1105,16 @@ impl VaultWriter {
         let mut vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, keyring);
 
         // Apply the change. An error leaves the files unchanged.
+        let held_files = vh.get_unlocked_vault()?.holds_files();
         let value = f(&mut vh)?;
+
+        // File credentials do not sync yet. A change that adds the first one
+        // to a synced vault is refused before any save. A synced vault that
+        // already holds one is not refused, so it can still be saved.
+        let synced = sync.is_some() || vh.get_unlocked_vault()?.replica_id().is_some();
+        if synced && !held_files && vh.get_unlocked_vault()?.holds_files() {
+            return Err(Error::FileInSyncedVault.into());
+        }
 
         let mut sync_status = SyncStatus::of_case(&case);
         let changed = match (&mut sync, session) {
@@ -1229,6 +1247,9 @@ impl VaultWriter {
                 })?
             },
         };
+        if changed {
+            self.collect_blobs(id, &vh);
+        }
         let save_count = if changed {
             vault_lock.record_save()
         } else {
@@ -2096,6 +2117,10 @@ impl VaultWriter {
             return Err(Error::SyncFolderHasVault);
         }
         let mut vault = Vault::from_unlocked_key(&file_key, enc_vault)?;
+        // File credentials do not sync yet.
+        if vault.holds_files() {
+            return Err(Error::FileInSyncedVault);
+        }
 
         // The bytes of `meta.json` are a function of the vault id, so a file
         // left by a failed setup is the file of the next one.
@@ -2259,6 +2284,10 @@ impl VaultWriter {
                 )?;
                 let generation = enc_vault.generation;
                 let vault = Box::new(Vault::from_unlocked_key(&file_key, enc_vault)?);
+                // File credentials do not sync yet.
+                if vault.holds_files() {
+                    return Err(Error::FileInSyncedVault);
+                }
                 let loaded = JoinLoaded::Existing {
                     contents,
                     vault,
@@ -2425,6 +2454,11 @@ impl VaultWriter {
         mut sync: SyncTxn,
         previous_key: String,
     ) -> Result<Committed<()>, Error> {
+        // File credentials do not sync yet, so a version that holds one is
+        // not recorded.
+        if vault.holds_files() {
+            return Err(Error::FileInSyncedVault);
+        }
         #[cfg(test)]
         sync.set_apply_fault(self.apply_fault);
         let session = locked.state.session(sync.replica(), sync.loaded());
@@ -2713,6 +2747,35 @@ impl VaultWriter {
                 Ok(_) => {},
                 Err(e) => log::error!("Failed to prune {}: {e}", dir.path.display()),
             }
+        }
+    }
+
+    /// Delete the local file blobs of vault `id` that no record references
+    /// in `vh`, as saved, or in a retained version (`files/gc.rs`). Runs
+    /// under the vault locks, after the save and the retention. A retained
+    /// version is read with the file key of `vh`. A version that fails to
+    /// read, such as one under an earlier file key, keeps every blob. A
+    /// failure is logged and does not fail the save.
+    fn collect_blobs(&self, id: Uuid, vh: &VaultHandle) {
+        let collect = || -> Result<usize, Error> {
+            let vault = vh.get_unlocked_vault()?;
+            let store = BlobStore::of(&vh.path, id);
+            let retained = || {
+                let versions = self.versions(id);
+                let list = versions.list().map_err(Error::VaultReadError)?;
+                let file_key = vault.unlocked_key();
+                Ok(list.into_iter().map(move |version| {
+                    let contents = EncryptedVault::read_file(&versions.file(&version.name))?;
+                    let enc_vault = EncryptedVault::parse(&contents, &*self.signer)?;
+                    Vault::from_unlocked_key(&file_key, enc_vault)
+                }))
+            };
+            gc::collect(&store, vault, retained)
+        };
+        match collect() {
+            Ok(0) => {},
+            Ok(count) => log::info!("Deleted {count} unreferenced file blobs of vault {id}"),
+            Err(e) => log::warn!("Failed to collect the file blobs of vault {id}: {e}"),
         }
     }
 

@@ -37,6 +37,11 @@ pub enum FieldKind {
     /// (see `passkey.rs`), holding the private key, so it is confidential in
     /// the same way a password is. It is never editable as text.
     Passkey,
+    /// A file. The credential value is a JSON `FileRecord` (see
+    /// `files/record.rs`), holding the per-file key, so it is confidential.
+    /// It is never editable as text. A credential never changes to or from
+    /// this kind.
+    File,
     /// Unknown or newer kind written by another client. Rendered read-only.
     #[serde(untagged)]
     Unknown(Value),
@@ -155,6 +160,7 @@ mod tests {
         for src in [
             r#"{"type":"email","x":1}"#,
             r#"{"type":"passkey","x":1}"#,
+            r#"{"type":"file","x":1}"#,
             r#"{"multiline":true,"type":"text","x":1}"#,
             r#"{"type":"confidential","x":{"y":[1,2]}}"#,
         ] {
@@ -162,6 +168,39 @@ mod tests {
             assert!(matches!(kind, FieldKind::Unknown(_)), "{src}");
             assert_eq!(serde_json::to_string(&kind).unwrap(), src);
         }
+    }
+
+    /// `FieldKind` of the build before the file kind, as an older reader
+    /// deserializes it.
+    #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+    #[serde(tag = "type", rename_all = "kebab-case")]
+    enum OlderFieldKind {
+        Text(TextField),
+        Confidential(TextField),
+        Email,
+        Url,
+        Phone,
+        Date,
+        Totp,
+        Passkey,
+        #[serde(untagged)]
+        Unknown(Value),
+    }
+
+    #[test]
+    fn file_kind_reads_as_unknown_on_older_reader_and_round_trips() {
+        let json = serde_json::to_string(&FieldKind::File).unwrap();
+        assert_eq!(json, r#"{"type":"file"}"#);
+
+        let older: OlderFieldKind = serde_json::from_str(&json).unwrap();
+        assert!(matches!(older, OlderFieldKind::Unknown(_)), "{older:?}");
+
+        // An older client that rewrites the metadata writes the same object.
+        let back = serde_json::to_string(&older).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FieldKind>(&back).unwrap(),
+            FieldKind::File
+        );
     }
 
     #[test]
@@ -180,6 +219,7 @@ mod tests {
             FieldKind::Date,
             FieldKind::Totp,
             FieldKind::Passkey,
+            FieldKind::File,
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).unwrap();

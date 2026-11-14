@@ -156,6 +156,45 @@ pub enum Error {
     #[error("Passkey operation failed: {0}")]
     Passkey(String),
 
+    #[error("File record is invalid: {0}")]
+    FileRecordInvalid(String),
+
+    #[error("File is too large to encrypt")]
+    FileTooLarge,
+
+    #[error("Failed to encrypt file")]
+    FileEncryptionError,
+
+    #[error("Failed to decrypt file")]
+    FileDecryptionError,
+
+    #[error("File blob {0} does not match its name")]
+    FileBlobMismatch(String),
+
+    #[error("File contents of blob {0} do not match the file record")]
+    FileContentMismatch(String),
+
+    #[error("File blob {0} is not on this Mac")]
+    FileMissing(String),
+
+    #[error("Failed to read file: {0}")]
+    FileReadError(#[source] std::io::Error),
+
+    #[error("Failed to write file: {0}")]
+    FileWriteError(#[source] std::io::Error),
+
+    #[error("Failed to delete file blob: {0}")]
+    FileDeleteError(#[source] std::io::Error),
+
+    #[error("Files cannot be stored in a synced vault yet")]
+    FileInSyncedVault,
+
+    #[error("Item {0} holds files and cannot move to another vault")]
+    FileMoveRefused(String),
+
+    #[error("Credential {0} cannot change to or from a file")]
+    FileKindChange(String),
+
     #[error("Failed to create new encryption: {0}")]
     KeyCreationFailed(KeychainError),
 
