@@ -78,7 +78,7 @@ fn kinds(state: &State) -> Vec<FieldKind> {
 }
 
 #[test]
-fn file_credentials_recorded_and_applied_to_other_vault_find_no_edits() {
+fn recorded_file_credentials_apply_without_edits() {
     let vault = vault_with_files(&FieldKind::File);
     let blobs = vault.file_blobs().unwrap();
     assert_eq!(blobs.len(), 3);
@@ -96,7 +96,7 @@ fn file_credentials_recorded_and_applied_to_other_vault_find_no_edits() {
 }
 
 #[test]
-fn older_build_keeps_file_kind_as_unknown_and_writes_it_back_unchanged() {
+fn older_build_round_trips_unknown_file_kind() {
     // An older build reads the file kind as an unknown kind that holds the
     // object. A reload on this build reads it as the file kind, so the vaults
     // of the older build are not reloaded.

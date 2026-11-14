@@ -54,7 +54,7 @@ fn failed_change_after_rename_deletes_blob() {
 }
 
 #[test]
-fn crash_between_blob_write_and_vault_save_leaves_no_missing_blob() {
+fn crash_between_blob_write_and_save_no_missing_blob() {
     let fx = Fixture::new();
     let before = fs::read_to_string(&fx.vault.path).unwrap();
     // A directory at the temp path of the save makes the vault save fail
@@ -105,7 +105,7 @@ fn temp_file_of_interrupted_write_deleted_once_stale() {
 }
 
 #[test]
-fn replace_moves_old_record_to_history_and_keeps_both_blobs() {
+fn replace_moves_old_record_to_history() {
     let fx = Fixture::new();
     fx.add("doc", b"first").unwrap();
     let first = fx.record("doc");
@@ -127,7 +127,7 @@ fn replace_moves_old_record_to_history_and_keeps_both_blobs() {
 }
 
 #[test]
-fn history_purge_deletes_blob_once_no_retained_version_references_it() {
+fn purge_deletes_blob_once_unreferenced() {
     let fx = Fixture::new();
     fx.add("doc", b"first").unwrap();
     let first = fx.record("doc").blob;
@@ -240,7 +240,7 @@ fn purge_of_item_deletes_its_blobs() {
 }
 
 #[test]
-fn blob_referenced_only_by_retained_version_kept_and_version_restores() {
+fn blob_of_retained_version_kept_and_restorable() {
     let fx = Fixture::new();
     fx.add("doc", b"contents").unwrap();
     let blob = fx.record("doc").blob;

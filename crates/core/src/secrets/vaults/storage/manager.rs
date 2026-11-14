@@ -730,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn rescan_lists_added_vault_and_leaves_unchanged_copy_unlocked() {
+    fn rescan_lists_added_vault_copy_stays_unlocked() {
         let mut fx = Fixture::new();
         let target = fx.target();
         let committed = fx.add_item(&target, "alpha");
@@ -878,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_and_delete_refuse_credential_that_is_not_a_file() {
+    fn replace_and_delete_refuse_non_file_credential() {
         let (manager, original, _dir) = manager_with_item();
         VaultsManager::transact(&manager, "personal", |store, target| {
             store

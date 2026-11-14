@@ -71,7 +71,7 @@ impl TwoMacs {
 }
 
 #[test]
-fn file_added_on_one_mac_read_on_other_with_fetch_into_local_store() {
+fn file_added_on_one_mac_read_on_other() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
@@ -93,7 +93,7 @@ fn file_added_on_one_mac_read_on_other_with_fetch_into_local_store() {
 }
 
 #[test]
-fn blob_not_local_in_folder_requested_and_read_fails_as_pending_until_downloaded() {
+fn remote_blob_read_pending_until_downloaded() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
@@ -116,7 +116,7 @@ fn blob_not_local_in_folder_requested_and_read_fails_as_pending_until_downloaded
 }
 
 #[test]
-fn blob_missing_from_folder_or_not_hashing_to_its_name_fails_read_and_writes_nothing() {
+fn bad_or_missing_folder_blob_fails_read() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
@@ -172,7 +172,7 @@ fn replace_and_trash_on_one_mac_show_on_other() {
 }
 
 #[test]
-fn mac_that_has_not_fetched_blob_reports_it_missing_and_still_syncs() {
+fn unfetched_blob_reported_missing_and_sync_continues() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
@@ -196,7 +196,7 @@ fn mac_that_has_not_fetched_blob_reports_it_missing_and_still_syncs() {
 }
 
 #[test]
-fn setup_of_vault_that_holds_files_uploads_blobs_before_first_state_file() {
+fn setup_with_files_uploads_blobs_first() {
     let transport = Arc::new(FakeTransport::default());
     let fx = Fixture::with_transport(0, None, transport.clone());
     fx.add_item().unwrap();
@@ -223,7 +223,7 @@ fn setup_of_vault_that_holds_files_uploads_blobs_before_first_state_file() {
 }
 
 #[test]
-fn join_of_existing_vault_that_holds_files_uploads_blobs_and_other_mac_reads_them() {
+fn join_with_files_uploads_blobs() {
     let transport = Arc::new(FakeTransport::default());
     let a = Fixture::with_transport(0, None, transport.clone());
     a.add_item().unwrap();
@@ -261,7 +261,7 @@ fn join_of_existing_vault_that_holds_files_uploads_blobs_and_other_mac_reads_the
 }
 
 #[test]
-fn mac_that_holds_blob_uploads_it_again_and_mac_that_lacks_it_does_not() {
+fn only_mac_with_blob_reuploads() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
@@ -281,7 +281,7 @@ fn mac_that_holds_blob_uploads_it_again_and_mac_that_lacks_it_does_not() {
 }
 
 #[test]
-fn purge_concurrent_with_replace_keeps_both_blobs_referenced_and_local() {
+fn concurrent_purge_and_replace_retain_both_blobs() {
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
     let (a_files, a_vault) = (macs.a.catalog.files(), &macs.a.vault);

@@ -25,7 +25,7 @@ fn publish_failed<R>(committed: &Committed<R>) -> bool {
 }
 
 #[test]
-fn blob_uploaded_as_stored_before_state_file_that_references_it() {
+fn blob_uploaded_before_referencing_state_file() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
 
@@ -46,7 +46,7 @@ fn blob_uploaded_as_stored_before_state_file_that_references_it() {
 }
 
 #[test]
-fn failed_upload_copies_no_state_file_pauses_sync_and_next_transaction_completes_it() {
+fn failed_upload_pauses_sync_until_next_transaction() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     let listed = published(&transport, &fx);
@@ -85,7 +85,7 @@ fn failed_upload_copies_no_state_file_pauses_sync_and_next_transaction_completes
 }
 
 #[test]
-fn copy_staged_uploads_blob_of_failed_publish_before_staged_file() {
+fn copy_staged_uploads_blob_of_failed_publish() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     let listed = published(&transport, &fx);
@@ -177,7 +177,7 @@ fn local_files(fx: &Fixture) -> (LocalSyncState, Sidecar) {
 }
 
 #[test]
-fn transaction_that_does_not_publish_uploads_blob_the_folder_lost() {
+fn unpublished_transaction_uploads_lost_blob() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
@@ -200,7 +200,7 @@ fn transaction_that_does_not_publish_uploads_blob_the_folder_lost() {
 }
 
 #[test]
-fn failed_heal_does_not_fail_the_save_or_pause_sync() {
+fn failed_heal_does_not_fail_save_or_pause_sync() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
@@ -224,7 +224,7 @@ fn failed_heal_does_not_fail_the_save_or_pause_sync() {
 }
 
 #[test]
-fn publish_uploads_blob_the_folder_lost_that_the_state_already_referenced() {
+fn publish_uploads_lost_blob_already_referenced() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     add_file(fx.catalog.files(), &fx.vault, "doc", b"contents").unwrap();
@@ -238,7 +238,7 @@ fn publish_uploads_blob_the_folder_lost_that_the_state_already_referenced() {
 }
 
 #[test]
-fn report_counts_blobs_to_upload_and_unreferenced_blobs_in_folder() {
+fn report_counts_uploads_and_unreferenced_blobs() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     let files = fx.catalog.files();
@@ -284,7 +284,7 @@ fn report_counts_blobs_to_upload_and_unreferenced_blobs_in_folder() {
 }
 
 #[test]
-fn report_gives_no_unreferenced_count_if_folder_cannot_be_listed() {
+fn report_omits_unreferenced_count_if_unlistable() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced_with_item(&transport);
     let files = fx.catalog.files();

@@ -217,7 +217,7 @@ fn read_replaced(vh: &VaultHandle, cred_key: &str) -> Vec<u8> {
 }
 
 #[test]
-fn round_trip_reads_live_replaced_and_leaves_out_trashed_file() {
+fn round_trip_excludes_trashed_file() {
     let _audit = test_dir();
     let source = Source::populated();
     let trashed_blob = source.blob_in_trash();
@@ -285,7 +285,7 @@ fn tampered_blob_is_refused_and_nothing_is_written() {
 }
 
 #[test]
-fn bundle_blob_that_no_record_names_is_checked_and_not_imported() {
+fn unreferenced_bundle_blob_checked_not_imported() {
     let _audit = test_dir();
     let source = Source::populated();
     let export = source.export();
@@ -310,7 +310,7 @@ fn bundle_blob_that_no_record_names_is_checked_and_not_imported() {
 }
 
 #[test]
-fn bundle_without_a_blob_imports_the_record_and_reports_it_missing() {
+fn bundle_missing_blob_imports_record_and_reports() {
     let _audit = test_dir();
     let source = Source::populated();
     let lost = source.blob("keep");
@@ -340,7 +340,7 @@ fn bundle_without_a_blob_imports_the_record_and_reports_it_missing() {
 }
 
 #[test]
-fn copy_of_a_vault_with_files_is_refused_and_nothing_is_written() {
+fn file_vault_copy_refused() {
     let _audit = test_dir();
     let source = Source::populated();
     let export = source.export();

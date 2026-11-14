@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn write_atomically_replaces_destination_with_private_file() {
+    fn write_atomically_replaces_with_private_file() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("out.txt");
         fs::write(&dest, b"old").unwrap();
@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn write_atomically_failure_leaves_destination_and_no_partial_file() {
+    fn write_atomically_failure_leaves_destination() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("out.txt");
         fs::write(&dest, b"old").unwrap();

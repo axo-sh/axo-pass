@@ -305,7 +305,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_report_lists_each_missing_blob_with_short_vault_id() {
+    fn export_report_lists_missing_blobs_by_short_vault_id() {
         let vault_id = Uuid::new_v4();
         let report = ExportReport {
             missing_blobs: vec![MissingBlob {

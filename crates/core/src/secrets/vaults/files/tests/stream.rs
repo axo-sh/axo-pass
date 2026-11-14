@@ -169,7 +169,7 @@ fn blob_hash_mismatch_refused_before_decrypting() {
 }
 
 #[test]
-fn plaintext_hash_or_size_mismatch_refused_after_decrypting() {
+fn plaintext_hash_or_size_mismatch_refused() {
     let plaintext = contents(CHUNK_SIZE + 9);
     let (blob, record) = sealed(&plaintext);
     let other_hash = FileRecord {

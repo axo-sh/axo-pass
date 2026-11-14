@@ -921,7 +921,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exported_response_of_an_older_app_reads_no_missing_blobs() {
+    fn older_export_response_reads_no_missing_blobs() {
         let json = r#"{"status":"vaults_exported","count":2}"#;
 
         let response: WireResponse = serde_json::from_str(json).unwrap();

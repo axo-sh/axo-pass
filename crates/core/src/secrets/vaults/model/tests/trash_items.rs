@@ -5,7 +5,7 @@ use super::support::{
 use super::*;
 
 #[test]
-fn changing_item_key_moves_credentials_and_survives_reload() {
+fn changing_item_key_moves_credentials_across_reload() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     let item_id = item_id_of(&vault, "item");
     let secret = secret_of(&vault, "item", "alpha");

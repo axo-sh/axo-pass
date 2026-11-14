@@ -695,7 +695,7 @@ mod tests {
     /// A save prompt carries its vault choices to the app. Once the broker
     /// sets the chosen vault, that vault is the one reported as changed.
     #[test]
-    fn save_prompt_carries_vault_choices_and_reports_chosen_vault() {
+    fn save_prompt_carries_and_reports_vault_choice() {
         let vault = |key: &str| app_broker::PlacementVault {
             key: key.to_string(),
             name: Some(key.to_uppercase()),

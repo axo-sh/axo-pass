@@ -20,7 +20,7 @@ fn history_values(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<String> 
 }
 
 #[test]
-fn importing_item_in_another_vault_keeps_ids_values_and_history() {
+fn import_item_in_other_vault_preserves_history() {
     let mut source = vault_with_credentials("item", &["alpha"]);
     set_value(&mut source, "item", "alpha", "second");
     set_value(&mut source, "item", "alpha", "third");
@@ -62,7 +62,7 @@ fn importing_item_in_another_vault_keeps_ids_values_and_history() {
 }
 
 #[test]
-fn importing_item_rejects_taken_key_and_leaves_vault_unchanged() {
+fn import_item_rejects_taken_key() {
     let source = vault_with_credentials("item", &["alpha"]);
     let mut dest = vault_with_credentials("item", &["beta"]);
 
@@ -119,7 +119,7 @@ fn history_kinds(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<HistoryKi
 }
 
 #[test]
-fn first_non_empty_value_adds_value_created_entry_without_value() {
+fn first_non_empty_value_adds_created_entry() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     assert_eq!(
         history_kinds(&vault, "item", "alpha"),
@@ -179,7 +179,7 @@ fn unknown_history_kind_survives_reload_and_rekey() {
 }
 
 #[test]
-fn item_history_lists_creation_value_changes_and_deletion_newest_first() {
+fn item_history_lists_events_newest_first() {
     let mut vault = vault_with_credentials("item", &["alpha", "beta"]);
     set_value(&mut vault, "item", "alpha", "second");
     vault.delete_item_credential("item", "beta").unwrap();
@@ -210,7 +210,7 @@ fn item_history_lists_creation_value_changes_and_deletion_newest_first() {
 }
 
 #[test]
-fn saving_same_or_first_or_empty_value_adds_no_previous_value() {
+fn save_same_first_or_empty_adds_no_previous() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "secret");
     assert!(vault.list_history("item", "alpha").unwrap().is_empty());
@@ -253,7 +253,7 @@ fn restoring_previous_value_swaps_it_with_current_value() {
 }
 
 #[test]
-fn restoring_only_previous_value_over_empty_value_records_value_created() {
+fn restore_only_previous_over_empty_records_created() {
     let mut vault = vault_with_credentials("item", &["alpha"]);
     set_value(&mut vault, "item", "alpha", "");
     let first = vault.list_history("item", "alpha").unwrap()[0].id;

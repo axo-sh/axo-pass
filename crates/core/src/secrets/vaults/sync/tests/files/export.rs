@@ -35,7 +35,7 @@ fn export_b(
 }
 
 #[test]
-fn export_fetches_blob_that_is_only_in_the_folder() {
+fn export_fetches_blob_only_in_folder() {
     let _audit = test_dir();
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);
@@ -55,7 +55,7 @@ fn export_fetches_blob_that_is_only_in_the_folder() {
 }
 
 #[test]
-fn export_reports_blob_that_the_folder_lacks_and_writes_the_rest() {
+fn export_reports_blob_missing_from_folder() {
     let _audit = test_dir();
     let transport = Arc::new(FakeTransport::default());
     let macs = TwoMacs::new(&transport);

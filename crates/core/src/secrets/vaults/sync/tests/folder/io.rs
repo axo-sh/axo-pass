@@ -341,7 +341,7 @@ fn blob_written_listed_and_read_and_existing_blob_kept() {
 }
 
 #[test]
-fn blob_not_local_is_remote_not_read_and_download_requested() {
+fn remote_blob_not_read_and_download_requested() {
     let folder = Folder::plain();
     let transport = &folder.transport;
     let io = folder.plain_io();
@@ -373,7 +373,7 @@ fn blob_not_local_is_remote_not_read_and_download_requested() {
 }
 
 #[test]
-fn blob_that_does_not_hash_to_its_name_not_fetched_into_local_store() {
+fn mismatched_blob_hash_not_fetched() {
     for folder in Folder::each() {
         let transport = &folder.transport;
         let store = BlobStore::of(&folder.dir.path().join("vault.json"), VAULT);

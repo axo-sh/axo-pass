@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn file_kind_reads_as_unknown_on_older_reader_and_round_trips() {
+    fn file_kind_unknown_on_older_reader() {
         let json = serde_json::to_string(&FieldKind::File).unwrap();
         assert_eq!(json, r#"{"type":"file"}"#);
 

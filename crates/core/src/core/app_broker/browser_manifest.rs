@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_rewrites_only_a_differing_path() {
+    fn ensure_rewrites_only_differing_path() {
         let f = fixture();
         f.manifests.install(Browser::Chrome).unwrap();
         let firefox = write_manifest(
@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_installs_missing_manifests_of_installed_browsers() {
+    fn ensure_installs_missing_manifests() {
         let f = fixture();
         assert_eq!(f.manifests.ensure(), Browser::ALL.to_vec());
         for browser in Browser::ALL {
