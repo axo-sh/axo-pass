@@ -113,11 +113,17 @@ extension ItemInfo {
     }
   }
 
-  /// Credentials that could hold the password: not a passkey, one-time code, or
-  /// unknown kind.
+  /// Credentials that could hold the password: not a passkey, file, one-time
+  /// code, or unknown kind.
   var passwordCandidates: [CredentialInfo] {
-    credentials.filter { !["passkey", "totp", "unknown"].contains($0.kind.kind) }
+    credentials.filter { !["passkey", "file", "totp", "unknown"].contains($0.kind.kind) }
   }
+}
+
+extension CredentialInfo {
+  /// Whether the value is a record the app never shows as text: a passkey or
+  /// a file. Rows show the listing's `passkey` or `file` fields instead.
+  var hasRecordValue: Bool { kind.kind == "passkey" || kind.kind == "file" }
 }
 
 /// The host of a stored website, which is a URL or a bare domain, without a

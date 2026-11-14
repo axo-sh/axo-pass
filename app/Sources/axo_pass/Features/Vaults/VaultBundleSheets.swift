@@ -61,6 +61,8 @@ struct VaultExportSheet: View {
   @State private var workFactor: ExportWorkFactor = .secure
   @State private var includePasskeys = true
   @State private var progressText: String?
+  /// Report of a finished export that left file blobs out. Nil until then.
+  @State private var report: VaultExportReport?
 
   init(model: VaultsModel, only: String? = nil) {
     self.model = model
@@ -162,8 +164,16 @@ struct VaultExportSheet: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        Text("Files in Recently Deleted are not exported.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .padding(.top, 4)
       }
-      .disabled(isExporting)
+      .disabled(isExporting || report != nil)
+
+      if let report {
+        missingBlobsView(report)
+      }
 
       if passphraseMismatch {
         Label("Passphrases do not match.", systemImage: "exclamationmark.triangle.fill")
@@ -184,15 +194,64 @@ struct VaultExportSheet: View {
           Text(progressText ?? "Exporting…").font(.caption).foregroundStyle(.secondary)
         }
         Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
-        Button("Export…") { export() }
-          .keyboardShortcut(.defaultAction)
-          .disabled(!canExport)
+        if report != nil {
+          Button("Done") { dismiss() }
+            .keyboardShortcut(.defaultAction)
+        } else {
+          Button("Cancel") { dismiss() }
+            .keyboardShortcut(.cancelAction)
+          Button("Export…") { export() }
+            .keyboardShortcut(.defaultAction)
+            .disabled(!canExport)
+        }
       }
     }
     .padding(20)
     .frame(width: 420)
+  }
+
+  /// Notice for an export that wrote the bundle without some file blobs. The
+  /// files import as missing locally.
+  private func missingBlobsView(_ report: VaultExportReport) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Label(
+        "The export finished, but \(report.missingBlobs.count) file(s) could not be included.",
+        systemImage: "exclamationmark.triangle.fill"
+      )
+      .font(.callout)
+      .foregroundStyle(.orange)
+      .fixedSize(horizontal: false, vertical: true)
+      Text(
+        "Their records are in the file. After an import they show as missing until the contents are available on that Mac."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+      GroupBox {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(report.missingBlobs.enumerated()), id: \.offset) { _, missing in
+              VStack(alignment: .leading, spacing: 1) {
+                Text(vaultName(forId: missing.vaultId))
+                Text(missing.reason).font(.caption).foregroundStyle(.secondary)
+                Text(String(missing.blob.prefix(12)))
+                  .font(.caption.monospaced())
+                  .foregroundStyle(.tertiary)
+              }
+            }
+          }
+          .padding(4)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 120)
+      }
+    }
+  }
+
+  /// Name of the vault with short id `id`, or the id if no vault matches.
+  private func vaultName(forId id: String) -> String {
+    let vault = model.vaults.first { $0.id == id }
+    return vault?.name ?? vault?.key ?? id
   }
 
   private func binding(for key: String) -> Binding<Bool> {
@@ -209,7 +268,7 @@ struct VaultExportSheet: View {
     Task {
       isExporting = true
       progressText = "Preparing…"
-      error = await model.exportBundle(
+      let result = await model.exportBundle(
         vaultKeys: keys, destination: destination, passphrase: passphrase,
         workFactor: workFactor, includePasskeys: includePasskeys,
         onStage: { stage, index, total in
@@ -224,7 +283,14 @@ struct VaultExportSheet: View {
         })
       isExporting = false
       progressText = nil
-      if error == nil { dismiss() }
+      error = result.message
+      if let exported = result.report {
+        if exported.missingBlobs.isEmpty {
+          dismiss()
+        } else {
+          report = exported
+        }
+      }
     }
   }
 
@@ -264,8 +330,12 @@ struct VaultImportSheet: View {
     var targetKey: String
     var id: String { info.id }
 
+    /// A vault that is on this Mac and holds files can only be skipped. Its
+    /// file blobs are bound to the vault id, so a copy is refused.
+    var skipOnly: Bool { info.idExists && info.files > 0 }
+
     /// Whether the vault is written by the import.
-    var imports: Bool { info.idExists ? copy : include }
+    var imports: Bool { info.idExists ? copy && !skipOnly : include }
 
     /// Action sent for the vault. Only read if the vault is imported.
     var action: BundleImportAction { info.idExists ? .copy : .default }
@@ -340,17 +410,34 @@ struct VaultImportSheet: View {
                       Text("This vault is already on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                      Picker("", selection: $row.copy) {
-                        Text("Skip").tag(false)
-                        Text("Import as Copy").tag(true)
+                      if row.skipOnly {
+                        Text(
+                          "It holds files, which are tied to the vault and cannot be imported as a copy. It is skipped."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                      } else {
+                        Picker("", selection: $row.copy) {
+                          Text("Skip").tag(false)
+                          Text("Import as Copy").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
                       }
-                      .pickerStyle(.segmented)
-                      .labelsHidden()
-                      .fixedSize()
                     }
-                    TextField("Import as", text: $row.targetKey)
-                      .textFieldStyle(.roundedBorder)
-                      .disabled(!row.imports)
+                    if row.info.files > 0 {
+                      Text(fileSummary(row.info))
+                        .font(.caption)
+                        .foregroundStyle(row.info.missingFiles > 0 ? .orange : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !row.skipOnly {
+                      TextField("Import as", text: $row.targetKey)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!row.imports)
+                    }
                   }
                 }
               }
@@ -392,6 +479,20 @@ struct VaultImportSheet: View {
     }
     .padding(20)
     .frame(width: 440)
+  }
+
+  /// File count of a bundle vault, and how many of them lack their contents.
+  /// A file without contents imports as missing on this Mac.
+  private func fileSummary(_ info: BundleVaultInfo) -> String {
+    let files = info.files == 1 ? "1 file" : "\(info.files) files"
+    switch info.missingFiles {
+    case 0: return files
+    case info.files:
+      return "\(files), none with contents in the bundle. They import as missing."
+    default:
+      return
+        "\(files), \(info.missingFiles) without contents in the bundle. Those import as missing."
+    }
   }
 
   private func chooseFile() {

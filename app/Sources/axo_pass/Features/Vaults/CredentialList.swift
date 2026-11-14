@@ -45,7 +45,11 @@ struct CredentialList: View {
   // naming deletes it.
   @State private var unnamedSection: String? = nil
   // Section creation error. Shown separately since there is no row for it.
-  @State private var listError: String? = nil
+  @State var listError: String? = nil
+  // Decrypted copy of a file open in Quick Look. Removed when it closes.
+  @State var previewURL: URL? = nil
+  // Keys of file credentials being read or replaced.
+  @State var fileBusy: Set<String> = []
   @State private var showingNewCredentialSheet = false
   @State private var showingRenameItemSheet = false
   // Credential whose previous values are shown.
@@ -96,6 +100,11 @@ struct CredentialList: View {
     .onChange(of: selection) { _, new in
       if !new.isEmpty { cardSelection = nil }
     }
+    .quickLookPreview($previewURL)
+    .onChange(of: previewURL) { old, new in
+      if old != new { previewClosed(old) }
+    }
+    .onDisappear { previewClosed(previewURL) }
     .background {
       Button("Copy Username", action: copyUsername)
         .keyboardShortcut("c", modifiers: [.command, .shift])
@@ -120,11 +129,12 @@ struct CredentialList: View {
 
         Menu {
           Button("New Credential…") { showingNewCredentialSheet = true }
+          Button("Add File…") { addFile() }
           Button("New Section") { newSection() }
         } label: {
           Label("Add", systemImage: "plus")
         }
-        .help("New credential or section.")
+        .help("New credential, file, or section.")
 
         Button {
           historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey)
@@ -254,6 +264,7 @@ struct CredentialList: View {
       Button("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) }
       Divider()
       Button("New Credential…") { showingNewCredentialSheet = true }
+      Button("Add File…") { addFile() }
       Button("New Section") { newSection() }
     }
   }
@@ -352,6 +363,11 @@ struct CredentialList: View {
       onSetRole: { role, assign in
         Task { await setRole(cred, role: role, assign: assign) }
       },
+      fileFailure: model.fileFailure(vaultKey: vaultKey, itemKey: item.key, credKey: cred.key),
+      isFileBusy: fileBusy.contains(cred.key),
+      onPreviewFile: { previewFile(cred) },
+      onSaveFile: { saveFile(cred) },
+      onReplaceFile: { replaceFile(cred) },
       fieldLabel: fieldLabel,
       showsCopied: shortcutCopied == cred.key,
       isDuplicatePasskey: item.hasDuplicate(of: cred)
@@ -373,6 +389,7 @@ struct CredentialList: View {
         .action("Copy Item Key") { copyItemKey() },
         .divider,
         .action("New Credential…") { showingNewCredentialSheet = true },
+        .action("Add File…") { addFile() },
         .action("New Section") { newSection() },
       ]
     }
@@ -415,10 +432,20 @@ struct CredentialList: View {
         .action("Rename") { renaming = .credential(key, .title) },
         .action("Change ID") { renaming = .credential(key, .key) },
         .divider,
-        .action("History…") {
-          previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
-        },
       ]
+      if cred.kind.kind == "file" {
+        // A file has no text value, so it has no previous values to show.
+        items += [
+          .action("Preview") { previewFile(cred) },
+          .action("Save…") { saveFile(cred) },
+          .action("Replace…") { replaceFile(cred) },
+        ]
+      } else {
+        items.append(
+          .action("History…") {
+            previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
+          })
+      }
       let roles = roleMenuItems(for: cred)
       if !roles.isEmpty {
         items += [.divider] + roles
@@ -441,7 +468,7 @@ struct CredentialList: View {
   }
 
   /// Autofill role actions for a credential. A one-time code credential can only
-  /// be the code source, and a passkey takes no role.
+  /// be the code source, and a passkey or a file takes no role.
   private func roleMenuItems(for cred: CredentialInfo) -> [OutlineMenuItem] {
     func roleItem(_ role: String, assign: String, clear: String) -> OutlineMenuItem {
       let isAssigned = cred.role == role
@@ -450,7 +477,7 @@ struct CredentialList: View {
       }
     }
     switch cred.kind.kind {
-    case "passkey", "unknown":
+    case "passkey", "file", "unknown":
       return []
     case "totp":
       return [

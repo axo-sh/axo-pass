@@ -16,6 +16,7 @@ use axo_pass_core::secrets::vaults::{
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
+use crate::files::{FileInfo, refuse_file};
 use crate::*;
 
 #[derive(uniffi::Record, Clone)]
@@ -78,6 +79,9 @@ pub struct CredentialInfo {
     /// Only present for passkeys; contains passkey credential details for
     /// display.
     pub passkey: Option<PasskeyInfo>,
+    /// Only present for file credentials whose record reads; details of the
+    /// file for display. Carries no key.
+    pub file: Option<FileInfo>,
 }
 
 /// The displayable fields of a passkey. Carries no key material, so the UI
@@ -236,6 +240,8 @@ pub struct DeletedItemCredentialInfo {
     pub kind: FieldKindInfo,
     /// True if the credential was deleted before the item.
     pub deleted_before_item: bool,
+    /// Details of a deleted file credential. `None` for any other kind.
+    pub file: Option<FileInfo>,
 }
 
 /// A deleted credential of a live item that can still be restored. The value
@@ -254,6 +260,8 @@ pub struct DeletedCredentialInfo {
     pub item_title: String,
     /// Deletion time as a Unix timestamp in seconds.
     pub deleted_at: i64,
+    /// Details of a deleted file credential. `None` for any other kind.
+    pub file: Option<FileInfo>,
 }
 
 /// A vault folder. Folders are listed in display order.
@@ -540,7 +548,10 @@ impl AxoPass {
 /// the shared LAContext, so there is no re-prompt after a successful
 /// `unlock`. The manager mutex is released while the vault unlocks, since the
 /// read can run a transaction ([`VaultsManager::unlock_vault`]).
-fn ensure_unlocked(manager: &Mutex<VaultsManager>, vault_key: &str) -> Result<(), FfiError> {
+pub(crate) fn ensure_unlocked(
+    manager: &Mutex<VaultsManager>,
+    vault_key: &str,
+) -> Result<(), FfiError> {
     let locked = {
         let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
         let vault = m.get_or_create_vault_mut(vault_key)?;
@@ -611,6 +622,50 @@ fn item_display_order(
     (sections, credential_order)
 }
 
+/// Details of the deleted credential `cred_id` of item `item_id`, if `kind`
+/// is the file kind and its record reads.
+fn deleted_file_info(
+    vault: &VaultHandle,
+    item_id: Uuid,
+    cred_id: Uuid,
+    kind: &FieldKind,
+) -> Option<FileInfo> {
+    if !matches!(kind, FieldKind::File) {
+        return None;
+    }
+    let value = vault.get_deleted_secret(item_id, cred_id).ok()?;
+    FileInfo::of_value(vault, value.expose_secret())
+}
+
+/// Fail with `InvalidInput` if the deleted credential `cred_id` of item
+/// `item_id` is a file credential. Its value is a record with the file key.
+fn refuse_deleted_file(vault: &VaultHandle, item_id: Uuid, cred_id: Uuid) -> Result<(), FfiError> {
+    let in_live_items = vault
+        .list_all_deleted()?
+        .into_iter()
+        .filter(|d| d.item.id == item_id && d.credential.credential.id == cred_id)
+        .map(|d| matches!(d.credential.credential.kind, FieldKind::File));
+    let in_deleted_items = vault
+        .list_deleted_items()?
+        .into_iter()
+        .filter(|d| d.item.id == item_id)
+        .flat_map(|d| {
+            d.item
+                .credentials
+                .values()
+                .chain(d.deleted_credentials.iter().copied())
+                .filter(|c| c.id == cred_id)
+                .map(|c| matches!(c.kind, FieldKind::File))
+                .collect::<Vec<_>>()
+        });
+    if in_live_items.chain(in_deleted_items).any(|is_file| is_file) {
+        return Err(FfiError::InvalidInput(
+            "A file credential has no text value".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Read an id passed from Swift. The short form and the hex forms are
 /// accepted.
 pub(crate) fn parse_id(id: &str) -> Result<Uuid, FfiError> {
@@ -643,7 +698,11 @@ fn item_subject(vault_key: &str, item_key: &str) -> audit::Subject {
 }
 
 /// Audit subject for a credential, named `vault/item/credential`.
-fn credential_subject(vault_key: &str, item_key: &str, cred_key: &str) -> audit::Subject {
+pub(crate) fn credential_subject(
+    vault_key: &str,
+    item_key: &str,
+    cred_key: &str,
+) -> audit::Subject {
     audit::Subject::new(
         audit::SubjectKind::Credential,
         format!("{vault_key}/{item_key}/{cred_key}"),
@@ -713,7 +772,7 @@ fn dismiss_report(
 /// and reads in the app are not recorded. A passkey move that leaves the
 /// passkey in both vaults is the one exception. Details carry keys, titles,
 /// and counts, never values. `ids` are the ids of the subject.
-fn change_event(
+pub(crate) fn change_event(
     action: audit::Action,
     vault_key: &str,
     subject: audit::Subject,
@@ -838,6 +897,10 @@ impl AxoPass {
                                 .flatten()
                                 .and_then(|value| passkey::summary(value.expose_secret()))
                                 .map(|s| passkey_info(s, &signals));
+                            let file = matches!(c.kind, FieldKind::File)
+                                .then(|| vault.get_secret(&item.key, &c.key).ok().flatten())
+                                .flatten()
+                                .and_then(|value| FileInfo::of_value(vault, value.expose_secret()));
                             CredentialInfo {
                                 id: ShortId::encode_uuid(c.id),
                                 key: c.key.clone(),
@@ -849,6 +912,7 @@ impl AxoPass {
                                 last_used_day_at: c.last_used_day_at,
                                 created_at: c.created_at,
                                 passkey,
+                                file,
                             }
                         })
                         .collect();
@@ -1027,6 +1091,7 @@ impl AxoPass {
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
+            refuse_file(vault, &item_key, &cred_key)?;
             match vault
                 .get_secret(&item_key, &cred_key)
                 .map_err(FfiError::from)?
@@ -1108,6 +1173,7 @@ impl AxoPass {
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
+            refuse_file(vault, &item_key, &cred_key)?;
             let secret = vault
                 .get_history_value(&item_key, &cred_key, parse_id(&history_id)?)
                 .map_err(FfiError::from)?;
@@ -1189,6 +1255,7 @@ impl AxoPass {
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
+            refuse_file(vault, &item_key, &cred_key)?;
             match vault
                 .get_secret(&item_key, &cred_key)
                 .map_err(FfiError::from)?
@@ -1568,6 +1635,7 @@ impl AxoPass {
                             title: c.title.clone(),
                             kind: FieldKindInfo::from(&c.kind),
                             deleted_before_item,
+                            file: deleted_file_info(vault, d.item.id, c.id, &c.kind),
                         })
                         .collect();
                     DeletedItemInfo {
@@ -1713,6 +1781,7 @@ impl AxoPass {
         let key = vault_key.clone();
         let (changed, ids) = self
             .edit_vault(vault_key, move |vw| {
+                refuse_file(vw, &item_key, &cred_key)?;
                 let previous = vw
                     .get_secret_overview(&item_key, &cred_key)?
                     .map(|o| (o.title.clone(), o.kind.clone()));
@@ -1828,6 +1897,12 @@ impl AxoPass {
                     item_key: d.item.key.clone(),
                     item_title: d.item.title.clone(),
                     deleted_at: d.credential.deleted_at,
+                    file: deleted_file_info(
+                        vault,
+                        d.item.id,
+                        d.credential.credential.id,
+                        &d.credential.credential.kind,
+                    ),
                 })
                 .collect())
         })
@@ -1851,8 +1926,10 @@ impl AxoPass {
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
+            let (item_id, cred_id) = (parse_id(&item_id)?, parse_id(&cred_id)?);
+            refuse_deleted_file(vault, item_id, cred_id)?;
             let secret = vault
-                .get_deleted_secret(parse_id(&item_id)?, parse_id(&cred_id)?)
+                .get_deleted_secret(item_id, cred_id)
                 .map_err(FfiError::from)?;
             Ok(secret.expose_secret().as_bytes().to_vec())
         })

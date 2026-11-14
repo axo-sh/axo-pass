@@ -363,6 +363,7 @@ dependencies = [
  "axo-pass-core",
  "log",
  "secrecy",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "uniffi",

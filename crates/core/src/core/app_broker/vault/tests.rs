@@ -32,6 +32,7 @@ use crate::secrets::vaults::storage::txn::VaultWriter;
 use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill, passkey};
 
 mod access;
+mod files;
 mod recorded_ids;
 mod save;
 

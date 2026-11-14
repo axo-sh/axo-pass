@@ -568,6 +568,27 @@ final class PaletteModel {
     let vaultName = vaultNames[ref.vaultKey] ?? ref.vaultKey
     let id = "cred:\(ref.vaultKey)/\(ref.itemKey)/\(cred.key)"
     let reference = "axo://\(ref.vaultKey)/\(ref.itemKey)/\(cred.key)"
+    // A file has no text value to copy, so it offers its reference only.
+    if cred.kind.kind == "file" {
+      return PaletteResult(
+        id: id,
+        kind: .credential,
+        title: cred.title,
+        subtitle: cred.file?.name,
+        systemImage: "doc",
+        keywords: [
+          "\(display.item.title) \(cred.title)",
+          "\(vaultName) \(display.item.title) \(cred.title)",
+          "\(ref.itemKey) \(cred.key)",
+          cred.key,
+          cred.file?.name ?? "",
+        ],
+        actions: [referenceAction(cred, of: ref, title: "Copy “\(reference)”")],
+        secondaryAction: openItemAction(ref),
+        completion: "\(ref.vaultKey)/\(ref.itemKey)/\(cred.key)",
+        breadcrumb: [vaultName, display.item.title]
+      )
+    }
     // A plain-text value is named in its copy action once its row has fetched
     // it. Only the first line is shown.
     let copyTitle: String

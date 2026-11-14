@@ -206,6 +206,8 @@ final class VaultsModel {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
     autoLock = AutoLock { [weak self] trigger in self?.lock(automatic: trigger) }
+    // Decrypted previews left by a run that quit or crashed.
+    FilePreviews.removeAll()
   }
 
   // MARK: - Vault list
@@ -561,6 +563,9 @@ final class VaultsModel {
     itemCache = [:]
     folderCache = [:]
     itemLoadFailures = [:]
+    fileFailures = [:]
+    // Previews are decrypted copies on disk. A lock removes them.
+    FilePreviews.removeAll()
     selectedItemRef = nil
     unlockError = nil
     autoPromptPending = true
@@ -904,9 +909,10 @@ final class VaultsModel {
 
   // MARK: - Bundle export / import
 
-  /// Export the given vaults to a passphrase-encrypted bundle file. Returns an
-  /// error message on failure, nil on success. `onStage` is called on the main
-  /// actor as the export progresses.
+  /// Export the given vaults to a passphrase-encrypted bundle file. Returns the
+  /// export report on success, or nil and a message on failure. The report
+  /// lists file blobs the bundle lacks. `onStage` is called on the main actor
+  /// as the export progresses.
   func exportBundle(
     vaultKeys: [String],
     destination: URL,
@@ -914,15 +920,15 @@ final class VaultsModel {
     workFactor: ExportWorkFactor,
     includePasskeys: Bool,
     onStage: @escaping @MainActor (VaultExportStage, UInt32, UInt32) -> Void
-  ) async -> String? {
+  ) async -> (report: VaultExportReport?, message: String?) {
     let delegate = ExportProgressForwarder(onStage)
     do {
-      try await core.exportVaultBundle(
+      let report = try await core.exportVaultBundle(
         vaultKeys: vaultKeys, destPath: destination.path, passphrase: passphrase,
         workFactor: workFactor, includePasskeys: includePasskeys, progress: delegate)
-      return nil
+      return (report, nil)
     } catch {
-      return String(describing: error)
+      return (nil, String(describing: error))
     }
   }
 
@@ -1213,6 +1219,110 @@ final class VaultsModel {
     }
   }
 
+  // MARK: - Files
+
+  /// Why the contents of file credentials could not be read, by
+  /// `vault/item/credential`. Set by a failed preview or save, and cleared by
+  /// a successful read or a replace.
+  private(set) var fileFailures: [String: FileFailure] = [:]
+
+  func fileFailure(vaultKey: String, itemKey: String, credKey: String) -> FileFailure? {
+    fileFailures[Self.fileKey(vaultKey, itemKey, credKey)]
+  }
+
+  private static func fileKey(_ vaultKey: String, _ itemKey: String, _ credKey: String) -> String {
+    "\(vaultKey)/\(itemKey)/\(credKey)"
+  }
+
+  /// Add the file at `url` to an item as a new file credential titled with the
+  /// file name. Returns an error message on failure, nil on success.
+  func addFile(vaultKey: String, itemKey: String, url: URL) async -> String? {
+    let taken = Set(item(vaultKey: vaultKey, itemKey: itemKey)?.credentials.map(\.key) ?? [])
+    let source = FileSource(url: url)
+    return await performFileChange(vaultKey) {
+      try await core.addFile(
+        vaultKey: vaultKey, itemKey: itemKey,
+        credKey: fileCredentialKey(for: source.name, taken: taken), title: source.name,
+        source: source)
+    }
+  }
+
+  /// Replace the file of a file credential with the file at `url`. The replaced
+  /// file goes to the credential's previous values. Returns an error message on
+  /// failure, nil on success.
+  func replaceFile(vaultKey: String, itemKey: String, credKey: String, url: URL) async -> String? {
+    let error = await performFileChange(vaultKey) {
+      try await core.replaceFile(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, source: FileSource(url: url))
+    }
+    if error == nil {
+      fileFailures.removeValue(forKey: Self.fileKey(vaultKey, itemKey, credKey))
+    }
+    return error
+  }
+
+  /// Run a file change and reload the vault items. An expired authentication
+  /// locks the app.
+  private func performFileChange(_ vaultKey: String, _ change: () async throws -> Void) async
+    -> String?
+  {
+    do {
+      try await mutate(vaultKey, change)
+      return nil
+    } catch FfiError.AuthExpired, FfiError.AuthCancelled {
+      lock()
+      return "Authentication expired."
+    } catch {
+      return String(describing: error)
+    }
+  }
+
+  /// Decrypt a file credential to `destination`, replacing a file there. The
+  /// contents are verified before they appear. A failure that names the state
+  /// of the contents is recorded in `fileFailures`. Returns nil on success, or
+  /// the failure.
+  func saveFile(vaultKey: String, itemKey: String, credKey: String, to destination: URL) async
+    -> FileFailure?
+  {
+    let key = Self.fileKey(vaultKey, itemKey, credKey)
+    do {
+      _ = try await core.readFileToPath(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, destPath: destination.path)
+      fileFailures.removeValue(forKey: key)
+      return nil
+    } catch {
+      let failure = FileFailure(error)
+      if case .authentication = failure {
+        lock()
+      } else {
+        fileFailures[key] = failure
+      }
+      return failure
+    }
+  }
+
+  /// Decrypt a file credential to a private temporary file for Quick Look.
+  /// Returns the URL, or nil with the failure recorded. Remove the file with
+  /// `FilePreviews.remove` when the preview closes.
+  func previewFile(vaultKey: String, itemKey: String, credKey: String, name: String) async
+    -> URL?
+  {
+    do {
+      let url = try FilePreviews.makeFileURL(name: name)
+      if let failure = await saveFile(
+        vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, to: url)
+      {
+        FilePreviews.remove(url)
+        if case .other(let message) = failure { actionError = message }
+        return nil
+      }
+      return url
+    } catch {
+      actionError = String(describing: error)
+      return nil
+    }
+  }
+
   // MARK: - Undoable delete
 
   /// Delete item sections and credentials, and register an undo. The undo
@@ -1308,7 +1418,12 @@ final class VaultsModel {
     let error = await failureMessage {
       try await mutate(vaultKey) {
         for cred in credentials {
-          try await core.deleteCredential(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+          if item.credentials.first(where: { $0.key == cred.key })?.kind.kind == "file" {
+            try await core.deleteFile(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+          } else {
+            try await core.deleteCredential(
+              vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key)
+          }
           deletedCredentials.append(cred)
         }
         for section in sections {

@@ -38,6 +38,17 @@ struct CredentialRow: View {
   /// Assign (`true`) or clear (`false`) one of the credential's autofill roles:
   /// "username", "password", or "totp".
   let onSetRole: (_ role: String, _ assign: Bool) -> Void
+  /// Why the contents of this file credential could not be read, if they could
+  /// not. Only file rows show it.
+  var fileFailure: FileFailure? = nil
+  /// The contents of this file credential are being read or replaced.
+  var isFileBusy: Bool = false
+  /// Open the file in Quick Look. Only file rows offer it.
+  var onPreviewFile: () -> Void = {}
+  /// Save the file to disk. Only file rows offer it.
+  var onSaveFile: () -> Void = {}
+  /// Replace the file. Only file rows offer it.
+  var onReplaceFile: () -> Void = {}
   /// The field name a login card shows beside the value, such as "Password".
   /// Nil for a row in the item's credential list, which shows the credential's
   /// title and reference instead.
@@ -71,6 +82,10 @@ struct CredentialRow: View {
   /// Passkeys are shown read only: their value is a structured record the
   /// authenticator owns, not free text to edit.
   private var isPasskey: Bool { cred.kind.kind == "passkey" }
+
+  /// A file credential shows the file's details and actions. Its value is a
+  /// record with the file key, so the row never reveals or copies it.
+  private var isFile: Bool { cred.kind.kind == "file" }
 
   /// Copied by the Copy button or a copy shortcut.
   private var copied: Bool { justCopied || showsCopied }
@@ -146,7 +161,7 @@ struct CredentialRow: View {
   @ViewBuilder
   private var roleMenu: some View {
     switch cred.kind.kind {
-    case "passkey", "unknown":
+    case "passkey", "file", "unknown":
       EmptyView()
     case "totp":
       roleButton("totp", assign: "Use for one-time code", clear: "Stop using for one-time code")
@@ -204,7 +219,12 @@ struct CredentialRow: View {
         }
       }
 
-      if quickEditing {
+      if isFile {
+        FileBox(
+          file: cred.file, failure: fileFailure, isBusy: isFileBusy,
+          onPreview: onPreviewFile, onSave: onSaveFile, onReplace: onReplaceFile,
+          onTrash: onDelete)
+      } else if quickEditing {
         quickEditor
       } else {
         valueBox

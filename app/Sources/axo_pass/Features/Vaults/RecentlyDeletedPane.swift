@@ -179,12 +179,13 @@ private struct RecentlyDeletedDetail: View {
         DeletedSecretRow(
           vaultKey: vaultKey, itemId: item.id, credId: cred.id, title: cred.title,
           key: cred.key,
-          note: cred.deletedBeforeItem ? "Deleted before the item" : nil)
+          note: cred.deletedBeforeItem ? "Deleted before the item" : nil,
+          isFile: cred.kind.kind == "file", file: cred.file)
       }
     case .credential(let vaultKey, let cred):
       DeletedSecretRow(
         vaultKey: vaultKey, itemId: cred.itemId, credId: cred.id, title: cred.title,
-        key: cred.key, note: nil)
+        key: cred.key, note: nil, isFile: cred.kind.kind == "file", file: cred.file)
     }
   }
 
@@ -220,7 +221,8 @@ private struct RecentlyDeletedDetail: View {
   }
 }
 
-/// One deleted credential with its value. The value is masked until clicked.
+/// One deleted credential with its value. The value is masked until clicked. A
+/// deleted file shows its details only. Its contents open after a restore.
 private struct DeletedSecretRow: View {
   @Environment(VaultsModel.self) private var vaults
 
@@ -230,6 +232,8 @@ private struct DeletedSecretRow: View {
   let title: String
   let key: String
   let note: String?
+  let isFile: Bool
+  let file: FileInfo?
 
   @State private var secret: SymmetricKey? = nil
   @State private var isRevealing = false
@@ -237,6 +241,38 @@ private struct DeletedSecretRow: View {
   @State private var justCopied = false
 
   var body: some View {
+    if isFile {
+      fileBody
+    } else {
+      secretBody
+    }
+  }
+
+  private var fileBody: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).fontWeight(.semibold)
+        Text(key + (note.map { " · \($0)" } ?? ""))
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      }
+      HStack(spacing: 10) {
+        Image(systemName: file?.symbolName ?? "doc")
+          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(file?.name ?? "Unreadable file record").lineLimit(1).truncationMode(.middle)
+          if let file {
+            Text(file.detail).font(.caption).foregroundStyle(.secondary)
+          }
+        }
+      }
+      Text("Restore it to preview or save the file.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var secretBody: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 2) {

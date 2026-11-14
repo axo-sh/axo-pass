@@ -17,6 +17,12 @@
 //! the trash, which keeps the blob. Purging it from the trash or purging its
 //! history entry drops the record, and the next save deletes the blob.
 //!
+//! The app reaches these calls through `VaultsManager::add_file`,
+//! `replace_file`, `delete_file`, and `read_file`. The broker and CLI do not
+//! read or write file contents, and the broker refuses to read, resolve, or
+//! overwrite a file credential as text. [`is_local`] tells a listing whether
+//! the contents are on this Mac.
+//!
 //! In a synced vault, a file record syncs as the value of its credential.
 //! The publish uploads its blob to the synced folder before any state file
 //! that references it, and a Mac that lacks the blob fetches it when the
@@ -73,6 +79,16 @@ impl FileSummary {
 /// file record.
 pub fn summary(value: &str) -> Option<FileSummary> {
     FileRecord::decode(value).ok().map(|r| FileSummary::of(&r))
+}
+
+/// Whether the blob that file record `value` names is in the local store of
+/// the vault `vh`. False if `value` is not a file record or the vault id
+/// cannot be read.
+pub fn is_local(vh: &VaultHandle, value: &str) -> bool {
+    let (Ok(record), Ok(vault_id)) = (FileRecord::decode(value), vh.vault_id()) else {
+        return false;
+    };
+    BlobStore::of(&vh.path, vault_id).contains(&record.blob)
 }
 
 /// Add the file `input` to item `item_key` as a new credential `cred_key`

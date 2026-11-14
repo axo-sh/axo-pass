@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Write};
 use std::sync::{Mutex, MutexGuard};
 
 use uuid::Uuid;
 
+use crate::audit::SubjectIds;
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::bundle::{ImportSelection, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::{self, FileInput, FileSummary};
 use crate::secrets::vaults::storage::catalog::{
     DuplicateVaultKeys, DuplicateVaults, MissingVault, VaultCatalog, VaultScanResult,
 };
@@ -234,6 +237,140 @@ impl VaultsManager {
         Ok(VaultsManager::lock(manager).install(committed))
     }
 
+    /// Add a file credential to a vault of a shared manager, as
+    /// [`files::add_file`] does, and keep the saved copy. Locks as
+    /// [`Self::write_vault`] does. Returns the audit ids of the credential.
+    pub fn add_file<R: Read>(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        item_key: &str,
+        cred_key: &str,
+        title: &str,
+        input: FileInput<R>,
+    ) -> Result<SubjectIds, Error> {
+        Self::add_file_with(
+            manager,
+            vault_key,
+            Unlock::App,
+            item_key,
+            cred_key,
+            title,
+            input,
+        )
+    }
+
+    /// [`Self::add_file`] with the vault key unlocked by `unlock`.
+    fn add_file_with<R: Read>(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        unlock: Unlock<'_>,
+        item_key: &str,
+        cred_key: &str,
+        title: &str,
+        input: FileInput<R>,
+    ) -> Result<SubjectIds, Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = files::add_file(
+            store.files(),
+            &target,
+            unlock,
+            item_key,
+            cred_key,
+            title,
+            input,
+        )?;
+        Ok(VaultsManager::lock(manager).install(committed))
+    }
+
+    /// Replace the file of a credential of a shared manager, as
+    /// [`files::replace_file`] does, and keep the saved copy. Returns the
+    /// audit ids of the credential.
+    pub fn replace_file<R: Read>(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        item_key: &str,
+        cred_key: &str,
+        input: FileInput<R>,
+    ) -> Result<SubjectIds, Error> {
+        Self::replace_file_with(manager, vault_key, Unlock::App, item_key, cred_key, input)
+    }
+
+    /// [`Self::replace_file`] with the vault key unlocked by `unlock`.
+    fn replace_file_with<R: Read>(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        unlock: Unlock<'_>,
+        item_key: &str,
+        cred_key: &str,
+        input: FileInput<R>,
+    ) -> Result<SubjectIds, Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed =
+            files::replace_file(store.files(), &target, unlock, item_key, cred_key, input)?;
+        Ok(VaultsManager::lock(manager).install(committed))
+    }
+
+    /// Move a file credential of a shared manager to the trash, as
+    /// [`files::delete_file`] does, and keep the saved copy.
+    pub fn delete_file(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        item_key: &str,
+        cred_key: &str,
+    ) -> Result<(), Error> {
+        Self::delete_file_with(manager, vault_key, Unlock::App, item_key, cred_key)
+    }
+
+    /// [`Self::delete_file`] with the vault key unlocked by `unlock`.
+    fn delete_file_with(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        unlock: Unlock<'_>,
+        item_key: &str,
+        cred_key: &str,
+    ) -> Result<(), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = files::delete_file(store.files(), &target, unlock, item_key, cred_key)?;
+        VaultsManager::lock(manager).install(committed);
+        Ok(())
+    }
+
+    /// Decrypt the file of a credential of a shared manager to `output`, as
+    /// [`files::read_file`] does. The read unlocks its own copy of the vault
+    /// on the shared context, so the manager mutex is not held while the file
+    /// downloads or decrypts.
+    pub fn read_file(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        item_key: &str,
+        cred_key: &str,
+        output: impl Write,
+    ) -> Result<FileSummary, Error> {
+        Self::read_file_on(
+            manager,
+            vault_key,
+            AuthContext::SharedThreadLocal,
+            item_key,
+            cred_key,
+            output,
+        )
+    }
+
+    /// [`Self::read_file`] with the vault unlocked on `context`.
+    fn read_file_on(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        context: AuthContext,
+        item_key: &str,
+        cred_key: &str,
+        output: impl Write,
+    ) -> Result<FileSummary, Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let mut vh = VaultHandle::load_from_path(&target.path, store.files().locks())?;
+        store.unlock_counted(&mut vh, context)?;
+        files::read_file(store.files(), &vh, item_key, cred_key, output)
+    }
+
     /// Unlock vault `vault_key` of a shared manager on the shared context and
     /// keep the unlocked copy. The read follows the rule of a broker read
     /// ([`VaultCatalog::unlock_counted`]), so it can run a transaction with
@@ -446,6 +583,7 @@ impl VaultsManager {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -453,6 +591,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::secrets::vaults::FieldKind;
+    use crate::secrets::vaults::files::store::BlobStore;
     use crate::secrets::vaults::storage::test_unlocker::KeyUnlocker;
     use crate::secrets::vaults::storage::txn::VaultWriter;
 
@@ -472,11 +612,15 @@ mod tests {
             let files = VaultWriter::isolated(dir.path().join("data"));
             let original = VaultHandle::new_for_test_at(vaults_dir.join("personal.json"));
             files.create(&original).unwrap();
+            let keys = HashMap::from([(
+                original.vault_id().unwrap(),
+                original.unlocked_key().unwrap(),
+            )]);
             let manager = VaultsManager::with(VaultCatalog::with_unlocker(
                 vaults_dir,
                 files,
                 Vec::new(),
-                Arc::new(KeyUnlocker::default()),
+                Arc::new(KeyUnlocker(keys)),
             ));
             Self {
                 _dir: dir,
@@ -645,5 +789,167 @@ mod tests {
         let m = VaultsManager::lock(&manager);
         let vw = m.get_vault("personal").unwrap();
         assert!(vw.get_item_overview("alpha").unwrap().is_some());
+    }
+
+    /// Manager of a fixture vault that holds item `item`, shared, with the
+    /// unlocked vault that opens its file.
+    fn manager_with_item() -> (Mutex<VaultsManager>, VaultHandle, TempDir) {
+        let fx = Fixture::new();
+        let original = fx.original;
+        let manager = Mutex::new(fx.manager);
+        VaultsManager::transact(&manager, "personal", |store, target| {
+            store
+                .files()
+                .write::<_, Error>(target, Unlock::Unlocked(&original), |vw| {
+                    vw.add_item("item", "Item").map(|_| ())
+                })
+        })
+        .unwrap();
+        (manager, original, fx._dir)
+    }
+
+    fn input(name: &str, contents: &'static [u8]) -> FileInput<&'static [u8]> {
+        FileInput {
+            name: name.to_string(),
+            mime: Some("text/plain".to_string()),
+            contents,
+        }
+    }
+
+    fn read(manager: &Mutex<VaultsManager>, cred: &str) -> Result<(FileSummary, Vec<u8>), Error> {
+        let mut out = Vec::new();
+        let summary = VaultsManager::read_file_on(
+            manager,
+            "personal",
+            AuthContext::OneTime,
+            "item",
+            cred,
+            &mut out,
+        )?;
+        Ok((summary, out))
+    }
+
+    #[test]
+    fn file_added_replaced_read_and_deleted_through_manager() {
+        let (manager, original, _dir) = manager_with_item();
+
+        let ids = VaultsManager::add_file_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(&original),
+            "item",
+            "doc",
+            "Doc",
+            input("doc.txt", b"first"),
+        )
+        .unwrap();
+        assert!(ids.credential_id.is_some());
+        let (summary, contents) = read(&manager, "doc").unwrap();
+        assert_eq!(contents, b"first");
+        assert_eq!(summary.name, "doc.txt");
+        assert_eq!(summary.size, 5);
+        assert_eq!(summary.mime.as_deref(), Some("text/plain"));
+
+        VaultsManager::replace_file_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(&original),
+            "item",
+            "doc",
+            input("doc2.txt", b"second file"),
+        )
+        .unwrap();
+        let (summary, contents) = read(&manager, "doc").unwrap();
+        assert_eq!(contents, b"second file");
+        assert_eq!(summary.name, "doc2.txt");
+
+        VaultsManager::delete_file_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(&original),
+            "item",
+            "doc",
+        )
+        .unwrap();
+        assert!(matches!(
+            read(&manager, "doc"),
+            Err(Error::InvalidCredentialKey(_))
+        ));
+    }
+
+    #[test]
+    fn replace_and_delete_refuse_credential_that_is_not_a_file() {
+        let (manager, original, _dir) = manager_with_item();
+        VaultsManager::transact(&manager, "personal", |store, target| {
+            store
+                .files()
+                .write::<_, Error>(target, Unlock::Unlocked(&original), |vw| {
+                    vw.add_new_secret(
+                        "item",
+                        "text",
+                        "Text",
+                        FieldKind::default(),
+                        "value".to_string().into(),
+                    )
+                })
+        })
+        .unwrap();
+
+        let replaced = VaultsManager::replace_file_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(&original),
+            "item",
+            "text",
+            input("a.txt", b"a"),
+        );
+        let deleted = VaultsManager::delete_file_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(&original),
+            "item",
+            "text",
+        );
+
+        assert!(matches!(replaced, Err(Error::InvalidCredentialKey(_))));
+        assert!(matches!(deleted, Err(Error::InvalidCredentialKey(_))));
+    }
+
+    #[test]
+    fn read_reports_missing_and_damaged_blobs() {
+        let (manager, original, _dir) = manager_with_item();
+        for cred in ["missing", "damaged"] {
+            VaultsManager::add_file_with(
+                &manager,
+                "personal",
+                Unlock::Unlocked(&original),
+                "item",
+                cred,
+                cred,
+                input("a.txt", b"contents"),
+            )
+            .unwrap();
+        }
+        let store_of = |cred: &str| {
+            let m = VaultsManager::lock(&manager);
+            let vh = m.get_vault("personal").unwrap();
+            let record = crate::secrets::vaults::files::read_record(vh, "item", cred).unwrap();
+            (BlobStore::of(&vh.path, vh.vault_id().unwrap()), record.blob)
+        };
+        let (store, blob) = store_of("missing");
+        store.delete(&blob).unwrap();
+        let (store, blob) = store_of("damaged");
+        let mut bytes = fs::read(store.path(&blob)).unwrap();
+        bytes[0] ^= 1;
+        fs::write(store.path(&blob), bytes).unwrap();
+
+        assert!(matches!(
+            read(&manager, "missing"),
+            Err(Error::FileMissing(_))
+        ));
+        assert!(matches!(
+            read(&manager, "damaged"),
+            Err(Error::FileBlobMismatch(_))
+        ));
     }
 }

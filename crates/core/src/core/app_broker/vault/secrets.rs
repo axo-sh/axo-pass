@@ -5,7 +5,17 @@ use super::serve::{AccessIds, Served, open_vault};
 use super::{BrokerCredential, BrokerVaultItem, VaultPayload, VaultRef, WriteSecretPayload};
 use crate::audit::SubjectIds;
 use crate::core::auth::ForeignContext;
-use crate::secrets::vaults::{MatchKind, VaultCatalog, VaultHandle, autofill};
+use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, autofill};
+
+/// Whether credential `credential_key` of item `item_key` is a file. Its
+/// value is a record with the file key, so the broker neither reads nor
+/// overwrites it. The broker does not read or write file contents.
+fn is_file(vh: &VaultHandle, item_key: &str, credential_key: &str) -> bool {
+    matches!(
+        vh.get_secret_overview(item_key, credential_key),
+        Ok(Some(cred)) if matches!(cred.kind, FieldKind::File)
+    )
+}
 
 /// Write payload of an item request, if it carries one. Any other payload is
 /// refused.
@@ -46,6 +56,9 @@ pub(super) fn read_secret(
 ) -> Result<Served, String> {
     write_payload(payload)?;
     let vh = open_vault(vaults, vault_key, context)?;
+    if is_file(&vh, item_key, credential_key) {
+        return Err("A file credential cannot be read as text".to_string());
+    }
     let value = vh
         .get_secret(item_key, credential_key)
         .map_err(|e| format!("Failed to get secret: {e}"))?
@@ -107,6 +120,9 @@ fn write_secret(
         .map_err(|e| format!("Failed to write login: {e}"))?;
         return Ok(created);
     }
+    if is_file(vh, item_key, credential_key) {
+        return Err("A file credential cannot be overwritten with text".to_string());
+    }
     // Keep an existing credential's kind so a value-only update does
     // not reset it; a new credential falls back to the default.
     let existing = vh
@@ -154,6 +170,15 @@ pub(super) fn resolve_secrets(
         });
 
         let value = match vh {
+            Some(vh) if is_file(vh, &r.item_key, &r.credential_key) => {
+                log::error!(
+                    "Refusing to resolve file credential {}/{}/{} as text",
+                    r.vault_key,
+                    r.item_key,
+                    r.credential_key
+                );
+                None
+            },
             Some(vh) => match vh.get_secret(&r.item_key, &r.credential_key) {
                 Ok(secret) => secret.map(|s| s.expose_secret().to_string()),
                 Err(e) => {

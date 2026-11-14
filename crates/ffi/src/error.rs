@@ -17,6 +17,21 @@ pub enum FfiError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    /// The contents of a file are downloading to this Mac. Try again later.
+    /// The payload is the blob name.
+    #[error("File contents are downloading")]
+    FilePending(String),
+
+    /// The contents of a file are not on this Mac and the synced folder does
+    /// not hold them. The payload is the blob name.
+    #[error("File contents are not on this Mac")]
+    FileMissing(String),
+
+    /// The stored contents of a file fail verification against the vault
+    /// record. The payload is the blob name.
+    #[error("File contents are damaged")]
+    FileBlobMismatch(String),
+
     /// The request itself was invalid (e.g. a malformed vault/item/credential
     /// key, or a value that fails a precondition like "already exists").
     #[error("{0}")]
@@ -52,7 +67,16 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
             VaultError::DeletedItemNotFound(id) => FfiError::NotFound(format!("Deleted item {id}")),
-            other @ (VaultError::InvalidFolderOrder
+            VaultError::FilePending(blob) => FfiError::FilePending(blob),
+            VaultError::FileMissing(blob) => FfiError::FileMissing(blob),
+            // A blob that does not hash to its name, and contents that do not
+            // match the record, are both stored bytes that fail verification.
+            VaultError::FileBlobMismatch(blob) | VaultError::FileContentMismatch(blob) => {
+                FfiError::FileBlobMismatch(blob)
+            },
+            other @ (VaultError::FileMoveRefused(_)
+            | VaultError::FileKindChange(_)
+            | VaultError::InvalidFolderOrder
             | VaultError::DuplicateCredentialKey(_)
             | VaultError::DuplicateItemKey(_)
             | VaultError::InvalidSectionOrder(_)
@@ -114,5 +138,49 @@ impl From<AgeError> for FfiError {
 impl From<agent_client::SshAgentClientError> for FfiError {
     fn from(e: agent_client::SshAgentClientError) -> Self {
         FfiError::Internal(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_pending_maps_to_its_own_variant() {
+        let e = FfiError::from(VaultError::FilePending("blob".to_string()));
+
+        assert!(matches!(e, FfiError::FilePending(b) if b == "blob"));
+    }
+
+    #[test]
+    fn file_missing_maps_to_its_own_variant() {
+        let e = FfiError::from(VaultError::FileMissing("blob".to_string()));
+
+        assert!(matches!(e, FfiError::FileMissing(b) if b == "blob"));
+    }
+
+    #[test]
+    fn blob_and_content_mismatch_map_to_damaged_variant() {
+        let blob = FfiError::from(VaultError::FileBlobMismatch("blob".to_string()));
+        let content = FfiError::from(VaultError::FileContentMismatch("blob".to_string()));
+
+        assert!(matches!(blob, FfiError::FileBlobMismatch(b) if b == "blob"));
+        assert!(matches!(content, FfiError::FileBlobMismatch(b) if b == "blob"));
+    }
+
+    #[test]
+    fn refused_file_changes_map_to_invalid_input() {
+        let moved = FfiError::from(VaultError::FileMoveRefused("item".to_string()));
+        let kind = FfiError::from(VaultError::FileKindChange("cred".to_string()));
+
+        assert!(matches!(moved, FfiError::InvalidInput(_)));
+        assert!(matches!(kind, FfiError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn other_file_errors_stay_internal() {
+        let e = FfiError::from(VaultError::FileDecryptionError);
+
+        assert!(matches!(e, FfiError::Internal(_)));
     }
 }

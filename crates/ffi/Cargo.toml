@@ -23,3 +23,6 @@ thiserror.workspace = true
 tokio.workspace = true
 uniffi = { version = "0.32", features = ["cli", "tokio"] }
 uuid = "1.28.0"
+
+[dev-dependencies]
+tempfile = "3"

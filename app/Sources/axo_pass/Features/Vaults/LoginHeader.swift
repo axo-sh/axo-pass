@@ -240,9 +240,9 @@ extension CredentialList {
   }
 
   /// Copy a credential and show the copy confirmation on its row. The login
-  /// card code row copies the current code. Passkeys are not copied.
+  /// card code row copies the current code. Passkeys and files are not copied.
   private func copyFromShortcut(_ cred: CredentialInfo, isCardRow: Bool) {
-    guard cred.kind.kind != "passkey" else { return }
+    guard !cred.hasRecordValue else { return }
     Task {
       let copied =
         isCardRow && cred.kind.kind == "totp" ? await copyCurrentCode(cred) : await copy(cred)
