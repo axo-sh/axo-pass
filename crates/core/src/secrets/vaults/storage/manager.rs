@@ -934,7 +934,8 @@ mod tests {
             let m = VaultsManager::lock(&manager);
             let vh = m.get_vault("personal").unwrap();
             let record = crate::secrets::vaults::files::read_record(vh, "item", cred).unwrap();
-            (BlobStore::of(&vh.path, vh.vault_id().unwrap()), record.blob)
+            let store = BlobStore::of(m.store.files().root(), vh.vault_id().unwrap());
+            (store, record.blob)
         };
         let (store, blob) = store_of("missing");
         store.delete(&blob).unwrap();

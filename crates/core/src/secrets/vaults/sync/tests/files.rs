@@ -3,6 +3,7 @@
 //! blob status of the sync report, and the sync of file records between
 //! Macs, and the export of a synced vault whose blobs are in the folder.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use super::load::Fixture;
@@ -112,8 +113,8 @@ fn record(vh: &VaultHandle, cred_key: &str) -> FileRecord {
 }
 
 /// Local blob store of the vault `vh`.
-fn store(vh: &VaultHandle) -> BlobStore {
-    BlobStore::of(&vh.path, vh.vault_id().unwrap())
+fn store(root: &Path, vh: &VaultHandle) -> BlobStore {
+    BlobStore::of(root, vh.vault_id().unwrap())
 }
 
 /// Sync report of the vault `vh`, read through `writer`.

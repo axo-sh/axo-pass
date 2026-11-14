@@ -40,7 +40,7 @@ fn blob_uploaded_before_referencing_state_file() {
     // The blob is copied as the local store holds it.
     assert_eq!(
         transport.blob(fx.id(), blob),
-        Some(store(&fx.vault).read_bytes(&blob).unwrap())
+        Some(store(&fx.root, &fx.vault).read_bytes(&blob).unwrap())
     );
     assert_eq!(report(fx.catalog.files(), &fx.vault).blobs, status(0, 0));
 }
@@ -68,7 +68,7 @@ fn failed_upload_pauses_sync_until_next_transaction() {
         .write(|vh| vh.add_item("other", "Other").map(|_| ()))
         .unwrap();
     assert!(publish_failed(&committed), "{:?}", committed.sync_status);
-    assert!(store(&fx.vault).contains(&blob));
+    assert!(store(&fx.root, &fx.vault).contains(&blob));
     assert_eq!(saved(&fx).0.staged_blobs, vec![blob]);
     assert_eq!(published(&transport, &fx), listed);
 

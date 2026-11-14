@@ -1,7 +1,9 @@
 //! Local blob store of a vault.
 //!
-//! Blobs of a vault are in the directory `{vault short id}.files` beside the
-//! vault file, one file per blob, named by the blob hash. A blob is first
+//! Blobs of a vault are in the directory `files/{vault short id}` under the app
+//! data directory, as the retained versions are in `versions/{vault short id}`.
+//! The location does not depend on where the vault file is. There is one file
+//! per blob, named by the blob hash. A blob is first
 //! written to a hidden temp file in that directory. The temp file is renamed
 //! to the blob name under the vault locks, before the transaction that
 //! references the blob saves (`files/mod.rs`). Garbage collection ignores
@@ -19,8 +21,8 @@ use super::stream::{self, Sealed};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::short_id::ShortId;
 
-/// Suffix of the store directory name.
-const STORE_SUFFIX: &str = "files";
+/// Directory of the blob stores under the app data directory.
+pub(crate) const FILES_DIR: &str = "files";
 
 /// Suffix of a temp file name.
 const TEMP_SUFFIX: &str = ".tmp";
@@ -35,12 +37,10 @@ pub(crate) struct BlobStore {
 }
 
 impl BlobStore {
-    /// Store of vault `id` whose vault file is at `vault_path`.
-    pub(crate) fn of(vault_path: &Path, id: Uuid) -> Self {
-        let parent = vault_path.parent().unwrap_or(Path::new(""));
-        let name = format!("{}.{STORE_SUFFIX}", ShortId::encode_uuid(id));
+    /// Store of vault `id` under the app data directory `root`.
+    pub(crate) fn of(root: &Path, id: Uuid) -> Self {
         Self {
-            dir: parent.join(name),
+            dir: root.join(FILES_DIR).join(ShortId::encode_uuid(id)),
         }
     }
 

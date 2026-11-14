@@ -8,6 +8,7 @@ use axo_pass_core::secrets::vaults::model::history::HistoryKind;
 use axo_pass_core::secrets::vaults::model::{ItemChange, ItemHistoryEvent, totp};
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey::signals::{self, SignalStore};
+use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
 use axo_pass_core::secrets::vaults::{
     CredentialPlacement, CredentialUpdate, Error as VaultError, FieldKind, MatchKind, ShortId,
     Site, TextField, VaultCatalog, VaultFolder, VaultHandle, VaultItemCredentialOverview,
@@ -625,6 +626,7 @@ fn item_display_order(
 /// Details of the deleted credential `cred_id` of item `item_id`, if `kind`
 /// is the file kind and its record reads.
 fn deleted_file_info(
+    writer: &VaultWriter,
     vault: &VaultHandle,
     item_id: Uuid,
     cred_id: Uuid,
@@ -634,7 +636,7 @@ fn deleted_file_info(
         return None;
     }
     let value = vault.get_deleted_secret(item_id, cred_id).ok()?;
-    FileInfo::of_value(vault, value.expose_secret())
+    FileInfo::of_value(writer, vault, value.expose_secret())
 }
 
 /// Fail with `InvalidInput` if the deleted credential `cred_id` of item
@@ -859,6 +861,7 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let catalog = m.store().clone();
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
@@ -900,7 +903,13 @@ impl AxoPass {
                             let file = matches!(c.kind, FieldKind::File)
                                 .then(|| vault.get_secret(&item.key, &c.key).ok().flatten())
                                 .flatten()
-                                .and_then(|value| FileInfo::of_value(vault, value.expose_secret()));
+                                .and_then(|value| {
+                                    FileInfo::of_value(
+                                        catalog.files(),
+                                        vault,
+                                        value.expose_secret(),
+                                    )
+                                });
                             CredentialInfo {
                                 id: ShortId::encode_uuid(c.id),
                                 key: c.key.clone(),
@@ -1610,6 +1619,7 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let catalog = m.store().clone();
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
@@ -1635,7 +1645,13 @@ impl AxoPass {
                             title: c.title.clone(),
                             kind: FieldKindInfo::from(&c.kind),
                             deleted_before_item,
-                            file: deleted_file_info(vault, d.item.id, c.id, &c.kind),
+                            file: deleted_file_info(
+                                catalog.files(),
+                                vault,
+                                d.item.id,
+                                c.id,
+                                &c.kind,
+                            ),
                         })
                         .collect();
                     DeletedItemInfo {
@@ -1881,6 +1897,7 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let catalog = m.store().clone();
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
@@ -1898,6 +1915,7 @@ impl AxoPass {
                     item_title: d.item.title.clone(),
                     deleted_at: d.credential.deleted_at,
                     file: deleted_file_info(
+                        catalog.files(),
                         vault,
                         d.item.id,
                         d.credential.credential.id,

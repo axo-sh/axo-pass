@@ -37,7 +37,7 @@ use std::io::{Read, Write};
 
 pub use record::{FileHash, FileRecord};
 use secrecy::ExposeSecret;
-use store::{BlobStore, StagedBlob};
+use store::StagedBlob;
 use uuid::Uuid;
 
 use super::format::encrypted_vault::VaultHeader;
@@ -84,11 +84,11 @@ pub fn summary(value: &str) -> Option<FileSummary> {
 /// Whether the blob that file record `value` names is in the local store of
 /// the vault `vh`. False if `value` is not a file record or the vault id
 /// cannot be read.
-pub fn is_local(vh: &VaultHandle, value: &str) -> bool {
+pub fn is_local(writer: &VaultWriter, vh: &VaultHandle, value: &str) -> bool {
     let (Ok(record), Ok(vault_id)) = (FileRecord::decode(value), vh.vault_id()) else {
         return false;
     };
-    BlobStore::of(&vh.path, vault_id).contains(&record.blob)
+    writer.blob_store(vault_id).contains(&record.blob)
 }
 
 /// Add the file `input` to item `item_key` as a new credential `cred_key`
@@ -104,10 +104,10 @@ pub fn add_file<R: Read>(
     title: &str,
     input: FileInput<R>,
 ) -> Result<Committed<SubjectIds>, Error> {
-    let (vault_id, staged) = stage(target, input.contents)?;
+    let (vault_id, staged) = stage(writer, target, input.contents)?;
     let value = staged.record(input.name, input.mime).encode()?;
     writer.write(target, unlock, |vh| {
-        commit_into(vh, vault_id, staged, |vh| {
+        commit_into(writer, vh, vault_id, staged, |vh| {
             vh.add_new_secret(item_key, cred_key, title, FieldKind::File, value)?;
             vh.credential_ids(item_key, cred_key)
         })
@@ -127,11 +127,11 @@ pub fn replace_file<R: Read>(
     cred_key: &str,
     input: FileInput<R>,
 ) -> Result<Committed<SubjectIds>, Error> {
-    let (vault_id, staged) = stage(target, input.contents)?;
+    let (vault_id, staged) = stage(writer, target, input.contents)?;
     let value = staged.record(input.name, input.mime).encode()?;
     writer.write(target, unlock, |vh| {
         let title = file_credential(vh, item_key, cred_key)?.title.clone();
-        commit_into(vh, vault_id, staged, |vh| {
+        commit_into(writer, vh, vault_id, staged, |vh| {
             vh.add_secret(item_key, cred_key, &title, FieldKind::File, value)?;
             vh.credential_ids(item_key, cred_key)
         })
@@ -158,10 +158,10 @@ pub fn read_file(
 ) -> Result<FileSummary, Error> {
     let record = read_record(vh, item_key, cred_key)?;
     let vault_id = vh.vault_id()?;
-    let store = BlobStore::of(&vh.path, vault_id);
+    let store = writer.blob_store(vault_id);
     let synced = vh.get_unlocked_vault()?.replica_id().is_some();
     if synced && !store.contains(&record.blob) {
-        writer.fetch_blob(vault_id, &vh.path, record.blob)?;
+        writer.fetch_blob(vault_id, record.blob)?;
     }
     store.read(&record, vault_id, output)?;
     Ok(FileSummary::of(&record))
@@ -212,9 +212,13 @@ fn file_credential<'a>(
 /// Encrypt `contents` to a temp file in the store of the vault `target`.
 /// Returns the vault id the blob is bound to. The id is read from the file
 /// header without verifying it. The transaction checks it under the locks.
-fn stage(target: &Target, contents: impl Read) -> Result<(Uuid, StagedBlob), Error> {
+fn stage(
+    writer: &VaultWriter,
+    target: &Target,
+    contents: impl Read,
+) -> Result<(Uuid, StagedBlob), Error> {
     let vault_id = VaultHeader::peek(&target.path)?.id;
-    let staged = BlobStore::of(&target.path, vault_id).stage(vault_id, contents)?;
+    let staged = writer.blob_store(vault_id).stage(vault_id, contents)?;
     Ok((vault_id, staged))
 }
 
@@ -223,6 +227,7 @@ fn stage(target: &Target, contents: impl Read) -> Result<(Uuid, StagedBlob), Err
 /// is deleted, since no record references it. Fails with `VaultNotFound` if
 /// the vault is not vault `vault_id`, which the blob is bound to.
 fn commit_into<R>(
+    writer: &VaultWriter,
     vh: &mut VaultHandle,
     vault_id: Uuid,
     staged: StagedBlob,
@@ -231,7 +236,7 @@ fn commit_into<R>(
     if vh.vault_id()? != vault_id {
         return Err(Error::VaultNotFound(vh.path.display().to_string()));
     }
-    let store = BlobStore::of(&vh.path, vault_id);
+    let store = writer.blob_store(vault_id);
     let blob = staged.commit(&store)?;
     write(vh).inspect_err(|_| {
         if let Err(e) = store.delete(&blob) {

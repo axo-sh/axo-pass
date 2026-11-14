@@ -413,7 +413,7 @@ impl ImportableBundle {
         let mut new_blobs: Vec<(BlobStore, FileHash)> = Vec::new();
         let mut write = || -> Result<(), Error> {
             for (vw, blobs) in staged.iter().zip(&staged_blobs) {
-                let store = BlobStore::of(&vw.path, vw.vault_id()?);
+                let store = files.blob_store(vw.vault_id()?);
                 for (name, bytes) in blobs {
                     let is_new = !store.contains(name);
                     store.put(name, bytes)?;

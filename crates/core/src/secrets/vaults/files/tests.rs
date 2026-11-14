@@ -5,6 +5,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use super::store::BlobStore;
 use super::*;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -51,7 +52,7 @@ impl Fixture {
     }
 
     fn store(&self) -> BlobStore {
-        BlobStore::of(&self.vault.path, self.id())
+        self.writer.blob_store(self.id())
     }
 
     /// Blobs in the store.

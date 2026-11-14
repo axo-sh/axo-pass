@@ -42,7 +42,7 @@ fn export_fetches_blob_only_in_folder() {
     add_file(macs.a.catalog.files(), &macs.a.vault, "doc", b"contents").unwrap();
     let b_vault = macs.sync_b();
     let blob = record(&b_vault, "doc").blob;
-    assert!(!store(&macs.b_vault).contains(&blob));
+    assert!(!store(&macs.b.root, &macs.b_vault).contains(&blob));
     let in_folder = transport.blob(macs.id(), blob).unwrap();
 
     let (report, bundle) = export_b(&macs);
@@ -51,7 +51,12 @@ fn export_fetches_blob_only_in_folder() {
     let info = &bundle.vaults()[0];
     assert_eq!((info.files, info.missing_files), (1, 0));
     // The blob is now in the local store, as the folder held it.
-    assert_eq!(store(&macs.b_vault).read_bytes(&blob).unwrap(), in_folder);
+    assert_eq!(
+        store(&macs.b.root, &macs.b_vault)
+            .read_bytes(&blob)
+            .unwrap(),
+        in_folder
+    );
 }
 
 #[test]
@@ -86,6 +91,6 @@ fn export_reports_blob_missing_from_folder() {
     assert_eq!((missing.vault_id, missing.blob), (macs.id(), lost));
     let info = &bundle.vaults()[0];
     assert_eq!((info.files, info.missing_files), (2, 1));
-    assert!(store(&macs.b_vault).contains(&kept));
-    assert!(!store(&macs.b_vault).contains(&lost));
+    assert!(store(&macs.b.root, &macs.b_vault).contains(&kept));
+    assert!(!store(&macs.b.root, &macs.b_vault).contains(&lost));
 }

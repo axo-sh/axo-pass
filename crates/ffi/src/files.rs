@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use axo_pass_core::audit;
 use axo_pass_core::secrets::vaults::files::{self as core_files, FileInput, FileSummary};
+use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
 use axo_pass_core::secrets::vaults::{FieldKind, VaultHandle, VaultsManager};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
@@ -58,9 +59,12 @@ impl FileInfo {
 
     /// Details of the file record `value` in the unlocked vault `vault`.
     /// `None` if `value` is not a file record.
-    pub(crate) fn of_value(vault: &VaultHandle, value: &str) -> Option<Self> {
+    pub(crate) fn of_value(writer: &VaultWriter, vault: &VaultHandle, value: &str) -> Option<Self> {
         let summary = core_files::summary(value)?;
-        Some(Self::new(summary, core_files::is_local(vault, value)))
+        Some(Self::new(
+            summary,
+            core_files::is_local(writer, vault, value),
+        ))
     }
 }
 
@@ -322,6 +326,7 @@ impl AxoPass {
         tokio::task::spawn_blocking(move || {
             ensure_unlocked(&manager, &vault_key)?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let catalog = m.store().clone();
             let vault = m
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
@@ -329,7 +334,7 @@ impl AxoPass {
             let value = vault
                 .get_secret(&item_key, &cred_key)?
                 .ok_or_else(|| FfiError::NotFound(format!("{vault_key}/{item_key}/{cred_key}")))?;
-            FileInfo::of_value(vault, value.expose_secret())
+            FileInfo::of_value(catalog.files(), vault, value.expose_secret())
                 .ok_or_else(|| FfiError::Internal("Unreadable file record".to_string()))
         })
         .await

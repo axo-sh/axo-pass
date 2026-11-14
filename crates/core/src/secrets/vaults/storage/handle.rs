@@ -825,7 +825,6 @@ pub fn export_bundle(
             vault.to_bundled_vault_with_blobs(key, bundle_id, &bundle_cipher, include_passkeys)?;
         bundled.blobs = export_blobs::collect(
             writer,
-            vw,
             vault.id(),
             vault.replica_id().is_some(),
             &referenced,

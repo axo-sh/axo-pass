@@ -76,7 +76,7 @@ impl Source {
     }
 
     fn store(&self) -> BlobStore {
-        BlobStore::of(&self.vault.path, self.id())
+        self.writer.blob_store(self.id())
     }
 
     fn add(&self, cred_key: &str, contents: &[u8]) {
@@ -200,7 +200,7 @@ fn read(target: &ImportTarget, vh: &VaultHandle, cred_key: &str) -> Result<Vec<u
 
 /// Contents of the older file of credential `cred_key` of `vh`, from its
 /// history record.
-fn read_replaced(vh: &VaultHandle, cred_key: &str) -> Vec<u8> {
+fn read_replaced(target: &ImportTarget, vh: &VaultHandle, cred_key: &str) -> Vec<u8> {
     let vault = vh.get_unlocked_vault().unwrap();
     let entries = vault.list_history("item", cred_key).unwrap();
     assert_eq!(entries.len(), 1);
@@ -210,7 +210,9 @@ fn read_replaced(vh: &VaultHandle, cred_key: &str) -> Vec<u8> {
     let record = FileRecord::decode(value.expose_secret()).unwrap();
     let id = vh.vault_id().unwrap();
     let mut out = Vec::new();
-    BlobStore::of(&vh.path, id)
+    target
+        .files
+        .blob_store(id)
         .read(&record, id, &mut out)
         .unwrap();
     out
@@ -251,10 +253,10 @@ fn round_trip_excludes_trashed_file() {
     let vh = imported(&target, &handles[0].path);
     assert_eq!(read(&target, &vh, "keep").unwrap(), KEEP);
     assert_eq!(read(&target, &vh, "swap").unwrap(), SECOND);
-    assert_eq!(read_replaced(&vh, "swap"), FIRST);
+    assert_eq!(read_replaced(&target, &vh, "swap"), FIRST);
     // A trashed file is not exported, as no trashed entry is.
     assert!(vh.get_secret_overview("item", "gone").unwrap().is_none());
-    let store = BlobStore::of(&vh.path, vh.vault_id().unwrap());
+    let store = target.files.blob_store(vh.vault_id().unwrap());
     assert_eq!(
         store.list().unwrap().into_iter().collect::<BTreeSet<_>>(),
         names
@@ -295,11 +297,11 @@ fn unreferenced_bundle_blob_checked_not_imported() {
     fs::write(&export.path, serde_json::to_string(&json).unwrap()).unwrap();
 
     let target = ImportTarget::new();
-    let handles = target
+    target
         .import(export.open().unwrap(), &[source.id()])
         .unwrap();
 
-    let store = BlobStore::of(&handles[0].path, source.id());
+    let store = target.files.blob_store(source.id());
     assert!(!store.contains(&extra));
     assert_eq!(store.list().unwrap().len(), 3);
 
@@ -333,7 +335,7 @@ fn bundle_missing_blob_imports_record_and_reports() {
     let result = read(&target, &vh, "keep");
     assert!(matches!(result, Err(Error::FileMissing(_))), "{result:?}");
     assert_eq!(read(&target, &vh, "swap").unwrap(), SECOND);
-    assert_eq!(read_replaced(&vh, "swap"), FIRST);
+    assert_eq!(read_replaced(&target, &vh, "swap"), FIRST);
     // The record is kept, so a later restore of the blob makes it readable.
     let named = vh.get_unlocked_vault().unwrap().file_blobs().unwrap();
     assert!(named.contains(&lost));

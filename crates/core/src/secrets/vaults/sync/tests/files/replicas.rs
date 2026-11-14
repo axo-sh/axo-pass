@@ -79,7 +79,7 @@ fn file_added_on_one_mac_read_on_other() {
     let b_vault = macs.sync_b();
 
     let blob = record(&b_vault, "doc").blob;
-    let b_store = store(&b_vault);
+    let b_store = store(&macs.b.root, &b_vault);
     assert!(!b_store.contains(&blob));
     assert_eq!(macs.read_b("doc").unwrap(), b"contents");
     assert_eq!(
@@ -109,7 +109,7 @@ fn remote_blob_read_pending_until_downloaded() {
         "{err}"
     );
     assert_eq!(transport.blob_download_requests(), vec![(macs.id(), blob)]);
-    assert!(!store(&b_vault).contains(&blob));
+    assert!(!store(&macs.b.root, &b_vault).contains(&blob));
 
     assert_eq!(transport.complete_downloads(macs.id()), 1);
     assert_eq!(macs.read_b("doc").unwrap(), b"contents");
@@ -126,12 +126,12 @@ fn bad_or_missing_folder_blob_fails_read() {
     transport.put_blob(macs.id(), blob, b"other bytes");
     let err = macs.read_b("doc").unwrap_err();
     assert!(matches!(err, Error::FileBlobMismatch(_)), "{err}");
-    assert!(store(&b_vault).list().unwrap().is_empty());
+    assert!(store(&macs.b.root, &b_vault).list().unwrap().is_empty());
 
     transport.remove_blob(macs.id(), blob);
     let err = macs.read_b("doc").unwrap_err();
     assert!(matches!(err, Error::FileMissing(_)), "{err}");
-    assert!(store(&b_vault).list().unwrap().is_empty());
+    assert!(store(&macs.b.root, &b_vault).list().unwrap().is_empty());
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn replace_and_trash_on_one_mac_show_on_other() {
     let b_saved = b_vault.get_unlocked_vault().unwrap();
     assert_eq!(b_saved.file_blobs().unwrap(), [first, second].into());
     // The trash holds both records, so Mac B keeps both blobs.
-    let mut kept = store(&b_vault).list().unwrap();
+    let mut kept = store(&macs.b.root, &b_vault).list().unwrap();
     kept.sort();
     let mut expected = vec![first, second];
     expected.sort();
@@ -253,7 +253,7 @@ fn join_with_files_uploads_blobs() {
     // Mac A applies the join, and reads the file with a fetch.
     let committed = a.write(|_| Ok(())).unwrap();
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(!store(&a.vault).contains(&blob));
+    assert!(!store(&a.root, &a.vault).contains(&blob));
     assert_eq!(
         read_file(a.catalog.files(), &a.vault, "doc").unwrap(),
         b"from b"
@@ -275,7 +275,7 @@ fn only_mac_with_blob_reuploads() {
     assert!(transport.blob_names(macs.id()).is_empty());
 
     // Mac B holds the blob after a read, and its next transaction uploads it.
-    store(&b_vault).put(&blob, &bytes).unwrap();
+    store(&macs.b.root, &b_vault).put(&blob, &bytes).unwrap();
     macs.sync_b();
     assert_eq!(transport.blob(macs.id(), blob), Some(bytes));
 }
@@ -342,7 +342,11 @@ fn concurrent_purge_and_replace_retain_both_blobs() {
     // Local garbage collection keeps both blobs on each Mac. Mac B holds
     // them. Mac A and Mac C are given both by hand. Each Mac then runs a
     // transaction that changes the vault.
-    let (a_store, b_store, c_store) = (store(a_vault), store(&macs.b_vault), store(&c_vault));
+    let (a_store, b_store, c_store) = (
+        store(&macs.a.root, a_vault),
+        store(&macs.b.root, &macs.b_vault),
+        store(&c.root, &c_vault),
+    );
     for store in [&a_store, &c_store] {
         for blob in [first, second] {
             store

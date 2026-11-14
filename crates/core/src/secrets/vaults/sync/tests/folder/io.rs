@@ -376,7 +376,7 @@ fn remote_blob_not_read_and_download_requested() {
 fn mismatched_blob_hash_not_fetched() {
     for folder in Folder::each() {
         let transport = &folder.transport;
-        let store = BlobStore::of(&folder.dir.path().join("vault.json"), VAULT);
+        let store = BlobStore::of(folder.dir.path(), VAULT);
         let blob = FileHash::of(b"blob");
         transport.write_blob(VAULT, blob, b"tampered").unwrap();
 

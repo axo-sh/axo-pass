@@ -15,8 +15,6 @@ use uuid::Uuid;
 
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
-use crate::secrets::vaults::files::store::BlobStore;
-use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
 /// File blob that an export could not include.
@@ -36,25 +34,24 @@ pub struct ExportReport {
     pub missing_blobs: Vec<MissingBlob>,
 }
 
-/// Bytes of each blob of `referenced` for the vault `vh` with id `vault_id`.
-/// The blobs that could not be read go to `missing`. A vault that syncs
-/// fetches a blob that is not local through `writer`. Fails on a read error
-/// other than a missing or damaged blob.
+/// Bytes of each blob of `referenced` for the vault with id `vault_id`, read
+/// from the blob store of `writer`. The blobs that could not be read go to
+/// `missing`. A vault that syncs fetches a blob that is not local through
+/// `writer`. Fails on a read error other than a missing or damaged blob.
 pub(crate) fn collect(
     writer: &VaultWriter,
-    vh: &VaultHandle,
     vault_id: Uuid,
     synced: bool,
     referenced: &BTreeSet<FileHash>,
     missing: &mut Vec<MissingBlob>,
 ) -> Result<BTreeMap<FileHash, Vec<u8>>, Error> {
-    let store = BlobStore::of(&vh.path, vault_id);
+    let store = writer.blob_store(vault_id);
     let mut blobs = BTreeMap::new();
     for blob in referenced {
         let read = match store.read_bytes(blob) {
             Ok(bytes) => Ok(bytes),
             Err(Error::FileMissing(_) | Error::FileBlobMismatch(_)) if synced => writer
-                .fetch_blob(vault_id, &vh.path, *blob)
+                .fetch_blob(vault_id, *blob)
                 .and_then(|()| store.read_bytes(blob)),
             Err(e @ (Error::FileMissing(_) | Error::FileBlobMismatch(_))) => Err(e),
             Err(e) => return Err(e),

@@ -22,7 +22,6 @@
 //! 16, D18 of doc 18).
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use uuid::Uuid;
 
@@ -168,7 +167,7 @@ impl SyncReport {
     /// reported as `KeyMissing`. Fails as a transaction fails to load the
     /// vault, its sync state, or its sidecar.
     pub fn read(writer: &VaultWriter, target: &Target, unlock: Unlock<'_>) -> Result<Self, Error> {
-        writer.read_locked(target, unlock, |read| Self::of(writer, read, &target.path))
+        writer.read_locked(target, unlock, |read| Self::of(writer, read))
     }
 
     /// Whether the vault syncs with no folder, as its sidecar has no root.
@@ -179,7 +178,7 @@ impl SyncReport {
 
     /// Report of `read`, the vault file at `vault_path`, under the vault
     /// locks of `writer`.
-    fn of(writer: &VaultWriter, read: LockedRead, vault_path: &Path) -> Result<Self, Error> {
+    fn of(writer: &VaultWriter, read: LockedRead) -> Result<Self, Error> {
         let LockedRead {
             id,
             file_key,
@@ -245,7 +244,7 @@ impl SyncReport {
         report.blobs = BlobStatus::of(
             id,
             &vault,
-            &BlobStore::of(vault_path, id),
+            &writer.blob_store(id),
             &trusted.state.store,
             transport.as_deref(),
         )?;
