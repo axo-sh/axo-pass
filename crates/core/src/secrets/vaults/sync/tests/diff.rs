@@ -7,6 +7,7 @@ use super::{NOW, id, session};
 use crate::secrets::vaults::autofill::item::{ItemAutofill, MatchKind, Website};
 use crate::secrets::vaults::format::encrypted_vault::VaultFileKey;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::model::{CredentialPlacement, CredentialUpdate, Vault};
 use crate::secrets::vaults::passkey::signals::{
     Report, SignalStore, clear_pending, record_pending,
@@ -469,9 +470,21 @@ fn each_local_change_found_and_recorded_in_its_register() {
     let view = mac.record_change(&vault);
     let shown = &view.credentials[&field];
     assert_eq!(shown.value.0.as_str(), "two");
-    assert_eq!(shown.history.len(), 1);
-    assert_eq!(shown.history[0].value.0.as_str(), "one");
-    let history_id = shown.history[0].id;
+    // Entries with the same time are ordered by id.
+    assert_eq!(shown.history.len(), 2);
+    assert!(
+        shown
+            .history
+            .iter()
+            .any(|h| h.kind == HistoryKind::ValueCreated && h.value.is_none())
+    );
+    let previous = shown
+        .history
+        .iter()
+        .find(|h| h.kind == HistoryKind::ValueUpdated)
+        .unwrap();
+    assert_eq!(previous.value.as_ref().unwrap().0.as_str(), "one");
+    let history_id = previous.id;
 
     vault
         .move_item_credential("renamed", "email", Some(section))
@@ -496,7 +509,12 @@ fn each_local_change_found_and_recorded_in_its_register() {
 
     vault.purge_history("renamed", "email", history_id).unwrap();
     let view = mac.record_change(&vault);
-    assert!(view.credentials[&field].history.is_empty());
+    let kinds: Vec<_> = view.credentials[&field]
+        .history
+        .iter()
+        .map(|h| &h.kind)
+        .collect();
+    assert_eq!(kinds, [&HistoryKind::ValueCreated]);
 
     vault
         .mark_credential_used("renamed", "email", DAY, &utc)

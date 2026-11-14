@@ -16,6 +16,7 @@ use super::{NOW, id, session};
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::{SignalEntry, UnknownEntry};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::keys::{KeyFingerprint, SyncKey, SyncKeyring};
@@ -118,8 +119,9 @@ pub(super) fn full_state() -> State {
     password.history.entry(id(40)).write(
         &m,
         HistoryValue {
-            value: SecretText::new("p0"),
-            replaced_at: NOW,
+            at: NOW,
+            kind: HistoryKind::ValueUpdated,
+            value: Some(SecretText::new("p0")),
         },
     );
     password.last_used_day_at.entry(one.replica).write(&m, NOW);

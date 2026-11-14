@@ -1,0 +1,21 @@
+[
+  {
+    "at": 1700000005,
+    "kind": {
+      "type": "value-created"
+    }
+  },
+  {
+    "at": 1700000005,
+    "kind": {
+      "type": "value-updated"
+    }
+  },
+  {
+    "at": 1700000005,
+    "kind": {
+      "type": "renamed",
+      "from": "Old title"
+    }
+  }
+]

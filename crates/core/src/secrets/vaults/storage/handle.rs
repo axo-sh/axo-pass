@@ -25,8 +25,8 @@ use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
     CredentialPlacement, CredentialUpdate, DeletedCredentialEntry, DeletedItemOverview,
-    HistoryOverview, ItemTransfer, UnlockedKey, Vault, VaultFolder, VaultItemCredentialOverview,
-    VaultItemOverview, VaultItemSection,
+    HistoryOverview, ItemHistoryEvent, ItemTransfer, UnlockedKey, Vault, VaultFolder,
+    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
 use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeychainKeys};
@@ -433,6 +433,12 @@ impl VaultHandle {
     ) -> Result<Vec<HistoryOverview>, Error> {
         let vault = self.get_unlocked_vault()?;
         vault.list_history(item_key, cred_key)
+    }
+
+    /// History of a live item, newest first.
+    pub fn item_history(&self, item_key: &str) -> Result<Vec<ItemHistoryEvent<'_>>, Error> {
+        let vault = self.get_unlocked_vault()?;
+        vault.item_history(item_key)
     }
 
     pub fn get_history_value(

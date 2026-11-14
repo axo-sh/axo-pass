@@ -227,7 +227,9 @@ struct ItemsPane: View {
       }
     }
     Button("Rename…") { renamingItem = display }
-    Button("History…") { historyTarget = ItemHistoryTarget(display.item) }
+    Button("History…") {
+      historyTarget = ItemHistoryTarget(display.item, vaultKey: display.vaultKey)
+    }
     let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
     if !otherVaults.isEmpty {
       Menu("Move to Vault") {

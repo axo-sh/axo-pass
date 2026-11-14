@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::secrets::vaults::autofill::item::{MatchKind, Role, Website};
-use crate::secrets::vaults::model::sync::{PreviousValue, SyncWriter};
+use crate::secrets::vaults::model::sync::{SyncHistoryEntry, SyncWriter};
 use crate::secrets::vaults::sync::crdt::{CausalState, ReplicaId, Session};
 use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::model::SyncState;
@@ -26,8 +26,18 @@ struct Filled {
     gamma: Uuid,
     /// Trashed, from the trashed item `removed`.
     delta: Uuid,
+    /// `value-created` entry of `alpha`.
+    alpha_created: Uuid,
     /// Previous value of `alpha`.
     alpha_history: Uuid,
+}
+
+/// Overviews of the stored history entries of a live credential, oldest
+/// first.
+fn history_overviews(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<HistoryOverview> {
+    let item_id = item_id_of(vault, item_key);
+    let cred_id = cred_id(vault, item_key, cred_key);
+    vault.history_overviews(item_id, cred_id, vault.history.get(&cred_id))
 }
 
 /// Filled vault, saved and loaded so every blob is cached, and its ids.
@@ -59,6 +69,7 @@ fn filled() -> (Vault, Filled) {
         beta: deleted_ids(&vault, "kept")[0],
         gamma,
         delta: removed.deleted_credentials[0].id,
+        alpha_created: history_overviews(&vault, "kept", "alpha")[0].id,
         alpha_history: vault.list_history("kept", "alpha").unwrap()[0].id,
     };
     (vault, ids)
@@ -121,7 +132,10 @@ fn contents(vault: &Vault) -> String {
         let history: Vec<_> = cred
             .history
             .iter()
-            .map(|h| (h.id, h.replaced_at, h.value.expose_secret().clone()))
+            .map(|h| {
+                let value = h.value.as_ref().map(|v| v.expose_secret().clone());
+                (h.id, &h.metadata, value)
+            })
             .collect();
         writeln!(
             out,
@@ -135,9 +149,9 @@ fn contents(vault: &Vault) -> String {
     out
 }
 
-/// Trash state, value, and previous values of a credential, live or
+/// Trash state, value, and history entry values of a credential, live or
 /// trashed.
-fn credential_entry(vault: &Vault, id: Uuid) -> (Uuid, Option<i64>, String, Vec<String>) {
+fn credential_entry(vault: &Vault, id: Uuid) -> (Uuid, Option<i64>, String, Vec<Option<String>>) {
     let entries = vault.sync_entries().unwrap();
     let cred = entries
         .credentials
@@ -150,7 +164,7 @@ fn credential_entry(vault: &Vault, id: Uuid) -> (Uuid, Option<i64>, String, Vec<
         cred.value.expose_secret().clone(),
         cred.history
             .iter()
-            .map(|h| h.value.expose_secret().clone())
+            .map(|h| h.value.as_ref().map(|v| v.expose_secret().clone()))
             .collect(),
     )
 }
@@ -174,10 +188,34 @@ fn each_mutation_changes_only_its_field_and_blobs() {
         beta,
         gamma,
         delta,
+        alpha_created,
         alpha_history,
     } = ids;
     let [k, r, a, b, g, d] = [kept, removed, alpha, beta, gamma, delta].map(short_id);
-    let alpha_replaced_at = base.list_history("kept", "alpha").unwrap()[0].replaced_at;
+    let alpha_entries = history_overviews(&base, "kept", "alpha");
+    let created_at = alpha_entries[0].at;
+    let replaced_at = alpha_entries[1].at;
+    // Stored history of `alpha`, with the previous value at `at` and `value`.
+    let alpha_history_with = move |at: i64, value: &'static str| {
+        [
+            SyncHistoryEntry {
+                id: alpha_created,
+                metadata: HistoryMetadata {
+                    at: created_at,
+                    kind: HistoryKind::ValueCreated,
+                },
+                value: None,
+            },
+            SyncHistoryEntry {
+                id: alpha_history,
+                metadata: HistoryMetadata {
+                    at,
+                    kind: HistoryKind::ValueUpdated,
+                },
+                value: Some(value),
+            },
+        ]
+    };
     let site = || vec![Website::new("example.org", MatchKind::Host)];
     let cases: Vec<(&str, Mutation, Vec<String>)> = vec![
         (
@@ -298,27 +336,16 @@ fn each_mutation_changes_only_its_field_and_blobs() {
         ),
         (
             "history time",
-            Box::new(move |w| {
-                let entry = PreviousValue {
-                    id: alpha_history,
-                    value: "one",
-                    replaced_at: 5,
-                };
-                w.set_history(alpha, &[entry]).unwrap();
-            }),
-            vec![format!("/items/{k}/credentials/{a}/history/0/info")],
+            Box::new(move |w| w.set_history(alpha, &alpha_history_with(5, "one")).unwrap()),
+            vec![format!("/items/{k}/credentials/{a}/history/1/metadata")],
         ),
         (
             "history value",
             Box::new(move |w| {
-                let entry = PreviousValue {
-                    id: alpha_history,
-                    value: "other",
-                    replaced_at: alpha_replaced_at,
-                };
-                w.set_history(alpha, &[entry]).unwrap();
+                let entries = alpha_history_with(replaced_at, "other");
+                w.set_history(alpha, &entries).unwrap();
             }),
-            vec![format!("/items/{k}/credentials/{a}/history/0/value")],
+            vec![format!("/items/{k}/credentials/{a}/history/1/value")],
         ),
         (
             "history purge",
@@ -404,7 +431,8 @@ fn trash_moves_decrypt_after_reload() {
     writer.move_credential(ids.gamma, ids.kept).unwrap();
 
     let vault = reload(&vault);
-    let one = vec!["one".to_string()];
+    // A `value-created` entry, then the previous value.
+    let one = vec![None, Some("one".to_string())];
     assert_eq!(
         credential_entry(&vault, ids.alpha),
         (ids.removed, None, "two".to_string(), one.clone())
@@ -698,13 +726,16 @@ fn mutations_leave_view_edits_empty() {
     let shown = &view.credentials[&alpha];
     writer.set_credential_title(alpha, &shown.title).unwrap();
     writer.set_value(alpha, shown.value.0.as_str()).unwrap();
-    let history: Vec<PreviousValue<'_>> = shown
+    let history: Vec<SyncHistoryEntry<'_>> = shown
         .history
         .iter()
-        .map(|h| PreviousValue {
+        .map(|h| SyncHistoryEntry {
             id: h.id,
-            value: h.value.0.as_str(),
-            replaced_at: h.replaced_at,
+            metadata: HistoryMetadata {
+                at: h.at,
+                kind: h.kind.clone(),
+            },
+            value: h.value.as_ref().map(|v| v.0.as_str()),
         })
         .collect();
     writer.set_history(alpha, &history).unwrap();

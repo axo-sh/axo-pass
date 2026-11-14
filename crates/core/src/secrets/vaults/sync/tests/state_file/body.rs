@@ -10,6 +10,7 @@ use super::super::{NOW, id, session};
 use super::full_state;
 use crate::schema_snapshot::SchemaSnapshot;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::sync::crdt::{
     ActorId, Ask, CausalContext, Mint, MvRegister, ReplicaId, Versioned, WriteId,
 };
@@ -312,7 +313,7 @@ const EXAMPLE: &str = indoc! {r#"
               ["00000000-0000-0000-0000-0000000000a1", 1, 6, 300, "p2"]
             ],
             "history": {
-              "00000000-0000-0000-0000-000000000500": [ ["00000000-0000-0000-0000-0000000000a1", 1, 6, 300, { "value": "p1", "replaced_at": 300 }] ]
+              "00000000-0000-0000-0000-000000000500": [ ["00000000-0000-0000-0000-0000000000a1", 1, 6, 300, { "at": 300, "kind": { "type": "value-updated" }, "value": "p1" }] ]
             },
             "last_used_day_at": {},
             "created_at": [ ["00000000-0000-0000-0000-0000000000a0", 3, 3, 120, 120] ],
@@ -374,16 +375,19 @@ proptest! {
 }
 
 /// Parse a body sample and serialize it again. A kind with an unknown field
-/// reads as `FieldKind::Unknown`, which no sample holds, so it is refused.
+/// reads as `FieldKind::Unknown` or `HistoryKind::Unknown`, which no sample
+/// holds, so it is refused.
 fn parse_sample(text: &str) -> Result<String, String> {
     let state: State = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let unknown_kind = state
-        .store
-        .credentials
-        .iter()
-        .flat_map(|(_, credential)| credential.kind.values())
+    let credentials = || state.store.credentials.iter().map(|(_, c)| c);
+    let unknown_kind = credentials()
+        .flat_map(|credential| credential.kind.values())
         .any(|(_, kind)| matches!(kind.value, FieldKind::Unknown(_)));
-    if unknown_kind {
+    let unknown_history_kind = credentials()
+        .flat_map(|credential| credential.history.iter())
+        .flat_map(|(_, register)| register.values())
+        .any(|(_, entry)| matches!(entry.value.kind, HistoryKind::Unknown(_)));
+    if unknown_kind || unknown_history_kind {
         return Err("sample holds an unknown kind".to_string());
     }
     serde_json::to_string_pretty(&state).map_err(|e| e.to_string())

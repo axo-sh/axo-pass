@@ -12,6 +12,7 @@ use super::*;
 use crate::schema_snapshot::SchemaSnapshot;
 use crate::secrets::vaults::autofill::item::{MatchKind, Role, Website};
 use crate::secrets::vaults::model::fields::{FieldKind, TextField};
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::model::{VaultFolderMetadata, VaultSectionMetadata};
 use crate::secrets::vaults::passkey::signals::SignalStore;
 
@@ -28,18 +29,20 @@ fn blob<T>() -> EncryptedBlob<T> {
     serde_json::from_value(json!("AAAAAAAAAAAAAAAAAAAAAAAA")).unwrap()
 }
 
-fn credential(history: &[u128]) -> EncryptedVaultItemCredential {
+/// History entry with id `n`, with a value if `has_value`.
+fn history_entry(n: u128, has_value: bool) -> HistoryEntry {
+    HistoryEntry {
+        id: id(n),
+        metadata: blob(),
+        value: has_value.then(blob),
+    }
+}
+
+fn credential(history: Vec<HistoryEntry>) -> EncryptedVaultItemCredential {
     EncryptedVaultItemCredential {
         metadata: blob(),
         value: blob(),
-        history: history
-            .iter()
-            .map(|n| HistoryEntry {
-                id: id(*n),
-                value: blob(),
-                info: blob(),
-            })
-            .collect(),
+        history,
     }
 }
 
@@ -48,11 +51,11 @@ fn full_item(n: u128) -> EncryptedVaultItem {
     EncryptedVaultItem {
         metadata: blob(),
         autofill: Some(blob()),
-        credentials: BTreeMap::from([(id(n), credential(&[n + 1]))]),
+        credentials: BTreeMap::from([(id(n), credential(vec![history_entry(n + 1, true)]))]),
         deleted: BTreeMap::from([(
             id(n + 2),
             DeletedCredential {
-                credential: credential(&[n + 3]),
+                credential: credential(vec![history_entry(n + 3, false)]),
                 info: blob(),
             },
         )]),
@@ -83,7 +86,7 @@ fn minimal_vault() -> EncryptedVault {
     let item = EncryptedVaultItem {
         metadata: blob(),
         autofill: None,
-        credentials: BTreeMap::from([(id(4), credential(&[]))]),
+        credentials: BTreeMap::from([(id(4), credential(Vec::new()))]),
         deleted: BTreeMap::new(),
     };
     EncryptedVault {
@@ -264,10 +267,24 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
     samples
 }
 
-fn history_info() -> Vec<HistoryInfo> {
-    vec![HistoryInfo {
-        replaced_at: 1_700_000_005,
-    }]
+/// History metadata of every history kind.
+fn history_metadata() -> Vec<HistoryMetadata> {
+    // A new kind fails to compile here until it is added to `kinds`.
+    let _ = |kind: HistoryKind| match kind {
+        HistoryKind::ValueCreated | HistoryKind::ValueUpdated | HistoryKind::Unknown(_) => {},
+    };
+    let kinds = [
+        HistoryKind::ValueCreated,
+        HistoryKind::ValueUpdated,
+        HistoryKind::Unknown(json!({"type": "renamed", "from": "Old title"})),
+    ];
+    kinds
+        .into_iter()
+        .map(|kind| HistoryMetadata {
+            at: 1_700_000_005,
+            kind,
+        })
+        .collect()
 }
 
 /// Deleted info without a role, then with every role.
@@ -306,7 +323,8 @@ fn vault_snapshot() -> SchemaSnapshot {
     snapshot.add("item-autofill", &item_autofill(), &[]);
     // An object with a field kind this build does not know is kept as is.
     snapshot.add("credential-metadata", &credential_metadata(), &["kind"]);
-    snapshot.add("history-info", &history_info(), &[]);
+    // An object with a history kind this build does not know is kept as is.
+    snapshot.add("history-metadata", &history_metadata(), &["kind"]);
     snapshot.add("deleted-info", &deleted_info(), &[]);
     snapshot
 }

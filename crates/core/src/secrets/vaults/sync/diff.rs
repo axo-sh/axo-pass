@@ -27,12 +27,13 @@ use super::model::{
     SyncState, TrashValue, WebsiteValue,
 };
 use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
-use super::view::{VaultView, list_order};
+use super::view::{HistoryView, VaultView, list_order};
 use crate::secrets::vaults::Error;
 use crate::secrets::vaults::autofill::item::{Role, Website};
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::{
-    DeletedInfo, SyncCredentialEntry, SyncEntries, SyncItemEntry, Vault,
+    DecryptedHistoryEntry, DeletedInfo, HistoryMetadata, SyncCredentialEntry, SyncEntries,
+    SyncItemEntry, Vault,
 };
 use crate::secrets::vaults::passkey::signals::SignalEntry;
 
@@ -572,6 +573,39 @@ impl TrashValue {
     }
 }
 
+impl HistoryValue {
+    /// History value of a vault history entry, field by field.
+    pub(super) fn of(entry: &DecryptedHistoryEntry) -> Self {
+        let DecryptedHistoryEntry {
+            id: _,
+            metadata: HistoryMetadata { at, kind },
+            value,
+        } = entry;
+        Self {
+            at: *at,
+            kind: kind.clone(),
+            value: value
+                .as_ref()
+                .map(|v| SecretText::new(v.expose_secret().as_str())),
+        }
+    }
+
+    /// History value of a shown history entry, field by field.
+    pub(super) fn of_view(view: &HistoryView) -> Self {
+        let HistoryView {
+            id: _,
+            at,
+            kind,
+            value,
+        } = view;
+        Self {
+            at: *at,
+            kind: kind.clone(),
+            value: value.clone(),
+        }
+    }
+}
+
 /// Comparison of a vault with a view.
 struct Diff<'a> {
     store: &'a SyncState,
@@ -948,13 +982,7 @@ impl<'a> Diff<'a> {
         let shown_history: BTreeMap<HistoryId, HistoryValue> = shown
             .into_iter()
             .flat_map(|s| &s.history)
-            .map(|h| {
-                let value = HistoryValue {
-                    value: h.value.clone(),
-                    replaced_at: h.replaced_at,
-                };
-                (h.id, value)
-            })
+            .map(|h| (h.id, HistoryValue::of_view(h)))
             .collect();
         let stored: BTreeSet<HistoryId> = entry.history.iter().map(|h| h.id).collect();
         for history_id in shown_history.keys() {
@@ -962,13 +990,10 @@ impl<'a> Diff<'a> {
                 self.edits.push(Edit::RemoveHistory(id, *history_id));
             }
         }
-        for previous in &entry.history {
-            let value = HistoryValue {
-                value: SecretText::new(previous.value.expose_secret().as_str()),
-                replaced_at: previous.replaced_at,
-            };
-            if shown_history.get(&previous.id) != Some(&value) {
-                self.edits.push(Edit::History(id, previous.id, value));
+        for stored_entry in &entry.history {
+            let value = HistoryValue::of(stored_entry);
+            if shown_history.get(&stored_entry.id) != Some(&value) {
+                self.edits.push(Edit::History(id, stored_entry.id, value));
             }
         }
 

@@ -306,8 +306,11 @@
               2,
               1000,
               {
-                "value": "p0",
-                "replaced_at": 1000
+                "at": 1000,
+                "kind": {
+                  "type": "value-updated"
+                },
+                "value": "p0"
               }
             ]
           ]

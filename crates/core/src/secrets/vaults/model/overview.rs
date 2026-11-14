@@ -13,6 +13,7 @@ use crate::secrets::vaults::autofill::item::{ItemAutofill, Role};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::normalized_key;
 
@@ -250,19 +251,46 @@ pub struct DeletedCredentialEntry<'a> {
     pub credential: &'a DeletedCredentialOverview,
 }
 
-/// A previous value of a credential, without the value.
+/// A history entry of a credential, without its value.
 #[derive(Clone, Debug)]
 pub struct HistoryOverview {
     pub id: Uuid,
     /// Unix timestamp in seconds.
-    pub replaced_at: i64,
+    pub at: i64,
+    pub kind: HistoryKind,
 }
 
-/// Details of a previous value, stored as one encrypted blob.
-#[derive(Serialize, Deserialize, Zeroize)]
+/// One event of the history of an item.
+#[derive(Clone, Debug)]
+pub struct ItemHistoryEvent<'a> {
+    /// Unix timestamp in seconds.
+    pub at: i64,
+    pub change: ItemChange,
+    /// Credential the event applies to. `None` for an event of the item.
+    pub credential: Option<&'a VaultItemCredentialOverview>,
+    /// Whether the credential is deleted.
+    pub credential_deleted: bool,
+}
+
+/// Change an item history event records.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ItemChange {
+    ItemCreated,
+    /// History entry `id` of the credential.
+    History {
+        id: Uuid,
+        kind: HistoryKind,
+    },
+    CredentialDeleted,
+}
+
+/// Details of a history entry, stored as one encrypted blob.
+#[derive(Serialize, Deserialize, Zeroize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
-pub struct HistoryInfo {
-    pub replaced_at: i64,
+pub struct HistoryMetadata {
+    /// Unix seconds of the change.
+    pub at: i64,
+    pub kind: HistoryKind,
 }
 
 /// Details of a deleted credential or item, stored as one encrypted blob.

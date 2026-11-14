@@ -1,8 +1,9 @@
 //! History ids, resolve requests, and "Keep `{key}-{suffix}`".
 //!
-//! A history entry for a replaced credential value takes an id derived from
-//! the credential id and the write id of the replaced value. Macs that replace
-//! the same value, or resolve the same conflict, therefore write one entry.
+//! A `value-updated` history entry for a replaced credential value takes an
+//! id derived from the credential id and the write id of the replaced value.
+//! Macs that replace the same value, or resolve the same conflict, therefore
+//! write one entry.
 //!
 //! A resolve request writes the chosen value into an Ask register under the
 //! write id of the transaction, whatever the diff finds, so it supersedes every
@@ -28,6 +29,7 @@ use super::view::{AskRegister, Conflict, Entity, VaultView};
 use crate::secrets::vaults::Error;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 
 /// Derived ids of history entries.
 pub struct HistoryIds;
@@ -67,8 +69,9 @@ impl HistoryIds {
             .filter(|(_, versioned)| !versioned.value.0.is_empty())
             .map(move |(write_id, versioned)| {
                 let entry = HistoryValue {
-                    value: versioned.value.clone(),
-                    replaced_at: now,
+                    at: now,
+                    kind: HistoryKind::ValueUpdated,
+                    value: Some(versioned.value.clone()),
                 };
                 Edit::History(credential, Self::derive(credential, write_id), entry)
             })
@@ -104,7 +107,11 @@ impl HistoryIds {
                     .history
                     .get(&h.id)
                     .is_some_and(|r| r.shown().is_some());
-                !known && h.value.expose_secret().as_str() == shown.value.0.as_str()
+                let replaced_shown = h.metadata.kind == HistoryKind::ValueUpdated
+                    && h.value
+                        .as_ref()
+                        .is_some_and(|v| v.expose_secret().as_str() == shown.value.0.as_str());
+                !known && replaced_shown
             });
             if let Some(added) = added {
                 renames.push((id, added.id, derived));

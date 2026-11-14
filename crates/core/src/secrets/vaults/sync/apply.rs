@@ -18,7 +18,8 @@ use super::view::{CredentialView, Entity, ItemView, VaultView};
 use crate::secrets::vaults::Error;
 use crate::secrets::vaults::autofill::item::{ItemAutofill, Website};
 use crate::secrets::vaults::model::{
-    DeletedInfo, PreviousValue, SyncWriter, Vault, VaultItemCredentialOverview, VaultItemOverview,
+    DeletedInfo, HistoryMetadata, SyncHistoryEntry, SyncWriter, Vault, VaultItemCredentialOverview,
+    VaultItemOverview,
 };
 use crate::secrets::vaults::passkey::signals::{SignalEntry, SignalStore};
 
@@ -133,13 +134,7 @@ impl Stored {
                 let history = entry
                     .history
                     .iter()
-                    .map(|h| {
-                        let value = HistoryValue {
-                            value: SecretText::new(h.value.expose_secret().as_str()),
-                            replaced_at: h.replaced_at,
-                        };
-                        (h.id, value)
-                    })
+                    .map(|h| (h.id, HistoryValue::of(h)))
                     .collect();
                 let credential = StoredCredential {
                     item: entry.item,
@@ -454,22 +449,19 @@ impl Apply<'_, '_> {
         let history: BTreeMap<HistoryId, HistoryValue> = shown
             .history
             .iter()
-            .map(|h| {
-                let value = HistoryValue {
-                    value: h.value.clone(),
-                    replaced_at: h.replaced_at,
-                };
-                (h.id, value)
-            })
+            .map(|h| (h.id, HistoryValue::of_view(h)))
             .collect();
         if stored.history != history {
-            let entries: Vec<PreviousValue<'_>> = shown
+            let entries: Vec<SyncHistoryEntry<'_>> = shown
                 .history
                 .iter()
-                .map(|h| PreviousValue {
+                .map(|h| SyncHistoryEntry {
                     id: h.id,
-                    value: h.value.0.as_str(),
-                    replaced_at: h.replaced_at,
+                    metadata: HistoryMetadata {
+                        at: h.at,
+                        kind: h.kind.clone(),
+                    },
+                    value: h.value.as_ref().map(|v| v.0.as_str()),
                 })
                 .collect();
             self.writer.set_history(id, &entries)?;

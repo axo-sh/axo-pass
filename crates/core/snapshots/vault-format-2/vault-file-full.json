@@ -20,8 +20,8 @@
             "history": [
               {
                 "id": "1111111111111111111116",
-                "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
-                "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                "value": "AAAAAAAAAAAAAAAAAAAAAAAA"
               }
             ]
           }
@@ -34,8 +34,7 @@
               "history": [
                 {
                   "id": "1111111111111111111118",
-                  "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
-                  "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                  "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA"
                 }
               ]
             },
@@ -56,8 +55,8 @@
               "history": [
                 {
                   "id": "111111111111111111111b",
-                  "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
-                  "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                  "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA",
+                  "value": "AAAAAAAAAAAAAAAAAAAAAAAA"
                 }
               ]
             }
@@ -70,8 +69,7 @@
                 "history": [
                   {
                     "id": "111111111111111111111d",
-                    "value": "AAAAAAAAAAAAAAAAAAAAAAAA",
-                    "info": "AAAAAAAAAAAAAAAAAAAAAAAA"
+                    "metadata": "AAAAAAAAAAAAAAAAAAAAAAAA"
                   }
                 ]
               },

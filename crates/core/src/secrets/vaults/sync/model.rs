@@ -37,6 +37,7 @@ use super::crdt::{
 };
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::SignalEntry;
 
 #[cfg(test)]
@@ -245,13 +246,17 @@ pub struct Placement {
     pub position: Option<u32>,
 }
 
-/// Previous value of a credential.
+/// History entry of a credential. Mapped field by field from
+/// `HistoryMetadata` and the entry value.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryValue {
-    pub value: SecretText,
     /// Unix seconds.
-    pub replaced_at: i64,
+    pub at: i64,
+    pub kind: HistoryKind,
+    /// Value the entry holds, as its kind states.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<SecretText>,
 }
 
 /// Trash details of an item or credential. Mapped field by field from

@@ -158,7 +158,7 @@ fn assert_live_blobs_decrypt(cipher: &VaultCipher, encrypted: &EncryptedVault, d
         kinds,
         [
             "live: credential metadata",
-            "live: history info",
+            "live: history metadata",
             "live: history value",
             "live: item autofill",
             "live: item metadata",

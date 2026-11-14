@@ -3,6 +3,7 @@ use uuid::Uuid;
 use super::{NOW, id, session};
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::{RenameEntry, Report, SignalEntry, SignalStore};
 use crate::secrets::vaults::sync::crdt::{CausalState, Mint, MvRegister, Policy, ReplicaId};
 use crate::secrets::vaults::sync::model::{

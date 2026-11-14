@@ -406,8 +406,9 @@ fn conflicts_of_other_policies_not_listed() {
             };
             entry.placement.write(m, placement);
             let history = HistoryValue {
-                value: SecretText::new(text.clone()),
-                replaced_at: at,
+                at,
+                kind: HistoryKind::ValueUpdated,
+                value: Some(SecretText::new(text.clone())),
             };
             entry.history.entry(id(40)).write(m, history);
             entry.last_used_day_at.entry(replica).write(m, at);

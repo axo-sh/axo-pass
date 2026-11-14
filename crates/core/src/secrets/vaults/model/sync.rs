@@ -11,14 +11,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretBox};
 use uuid::Uuid;
 
 use super::{
-    CredentialId, DecryptedCredential, DecryptedItem, DeletedCredentialOverview, DeletedEntry,
-    DeletedInfo, DeletedItemEntry, FolderId, HistoryInfo, ItemId, SectionId, Vault,
-    VaultCredentialMetadata, VaultFolder, VaultItemCredentialOverview, VaultItemOverview,
-    VaultItemSection,
+    CredentialId, DecryptedCredential, DecryptedHistoryEntry, DecryptedItem,
+    DeletedCredentialOverview, DeletedEntry, DeletedInfo, DeletedItemEntry, FolderId,
+    HistoryMetadata, ItemId, SectionId, Vault, VaultCredentialMetadata, VaultFolder,
+    VaultItemCredentialOverview, VaultItemOverview, VaultItemSection,
 };
 use crate::secrets::vaults::autofill::item::{ItemAutofill, Website};
 use crate::secrets::vaults::errors::Error;
@@ -74,11 +74,11 @@ pub(crate) struct SyncWriter<'a> {
     vault: &'a mut Vault,
 }
 
-/// Previous value of a credential, as given to [`SyncWriter::set_history`].
-pub(crate) struct PreviousValue<'a> {
+/// History entry of a credential, as given to [`SyncWriter::set_history`].
+pub(crate) struct SyncHistoryEntry<'a> {
     pub(crate) id: Uuid,
-    pub(crate) value: &'a str,
-    pub(crate) replaced_at: i64,
+    pub(crate) metadata: HistoryMetadata,
+    pub(crate) value: Option<&'a str>,
 }
 
 /// Place of a credential in the vault, with the id of its item.
@@ -174,13 +174,8 @@ impl Detached {
         };
         let mut moved = Vec::with_capacity(history.len());
         for entry in &history {
-            let value = cipher.decrypt_history_value(item, id, entry.id, &entry.value)?;
-            let info = cipher.decrypt_history_info(item, id, entry.id, &entry.info)?;
-            moved.push(HistoryEntry {
-                id: entry.id,
-                value: cipher.encrypt_history_value(dest, id, entry.id, value.expose_secret())?,
-                info: cipher.encrypt_history_info(dest, id, entry.id, info.expose_secret())?,
-            });
+            let decrypted = cipher.decrypt_history_entry(item, id, entry)?;
+            moved.push(cipher.encrypt_history_entry(dest, id, &decrypted)?);
         }
         Ok(Self {
             item: dest,
@@ -726,12 +721,13 @@ impl SyncWriter<'_> {
     }
 
     /// Replace the history of a credential with `entries`, in the given order.
-    /// An entry whose id, value, and time are stored keeps its blobs. Other
-    /// blobs are encrypted again.
+    /// A stored blob that matches the given metadata or value is kept. Other
+    /// blobs are encrypted again. Fails if the presence of a value does not
+    /// match its kind.
     pub(crate) fn set_history(
         &mut self,
         id: CredentialId,
-        entries: &[PreviousValue<'_>],
+        entries: &[SyncHistoryEntry<'_>],
     ) -> Result<(), Error> {
         let place = self.place(id)?;
         let item = place.item();
@@ -740,46 +736,53 @@ impl SyncWriter<'_> {
         let mut history = Vec::with_capacity(entries.len());
         for given in entries {
             let stored = current.iter().find(|entry| entry.id == given.id);
-            let value = match stored {
-                Some(entry)
-                    if cipher
-                        .decrypt_history_value(item, id, entry.id, &entry.value)?
-                        .expose_secret()
-                        == given.value =>
-                {
-                    entry.value.clone()
+            let encrypted = cipher.encrypt_history_entry(
+                item,
+                id,
+                &DecryptedHistoryEntry {
+                    id: given.id,
+                    metadata: given.metadata.clone(),
+                    value: given
+                        .value
+                        .map(|value| SecretBox::new(Box::new(value.to_string()))),
                 },
-                _ => cipher.encrypt_history_value(item, id, given.id, given.value)?,
+            )?;
+            let Some(stored) = stored else {
+                history.push(encrypted);
+                continue;
             };
-            let info = match stored {
-                Some(entry)
+            let metadata = if *cipher
+                .decrypt_history_metadata(item, id, stored.id, &stored.metadata)?
+                .expose_secret()
+                == given.metadata
+            {
+                stored.metadata.clone()
+            } else {
+                encrypted.metadata
+            };
+            let value = match (&stored.value, given.value) {
+                (Some(blob), Some(value))
                     if cipher
-                        .decrypt_history_info(item, id, entry.id, &entry.info)?
+                        .decrypt_history_value(item, id, stored.id, blob)?
                         .expose_secret()
-                        .replaced_at
-                        == given.replaced_at =>
+                        == value =>
                 {
-                    entry.info.clone()
+                    Some(blob.clone())
                 },
-                _ => {
-                    let info = HistoryInfo {
-                        replaced_at: given.replaced_at,
-                    };
-                    cipher.encrypt_history_info(item, id, given.id, &info)?
-                },
+                _ => encrypted.value,
             };
             history.push(HistoryEntry {
                 id: given.id,
+                metadata,
                 value,
-                info,
             });
         }
         self.replace_history(place, id, |stored| *stored = history)
     }
 
-    /// Change the id of one previous value of a credential. Its value and
-    /// info blobs are encrypted again under the new id. Fails if the entry is
-    /// missing or the new id is taken.
+    /// Change the id of one history entry of a credential. Its blobs are
+    /// encrypted again under the new id. Fails if the entry is missing or the
+    /// new id is taken.
     pub(crate) fn set_history_id(
         &mut self,
         id: CredentialId,
@@ -797,13 +800,9 @@ impl SyncWriter<'_> {
             .find(|e| e.id == entry)
             .ok_or_else(|| Error::InvalidHistoryEntry(entry.to_string()))?;
         let cipher = &self.vault.cipher;
-        let value = cipher.decrypt_history_value(item, id, entry, &stored.value)?;
-        let info = cipher.decrypt_history_info(item, id, entry, &stored.info)?;
-        let mut renamed = Some(HistoryEntry {
-            id: new_id,
-            value: cipher.encrypt_history_value(item, id, new_id, value.expose_secret())?,
-            info: cipher.encrypt_history_info(item, id, new_id, info.expose_secret())?,
-        });
+        let mut decrypted = cipher.decrypt_history_entry(item, id, stored)?;
+        decrypted.id = new_id;
+        let mut renamed = Some(cipher.encrypt_history_entry(item, id, &decrypted)?);
         self.replace_history(place, id, |stored| {
             for e in stored.iter_mut() {
                 if e.id == entry

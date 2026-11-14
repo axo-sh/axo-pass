@@ -95,10 +95,11 @@ fn history_entries_from_two_macs_ordered_by_time_then_id() {
     let add = |entries: &'static [(u128, i64)]| {
         move |s: &mut SyncState, m: &Mint| {
             let history = &mut s.credentials.entry(credential).history;
-            for (n, replaced_at) in entries {
+            for (n, at) in entries {
                 let value = HistoryValue {
-                    value: SecretText::new(n.to_string()),
-                    replaced_at: *replaced_at,
+                    at: *at,
+                    kind: HistoryKind::ValueUpdated,
+                    value: Some(SecretText::new(n.to_string())),
                 };
                 history.entry(id(*n)).write(m, value);
             }
@@ -109,7 +110,7 @@ fn history_entries_from_two_macs_ordered_by_time_then_id() {
     let shown: Vec<_> = view.credentials[&credential]
         .history
         .iter()
-        .map(|h| (h.id, h.replaced_at))
+        .map(|h| (h.id, h.at))
         .collect();
     assert_eq!(shown, [(id(41), 10), (id(42), 10), (id(40), 20)]);
 }

@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use super::{NOW, id, session};
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::model::fields::{FieldKind, TextField};
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::{
     AcceptedEntry, DismissEntry, DismissKind, RenameEntry, SignalEntry, UnknownEntry,
 };
@@ -132,6 +133,15 @@ fn signal(alt: bool) -> SignalEntry {
     })
 }
 
+/// `value-updated` history value holding `value`, at `NOW`.
+fn value_updated(value: &str) -> HistoryValue {
+    HistoryValue {
+        at: NOW,
+        kind: HistoryKind::ValueUpdated,
+        value: Some(SecretText::new(value)),
+    }
+}
+
 fn trash(alt: bool) -> Option<TrashValue> {
     Some(TrashValue {
         deleted_at: NOW + i64::from(alt),
@@ -251,11 +261,7 @@ const CREDENTIAL_WRITES: [Write<SyncCredential>; 10] = [
         s.value.write(m, SecretText::new(text(alt)))
     }),
     ("history", |s, m, alt| {
-        let history = HistoryValue {
-            value: SecretText::new(text(alt)),
-            replaced_at: NOW,
-        };
-        s.history.entry(id(30)).write(m, history);
+        s.history.entry(id(30)).write(m, value_updated(&text(alt)));
     }),
     ("last_used_day_at", |s, m, alt| {
         let day = NOW + i64::from(alt);
@@ -352,11 +358,10 @@ fn removal_only_mint_advances_context_and_join_applies_removal() {
     store.items.entry(id(4)).title.write(&m, text(false));
     let credential = store.credentials.entry(id(2));
     credential.title.write(&m, text(false));
-    let history = HistoryValue {
-        value: SecretText::new("old"),
-        replaced_at: NOW,
-    };
-    credential.history.entry(id(3)).write(&m, history);
+    credential
+        .history
+        .entry(id(3))
+        .write(&m, value_updated("old"));
     store.credentials.entry(id(5)).title.write(&m, text(false));
     store
         .signals
@@ -403,10 +408,7 @@ fn secret_text_compares_by_value_and_debug_shows_no_value() {
     assert_eq!(SecretText::new("hunter2"), SecretText::new("hunter2"));
     assert_ne!(SecretText::new("hunter2"), SecretText::new("hunter3"));
 
-    let history = HistoryValue {
-        value: SecretText::new("hunter2"),
-        replaced_at: NOW,
-    };
+    let history = value_updated("hunter2");
     let debug = format!("{history:?}");
     assert!(!debug.contains("hunter2"), "{debug}");
     assert!(debug.contains("SecretText"), "{debug}");

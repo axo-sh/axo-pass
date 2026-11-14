@@ -1438,6 +1438,11 @@ final class VaultsModel {
     return key
   }
 
+  /// History of an item, newest first, as stored in the vault.
+  func itemHistory(vaultKey: String, itemKey: String) async throws -> [ItemHistoryEventInfo] {
+    try await core.listItemHistory(vaultKey: vaultKey, itemKey: itemKey)
+  }
+
   /// Previous values of a credential, most recently replaced first.
   func credentialHistory(vaultKey: String, itemKey: String, credKey: String) async throws
     -> [HistoryEntryInfo]
@@ -1654,25 +1659,6 @@ final class VaultsModel {
     )
     guard let events = try? await core.listAuditEvents(filter: filter) else { return [] }
     return events.map(AuditLogRow.init)
-  }
-
-  /// Audit change events of one item, newest first. Events name the item by
-  /// its id, which is unchanged by a rename. Reads of values are left out.
-  func itemHistory(itemId: String, limit: UInt32, offset: UInt32) async throws -> [AuditLogRow] {
-    let filter = AuditFilterInput(
-      sinceRfc3339: nil,
-      untilRfc3339: nil,
-      actions: [],
-      categories: [],
-      kind: .change,
-      requesters: [],
-      outcomes: [],
-      query: nil,
-      detailId: AuditDetailIdInput(key: "item_id", id: itemId),
-      limit: limit,
-      offset: offset
-    )
-    return try await core.listAuditEvents(filter: filter).map(AuditLogRow.init)
   }
 
   /// The items of a vault as last loaded, without loading. Empty when the

@@ -17,7 +17,7 @@ use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::{self, VaultSigner};
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::{
-    DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemCredentialOverview,
+    DeletedInfo, HistoryMetadata, VaultCredentialMetadata, VaultItemCredentialOverview,
     VaultItemMetadata, VaultItemOverview, VaultMetadata,
 };
 use crate::secrets::vaults::storage::handle::validate_key;
@@ -601,22 +601,24 @@ pub struct DeletedItem {
 pub struct EncryptedVaultItemCredential {
     pub metadata: EncryptedBlob<VaultCredentialMetadata>,
     pub value: EncryptedBlob<String>,
-    /// Previous values, oldest first. Absent if empty.
+    /// History entries, oldest first. Absent if empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryEntry>,
 }
 
-/// A previous value of a credential. The value is encrypted under the entry id
-/// as well as the credential, so it cannot be swapped into the live value's
-/// place.
+/// A history entry of a credential. Blobs are encrypted under the entry id as
+/// well as the credential, so a replaced value cannot be swapped into the live
+/// value's place.
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryEntry {
     #[serde_as(as = "ShortId")]
     pub id: Uuid,
-    pub value: EncryptedBlob<String>,
-    pub info: EncryptedBlob<HistoryInfo>,
+    pub metadata: EncryptedBlob<HistoryMetadata>,
+    /// Value the entry holds, as its kind states. Absent if none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<EncryptedBlob<String>>,
 }
 
 /// A deleted credential. The credential blobs are the same as when it was

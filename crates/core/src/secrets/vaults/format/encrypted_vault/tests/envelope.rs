@@ -9,12 +9,16 @@ fn only_entry(file: &Value, pointer: &str) -> String {
 }
 
 /// Pointer to the one entry of the map at `pointer` in `file` that has a
-/// previous value.
+/// previous value, which is a history entry with a value.
 fn only_entry_with_history(file: &Value, pointer: &str) -> String {
     let map = file.pointer(pointer).unwrap().as_object().unwrap();
     let mut keys = map
         .iter()
-        .filter(|(_, entry)| entry["history"].as_array().is_some_and(|h| !h.is_empty()))
+        .filter(|(_, entry)| {
+            entry["history"]
+                .as_array()
+                .is_some_and(|h| h.iter().any(|e| e.get("value").is_some()))
+        })
         .map(|(key, _)| key);
     let key = keys.next().unwrap();
     assert!(keys.next().is_none(), "{pointer}");

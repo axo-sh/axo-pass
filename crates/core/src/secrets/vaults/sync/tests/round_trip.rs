@@ -13,8 +13,8 @@ use super::generators::{Ids, Script};
 use super::view::State;
 use super::{NOW, session};
 use crate::secrets::vaults::autofill::item::{ItemAutofill, Role};
-use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::{HistoryMetadata, Vault};
 use crate::secrets::vaults::passkey::signals::SignalStore;
 use crate::secrets::vaults::storage::handle::validate_key;
 use crate::secrets::vaults::sync::apply::ApplyReport;
@@ -116,7 +116,7 @@ struct CredentialContents {
     trashed: Option<(i64, Option<Role>)>,
     value: String,
     /// Id, time, and value.
-    history: Vec<(Uuid, i64, String)>,
+    history: Vec<(Uuid, HistoryMetadata, Option<String>)>,
 }
 
 impl Contents {
@@ -162,7 +162,10 @@ impl Contents {
                     history: entry
                         .history
                         .iter()
-                        .map(|h| (h.id, h.replaced_at, h.value.expose_secret().clone()))
+                        .map(|h| {
+                            let value = h.value.as_ref().map(|v| v.expose_secret().clone());
+                            (h.id, h.metadata.clone(), value)
+                        })
                         .collect(),
                 }
             })

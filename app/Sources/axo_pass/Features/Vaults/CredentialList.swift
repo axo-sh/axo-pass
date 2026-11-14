@@ -127,7 +127,7 @@ struct CredentialList: View {
         .help("New credential or section.")
 
         Button {
-          historyTarget = ItemHistoryTarget(item)
+          historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey)
         } label: {
           Label("History", systemImage: "clock.arrow.circlepath")
         }
@@ -251,7 +251,7 @@ struct CredentialList: View {
     .contextMenu {
       Button("Rename Item…") { showingRenameItemSheet = true }
       Button("Copy Item Key", action: copyItemKey)
-      Button("History…") { historyTarget = ItemHistoryTarget(item) }
+      Button("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) }
       Divider()
       Button("New Credential…") { showingNewCredentialSheet = true }
       Button("New Section") { newSection() }

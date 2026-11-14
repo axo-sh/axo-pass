@@ -16,6 +16,7 @@ use super::view::State;
 use crate::secrets::vaults::autofill::{self, LoginWrite};
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::model::fields::FieldKind;
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::rename_account;
 use crate::secrets::vaults::sync::crdt::WriteId;
 use crate::secrets::vaults::sync::resolve::HistoryIds;
@@ -425,9 +426,13 @@ fn concurrent_replace_writes_one_derived_id_entry() {
     sim.converge();
     sim.check_quiet();
     let state = sim.check_converged();
-    let shown = &VaultView::of(&state).credentials[&credential].history;
-    assert_eq!(shown.len(), 1);
-    assert_eq!(shown[0].id, derived);
+    let shown: Vec<_> = VaultView::of(&state).credentials[&credential]
+        .history
+        .iter()
+        .filter(|h| h.kind == HistoryKind::ValueUpdated)
+        .map(|h| h.id)
+        .collect();
+    assert_eq!(shown, [derived]);
     for n in 0..sim.macs.len() {
         let history = history(&sim, n);
         assert_eq!(

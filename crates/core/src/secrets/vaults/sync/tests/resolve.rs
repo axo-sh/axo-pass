@@ -99,7 +99,7 @@ fn history_ids(view: &VaultView, id: Uuid, value: &str) -> Vec<Uuid> {
     view.credentials[&id]
         .history
         .iter()
-        .filter(|h| h.value.0.as_str() == value)
+        .filter(|h| h.value.as_ref().is_some_and(|v| v.0.as_str() == value))
         .map(|h| h.id)
         .collect()
 }

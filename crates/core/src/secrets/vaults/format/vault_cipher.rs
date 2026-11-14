@@ -10,8 +10,24 @@ use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::format::encrypted_vault::HistoryEntry;
 use crate::secrets::vaults::model::{
-    DeletedInfo, HistoryInfo, VaultCredentialMetadata, VaultItemMetadata, VaultMetadata,
+    DecryptedHistoryEntry, DeletedInfo, HistoryMetadata, VaultCredentialMetadata,
+    VaultItemMetadata, VaultMetadata,
 };
+
+/// Check that a history entry holds a value if its kind states one. An
+/// unknown kind may hold a value or not.
+fn check_history_value(
+    entry_id: Uuid,
+    metadata: &HistoryMetadata,
+    has_value: bool,
+) -> Result<(), Error> {
+    match metadata.kind.has_value() {
+        Some(expected) if expected != has_value => {
+            Err(Error::InvalidHistoryEntry(entry_id.to_string()))
+        },
+        _ => Ok(()),
+    }
+}
 
 pub struct VaultCipher {
     cipher: Aes256Gcm,
@@ -205,7 +221,7 @@ impl VaultCipher {
         self.cred_aad(item_id, cred_id, &format!("history:{entry_id}"))
     }
 
-    fn history_info_aad(&self, item_id: Uuid, cred_id: Uuid, entry_id: Uuid) -> Vec<String> {
+    fn history_metadata_aad(&self, item_id: Uuid, cred_id: Uuid, entry_id: Uuid) -> Vec<String> {
         self.cred_aad(item_id, cred_id, &format!("history-info:{entry_id}"))
     }
 
@@ -236,31 +252,79 @@ impl VaultCipher {
         )
     }
 
-    pub fn encrypt_history_info(
+    pub fn encrypt_history_metadata(
         &self,
         item_id: Uuid,
         cred_id: Uuid,
         entry_id: Uuid,
-        value: &HistoryInfo,
-    ) -> Result<EncryptedBlob<HistoryInfo>, Error> {
+        value: &HistoryMetadata,
+    ) -> Result<EncryptedBlob<HistoryMetadata>, Error> {
         EncryptedBlob::encrypt(
             value,
             &self.cipher,
-            self.history_info_aad(item_id, cred_id, entry_id),
+            self.history_metadata_aad(item_id, cred_id, entry_id),
         )
     }
 
-    pub fn decrypt_history_info(
+    pub fn decrypt_history_metadata(
         &self,
         item_id: Uuid,
         cred_id: Uuid,
         entry_id: Uuid,
-        blob: &EncryptedBlob<HistoryInfo>,
-    ) -> Result<SecretBox<HistoryInfo>, Error> {
+        blob: &EncryptedBlob<HistoryMetadata>,
+    ) -> Result<SecretBox<HistoryMetadata>, Error> {
         blob.decrypt(
             &self.cipher,
-            self.history_info_aad(item_id, cred_id, entry_id),
+            self.history_metadata_aad(item_id, cred_id, entry_id),
         )
+    }
+
+    /// History entry of credential `cred_id` of item `item_id`, encrypted.
+    /// Fails if the presence of the value does not match the kind.
+    pub(crate) fn encrypt_history_entry(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry: &DecryptedHistoryEntry,
+    ) -> Result<HistoryEntry, Error> {
+        check_history_value(entry.id, &entry.metadata, entry.value.is_some())?;
+        let value = match &entry.value {
+            Some(value) => Some(self.encrypt_history_value(
+                item_id,
+                cred_id,
+                entry.id,
+                value.expose_secret(),
+            )?),
+            None => None,
+        };
+        Ok(HistoryEntry {
+            id: entry.id,
+            metadata: self.encrypt_history_metadata(item_id, cred_id, entry.id, &entry.metadata)?,
+            value,
+        })
+    }
+
+    /// History entry of credential `cred_id` of item `item_id`, decrypted.
+    /// Fails if the presence of the value does not match the kind.
+    pub(crate) fn decrypt_history_entry(
+        &self,
+        item_id: Uuid,
+        cred_id: Uuid,
+        entry: &HistoryEntry,
+    ) -> Result<DecryptedHistoryEntry, Error> {
+        let metadata =
+            self.decrypt_history_metadata(item_id, cred_id, entry.id, &entry.metadata)?;
+        let metadata = metadata.expose_secret().clone();
+        check_history_value(entry.id, &metadata, entry.value.is_some())?;
+        let value = match &entry.value {
+            Some(blob) => Some(self.decrypt_history_value(item_id, cred_id, entry.id, blob)?),
+            None => None,
+        };
+        Ok(DecryptedHistoryEntry {
+            id: entry.id,
+            metadata,
+            value,
+        })
     }
 
     pub fn encrypt_deleted_item_info(
@@ -291,21 +355,24 @@ impl VaultCipher {
         to.encrypt_cred_value(item_id, cred_id, value.expose_secret())
     }
 
-    /// Check that the info of each previous value of a credential decrypts
-    /// and parses. The values are not decrypted.
-    pub(crate) fn check_history_info(
+    /// Check that the metadata of each history entry of a credential decrypts
+    /// and parses, and that the presence of each value matches its kind. The
+    /// values are not decrypted.
+    pub(crate) fn check_history_metadata(
         &self,
         item_id: Uuid,
         cred_id: Uuid,
         history: &[HistoryEntry],
     ) -> Result<(), Error> {
         for entry in history {
-            self.decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
+            let metadata =
+                self.decrypt_history_metadata(item_id, cred_id, entry.id, &entry.metadata)?;
+            check_history_value(entry.id, metadata.expose_secret(), entry.value.is_some())?;
         }
         Ok(())
     }
 
-    /// Previous values of a credential decrypted with this cipher and
+    /// History entries of a credential decrypted with this cipher and
     /// encrypted with `to`. Entry ids and order are kept.
     pub(crate) fn rekey_history(
         &self,
@@ -317,23 +384,8 @@ impl VaultCipher {
         history
             .iter()
             .map(|entry| {
-                let value = self.decrypt_history_value(item_id, cred_id, entry.id, &entry.value)?;
-                let info = self.decrypt_history_info(item_id, cred_id, entry.id, &entry.info)?;
-                Ok(HistoryEntry {
-                    id: entry.id,
-                    value: to.encrypt_history_value(
-                        item_id,
-                        cred_id,
-                        entry.id,
-                        value.expose_secret(),
-                    )?,
-                    info: to.encrypt_history_info(
-                        item_id,
-                        cred_id,
-                        entry.id,
-                        info.expose_secret(),
-                    )?,
-                })
+                let decrypted = self.decrypt_history_entry(item_id, cred_id, entry)?;
+                to.encrypt_history_entry(item_id, cred_id, &decrypted)
             })
             .collect()
     }
@@ -483,8 +535,8 @@ impl VaultCipher {
                 let aad = self.cipher.cred_aad(item_id, cred_id, "metadata");
                 self.visit(place, "credential metadata", &mut cred.metadata, aad);
                 for entry in &mut cred.history {
-                    let aad = self.cipher.history_info_aad(item_id, cred_id, entry.id);
-                    self.visit(place, "history info", &mut entry.info, aad);
+                    let aad = self.cipher.history_metadata_aad(item_id, cred_id, entry.id);
+                    self.visit(place, "history metadata", &mut entry.metadata, aad);
                 }
             }
 
@@ -564,10 +616,13 @@ impl VaultCipher {
             let value = cipher.decrypt_cred_value(item_id, cred_id, &cred.value);
             record(results, place, "value", value.is_ok());
             for entry in &cred.history {
-                let value = cipher.decrypt_history_value(item_id, cred_id, entry.id, &entry.value);
-                record(results, place, "history value", value.is_ok());
-                let info = cipher.decrypt_history_info(item_id, cred_id, entry.id, &entry.info);
-                record(results, place, "history info", info.is_ok());
+                if let Some(blob) = &entry.value {
+                    let value = cipher.decrypt_history_value(item_id, cred_id, entry.id, blob);
+                    record(results, place, "history value", value.is_ok());
+                }
+                let metadata =
+                    cipher.decrypt_history_metadata(item_id, cred_id, entry.id, &entry.metadata);
+                record(results, place, "history metadata", metadata.is_ok());
             }
         }
 
@@ -704,7 +759,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            cipher.history_info_aad(item_id, cred_id, entry_id),
+            cipher.history_metadata_aad(item_id, cred_id, entry_id),
             vec![
                 vault_id.to_string(),
                 item_id.to_string(),

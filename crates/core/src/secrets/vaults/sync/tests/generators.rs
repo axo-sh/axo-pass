@@ -18,6 +18,7 @@ use super::view::State;
 use super::{NOW, session};
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
 use crate::secrets::vaults::model::fields::{FieldKind, TextField};
+use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::{
     AcceptedEntry, DismissEntry, DismissKind, RenameEntry, SignalEntry, UnknownEntry,
 };
@@ -467,8 +468,9 @@ impl Write {
                 replaced_at,
             } => {
                 let value = HistoryValue {
-                    value: SecretText::new(value),
-                    replaced_at,
+                    at: replaced_at,
+                    kind: HistoryKind::ValueUpdated,
+                    value: Some(SecretText::new(value)),
                 };
                 let history = &mut s.credentials.entry(Ids::credential(credential)).history;
                 history

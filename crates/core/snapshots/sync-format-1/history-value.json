@@ -1,6 +1,22 @@
 [
   {
-    "value": "p1",
-    "replaced_at": 1700000005
+    "at": 1700000005,
+    "kind": {
+      "type": "value-created"
+    }
+  },
+  {
+    "at": 1700000005,
+    "kind": {
+      "type": "value-updated"
+    },
+    "value": "p1"
+  },
+  {
+    "at": 1700000005,
+    "kind": {
+      "type": "renamed",
+      "from": "Old title"
+    }
   }
 ]

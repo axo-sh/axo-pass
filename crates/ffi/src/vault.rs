@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker::IndexedPasskey;
 use axo_pass_core::secrets::password::PasswordPolicy;
-use axo_pass_core::secrets::vaults::model::totp;
+use axo_pass_core::secrets::vaults::model::history::HistoryKind;
+use axo_pass_core::secrets::vaults::model::{ItemChange, ItemHistoryEvent, totp};
 use axo_pass_core::secrets::vaults::passkey::PasskeyTarget;
 use axo_pass_core::secrets::vaults::passkey::signals::{self, SignalStore};
 use axo_pass_core::secrets::vaults::{
@@ -153,6 +154,59 @@ pub struct HistoryEntryInfo {
     pub id: String,
     /// Time the value was replaced, as a Unix timestamp in seconds.
     pub replaced_at: i64,
+}
+
+/// Change an item history event records. See `model::ItemChange`.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum ItemHistoryKind {
+    ItemCreated,
+    ValueCreated,
+    ValueUpdated,
+    CredentialDeleted,
+    /// History entry of a kind this build does not know.
+    Other,
+}
+
+/// One event of the history of an item. Values are not included.
+#[derive(uniffi::Record)]
+pub struct ItemHistoryEventInfo {
+    /// Time of the event, as a Unix timestamp in seconds.
+    pub at: i64,
+    pub kind: ItemHistoryKind,
+    /// Credential id as a short id. `None` for an event of the item.
+    pub credential_id: Option<String>,
+    pub credential_key: Option<String>,
+    pub credential_title: Option<String>,
+    /// Whether the credential is deleted.
+    pub credential_deleted: bool,
+    /// History entry id as a short id, for an event from a credential history.
+    pub history_id: Option<String>,
+}
+
+impl From<ItemHistoryEvent<'_>> for ItemHistoryEventInfo {
+    fn from(event: ItemHistoryEvent<'_>) -> Self {
+        let (kind, history_id) = match event.change {
+            ItemChange::ItemCreated => (ItemHistoryKind::ItemCreated, None),
+            ItemChange::CredentialDeleted => (ItemHistoryKind::CredentialDeleted, None),
+            ItemChange::History { id, kind } => {
+                let kind = match kind {
+                    HistoryKind::ValueCreated => ItemHistoryKind::ValueCreated,
+                    HistoryKind::ValueUpdated => ItemHistoryKind::ValueUpdated,
+                    HistoryKind::Unknown(_) => ItemHistoryKind::Other,
+                };
+                (kind, Some(ShortId::encode_uuid(id)))
+            },
+        };
+        Self {
+            at: event.at,
+            kind,
+            credential_id: event.credential.map(|c| ShortId::encode_uuid(c.id)),
+            credential_key: event.credential.map(|c| c.key.clone()),
+            credential_title: event.credential.map(|c| c.title.clone()),
+            credential_deleted: event.credential_deleted,
+            history_id,
+        }
+    }
 }
 
 /// A deleted item that can still be restored. Credential values are not
@@ -1004,9 +1058,30 @@ impl AxoPass {
                 .into_iter()
                 .map(|h| HistoryEntryInfo {
                     id: ShortId::encode_uuid(h.id),
-                    replaced_at: h.replaced_at,
+                    replaced_at: h.at,
                 })
                 .collect())
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))?
+    }
+
+    /// List the history of an item, newest first.
+    pub async fn list_item_history(
+        &self,
+        vault_key: String,
+        item_key: String,
+    ) -> Result<Vec<ItemHistoryEventInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        tokio::task::spawn_blocking(move || {
+            ensure_unlocked(&manager, &vault_key)?;
+            let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
+            let vault = m
+                .get_or_create_vault_mut(&vault_key)
+                .map_err(FfiError::from)?;
+
+            let events = vault.item_history(&item_key).map_err(FfiError::from)?;
+            Ok(events.into_iter().map(ItemHistoryEventInfo::from).collect())
         })
         .await
         .map_err(|e| FfiError::Internal(e.to_string()))?

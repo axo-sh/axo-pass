@@ -100,11 +100,14 @@ fn bundle_exported_before_vault_format_2_imports() {
                         .history
                         .iter()
                         .map(|entry| {
-                            json!({
+                            let mut entry_json = json!({
                                 "id": entry.id,
-                                "value": blob_json(&entry.value),
-                                "info": blob_json(&entry.info),
-                            })
+                                "metadata": blob_json(&entry.metadata),
+                            });
+                            if let Some(value) = &entry.value {
+                                entry_json["value"] = blob_json(value);
+                            }
+                            entry_json
                         })
                         .collect();
                     let cred = json!({

@@ -43,6 +43,15 @@ fn add<T>(snapshot: &mut SchemaSnapshot, name: &str, samples: Vec<T>)
 where
     T: Serialize + DeserializeOwned + PartialEq + Debug,
 {
+    add_open(snapshot, name, samples, &[]);
+}
+
+/// [`add`] with the JSON objects at a key in `open_keys` left unchecked, as
+/// [`SchemaSnapshot::add`] states.
+fn add_open<T>(snapshot: &mut SchemaSnapshot, name: &str, samples: Vec<T>, open_keys: &[&str])
+where
+    T: Serialize + DeserializeOwned + PartialEq + Debug,
+{
     for sample in &samples {
         let bytes = cbor(sample);
         let parsed: T = ciborium::from_reader(&bytes[..]).unwrap();
@@ -62,7 +71,7 @@ where
             );
         }
     }
-    snapshot.add(name, &samples, &[]);
+    snapshot.add(name, &samples, open_keys);
 }
 
 fn folder_values() -> Vec<FolderValue> {
@@ -123,11 +132,25 @@ fn placements() -> Vec<Placement> {
     vec![full, minimal]
 }
 
+/// History value of every history kind, with a value as the kind states.
 fn history_values() -> Vec<HistoryValue> {
-    vec![HistoryValue {
-        value: SecretText::new("p1"),
-        replaced_at: 1_700_000_005,
-    }]
+    // A new kind fails to compile here until it is added below.
+    let _ = |kind: HistoryKind| match kind {
+        HistoryKind::ValueCreated | HistoryKind::ValueUpdated | HistoryKind::Unknown(_) => {},
+    };
+    let value = |kind, value: Option<&str>| HistoryValue {
+        at: 1_700_000_005,
+        kind,
+        value: value.map(SecretText::new),
+    };
+    vec![
+        value(HistoryKind::ValueCreated, None),
+        value(HistoryKind::ValueUpdated, Some("p1")),
+        value(
+            HistoryKind::Unknown(serde_json::json!({"type": "renamed", "from": "Old title"})),
+            None,
+        ),
+    ]
 }
 
 /// Trash value without a role, then with every role.
@@ -226,7 +249,8 @@ fn sync_snapshot() -> SchemaSnapshot {
     add(&mut snapshot, "section-value", section_values());
     add(&mut snapshot, "website-value", website_values());
     add(&mut snapshot, "placement", placements());
-    add(&mut snapshot, "history-value", history_values());
+    // An object with a history kind this build does not know is kept as is.
+    add_open(&mut snapshot, "history-value", history_values(), &["kind"]);
     add(&mut snapshot, "trash-value", trash_values());
     add(&mut snapshot, "secret-text", secret_texts());
     add(&mut snapshot, "replica-keys", replica_keys());
@@ -251,7 +275,7 @@ fn every_sample_round_trips_through_json_and_cbor_unchanged() {
 fn value_type_change_without_format_bump_fails_snapshot() {
     let mut snapshot = sync_snapshot();
     snapshot.edit("history-value", |text| {
-        text.replace("\"replaced_at\"", "\"replaced\"")
+        text.replace("\"at\"", "\"replaced_at\"")
     });
 
     let error = snapshot.compare().unwrap_err();
