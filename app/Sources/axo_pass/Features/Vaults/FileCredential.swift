@@ -143,54 +143,86 @@ extension FileInfo {
   }
 }
 
-/// Details and actions of a file credential, shown in place of a value.
+/// Details of a file credential, shown in place of a value. Actions are in a
+/// trailing menu that shows on hover. Dropping a file on the box replaces the file. The outline
+/// opens Quick Look on double-click and Space.
 struct FileBox: View {
   let file: FileInfo?
+  /// Credential title. The file name is shown only if it differs.
+  let title: String
   let failure: FileFailure?
   let isBusy: Bool
   let onPreview: () -> Void
   let onSave: () -> Void
   let onReplace: () -> Void
-  let onTrash: () -> Void
+  let onReplaceWith: (URL) -> Void
+  let onDelete: () -> Void
+
+  @State private var isDropTargeted: Bool = false
+  @State private var isHovering: Bool = false
+
+  private var isEnabled: Bool { file != nil && !isBusy }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 10) {
         Image(systemName: file?.symbolName ?? "exclamationmark.triangle")
-          .font(.title2)
+          .font(.title3)
           .foregroundStyle(.secondary)
-          .frame(width: 28)
+          .frame(width: 24)
         VStack(alignment: .leading, spacing: 2) {
-          Text(file?.name ?? "Unreadable file record")
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .textSelection(.enabled)
           if let file {
-            Text(file.detail).font(.caption).foregroundStyle(.secondary)
+            if file.name != title {
+              Text(file.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            }
+            Text(file.detail).foregroundStyle(.secondary)
+          } else {
+            Text("Unreadable file record")
           }
         }
         Spacer(minLength: 0)
         if isBusy { ProgressView().controlSize(.small) }
+        actionMenu
       }
       status
-      HStack(spacing: 8) {
-        Button("Preview", action: onPreview)
-          .help("Open in Quick Look")
-        Button("Save…", action: onSave)
-          .help("Save a copy to disk")
-        Button("Replace…", action: onReplace)
-          .help("Replace the file. The current file stays in the previous values.")
-        Spacer(minLength: 0)
-        Button("Move to Trash", role: .destructive, action: onTrash)
-      }
-      .controlSize(.small)
-      .disabled(isBusy)
-      .disabled(file == nil)
     }
-    .padding(.vertical, 8)
+    .padding(.vertical, 6)
     .padding(.horizontal, 10)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+    .overlay {
+      if isDropTargeted {
+        RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: 2)
+      }
+    }
+    .onHover { isHovering = $0 }
+    .dropDestination(for: URL.self) { urls, _ in
+      guard isEnabled, urls.count == 1, let url = urls.first, url.isFileURL else { return false }
+      onReplaceWith(url)
+      return true
+    } isTargeted: { isDropTargeted = $0 && isEnabled }
+  }
+
+  private var actionMenu: some View {
+    Menu {
+      Button("Quick Look", action: onPreview).disabled(!isEnabled)
+      Button("Save…", action: onSave).disabled(!isEnabled)
+      Button("Replace…", action: onReplace).disabled(!isEnabled)
+      Divider()
+      Button("Delete", role: .destructive, action: onDelete)
+    } label: {
+      Image(systemName: "ellipsis")
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .foregroundStyle(.secondary)
+    .fixedSize()
+    .help("File actions")
+    .opacity(isHovering ? 1 : 0)
+    .animation(.easeInOut(duration: 0.12), value: isHovering)
   }
 
   /// State of the contents. Nothing shows for a file that is on this Mac.
@@ -247,6 +279,11 @@ extension CredentialList {
   /// Ask for a file to replace the file of `cred` with.
   func replaceFile(_ cred: CredentialInfo) {
     guard let url = chooseFile(prompt: "Replace") else { return }
+    replaceFile(cred, with: url)
+  }
+
+  /// Replace the file of `cred` with the file at `url`.
+  func replaceFile(_ cred: CredentialInfo, with url: URL) {
     Task {
       fileBusy.insert(cred.key)
       defer { fileBusy.remove(cred.key) }

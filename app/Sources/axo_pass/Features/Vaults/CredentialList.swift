@@ -90,6 +90,10 @@ struct CredentialList: View {
       },
       onMove: moveEntries,
       onPrimaryAction: startRename,
+      onOpen: { selected in
+        if !quickLook(selected) { startRename(selected) }
+      },
+      onQuickLook: quickLook,
       onDelete: delete,
       onMouseDown: { cardSelection = nil }
     )
@@ -368,6 +372,7 @@ struct CredentialList: View {
       onPreviewFile: { previewFile(cred) },
       onSaveFile: { saveFile(cred) },
       onReplaceFile: { replaceFile(cred) },
+      onReplaceFileWith: { replaceFile(cred, with: $0) },
       fieldLabel: fieldLabel,
       showsCopied: shortcutCopied == cred.key,
       isDuplicatePasskey: item.hasDuplicate(of: cred)
@@ -436,7 +441,7 @@ struct CredentialList: View {
       if cred.kind.kind == "file" {
         // A file has no text value, so it has no previous values to show.
         items += [
-          .action("Preview") { previewFile(cred) },
+          .action("Quick Look") { previewFile(cred) },
           .action("Save…") { saveFile(cred) },
           .action("Replace…") { replaceFile(cred) },
         ]
@@ -499,6 +504,16 @@ struct CredentialList: View {
     case .section(let id): renaming = .section(id)
     case .credential(let key): renaming = .credential(key, .title)
     }
+  }
+
+  /// Open Quick Look if the selection is a single file credential. Returns
+  /// false otherwise.
+  private func quickLook(_ selected: Set<CredentialEntry>) -> Bool {
+    guard selected.count == 1, case .credential(let key)? = selected.first,
+      let cred = item.credentials.first(where: { $0.key == key }), cred.kind.kind == "file"
+    else { return false }
+    previewFile(cred)
+    return true
   }
 
   // MARK: - Sections

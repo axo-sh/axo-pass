@@ -76,8 +76,12 @@ struct CredentialOutline: NSViewRepresentable {
   let onSetCollapsed: (_ sectionId: String, _ collapsed: Bool) -> Void
   /// Move entries to an index in `entries`.
   let onMove: (_ moved: [CredentialEntry], _ destination: Int) -> Void
-  /// Return or double-click.
+  /// Return.
   let onPrimaryAction: (Set<CredentialEntry>) -> Void
+  /// Double-click on a row.
+  let onOpen: (Set<CredentialEntry>) -> Void
+  /// Space. Returns false if the selection has nothing to preview.
+  let onQuickLook: (Set<CredentialEntry>) -> Bool
   let onDelete: (Set<CredentialEntry>) -> Void
   /// Mouse down that reaches the outline. Row content that handles a click
   /// itself does not report it.
@@ -610,11 +614,15 @@ struct CredentialOutline: NSViewRepresentable {
 
     @objc func doubleClicked(_ sender: Any?) {
       guard let outline, entry(atRow: outline.clickedRow) != nil else { return }
-      primaryAction()
+      parent.onOpen(parent.selection)
     }
 
     func primaryAction() {
       parent.onPrimaryAction(parent.selection)
+    }
+
+    func quickLook() -> Bool {
+      parent.onQuickLook(parent.selection)
     }
 
     func deleteSelection() {
@@ -1033,6 +1041,8 @@ final class EntryOutlineView: NSOutlineView {
     case 36, 76: coordinator?.primaryAction()
     // Delete and forward delete.
     case 51, 117: coordinator?.deleteSelection()
+    // Space.
+    case 49 where coordinator?.quickLook() == true: break
     default: super.keyDown(with: event)
     }
   }

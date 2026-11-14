@@ -49,6 +49,8 @@ struct CredentialRow: View {
   var onSaveFile: () -> Void = {}
   /// Replace the file. Only file rows offer it.
   var onReplaceFile: () -> Void = {}
+  /// Replace the file with a dropped file. Only file rows offer it.
+  var onReplaceFileWith: (URL) -> Void = { _ in }
   /// The field name a login card shows beside the value, such as "Password".
   /// Nil for a row in the item's credential list, which shows the credential's
   /// title and reference instead.
@@ -221,9 +223,9 @@ struct CredentialRow: View {
 
       if isFile {
         FileBox(
-          file: cred.file, failure: fileFailure, isBusy: isFileBusy,
+          file: cred.file, title: cred.title, failure: fileFailure, isBusy: isFileBusy,
           onPreview: onPreviewFile, onSave: onSaveFile, onReplace: onReplaceFile,
-          onTrash: onDelete)
+          onReplaceWith: onReplaceFileWith, onDelete: onDelete)
       } else if quickEditing {
         quickEditor
       } else {
