@@ -13,6 +13,11 @@ reload = [
   ":run",
   "ap ssh-agent start",
 ]
+# Rebuild and relaunch the Swift app only. Run `reload` after Rust changes.
+"reload:app" = [
+  "pkill -f \"app/.build/dist/Axo Pass.app\" || true",
+  "strudel run",
+]
 release = [":app:ffi:release", ":app:cli:release", "strudel release"]
 
 logs = "tail -F ~/Library/Logs/Axo\\ Pass/app.log"
