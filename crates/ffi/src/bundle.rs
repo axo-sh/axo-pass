@@ -168,6 +168,9 @@ impl AxoPass {
                         }
                     },
                 )
+                // The report of blobs left out is logged and audited by the
+                // export. The app does not show it yet.
+                .map(|_report| ())
                 .map_err(FfiError::from)
         })
         .await

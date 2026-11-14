@@ -25,14 +25,14 @@ use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
 /// Writer and vaults directory of an import, in a temp directory.
-struct ImportTarget {
-    dir: TempDir,
-    files: VaultWriter,
-    vaults_dir: PathBuf,
+pub(super) struct ImportTarget {
+    pub(super) dir: TempDir,
+    pub(super) files: VaultWriter,
+    pub(super) vaults_dir: PathBuf,
 }
 
 impl ImportTarget {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let files = VaultWriter::isolated(dir.path().join("data"));
         let vaults_dir = dir.path().join("vaults");
@@ -45,7 +45,11 @@ impl ImportTarget {
 
     /// Import every vault of `bundle` in `ids` as `imported-{n}`, with the
     /// file key wrapper [`plain_wrap`].
-    fn import(&self, bundle: ImportableBundle, ids: &[Uuid]) -> Result<Vec<VaultHandle>, Error> {
+    pub(super) fn import(
+        &self,
+        bundle: ImportableBundle,
+        ids: &[Uuid],
+    ) -> Result<Vec<VaultHandle>, Error> {
         let selection = ids
             .iter()
             .enumerate()
@@ -59,7 +63,7 @@ impl ImportTarget {
     /// Verify the vault file at `path` under the writer signer. Returns the
     /// cipher of the raw file key the file holds, which [`plain_wrap`] stored
     /// as is.
-    fn load(&self, path: &Path) -> (VaultCipher, EncryptedVault) {
+    pub(super) fn load(&self, path: &Path) -> (VaultCipher, EncryptedVault) {
         let verified = EncryptedVault::load(path, self.files.signer().as_ref()).unwrap();
         let cipher = VaultCipher::new_with_bytes(verified.file_key.as_bytes(), verified.id);
         (cipher, verified.into_inner())
@@ -90,6 +94,8 @@ fn prepared_from(vault: &Vault, encrypted: EncryptedVault) -> PreparedVault {
         raw_file_key: SecretBox::new(Box::new(file_key_of(vault))),
         metadata: encrypted.metadata,
         items: encrypted.items,
+        referenced: Default::default(),
+        blobs: Default::default(),
     }
 }
 

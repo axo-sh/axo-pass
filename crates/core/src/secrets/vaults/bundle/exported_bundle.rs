@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::EncryptedVaultItem;
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -14,6 +15,9 @@ use crate::secrets::vaults::model::VaultMetadata;
 
 /// Current bundle format version. Import rejects anything newer. Version 2
 /// writes short ids. Version 1 has hyphenated ids, which import still reads.
+/// The `blobs` of a vault are an optional field of version 2. A build that
+/// predates them ignores the field and imports the file records without
+/// their blobs.
 pub const BUNDLE_VERSION: u32 = 2;
 
 /// A vault file key in raw (unwrapped) form. Serializes as base64 so it can be
@@ -25,11 +29,12 @@ pub struct RawFileKey(#[serde_as(as = "Base64")] pub Vec<u8>);
 /// Bundle export format. A single age operation protects a random bundle key;
 /// each vault's file key is wrapped with that bundle key via AES-256-GCM.
 ///
-/// Only the file keys and the items are encrypted. `version`, `id`,
-/// `exported_at`, and each vault's `name` and `default_key` are stored in
-/// plaintext and are not covered by any AAD, so one bundle file discloses the
-/// name and key of every vault in it, and anyone with write access to the file
-/// can rename or reorder entries undetected.
+/// Only the file keys and the items are encrypted. File blobs are ciphertext
+/// under the per-file keys of the item records, so they hold no plaintext.
+/// `version`, `id`, `exported_at`, and each vault's `name` and `default_key`
+/// are stored in plaintext and are not covered by any AAD, so one bundle file
+/// discloses the name and key of every vault in it, and anyone with write
+/// access to the file can rename or reorder entries undetected.
 #[serde_as]
 #[derive(Serialize, Deserialize)]
 pub struct ExportedBundle {
@@ -72,6 +77,15 @@ pub struct BundledVault {
     pub metadata: Option<EncryptedBlob<VaultMetadata>>,
     #[serde_as(as = "BTreeMap<ShortId, _>")]
     pub items: BTreeMap<Uuid, EncryptedVaultItem>,
+
+    /// File blobs that the records of `items` name, as stored: the sealed
+    /// bytes under the blob name, base64 encoded. Absent if the vault holds
+    /// no file. A blob that the export could not read is not listed, and the
+    /// import reports its file as missing. The blobs are bound to the vault
+    /// id, so they are read only under the id of this entry.
+    #[serde_as(as = "BTreeMap<_, Base64>")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub blobs: BTreeMap<FileHash, Vec<u8>>,
 }
 
 impl ExportedBundle {

@@ -16,8 +16,8 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
 use crate::secrets::vaults::autofill::item::ItemAutofill;
-use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
+use crate::secrets::vaults::bundle::{ExportMode, ExportReport, export_blobs};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultHeader};
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -30,7 +30,7 @@ use crate::secrets::vaults::model::{
 };
 use crate::secrets::vaults::passkey::signals::{self, SignalStore};
 use crate::secrets::vaults::storage::device_keys::{DeviceKeys, KeychainKeys};
-use crate::secrets::vaults::storage::txn::VaultLocks;
+use crate::secrets::vaults::storage::txn::{VaultLocks, VaultWriter};
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 use crate::secrets::vaults::sync::load::SyncLoad;
 
@@ -789,13 +789,20 @@ impl VaultHandle {
 /// protected once with `export_mode`. The source vaults are unchanged. Every
 /// vault must be unlocked. Passkeys are left out of the bundle unless
 /// `include_passkeys` is set.
+///
+/// The bundle holds each file blob that an exported record names, as stored
+/// (`bundle/export_blobs.rs`). `writer` fetches a blob that a synced vault
+/// lacks locally. A blob that cannot be read or fetched is listed in the
+/// report, and the bundle is written without it. Blobs of trashed files and
+/// unreferenced local blobs are not exported.
 pub fn export_bundle(
     vaults: &[&VaultHandle],
     path: &Path,
     export_mode: ExportMode,
     include_passkeys: bool,
+    writer: &VaultWriter,
     mut progress: impl FnMut(ExportProgress),
-) -> Result<(), Error> {
+) -> Result<ExportReport, Error> {
     if vaults.is_empty() {
         return Err(Error::VaultExportError("No vaults to export".to_string()));
     }
@@ -806,6 +813,7 @@ pub fn export_bundle(
 
     let total = vaults.len();
     let mut bundled_vaults = Vec::with_capacity(total);
+    let mut report = ExportReport::default();
     for (i, vw) in vaults.iter().enumerate() {
         progress(ExportProgress::Vault {
             index: i + 1,
@@ -813,12 +821,17 @@ pub fn export_bundle(
         });
         let vault = vw.get_unlocked_vault()?;
         let key = (vw.key != DEFAULT_VAULT).then(|| vw.key.clone());
-        bundled_vaults.push(vault.to_bundled_vault(
-            key,
-            bundle_id,
-            &bundle_cipher,
-            include_passkeys,
-        )?);
+        let (mut bundled, referenced) =
+            vault.to_bundled_vault_with_blobs(key, bundle_id, &bundle_cipher, include_passkeys)?;
+        bundled.blobs = export_blobs::collect(
+            writer,
+            vw,
+            vault.id(),
+            vault.replica_id().is_some(),
+            &referenced,
+            &mut report.missing_blobs,
+        )?;
+        bundled_vaults.push(bundled);
     }
 
     progress(ExportProgress::DerivingKey);
@@ -854,10 +867,21 @@ pub fn export_bundle(
                 ..SubjectIds::default()
             })
             .detail("bundle", bundle_id.clone())
-            .detail("vault_count", total.to_string()),
+            .detail("vault_count", total.to_string())
+            .detail("missing_blobs", missing_blobs(&report, vw).to_string()),
         );
     }
-    Ok(())
+    Ok(report)
+}
+
+/// Number of blobs of `report` that belong to the vault of `vw`.
+fn missing_blobs(report: &ExportReport, vw: &VaultHandle) -> usize {
+    let id = vw.vault_id().ok();
+    report
+        .missing_blobs
+        .iter()
+        .filter(|missing| Some(missing.vault_id) == id)
+        .count()
 }
 
 static WHITESPACE_REGEX: LazyLock<regex::Regex> =

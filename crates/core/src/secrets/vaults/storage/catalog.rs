@@ -13,7 +13,7 @@ use crate::core::config::APP_CONFIG;
 use crate::core::dirs::vaults_dir;
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::bundle::{
-    ExportMode, FileKeyWrapper, ImportAction, ImportSelection, ImportableBundle,
+    ExportMode, ExportReport, FileKeyWrapper, ImportAction, ImportSelection, ImportableBundle,
 };
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VaultFileKey, VaultHeader};
@@ -711,6 +711,9 @@ impl VaultCatalog {
 
     /// Unlock each of `keys` on `context` and export them into one bundle file
     /// at `path`. Passkeys are included only if `include_passkeys` is set.
+    /// File blobs are included, and a synced vault fetches the ones it lacks.
+    /// The report lists the blobs that could not be included
+    /// ([`export_bundle`]).
     pub fn export(
         &self,
         keys: &[String],
@@ -719,13 +722,20 @@ impl VaultCatalog {
         include_passkeys: bool,
         context: AuthContext,
         progress: impl FnMut(ExportProgress),
-    ) -> Result<(), Error> {
+    ) -> Result<ExportReport, Error> {
         let vaults = keys
             .iter()
             .map(|key| self.open(key, context.clone()))
             .collect::<Result<Vec<_>, _>>()?;
         let refs: Vec<&VaultHandle> = vaults.iter().collect();
-        export_bundle(&refs, path, export_mode, include_passkeys, progress)
+        export_bundle(
+            &refs,
+            path,
+            export_mode,
+            include_passkeys,
+            &self.files,
+            progress,
+        )
     }
 
     /// Import the selected vaults of an opened bundle, re-wrapping each file

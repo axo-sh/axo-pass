@@ -22,6 +22,7 @@ use crate::secrets::vaults::format::vault_cipher::VaultCipher;
 use crate::secrets::vaults::model::Vault;
 
 mod export;
+mod files;
 mod format;
 mod import;
 mod wrapping;
@@ -57,6 +58,7 @@ fn make_bundle_json(count: usize) -> (String, Uuid, Vec<Vec<u8>>) {
             wrapped_file_key,
             metadata: None,
             items: BTreeMap::new(),
+            blobs: BTreeMap::new(),
         });
     }
 

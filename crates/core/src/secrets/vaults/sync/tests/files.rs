@@ -1,7 +1,7 @@
 //! File credentials in a synced vault: the upload of each blob before the
 //! state file that references it, the fetch of a missing blob on read, the
 //! blob status of the sync report, and the sync of file records between
-//! Macs.
+//! Macs, and the export of a synced vault whose blobs are in the folder.
 
 use std::sync::Arc;
 
@@ -23,6 +23,7 @@ use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::{Error, VaultHandle};
 
+mod export;
 mod model;
 mod publish;
 mod replicas;

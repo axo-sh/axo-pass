@@ -11,17 +11,17 @@ use crate::secrets::vaults::sync::sidecar::Sidecar;
 
 /// Mac A with the vault of a fixture that holds item `item` and syncs
 /// through `transport`, and Mac B that joined it as a new vault.
-struct TwoMacs {
-    a: Fixture,
-    b: Mac,
+pub(super) struct TwoMacs {
+    pub(super) a: Fixture,
+    pub(super) b: Mac,
     /// Vault of Mac B.
-    b_vault: VaultHandle,
+    pub(super) b_vault: VaultHandle,
     setup: SyncSetup,
     transport: Arc<FakeTransport>,
 }
 
 impl TwoMacs {
-    fn new(transport: &Arc<FakeTransport>) -> Self {
+    pub(super) fn new(transport: &Arc<FakeTransport>) -> Self {
         let a = Fixture::with_transport(0, None, transport.clone());
         a.add_item().unwrap();
         let setup = enable(&a, root());
@@ -51,14 +51,14 @@ impl TwoMacs {
         (c, vault)
     }
 
-    fn id(&self) -> uuid::Uuid {
+    pub(super) fn id(&self) -> uuid::Uuid {
         self.a.id()
     }
 
     /// Run a transaction with no change on Mac B, which applies the state
     /// files of Mac A, and check that sync is active. Returns the vault of
     /// Mac B as saved.
-    fn sync_b(&self) -> VaultHandle {
+    pub(super) fn sync_b(&self) -> VaultHandle {
         let committed = self.b.write(&self.b_vault, |_| Ok(())).unwrap();
         assert_eq!(committed.sync_status, Some(SyncStatus::Active));
         on_disk(&self.b_vault)

@@ -1,3 +1,20 @@
+//! Export bundles of vaults.
+//!
+//! A bundle is one JSON file that holds each vault encrypted under a new file
+//! key (`exported_bundle.rs`). The bundle key is protected once with the
+//! export mode (`export_mode.rs`).
+//!
+//! The file blobs of a vault are inside its bundle entry, as stored. Export
+//! copies the blobs that exported records name (`export_blobs.rs`). Open
+//! checks every blob against its name before any import writes. An import
+//! writes the blobs of a vault to its local blob store before the vault file.
+//!
+//! Blobs are bound to the vault id, so a vault that holds files imports under
+//! its bundle id only. A copy of such a vault is refused. A vault whose
+//! bundle lacks a blob imports its records, and the file reads as missing
+//! locally.
+
+pub(crate) mod export_blobs;
 mod export_mode;
 pub mod exported_bundle;
 mod import_identity;
@@ -5,7 +22,7 @@ mod import_identity;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::{self};
 use std::path::{Path, PathBuf};
@@ -16,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
+pub use crate::secrets::vaults::bundle::export_blobs::{ExportReport, MissingBlob};
 pub use crate::secrets::vaults::bundle::export_mode::{
     ExportMode, MAX_WORK_FACTOR, MIN_WORK_FACTOR, WorkFactor,
 };
@@ -24,11 +42,13 @@ pub use crate::secrets::vaults::bundle::exported_bundle::{
 };
 pub use crate::secrets::vaults::bundle::import_identity::ImportIdentity;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
+use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVaultItem, VaultFileKey};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::vault_cipher::VaultCipher;
-use crate::secrets::vaults::model::{Vault, VaultMetadata};
+use crate::secrets::vaults::model::{Vault, VaultMetadata, bundled_file_blobs};
 use crate::secrets::vaults::storage::handle::{VaultHandle, normalized_key};
 use crate::secrets::vaults::storage::txn::VaultWriter;
 
@@ -75,10 +95,35 @@ pub struct BundleVaultInfo {
     pub id: Uuid,
     pub name: Option<String>,
     pub default_key: Option<String>,
+    /// Files in the vault: the blobs that its records name, history included.
+    pub files: usize,
+    /// Files whose blobs the bundle lacks. An import writes their records,
+    /// and the files read as missing locally.
+    pub missing_files: usize,
+}
+
+/// Blobs of `blobs` that `referenced` names. Fails with `FileBlobMismatch` if
+/// any blob of `blobs`, named or not, does not hash to its name.
+fn verified_blobs(
+    blobs: BTreeMap<FileHash, Vec<u8>>,
+    referenced: &BTreeSet<FileHash>,
+) -> Result<BTreeMap<FileHash, Vec<u8>>, Error> {
+    if let Some(name) = blobs
+        .iter()
+        .find_map(|(name, bytes)| (FileHash::of(bytes) != *name).then(|| name.to_string()))
+    {
+        return Err(Error::FileBlobMismatch(name));
+    }
+    Ok(blobs
+        .into_iter()
+        .filter(|(name, _)| referenced.contains(name))
+        .collect())
 }
 
 /// Vault written by an import, for its audit event.
 struct ImportedRow {
+    /// Files whose blobs the bundle lacks.
+    missing_files: usize,
     /// Vault id of the written vault.
     id: Uuid,
     /// Bundle vault id, if the vault is a copy.
@@ -94,9 +139,19 @@ struct PreparedVault {
     raw_file_key: SecretBox<Vec<u8>>,
     metadata: Option<EncryptedBlob<VaultMetadata>>,
     items: BTreeMap<Uuid, EncryptedVaultItem>,
+    /// Blobs that the records of `items` name.
+    referenced: BTreeSet<FileHash>,
+    /// Blobs of `referenced` that the bundle holds, each checked against its
+    /// name. Bundle blobs that no record names are dropped.
+    blobs: BTreeMap<FileHash, Vec<u8>>,
 }
 
 impl PreparedVault {
+    /// Blobs that the records name and the bundle lacks.
+    fn missing_blobs(&self) -> usize {
+        self.referenced.len() - self.blobs.len()
+    }
+
     /// Decrypt the vault with its raw file key and encrypt it again under a
     /// new file key, so the vault shares no key with the bundle. `key` is the
     /// vault key the vault is imported as, already validated. `wrap` receives
@@ -126,7 +181,10 @@ pub struct ImportableBundle {
 }
 
 impl ImportableBundle {
-    /// Read a bundle file and decrypt every file key with `identity`.
+    /// Read a bundle file and decrypt every file key with `identity`. Scans
+    /// the records of each vault for the blobs they name, and checks every
+    /// blob of the bundle against its name. A blob that does not match fails
+    /// with `FileBlobMismatch`, and nothing is imported from the bundle.
     pub fn open(import_path: &Path, identity: ImportIdentity) -> Result<Self, Error> {
         let data = fs::read_to_string(import_path).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
@@ -185,6 +243,11 @@ impl ImportableBundle {
                     raw_bytes.len()
                 )));
             }
+            // every blob is checked, so a bundle with one damaged blob is
+            // refused before anything is written
+            let cipher = VaultCipher::new_with_bytes(&raw_bytes, v.id);
+            let referenced = bundled_file_blobs(&cipher, &v.items)?;
+            let blobs = verified_blobs(v.blobs, &referenced)?;
             vaults.push(PreparedVault {
                 id: v.id,
                 name: v.name,
@@ -192,6 +255,8 @@ impl ImportableBundle {
                 raw_file_key: SecretBox::new(Box::new(raw_bytes)),
                 metadata: v.metadata,
                 items: v.items,
+                referenced,
+                blobs,
             });
         }
 
@@ -210,6 +275,8 @@ impl ImportableBundle {
                 raw_file_key: SecretBox::new(Box::new(vec![7u8; FILE_KEY_LEN])),
                 metadata: None,
                 items: BTreeMap::new(),
+                referenced: BTreeSet::new(),
+                blobs: BTreeMap::new(),
             })
             .collect();
         Self { vaults }
@@ -223,6 +290,8 @@ impl ImportableBundle {
                 id: v.id,
                 name: v.name.clone(),
                 default_key: v.default_key.clone(),
+                files: v.referenced.len(),
+                missing_files: v.missing_blobs(),
             })
             .collect()
     }
@@ -237,6 +306,12 @@ impl ImportableBundle {
     /// a partial file. A vault id that another tracked vault file already
     /// holds is refused. If a write fails, the vaults this import already
     /// wrote are removed on a best-effort basis.
+    ///
+    /// The blobs of a vault go to its local blob store before its file is
+    /// written. A vault that holds files is refused as a copy, since its blobs
+    /// are bound to the bundle vault id. A blob that the bundle lacks is not
+    /// written, and its file reads as missing. A failed import removes the
+    /// blobs it wrote.
     ///
     /// `wrapper` returns the file key wrapper and runs once, after every
     /// target key is checked.
@@ -285,6 +360,17 @@ impl ImportableBundle {
                 )));
             }
 
+            // blobs are sealed under the bundle vault id, so a copy cannot
+            // read them
+            if new_id.is_some() && !prepared.referenced.is_empty() {
+                return Err(Error::VaultImportError(format!(
+                    "Vault {} holds {} files, whose blobs are bound to the vault id. \
+                     Import it under its bundle id, not as a copy.",
+                    ShortId::encode_uuid(*id),
+                    prepared.referenced.len()
+                )));
+            }
+
             let path = VaultHandle::file_path(vault_dir, new_id.unwrap_or(*id));
             if path.exists() {
                 return Err(Error::DuplicateVaultId(format!(
@@ -305,35 +391,59 @@ impl ImportableBundle {
         // written
         let wrap = wrapper()?;
         let mut staged: Vec<VaultHandle> = Vec::with_capacity(planned.len());
+        let mut staged_blobs: Vec<BTreeMap<FileHash, Vec<u8>>> = Vec::with_capacity(planned.len());
         let mut audit_rows: Vec<ImportedRow> = Vec::with_capacity(planned.len());
-        for p in planned {
+        for mut p in planned {
             audit_rows.push(ImportedRow {
                 id: p.new_id.unwrap_or(p.prepared.id),
                 source_id: p.new_id.map(|_| p.prepared.id),
                 key: p.key.clone(),
                 name: p.prepared.name.clone(),
+                missing_files: p.prepared.missing_blobs(),
             });
+            staged_blobs.push(std::mem::take(&mut p.prepared.blobs));
             let vault = p.prepared.into_vault(p.key, p.new_id, |raw| wrap(raw))?;
             staged.push(VaultHandle::unlocked(p.path, vault));
         }
 
+        // A vault file is written after its blobs, so no record is saved
+        // before its blob. A blob that the store already holds is kept if the
+        // import fails.
         let mut written: Vec<&Path> = Vec::with_capacity(staged.len());
-        for vw in &staged {
-            if let Err(e) = files.create(vw) {
-                for path in written {
-                    let removed = files.delete(path, |path| {
-                        fs::remove_file(path).map_err(Error::VaultDeleteError)
-                    });
-                    if let Err(e) = removed {
-                        log::error!(
-                            "Failed to remove {} after a failed import: {e}",
-                            path.display()
-                        );
+        let mut new_blobs: Vec<(BlobStore, FileHash)> = Vec::new();
+        let mut write = || -> Result<(), Error> {
+            for (vw, blobs) in staged.iter().zip(&staged_blobs) {
+                let store = BlobStore::of(&vw.path, vw.vault_id()?);
+                for (name, bytes) in blobs {
+                    let is_new = !store.contains(name);
+                    store.put(name, bytes)?;
+                    if is_new {
+                        new_blobs.push((store.clone(), *name));
                     }
                 }
-                return Err(e);
+                files.create(vw)?;
+                written.push(&vw.path);
             }
-            written.push(&vw.path);
+            Ok(())
+        };
+        if let Err(e) = write() {
+            for path in &written {
+                let removed = files.delete(path, |path| {
+                    fs::remove_file(path).map_err(Error::VaultDeleteError)
+                });
+                if let Err(e) = removed {
+                    log::error!(
+                        "Failed to remove {} after a failed import: {e}",
+                        path.display()
+                    );
+                }
+            }
+            for (store, name) in &new_blobs {
+                if let Err(e) = store.delete(name) {
+                    log::error!("Failed to remove file blob {name} after a failed import: {e}");
+                }
+            }
+            return Err(e);
         }
 
         let count = audit_rows.len();
@@ -346,6 +456,14 @@ impl ImportableBundle {
             .subject(Subject::new(SubjectKind::Vault, row.key).maybe_label(row.name))
             .subject_ids(SubjectIds::vault(row.id))
             .detail("vault_count", count.to_string());
+            if row.missing_files > 0 {
+                log::warn!(
+                    "Imported vault {} without {} file blobs",
+                    ShortId::encode_uuid(row.id),
+                    row.missing_files
+                );
+                event = event.detail("missing_files", row.missing_files.to_string());
+            }
             if let Some(source_id) = row.source_id {
                 event = event.detail(SOURCE_VAULT_ID, ShortId::encode_uuid(source_id));
             }

@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
+pub(crate) use files::bundled_file_blobs;
 use history::HistoryKind;
 use jiff::tz::TimeZone;
 pub use overview::{
@@ -28,6 +29,7 @@ use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::bundle::exported_bundle::{BundledVault, ExportedBundle};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::encrypted_blob::EncryptedBlob;
 use crate::secrets::vaults::format::encrypted_vault::{
     DeletedCredential, DeletedItem, EncryptedVault, EncryptedVaultItem,
@@ -1023,6 +1025,9 @@ impl Vault {
     /// is kept. Entries left out are not decrypted, so a deleted entry or a
     /// left out passkey whose blob fails to decrypt does not fail the export.
     /// This vault is unchanged.
+    ///
+    /// The bundled vault holds no file blobs. Records name their blobs, which
+    /// [`Self::to_bundled_vault_with_blobs`] lists.
     pub fn to_bundled_vault(
         &self,
         key: Option<String>,
@@ -1030,6 +1035,20 @@ impl Vault {
         bundle_cipher: &Aes256Gcm,
         include_passkeys: bool,
     ) -> Result<BundledVault, Error> {
+        self.to_bundled_vault_with_blobs(key, bundle_id, bundle_cipher, include_passkeys)
+            .map(|(bundled, _)| bundled)
+    }
+
+    /// Same as [`Self::to_bundled_vault`], with the blobs that the exported
+    /// records name. Trashed files are not exported, so their blobs are not
+    /// listed. The caller adds the blob bytes to `blobs` of the result.
+    pub(crate) fn to_bundled_vault_with_blobs(
+        &self,
+        key: Option<String>,
+        bundle_id: Uuid,
+        bundle_cipher: &Aes256Gcm,
+        include_passkeys: bool,
+    ) -> Result<(BundledVault, BTreeSet<FileHash>), Error> {
         // A bundle holds no wrapped file key, so the copy gets an empty one.
         // The copy is dropped at return and is never saved.
         let scope = RekeyScope::Live {
@@ -1041,14 +1060,17 @@ impl Vault {
             bundle_cipher,
             ExportedBundle::file_key_aad(bundle_id, copy.id),
         )?;
-        Ok(BundledVault {
+        let blobs = copy.file_blobs()?;
+        let bundled = BundledVault {
             id: encrypted_vault.id,
             name: encrypted_vault.name,
             default_key: key,
             wrapped_file_key,
             metadata: encrypted_vault.metadata,
             items: encrypted_vault.items,
-        })
+            blobs: BTreeMap::new(),
+        };
+        Ok((bundled, blobs))
     }
 
     pub fn id(&self) -> Uuid {
