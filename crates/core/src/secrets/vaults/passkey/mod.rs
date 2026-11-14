@@ -578,6 +578,10 @@ struct StoredPasskey {
     /// Absent for passkeys created before PRF support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prf_secret: Option<String>,
+    /// Fields this build does not know, written back unchanged on a rewrite.
+    /// A field that a newer build adds is not dropped by a rename here.
+    #[serde(flatten)]
+    unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Passkey details to display. Excludes key and the user handle.
@@ -648,6 +652,7 @@ fn encode(passkey: &Passkey, created_at: Option<i64>) -> Result<String, Error> {
             .hmac_secret
             .as_ref()
             .map(|secret| B64.encode(&secret.cred_with_uv)),
+        unknown: serde_json::Map::new(),
     };
     serde_json::to_string(&record)
         .map_err(|e| Error::Passkey(format!("Failed to encode the passkey: {e}")))

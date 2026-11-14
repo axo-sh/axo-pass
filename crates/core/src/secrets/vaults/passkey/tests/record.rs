@@ -91,6 +91,49 @@ fn record_without_creation_time_still_summarizes() {
     assert!(super::summary("not json").is_none());
 }
 
+/// A field that a newer build adds to the record is kept by a rename.
+#[tokio::test]
+async fn rename_keeps_fields_this_build_does_not_know() {
+    let mut vw = registered_vault("ada").await;
+    let stored = list(&vw).unwrap().remove(0);
+    let value = vw
+        .get_secret(&stored.item_key, &stored.credential_key)
+        .unwrap()
+        .unwrap();
+    let mut record: serde_json::Value = serde_json::from_str(value.expose_secret()).unwrap();
+    record["backup_state"] = serde_json::json!({"eligible": true});
+    let title = read_record(&vw, &stored.item_key, &stored.credential_key)
+        .unwrap()
+        .title;
+    vw.replace_secret(
+        &stored.item_key,
+        &stored.credential_key,
+        &title,
+        FieldKind::Passkey,
+        SecretString::from(record.to_string()),
+    )
+    .unwrap();
+
+    rename_account(
+        &mut vw,
+        &stored.item_key,
+        &stored.credential_key,
+        "lovelace",
+    )
+    .unwrap();
+
+    let value = vw
+        .get_secret(&stored.item_key, &stored.credential_key)
+        .unwrap()
+        .unwrap();
+    let record: serde_json::Value = serde_json::from_str(value.expose_secret()).unwrap();
+    assert_eq!(record["username"], "lovelace");
+    assert_eq!(
+        record["backup_state"],
+        serde_json::json!({"eligible": true})
+    );
+}
+
 #[test]
 fn unreadable_records_rejected_not_panicked_on() {
     assert!(decode("not json").is_err());
