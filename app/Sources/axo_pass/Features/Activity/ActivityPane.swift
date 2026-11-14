@@ -109,6 +109,8 @@ struct ActivityPane: View {
   @ViewBuilder
   private func row(_ events: [ActivityEvent]) -> some View {
     let event = events[0]
+    let opener = SubjectOpener(
+      vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
     let content = HStack(spacing: 12) {
       Text(Self.time(event))
         .foregroundStyle(.secondary)
@@ -117,9 +119,18 @@ struct ActivityPane: View {
       TodayIcon(
         symbol: UsedTodayStyle.symbol(event.displayKind),
         color: UsedTodayStyle.color(event.displayKind))
-      Text(ActivityStyle.sentence(events))
-        .lineLimit(1)
-        .truncationMode(.tail)
+      HStack(spacing: 6) {
+        Text(opener.title(event.ref, label: event.label))
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .layoutPriority(1)
+        if let tag = opener.keyTag(event.ref) {
+          KeyIdTag(text: tag)
+        }
+        Text(ActivityStyle.predicate(events))
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
       if events.count > 1 {
         Text("\(events.count)")
           .font(.caption)
@@ -153,15 +164,15 @@ struct ActivityPane: View {
         content
       }
       .buttonStyle(.plain)
-      .help(expanded.contains(event.id) ? "Hide signatures" : "Show signatures")
+      .help(expanded.contains(event.id) ? "Hide details" : "Show details")
     } else {
       opening(event, content)
     }
   }
 
   /// Compact row of the events of one minute in an expanded run. Time is
-  /// aligned with the parent sentence. Hosts are listed if `showsHosts` is
-  /// true.
+  /// aligned with the parent sentence. Status is aligned with the parent
+  /// status. Hosts are listed if `showsHosts` is true.
   private func childRow(_ events: [ActivityEvent], showsHosts: Bool) -> some View {
     let event = events[0]
     var hosts: [String] = []
@@ -170,7 +181,8 @@ struct ActivityPane: View {
       Text(Self.time(event))
         .monospacedDigit()
         .frame(width: Self.timeWidth, alignment: .leading)
-      Text(events.count == 1 ? "1 signature" : "\(events.count) signatures")
+      let noun = event.record.outcome == .succeeded ? "signature" : "request"
+      Text(events.count == 1 ? "1 \(noun)" : "\(events.count) \(noun)s")
         .monospacedDigit()
       if showsHosts, !hosts.isEmpty {
         Text("to \(hosts.joined(separator: ", "))")
@@ -178,6 +190,12 @@ struct ActivityPane: View {
           .truncationMode(.tail)
       }
       Spacer(minLength: 12)
+      if let status = ActivityStyle.status(event) {
+        Text(status.text)
+          .foregroundStyle(status.color)
+      }
+      // Chevron width of the parent row, so statuses line up.
+      Color.clear.frame(width: 12, height: 1)
     }
     .font(.callout)
     .foregroundStyle(.secondary)
@@ -306,15 +324,17 @@ private enum ActivityStyle {
     }
   }
 
-  /// Row text, such as "github.com key signed for git to github.com". Subject
-  /// and programs are in the primary color. Programs are monospaced. Uses
-  /// that did not succeed read as requests.
-  static func sentence(_ events: [ActivityEvent]) -> AttributedString {
+  /// Row text after the subject title, such as "signed for git to
+  /// github.com". Programs and hosts are in the primary color. Programs are
+  /// monospaced. Uses that did not succeed read as requests.
+  static func predicate(_ events: [ActivityEvent]) -> AttributedString {
     let event = events[0]
     let phrase = phrase(event)
-    var text = subject(event)
-    text += secondary(" \(phrase.verb)")
-    let program = phrase.isBrowser ? event.browser ?? event.caller : event.caller
+    var text = secondary(phrase.verb)
+    let caller = event.caller.flatMap {
+      UsedTodayStyle.showsCaller($0, kind: event.kind) ? $0 : nil
+    }
+    let program = phrase.isBrowser ? event.browser ?? caller : caller
     if let program {
       text += secondary(" \(phrase.preposition) ")
       var name = AttributedString(program)
@@ -346,7 +366,7 @@ private enum ActivityStyle {
     case "passkey.asserted": return ("passkey sign-in", "in", true)
     case "ssh.sign": return ("signed", "for", false)
     case "ssh.key_add": return ("added to agent", "by", false)
-    case "ssh.passphrase", "gpg.passphrase": return ("passphrase", "for", false)
+    case "ssh.passphrase", "gpg.passphrase": return ("unlocked", "by", false)
     case "gpg.confirm": return ("confirmed", "for", false)
     case "age.decrypt": return ("decrypted", "by", false)
     case "age.encrypt": return ("encrypted", "by", false)
@@ -356,20 +376,6 @@ private enum ActivityStyle {
     case "credential.inject": return ("injected", "by", false)
     default: return ("used", "by", false)
     }
-  }
-
-  /// Subject label. An SSH key labeled by fingerprint shows as "SSH key" with
-  /// the fingerprint shortened in secondary monospaced text.
-  private static func subject(_ event: ActivityEvent) -> AttributedString {
-    let label = event.label
-    guard event.kind == .sshKey, label.hasPrefix("SHA256:"), label.count > 18 else {
-      return AttributedString(label)
-    }
-    var text = AttributedString("SSH key ")
-    var fingerprint = secondary("\(label.prefix(11))…\(label.suffix(4))")
-    fingerprint.font = .body.monospaced()
-    text += fingerprint
-    return text
   }
 
   private static func secondary(_ string: String) -> AttributedString {

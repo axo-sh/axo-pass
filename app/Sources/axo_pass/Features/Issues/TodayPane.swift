@@ -4,10 +4,10 @@ import AxoPassFFI
 import SwiftUI
 
 /// Home page of the app. Lists the issues with one fix button for each, then
-/// the keys and credentials used today. Counted issues are listed under "Needs
-/// you" and setup issues under "Not set up". Info issues are left out. If no
-/// counted issue exists, a summary line lists the checks that pass. Advice
-/// issues can be snoozed or dismissed, and are then listed under "Dismissed".
+/// the keys and credentials used today. The "Status" section lists chips of
+/// the status checks, then the counted issues. Setup issues are listed under
+/// "Not set up". Info issues are left out. Advice issues can be snoozed or
+/// dismissed, and are then listed under "Dismissed".
 struct TodayPane: View {
   let sshModel: SshModel
   let gpgModel: GpgModel
@@ -27,14 +27,16 @@ struct TodayPane: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
-        if counted.isEmpty {
+        let checks = statusChecks
+        if !checks.isEmpty || !counted.isEmpty {
           TodaySectionHeader("Status")
-          TodayCard { healthRow }
-        } else {
-          TodaySectionHeader(
-            "Needs you", count: counted.count,
-            tint: issues.worstSeverity == .broken ? .red : .orange)
-          issueCard(counted)
+          if !checks.isEmpty {
+            checkChips(checks)
+              .padding(.bottom, counted.isEmpty ? 0 : 10)
+          }
+          if !counted.isEmpty {
+            issueCard(counted)
+          }
         }
         if !setup.isEmpty {
           TodaySectionHeader("Not set up")
@@ -89,39 +91,36 @@ struct TodayPane: View {
 
   // MARK: - Status
 
-  /// Summary of the checks that pass. Shown if no counted issue exists.
-  private var healthRow: some View {
-    let checks = passingChecks
-    return HStack(spacing: 12) {
-      TodayIcon(symbol: "checkmark", color: .green)
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Nothing needs you")
-          .fontWeight(.medium)
-        if !checks.isEmpty {
-          Text(checks.joined(separator: " · "))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+  /// Chips of the status checks. Shown above the counted issues.
+  private func checkChips(_ checks: [StatusCheck]) -> some View {
+    TodayFlowLayout(spacing: 6) {
+      ForEach(checks, id: \.label) { check in
+        TodayCheckChip(label: check.label, passing: check.passing)
+          .help(check.help)
       }
-      Spacer(minLength: 0)
     }
-    .padding(.horizontal, 14)
-    .padding(.vertical, 10)
   }
 
-  /// Checks that pass, in sidebar order. A check that has not run is left out.
-  private var passingChecks: [String] {
-    var list: [String] = []
+  /// Status checks, in sidebar order. Checks that pass are listed. The SSH
+  /// agent check is also listed if it fails. A check that has not run is left
+  /// out. Labels are short. Help text gives the full check.
+  private var statusChecks: [StatusCheck] {
+    var list: [StatusCheck] = []
     let synced = vaults.vaults.filter { sync.state($0.key)?.isOn == true }.count
     if synced > 0 {
-      list.append(synced == 1 ? "1 vault synced" : "\(synced) vaults synced")
+      list.append(
+        StatusCheck("Sync", synced == 1 ? "1 vault synced" : "\(synced) vaults synced"))
     }
-    if issues.agentStatus == .running { list.append("SSH agent running") }
-    if issues.sshConf?.state == .configured { list.append("ssh uses Axo Pass") }
-    if issues.shell?.configured == true { list.append("ap set up in zsh") }
-    if issues.gpgConf?.state == .configured { list.append("gpg uses Axo Pass") }
-    if issues.autofillEnabled == true { list.append("AutoFill on") }
+    switch issues.agentStatus {
+    case .running: list.append(StatusCheck("SSH agent", "SSH agent running"))
+    case .notRunning, .staleSocket:
+      list.append(StatusCheck("SSH agent", "SSH agent not running", passing: false))
+    case nil: break
+    }
+    if issues.sshConf?.state == .configured { list.append(StatusCheck("SSH", "ssh uses Axo Pass")) }
+    if issues.shell?.configured == true { list.append(StatusCheck("Shell", "ap set up in zsh")) }
+    if issues.gpgConf?.state == .configured { list.append(StatusCheck("GPG", "gpg uses Axo Pass")) }
+    if issues.autofillEnabled == true { list.append(StatusCheck("AutoFill", "AutoFill on")) }
     return list
   }
 
@@ -147,15 +146,22 @@ struct TodayPane: View {
 
   @ViewBuilder
   private func usedRow(_ entry: UsedTodayEntry) -> some View {
+    let opener = SubjectOpener(
+      vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
     let content = HStack(spacing: 12) {
       TodayIcon(
         symbol: UsedTodayStyle.symbol(entry.displayKind),
         color: UsedTodayStyle.color(entry.displayKind))
       VStack(alignment: .leading, spacing: 2) {
-        Text(entry.label)
-          .fontWeight(.medium)
-          .lineLimit(1)
-          .truncationMode(.middle)
+        HStack(spacing: 6) {
+          Text(opener.title(entry.ref, label: entry.label))
+            .fontWeight(.medium)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          if let tag = opener.keyTag(entry.ref) {
+            KeyIdTag(text: tag)
+          }
+        }
         Text(UsedTodayStyle.summary(entry))
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -177,8 +183,6 @@ struct TodayPane: View {
     .padding(.vertical, 10)
     .contentShape(.rect)
 
-    let opener = SubjectOpener(
-      vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
     if opener.canOpen(entry.ref) {
       Button {
         opener.open(entry.ref)
@@ -355,6 +359,19 @@ struct TodayPane: View {
   }
 }
 
+/// Status check of the Today pane.
+private struct StatusCheck {
+  let label: String
+  let help: String
+  let passing: Bool
+
+  init(_ label: String, _ help: String, passing: Bool = true) {
+    self.label = label
+    self.help = help
+    self.passing = passing
+  }
+}
+
 /// Fix sheet that the Today pane presents itself.
 private enum TodaySheet: String, Identifiable {
   case duplicateVaults
@@ -416,12 +433,49 @@ struct SubjectOpener {
     return (vaultKey, itemId)
   }
 
-  /// Fingerprint of the GPG key that holds `keygrip` as its primary key or a
-  /// subkey.
-  private func gpgFingerprint(keygrip: String) -> String? {
+  /// Display title of a subject. GPG keys are named by the key name in place
+  /// of the keygrip. SSH keys labeled by fingerprint show as "SSH key", since
+  /// the id tag already shows the fingerprint.
+  func title(_ ref: AuditSubjectRef, label: String) -> String {
+    switch ref.kind {
+    case .sshKey:
+      return label.hasPrefix("SHA256:") ? "SSH key" : label
+    case .gpgKey:
+      guard let key = gpgKey(keygrip: ref.subjectId) else {
+        return "Keygrip …\(ref.subjectId.suffix(8))"
+      }
+      if !key.name.isEmpty { return key.name }
+      return key.email ?? key.fingerprint
+    default:
+      return label
+    }
+  }
+
+  /// First six characters of the key id, shown after the title. SSH keys use
+  /// the SHA256 fingerprint hash and GPG keys the fingerprint. Nil for other
+  /// kinds and for GPG keys not in the keyring.
+  func keyTag(_ ref: AuditSubjectRef) -> String? {
+    switch ref.kind {
+    case .sshKey:
+      let prefix = "SHA256:"
+      let id = ref.subjectId
+      return String((id.hasPrefix(prefix) ? id.dropFirst(prefix.count) : id[...]).prefix(6))
+    case .gpgKey:
+      return gpgKey(keygrip: ref.subjectId).map { String($0.fingerprint.prefix(6)) }
+    default:
+      return nil
+    }
+  }
+
+  /// GPG key that holds `keygrip` as its primary key or a subkey.
+  func gpgKey(keygrip: String) -> GpgKeyEntry? {
     issues.gpgKeys?.first { key in
       key.keygrip == keygrip || key.subkeys.contains { $0.keygrip == keygrip }
-    }?.fingerprint
+    }
+  }
+
+  private func gpgFingerprint(keygrip: String) -> String? {
+    gpgKey(keygrip: keygrip)?.fingerprint
   }
 }
 
@@ -499,6 +553,86 @@ struct TodayNoteRow: View {
   }
 }
 
+/// Monospaced capsule of a shortened key id.
+struct KeyIdTag: View {
+  let text: String
+
+  var body: some View {
+    KeyBadge(text: text)
+      .monospaced()
+      .fixedSize()
+  }
+}
+
+/// Status check with a green checkmark if it passes, or a red cross if it
+/// fails.
+private struct TodayCheckChip: View {
+  let label: String
+  let passing: Bool
+
+  var body: some View {
+    HStack(spacing: 4) {
+      Image(systemName: passing ? "checkmark" : "xmark")
+        .font(.system(size: 9, weight: .bold))
+        .foregroundStyle(passing ? .green : .red)
+      Text(label)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 2)
+    .background(.quaternary.opacity(0.6), in: Capsule())
+  }
+}
+
+/// Layout that places subviews left to right and wraps to a new line if the
+/// width runs out.
+private struct TodayFlowLayout: Layout {
+  var spacing: CGFloat
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+    let width = rows.map(\.width).max() ?? 0
+    let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+    return CGSize(width: width, height: height)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+  ) {
+    var y = bounds.minY
+    for row in arrange(width: bounds.width, subviews: subviews) {
+      var x = bounds.minX
+      for index in row.indices {
+        let size = subviews[index].sizeThatFits(.unspecified)
+        subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+        x += size.width + spacing
+      }
+      y += row.height + spacing
+    }
+  }
+
+  /// Subview indices of each line, with line width and height.
+  private func arrange(
+    width: CGFloat, subviews: Subviews
+  ) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+    var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+    var current: (indices: [Int], width: CGFloat, height: CGFloat) = ([], 0, 0)
+    for (index, subview) in subviews.enumerated() {
+      let size = subview.sizeThatFits(.unspecified)
+      let added = current.indices.isEmpty ? size.width : current.width + spacing + size.width
+      if !current.indices.isEmpty && added > width {
+        rows.append(current)
+        current = ([index], size.width, size.height)
+      } else {
+        current = (current.indices + [index], added, max(current.height, size.height))
+      }
+    }
+    if !current.indices.isEmpty { rows.append(current) }
+    return rows
+  }
+}
+
 /// White symbol on a rounded square of `color`.
 struct TodayIcon: View {
   let symbol: String
@@ -557,7 +691,7 @@ enum UsedTodayStyle {
   static func verb(_ action: String) -> String {
     switch action {
     case "ssh.sign": return "Signed"
-    case "ssh.passphrase", "gpg.passphrase": return "Passphrase supplied"
+    case "ssh.passphrase", "gpg.passphrase": return "Unlocked"
     case "gpg.confirm": return "Confirmed"
     case "age.decrypt": return "Decrypted"
     case "age.encrypt": return "Encrypted"
@@ -572,14 +706,21 @@ enum UsedTodayStyle {
     }
   }
 
+  /// Whether a caller is shown. gpg-agent is left out of GPG key callers,
+  /// since it makes every pinentry request.
+  static func showsCaller(_ caller: String, kind: UsedTodayKind) -> Bool {
+    !(kind == .gpgKey && caller == "gpg-agent")
+  }
+
   /// Kind, actions, and up to three callers, such as "SSH key · Signed by git,
   /// ssh".
   static func summary(_ entry: UsedTodayEntry) -> String {
     var parts = [kindLabel(entry.displayKind)]
     var action = entry.actions.map(verb).joined(separator: ", ")
-    if !entry.callers.isEmpty {
-      let shown = entry.callers.prefix(3).joined(separator: ", ")
-      let more = entry.callers.count > 3 ? " and \(entry.callers.count - 3) more" : ""
+    let callers = entry.callers.filter { showsCaller($0, kind: entry.kind) }
+    if !callers.isEmpty {
+      let shown = callers.prefix(3).joined(separator: ", ")
+      let more = callers.count > 3 ? " and \(callers.count - 3) more" : ""
       action += " by \(shown)\(more)"
     }
     parts.append(action)
