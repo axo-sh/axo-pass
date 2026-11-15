@@ -36,6 +36,12 @@ pub fn log_data_dir() -> PathBuf {
     dirs::state_dir().unwrap().join("axo-pass")
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn cache_dir() -> PathBuf {
+    // $XDG_CACHE_HOME/axo-pass, typically ~/.cache/axo-pass
+    dirs::cache_dir().unwrap().join("axo-pass")
+}
+
 /// Directory of the broker socket. `$XDG_RUNTIME_DIR/axo-pass`, or
 /// `/run/user/<uid>/axo-pass` if the variable is unset.
 #[cfg(not(target_os = "macos"))]

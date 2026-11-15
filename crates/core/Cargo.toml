@@ -59,6 +59,9 @@ url = "2.5.8"
 uuid = {version = "1.28.0", features = ["serde", "v4", "v7"]}
 zeroize = {version = "1.9.1", features = ["derive"]}
 
+[target.'cfg(target_os = "linux")'.dependencies]
+notify = "8.2.0"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
