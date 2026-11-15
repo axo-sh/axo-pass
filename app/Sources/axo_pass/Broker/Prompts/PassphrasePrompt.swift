@@ -278,9 +278,10 @@ private struct PassphraseEntryView: View {
 
       VStack(alignment: .leading, spacing: 12) {
         RevealableSecureField(
-          title: prompt.prompt ?? "Passphrase",
+          title: isQuestion ? "Answer" : "Passphrase",
           text: $value,
           focus: $fieldFocused,
+          secret: !isQuestion,
           onSubmit: { onSubmit(value, saveToKeychain && canSave) })
 
         if canSave {
@@ -295,7 +296,7 @@ private struct PassphraseEntryView: View {
           Button(touchID ? "Use Touch ID" : "Use Saved", action: onUseSaved)
         }
         Spacer()
-        Button("Unlock") { onSubmit(value, saveToKeychain && canSave) }
+        Button(isQuestion ? "Continue" : "Unlock") { onSubmit(value, saveToKeychain && canSave) }
           .keyboardShortcut(.defaultAction)
           .disabled(value.isEmpty)
       }
@@ -306,7 +307,14 @@ private struct PassphraseEntryView: View {
     .onAppear { fieldFocused = true }
   }
 
+  /// True for an ssh prompt that asks a yes/no question, such as the host key
+  /// confirmation. The answer is not a secret.
+  private var isQuestion: Bool {
+    prompt.kind == .ssh && (prompt.prompt?.contains("(yes/no") ?? false)
+  }
+
   private var title: [HeadlinePart] {
+    if isQuestion { return [.plain("SSH prompt")] }
     let passphrase = prompt.kind == .ssh ? "SSH key passphrase" : "OpenPGP passphrase"
     if let who = PromptCaller.appName(caller: prompt.caller, chain: prompt.callerChain) {
       return [.bold(who), .plain(" is asking for your \(passphrase)")]
