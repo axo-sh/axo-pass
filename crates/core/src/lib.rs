@@ -1,6 +1,7 @@
 pub mod age;
 pub mod audit;
 pub mod core;
+pub mod crypto;
 pub mod gpg;
 pub mod logging;
 #[cfg(test)]

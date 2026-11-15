@@ -30,6 +30,9 @@ fmt = [
 "fmt:all" = { command = [":fmt", ":app:fmt"], parallel = true }
 check = "cargo check --workspace --all-targets"
 test = "cargo test --workspace"
+"test:ecies" = "cargo test -p axo-pass-core --lib crypto::ecies"
+# Rewrites crates/core/src/crypto/ecies/vectors.json from Security.framework. macOS only.
+"ecies:vectors" = "cargo test -p axo-pass-core --lib crypto::ecies::apple_tests::write_vectors -- --ignored"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"

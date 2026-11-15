@@ -9,7 +9,7 @@ crate-type = ["rlib"]
 name = "axo_pass_core"
 
 [dependencies]
-aes-gcm = "0.10.3"
+aes-gcm = {version = "0.10.3", features = ["zeroize"]}
 age = {version = "0.11.5", features = ["armor"]}
 age-core = "0.11.0"
 anyhow.workspace = true
@@ -41,7 +41,7 @@ objc2-core-services = {version = "0.3.2", default-features = false, features = [
 objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSOperation", "NSPathUtilities", "NSString", "NSURL"]}
 objc2-local-authentication = "0.3.2"
 objc2-security = "0.3.2"
-p256 = "0.13"
+p256 = {version = "0.13", features = ["ecdh"]}
 passkey-authenticator = "0.5.0"
 passkey-types = "0.5.0"
 percent-encoding = "2.3.2"
