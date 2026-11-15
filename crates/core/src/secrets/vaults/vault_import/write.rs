@@ -1,16 +1,27 @@
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::path::PathBuf;
 
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use super::map::{ImportPlan, PlannedCredential, PlannedItem, UUID_KEY};
-use crate::secrets::vaults::{Error, ItemAutofill, VaultHandle};
+use crate::secrets::vaults::files::{FileInput, StagedFile, stage_file};
+use crate::secrets::vaults::storage::txn::{Target, VaultWriter};
+use crate::secrets::vaults::{Error, FieldKind, ItemAutofill, VaultHandle};
+
+/// File credential values by export path, for the files that were staged.
+pub type FileValues = HashMap<PathBuf, SecretString>;
 
 /// Counts of what [`write_plan`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImportSummary {
     /// Items written, including trashed items.
     pub added: usize,
+    /// File credentials written.
+    pub files_added: usize,
+    /// Planned files that were not staged, so no credential was written.
+    pub files_skipped: usize,
     /// Items left out because the vault already holds their 1Password uuid.
     pub skipped_existing: usize,
     /// Written items that were then deleted.
@@ -43,11 +54,77 @@ pub fn existing_import_uuids(handle: &VaultHandle) -> Result<HashSet<String>, Er
     Ok(uuids)
 }
 
+/// A planned file that could not be staged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFailure {
+    /// Title of the item that holds the file.
+    pub item: String,
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Result of [`stage_plan_files`].
+pub struct StagedFiles {
+    /// Staged files, for `write_with_files`.
+    pub files: Vec<StagedFile>,
+    /// Credential values of the staged files, for [`write_plan`].
+    pub values: FileValues,
+    /// Files that were left out. The import continues without them.
+    pub failures: Vec<FileFailure>,
+}
+
+/// Stage every planned file of the items whose uuid is not in `skip`. A file
+/// that cannot be read or staged is recorded as a failure.
+pub fn stage_plan_files(
+    writer: &VaultWriter,
+    target: &Target,
+    plan: &ImportPlan,
+    skip: &HashSet<String>,
+) -> StagedFiles {
+    let mut staged = StagedFiles {
+        files: Vec::new(),
+        values: FileValues::new(),
+        failures: Vec::new(),
+    };
+    for item in plan.items.iter().filter(|i| !skip.contains(&i.uuid)) {
+        for planned in &item.files {
+            let result = File::open(&planned.path)
+                .map_err(|e| e.to_string())
+                .and_then(|contents| {
+                    let input = FileInput {
+                        name: planned.name.clone(),
+                        mime: None,
+                        contents,
+                    };
+                    stage_file(writer, target, input).map_err(|e| e.to_string())
+                });
+            match result {
+                Ok(file) => {
+                    let value = SecretString::from(file.value().expose_secret().to_string());
+                    staged.values.insert(planned.path.clone(), value);
+                    staged.files.push(file);
+                },
+                Err(reason) => staged.failures.push(FileFailure {
+                    item: item.title.clone(),
+                    path: planned.path.clone(),
+                    reason,
+                }),
+            }
+        }
+    }
+    staged
+}
+
 /// Write a plan to a vault. Items whose uuid is already in the vault are
-/// skipped. An item key that is taken gets a numeric suffix. The caller runs
-/// this in one vault transaction and saves. An error leaves the handle
+/// skipped. An item key that is taken gets a numeric suffix. A file credential
+/// is written for each planned file that has a value in `files`. The caller
+/// runs this in one vault transaction and saves. An error leaves the handle
 /// partly written, so the caller must discard it.
-pub fn write_plan(handle: &mut VaultHandle, plan: &ImportPlan) -> Result<ImportSummary, Error> {
+pub fn write_plan(
+    handle: &mut VaultHandle,
+    plan: &ImportPlan,
+    files: &FileValues,
+) -> Result<ImportSummary, Error> {
     let mut summary = ImportSummary::default();
     let existing = existing_import_uuids(handle)?;
     let mut taken: HashSet<String> = handle
@@ -86,8 +163,10 @@ pub fn write_plan(handle: &mut VaultHandle, plan: &ImportPlan) -> Result<ImportS
             .folder_uuid
             .as_deref()
             .and_then(|uuid| folder_ids.get(uuid).copied());
-        write_item(handle, item, &key, folder)?;
+        let (written, left_out) = write_item(handle, item, &key, folder, files)?;
         summary.added += 1;
+        summary.files_added += written;
+        summary.files_skipped += left_out;
         if item.trashed {
             handle.delete_item(&key)?;
             summary.trashed += 1;
@@ -96,12 +175,15 @@ pub fn write_plan(handle: &mut VaultHandle, plan: &ImportPlan) -> Result<ImportS
     Ok(summary)
 }
 
+/// Write one item. Returns the counts of file credentials written and left
+/// out.
 fn write_item(
     handle: &mut VaultHandle,
     item: &PlannedItem,
     key: &str,
     folder: Option<Uuid>,
-) -> Result<(), Error> {
+    files: &FileValues,
+) -> Result<(usize, usize), Error> {
     handle.add_item(key, &item.title)?;
     if let Some(at) = item.created_at {
         handle.set_item_created_at(key, at)?;
@@ -116,6 +198,25 @@ fn write_item(
         for credential in &section.credentials {
             write_credential(handle, item, key, credential, Some(section_id), &mut ids)?;
         }
+    }
+
+    let (mut written, mut left_out) = (0, 0);
+    for file in &item.files {
+        let Some(value) = files.get(&file.path) else {
+            left_out += 1;
+            continue;
+        };
+        handle.add_new_secret(
+            key,
+            &file.key,
+            &file.title,
+            FieldKind::File,
+            SecretString::from(value.expose_secret().to_string()),
+        )?;
+        if let Some(at) = item.created_at {
+            handle.set_credential_created_at(key, &file.key, at)?;
+        }
+        written += 1;
     }
 
     let slot = |slot: &Option<String>| slot.as_deref().and_then(|k| ids.get(k).copied());
@@ -134,7 +235,7 @@ fn write_item(
     if folder.is_some() {
         handle.move_item(key, folder)?;
     }
-    Ok(())
+    Ok((written, left_out))
 }
 
 fn write_credential<'a>(
@@ -183,6 +284,8 @@ mod tests {
     use indoc::indoc;
 
     use super::*;
+    use crate::secrets::vaults::files::{read_file, write_with_files};
+    use crate::secrets::vaults::storage::txn::{Committed, Unlock};
     use crate::secrets::vaults::vault_import::map::{IMPORT_SECTION, MapOptions, map_items};
     use crate::secrets::vaults::vault_import::parse_1pif;
     use crate::secrets::vaults::{CATEGORY_LOGIN, FieldKind};
@@ -198,6 +301,63 @@ mod tests {
 
     fn handle() -> VaultHandle {
         VaultHandle::new_for_test("personal")
+    }
+
+    /// Write a plan that has no files.
+    fn apply(vault: &mut VaultHandle, plan: &ImportPlan) -> Result<ImportSummary, Error> {
+        write_plan(vault, plan, &FileValues::new())
+    }
+
+    /// Vault `personal` on disk, with its store under a temp directory.
+    struct Fixture {
+        dir: tempfile::TempDir,
+        writer: VaultWriter,
+        vault: VaultHandle,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let writer = VaultWriter::isolated(dir.path().join("data"));
+            let vault =
+                VaultHandle::new_for_test_at(dir.path().join("vaults").join("personal.json"));
+            writer.create(&vault).unwrap();
+            Self { dir, writer, vault }
+        }
+
+        /// Export folder with a note that has attachments `a.pdf` and `b.png`.
+        fn export_with_attachments(&self) -> std::path::PathBuf {
+            let export = self.dir.path().join("export.1pif");
+            let uuid = "ABC123ABC123ABC123ABC123ABC123AB";
+            fs::create_dir_all(export.join("attachments").join(uuid)).unwrap();
+            let record = format!(
+                r#"{{"uuid":"{uuid}","typeName":"securenotes.SecureNote","title":"Note","createdAt":1400000000,"secureContents":{{}}}}"#
+            );
+            fs::write(export.join("data.1pif"), record).unwrap();
+            fs::write(export.join("attachments").join(uuid).join("a.pdf"), "alpha").unwrap();
+            fs::write(export.join("attachments").join(uuid).join("b.png"), "bravo").unwrap();
+            export
+        }
+
+        fn plan(&self, export: &std::path::Path) -> ImportPlan {
+            map_items(&parse_1pif(export).unwrap(), MapOptions::default())
+        }
+
+        /// Stage the files of `plan`, then write it in one transaction.
+        fn import(&self, plan: &ImportPlan) -> (Vec<FileFailure>, Committed<ImportSummary>) {
+            let target = Target::of(&self.vault);
+            let staged = stage_plan_files(&self.writer, &target, plan, &HashSet::new());
+            let values = staged.values;
+            let committed = write_with_files(
+                &self.writer,
+                &target,
+                Unlock::Unlocked(&self.vault),
+                staged.files,
+                |vh| write_plan(vh, plan, &values),
+            )
+            .unwrap();
+            (staged.failures, committed)
+        }
     }
 
     fn secret(handle: &VaultHandle, item: &str, credential: &str) -> String {
@@ -217,7 +377,7 @@ mod tests {
     #[test]
     fn login_written_with_slots_sections_and_times() {
         let mut vault = handle();
-        let summary = write_plan(&mut vault, &plan_of(LOGIN)).unwrap();
+        let summary = apply(&mut vault, &plan_of(LOGIN)).unwrap();
 
         assert_eq!(summary.added, 1);
         assert_eq!(summary.folders_created, 1);
@@ -243,7 +403,7 @@ mod tests {
     #[test]
     fn credentials_placed_in_sections() {
         let mut vault = handle();
-        write_plan(&mut vault, &plan_of(LOGIN)).unwrap();
+        apply(&mut vault, &plan_of(LOGIN)).unwrap();
 
         let item = vault.get_item_overview("github").unwrap().unwrap();
         let section_of = |key: &str| {
@@ -265,7 +425,7 @@ mod tests {
     #[test]
     fn item_filed_in_folder() {
         let mut vault = handle();
-        write_plan(&mut vault, &plan_of(LOGIN)).unwrap();
+        apply(&mut vault, &plan_of(LOGIN)).unwrap();
 
         let item = vault.get_item_overview("github").unwrap().unwrap();
         let folders = vault.list_folders().unwrap();
@@ -278,9 +438,9 @@ mod tests {
     fn reimport_skips_existing_items_and_reuses_folders() {
         let mut vault = handle();
         let plan = plan_of(LOGIN);
-        write_plan(&mut vault, &plan).unwrap();
+        apply(&mut vault, &plan).unwrap();
 
-        let summary = write_plan(&mut vault, &plan).unwrap();
+        let summary = apply(&mut vault, &plan).unwrap();
 
         assert_eq!(
             summary,
@@ -297,10 +457,10 @@ mod tests {
     fn reimport_skips_item_in_recently_deleted() {
         let mut vault = handle();
         let plan = plan_of(LOGIN);
-        write_plan(&mut vault, &plan).unwrap();
+        apply(&mut vault, &plan).unwrap();
         vault.delete_item("github").unwrap();
 
-        let summary = write_plan(&mut vault, &plan).unwrap();
+        let summary = apply(&mut vault, &plan).unwrap();
 
         assert_eq!(summary.added, 0);
         assert_eq!(summary.skipped_existing, 1);
@@ -312,7 +472,7 @@ mod tests {
         let mut vault = handle();
         vault.add_item("github", "Mine").unwrap();
 
-        write_plan(&mut vault, &plan_of(LOGIN)).unwrap();
+        apply(&mut vault, &plan_of(LOGIN)).unwrap();
 
         assert_eq!(
             vault.get_item_overview("github").unwrap().unwrap().title,
@@ -329,7 +489,7 @@ mod tests {
             {"uuid":"T1","typeName":"securenotes.SecureNote","title":"Old","trashed":true,"secureContents":{"notesPlain":"gone"}}
         "#});
 
-        let summary = write_plan(&mut vault, &plan).unwrap();
+        let summary = apply(&mut vault, &plan).unwrap();
 
         assert_eq!(summary.added, 1);
         assert_eq!(summary.trashed, 1);
@@ -340,13 +500,81 @@ mod tests {
     }
 
     #[test]
+    fn attachments_written_as_file_credentials() {
+        let fx = Fixture::new();
+        let plan = fx.plan(&fx.export_with_attachments());
+
+        let (failures, committed) = fx.import(&plan);
+
+        assert!(failures.is_empty());
+        assert_eq!(committed.value.added, 1);
+        assert_eq!(committed.value.files_added, 2);
+        assert_eq!(committed.value.files_skipped, 0);
+        let vault = &committed.vault;
+        let item = vault.get_item_overview("note").unwrap().unwrap();
+        let file = item
+            .credentials
+            .values()
+            .find(|c| c.key == "a-pdf")
+            .unwrap();
+        assert_eq!(file.kind, FieldKind::File);
+        assert_eq!(file.title, "a.pdf");
+        assert_eq!(file.created_at, 1_400_000_000);
+        let mut contents = Vec::new();
+        let summary = read_file(&fx.writer, vault, "note", "b-png", &mut contents).unwrap();
+        assert_eq!(contents, b"bravo");
+        assert_eq!(summary.name, "b.png");
+        assert_eq!(summary.mime, None);
+    }
+
+    #[test]
+    fn unreadable_attachment_reported_and_import_continues() {
+        let fx = Fixture::new();
+        let export = fx.export_with_attachments();
+        let plan = fx.plan(&export);
+        let missing = plan.items[0].files[0].path.clone();
+        fs::remove_file(&missing).unwrap();
+
+        let (failures, committed) = fx.import(&plan);
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].item, "Note");
+        assert_eq!(failures[0].path, missing);
+        assert_eq!(committed.value.added, 1);
+        assert_eq!(committed.value.files_added, 1);
+        assert_eq!(committed.value.files_skipped, 1);
+        let item = committed.vault.get_item_overview("note").unwrap().unwrap();
+        assert!(item.credentials.values().all(|c| c.key != "a-pdf"));
+    }
+
+    #[test]
+    fn failed_write_leaves_no_blobs() {
+        let fx = Fixture::new();
+        let plan = fx.plan(&fx.export_with_attachments());
+        let target = Target::of(&fx.vault);
+        let staged = stage_plan_files(&fx.writer, &target, &plan, &HashSet::new());
+
+        let result = write_with_files(
+            &fx.writer,
+            &target,
+            Unlock::Unlocked(&fx.vault),
+            staged.files,
+            |_| Err::<(), _>(Error::InvalidItemKey("forced".to_string())),
+        );
+
+        assert!(result.is_err());
+        let blobs = fx.writer.blob_store(fx.vault.vault_id().unwrap()).list();
+        assert!(blobs.unwrap().is_empty());
+    }
+
+    #[test]
     fn note_without_time_keeps_current_time() {
         let mut vault = handle();
         let plan = plan_of(indoc! {r#"
             {"uuid":"N1","typeName":"securenotes.SecureNote","title":"Note","secureContents":{"notesPlain":"x"}}
         "#});
 
-        write_plan(&mut vault, &plan).unwrap();
+        apply(&mut vault, &plan).unwrap();
 
         let item = vault.get_item_overview("note").unwrap().unwrap();
         assert!(item.created_at > 1_700_000_000);

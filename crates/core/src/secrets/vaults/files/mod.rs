@@ -37,7 +37,7 @@ pub(crate) mod stream;
 use std::io::{Read, Write};
 
 pub use record::{FileHash, FileRecord};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use store::StagedBlob;
 use uuid::Uuid;
 
@@ -113,6 +113,73 @@ pub fn add_file<R: Read>(
             vh.credential_ids(item_key, cred_key)
         })
     })
+}
+
+/// A file encrypted to a temp file in the blob store, not yet part of any
+/// transaction. [`write_with_files`] commits it.
+pub struct StagedFile {
+    vault_id: Uuid,
+    staged: StagedBlob,
+    value: SecretString,
+}
+
+impl StagedFile {
+    /// Credential value for the file, an encoded [`FileRecord`]. It is known
+    /// before the blob is committed.
+    pub fn value(&self) -> &SecretString {
+        &self.value
+    }
+}
+
+/// Encrypt `input` to a temp file in the store of the vault `target`. A staged
+/// file that [`write_with_files`] never commits is left as a temp file in the
+/// store, and garbage collection deletes it.
+pub fn stage_file<R: Read>(
+    writer: &VaultWriter,
+    target: &Target,
+    input: FileInput<R>,
+) -> Result<StagedFile, Error> {
+    let (vault_id, staged) = stage(writer, target, input.contents)?;
+    let value = staged.record(input.name, input.mime).encode()?;
+    Ok(StagedFile {
+        vault_id,
+        staged,
+        value,
+    })
+}
+
+/// Run `write` in a transaction on the vault `target`, with every file of
+/// `files` committed to the blob store first. `write` adds the credentials
+/// that hold the values of the files, such as with `add_new_secret`. If it
+/// fails, or a file cannot be committed, the transaction saves nothing and
+/// the blobs committed so far are deleted. Fails with `VaultNotFound` if the
+/// vault is not the vault that a file was staged for.
+pub fn write_with_files<R>(
+    writer: &VaultWriter,
+    target: &Target,
+    unlock: Unlock<'_>,
+    files: Vec<StagedFile>,
+    write: impl FnOnce(&mut VaultHandle) -> Result<R, Error>,
+) -> Result<Committed<R>, Error> {
+    writer.write(target, unlock, |vh| commit_all(writer, vh, files, write))
+}
+
+/// Commit each file of `files` with [`commit_into`], then run `write`.
+fn commit_all<R, W>(
+    writer: &VaultWriter,
+    vh: &mut VaultHandle,
+    mut files: Vec<StagedFile>,
+    write: W,
+) -> Result<R, Error>
+where
+    W: FnOnce(&mut VaultHandle) -> Result<R, Error>,
+{
+    match files.pop() {
+        None => write(vh),
+        Some(file) => commit_into(writer, vh, file.vault_id, file.staged, |vh| {
+            commit_all(writer, vh, files, write)
+        }),
+    }
 }
 
 /// Replace the file of credential `cred_key` of item `item_key` with

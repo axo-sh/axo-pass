@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -18,6 +19,9 @@ const PASSWORD_KEY: &str = "password";
 const FOLDER_TYPE: &str = "system.folder.Regular";
 const FOLDER_TYPE_PREFIX: &str = "system.folder.";
 const OTP_PREFIX: &str = "otpauth://";
+/// Keys of `secureContents` that are not imported. `passwordHistory` holds
+/// previous passwords.
+const UNIMPORTED_KEYS: [&str; 1] = ["passwordHistory"];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MapOptions {
@@ -61,7 +65,23 @@ pub struct PlannedItem {
     /// Credentials outside any section.
     pub credentials: Vec<PlannedCredential>,
     pub sections: Vec<PlannedSection>,
+    /// Attachments, written as file credentials outside any section.
+    pub files: Vec<PlannedFile>,
     pub autofill: PlannedAutofill,
+}
+
+/// An attachment to add to an item as a file credential. The MIME type is not
+/// set, since readers fall back to the file name extension.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedFile {
+    /// Credential key. Unique within the item.
+    pub key: String,
+    /// Credential title, the file name.
+    pub title: String,
+    /// File name stored in the file record.
+    pub name: String,
+    /// Path of the file in the export.
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +237,9 @@ fn map_item(
 
     let mut type_credentials = Vec::new();
     for (extra_key, value) in &item.extra {
+        if UNIMPORTED_KEYS.contains(&extra_key.as_str()) {
+            continue;
+        }
         push_secret_value(&mut keys, &mut type_credentials, extra_key, value);
     }
     if !type_credentials.is_empty() {
@@ -225,6 +248,23 @@ fn map_item(
             credentials: type_credentials,
         });
     }
+
+    let files = item
+        .attachments
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            PlannedFile {
+                key: keys.allocate(&name),
+                title: name.clone(),
+                name,
+                path: path.clone(),
+            }
+        })
+        .collect();
 
     if let Some(notes) = &item.notes {
         credentials.push(PlannedCredential {
@@ -273,6 +313,7 @@ fn map_item(
         updated_at: item.updated_at,
         credentials,
         sections,
+        files,
         autofill,
     }
 }
@@ -627,6 +668,45 @@ mod tests {
         assert_eq!(credential(creds, "flags").value, r#"["a","b"]"#);
         assert_eq!(credential(creds, "billing-zip").title, "billing zip");
         assert_eq!(credential(creds, "billing-zip").kind, concealed);
+    }
+
+    #[test]
+    fn attachments_become_planned_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = r#"{"uuid":"ABC123ABC123ABC123ABC123ABC123AB","typeName":"securenotes.SecureNote","title":"N","secureContents":{}}"#;
+        fs::write(dir.path().join("data.1pif"), record).unwrap();
+        let folder = dir
+            .path()
+            .join("attachments")
+            .join("ABC123ABC123ABC123ABC123ABC123AB");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a b.pdf"), "1").unwrap();
+        fs::write(folder.join("a-b.pdf"), "2").unwrap();
+
+        let plan = map_items(&parse_1pif(dir.path()).unwrap(), MapOptions::default());
+        let files = &plan.items[0].files;
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].name, "a b.pdf");
+        assert_eq!(files[0].title, "a b.pdf");
+        assert_eq!(files[0].key, "a-b-pdf");
+        assert_eq!(files[0].path, folder.join("a b.pdf"));
+        assert_eq!(files[1].key, "a-b-pdf-2");
+    }
+
+    #[test]
+    fn password_history_not_imported() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"H1","typeName":"webforms.WebForm","title":"Site","secureContents":{"passwordHistory":[{"value":"old","time":1}],"ccnum":"4111"}}
+        "#});
+        let item = &plan.items[0];
+
+        let keys: Vec<&str> = section(item, "WebForm")
+            .credentials
+            .iter()
+            .map(|c| c.key.as_str())
+            .collect();
+        assert_eq!(keys, ["ccnum"]);
     }
 
     #[test]

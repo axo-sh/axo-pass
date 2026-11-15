@@ -53,6 +53,8 @@ pub struct ParsedItem {
     /// Keys of `secureContents` that the parser does not read into another
     /// field, with their values. Keys are in sorted order.
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// Files in `attachments/<uuid>/` next to the data file, sorted by path.
+    pub attachments: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +143,11 @@ pub fn parse_1pif<P: AsRef<Path>>(path: P) -> Result<Vec<ParsedItem>, OnePifErro
         items.push(raw.into_parsed());
     }
 
+    if let Some(root) = data_path.parent() {
+        for item in &mut items {
+            item.attachments = find_attachments(root, &item.uuid)?;
+        }
+    }
     Ok(items)
 }
 
@@ -332,8 +339,46 @@ impl RawItem {
             created_at: self.created_at,
             updated_at: self.updated_at,
             extra: sc.extra,
+            attachments: Vec::new(),
         }
     }
+}
+
+/// Files in `attachments/<uuid>/` of the export folder `root`, sorted by path.
+/// The folder name is the item uuid, compared without regard to case. Hidden
+/// files and subfolders are left out. Empty if the item has no folder.
+fn find_attachments(root: &Path, uuid: &str) -> Result<Vec<PathBuf>, OnePifError> {
+    let attachments = root.join("attachments");
+    if uuid.is_empty() || !attachments.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut folder = None;
+    for entry in fs::read_dir(&attachments).map_err(OnePifError::Read)? {
+        let entry = entry.map_err(OnePifError::Read)?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(uuid)
+            && entry.path().is_dir()
+        {
+            folder = Some(entry.path());
+            break;
+        }
+    }
+    let Some(folder) = folder else {
+        return Ok(Vec::new());
+    };
+
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&folder).map_err(OnePifError::Read)? {
+        let entry = entry.map_err(OnePifError::Read)?;
+        let hidden = entry.file_name().to_string_lossy().starts_with('.');
+        if !hidden && entry.path().is_file() {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 /// True for a null or empty string value.
@@ -458,6 +503,42 @@ mod tests {
         );
         assert_eq!(item.created_at, None);
         assert_eq!(item.updated_at, None);
+    }
+
+    #[test]
+    fn reads_attachment_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = indoc! {r#"
+            {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"With files","secureContents":{}}
+            {"uuid":"AAAA0000AAAA0000AAAA0000AAAA0000","typeName":"securenotes.SecureNote","title":"No files","secureContents":{}}
+        "#};
+        fs::write(dir.path().join("data.1pif"), data).unwrap();
+        let folder = dir
+            .path()
+            .join("attachments")
+            .join("5930154cfab244fb920d5189da0fab9c");
+        fs::create_dir_all(folder.join("nested")).unwrap();
+        fs::write(folder.join("b.png"), "b").unwrap();
+        fs::write(folder.join("a.pdf"), "a").unwrap();
+        fs::write(folder.join(".DS_Store"), "x").unwrap();
+
+        let items = parse_1pif(dir.path()).unwrap();
+
+        let names: Vec<_> = items[0]
+            .attachments
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["a.pdf", "b.png"]);
+        assert!(items[1].attachments.is_empty());
+    }
+
+    #[test]
+    fn no_attachments_folder_gives_no_attachments() {
+        let item = parse_one(
+            r#"{"uuid":"Z1","typeName":"securenotes.SecureNote","title":"N","secureContents":{}}"#,
+        );
+        assert!(item.attachments.is_empty());
     }
 
     #[test]

@@ -201,3 +201,70 @@ fn summary_reads_record_and_refuses_other_values() {
     assert_eq!(summary.sha256, FileHash([2; 32]));
     assert_eq!(super::summary("hunter2"), None);
 }
+
+#[test]
+fn write_with_files_commits_every_blob_and_credential() {
+    let fx = Fixture::new();
+    let alpha = stage_file(&fx.writer, &fx.target(), input("alpha", b"alpha")).unwrap();
+    let bravo = stage_file(&fx.writer, &fx.target(), input("bravo", b"bravo")).unwrap();
+    let values = [
+        alpha.value().expose_secret().to_string(),
+        bravo.value().expose_secret().to_string(),
+    ];
+
+    write_with_files(
+        &fx.writer,
+        &fx.target(),
+        fx.unlock(),
+        vec![alpha, bravo],
+        |vh| {
+            for (key, value) in ["alpha", "bravo"].into_iter().zip(values) {
+                vh.add_new_secret(
+                    "item",
+                    key,
+                    "Attachment",
+                    FieldKind::File,
+                    SecretString::from(value),
+                )?;
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(fx.blobs().len(), 2);
+    assert_eq!(fx.read("alpha").unwrap(), b"alpha");
+    assert_eq!(fx.read("bravo").unwrap(), b"bravo");
+    fx.assert_no_missing_blob();
+}
+
+#[test]
+fn write_with_files_failure_deletes_committed_blobs() {
+    let fx = Fixture::new();
+    let alpha = stage_file(&fx.writer, &fx.target(), input("alpha", b"alpha")).unwrap();
+    let bravo = stage_file(&fx.writer, &fx.target(), input("bravo", b"bravo")).unwrap();
+    let value = alpha.value().expose_secret().to_string();
+
+    let result = write_with_files(
+        &fx.writer,
+        &fx.target(),
+        fx.unlock(),
+        vec![alpha, bravo],
+        |vh| {
+            vh.add_new_secret(
+                "item",
+                "alpha",
+                "Attachment",
+                FieldKind::File,
+                SecretString::from(value),
+            )?;
+            Err::<(), _>(Error::InvalidItemKey("forced".to_string()))
+        },
+    );
+
+    assert!(matches!(result, Err(Error::InvalidItemKey(_))));
+    assert!(fx.blobs().is_empty());
+    let on_disk = fx.on_disk();
+    let missing = on_disk.get_secret_overview("item", "alpha").unwrap();
+    assert!(missing.is_none());
+}
