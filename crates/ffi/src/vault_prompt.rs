@@ -80,6 +80,12 @@ pub enum VaultAction {
     ImportVaults {
         count: u32,
     },
+    /// `ap vault import-1password`: add the items of a 1Password export to the
+    /// vault the prompt names. `new_vault` is set if that vault is created for
+    /// the import, and the prompt's vault key is then its name.
+    ImportItems {
+        new_vault: bool,
+    },
     /// `ap vault add`: validate and register the vault at `path`.
     AddVault {
         path: String,
@@ -342,6 +348,7 @@ impl From<app_broker::VaultAction> for VaultAction {
             app_broker::VaultAction::ImportVaults { count } => Self::ImportVaults {
                 count: count as u32,
             },
+            app_broker::VaultAction::ImportItems { new_vault } => Self::ImportItems { new_vault },
             app_broker::VaultAction::AddVault { path } => Self::AddVault { path },
             app_broker::VaultAction::CreatePasskey {
                 rp_id,
@@ -510,6 +517,7 @@ fn vault_action_mutates(action: &app_broker::VaultAction) -> bool {
             | app_broker::VaultAction::CreatePasskey { .. }
             | app_broker::VaultAction::AssertPasskey { .. }
             | app_broker::VaultAction::ImportVaults { .. }
+            | app_broker::VaultAction::ImportItems { .. }
             | app_broker::VaultAction::AddVault { .. }
     )
 }

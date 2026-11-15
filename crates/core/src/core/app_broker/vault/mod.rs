@@ -25,7 +25,7 @@ use super::PromptOutcome;
 use super::placement::{PasskeyChoices, PasskeyPlacement, VaultChoices};
 #[cfg(doc)]
 use super::wire::WireRequest;
-use super::wire::{WireImportIdentity, WireImportSelection};
+use super::wire::{WireImportIdentity, WireImportSelection, WireImportTarget};
 use crate::audit::Actor;
 use crate::core::auth::ForeignContext;
 use crate::core::provenance::ProcessNode;
@@ -46,8 +46,9 @@ pub(super) use logins::{list_logins_locked, vault_choices};
 pub(super) use passkeys::{list_passkeys_locked, passkey_choices, record_passkey_report};
 pub use requests::{
     ExportSummary, FileReadSummary, request_add_external_vault, request_assert_passkey,
-    request_create_passkey, request_export_vaults, request_import_vaults, request_read_vault_file,
-    request_resolve_secrets, request_vault_items, request_vault_secret, request_write_vault_secret,
+    request_create_passkey, request_export_vaults, request_import_items, request_import_vaults,
+    request_read_vault_file, request_resolve_secrets, request_vault_items, request_vault_secret,
+    request_write_vault_secret,
 };
 pub(super) use serve::{authorize_and_serve, authorize_and_serve_logins};
 
@@ -172,6 +173,12 @@ pub enum VaultAction {
     /// local encryption key and write them to the vaults directory. The bundle
     /// path, decryption identity and selection travel in [`ImportPayload`].
     ImportVaults { count: usize },
+
+    /// `ap vault import-1password`: add the items of a `.1pif` export to a
+    /// vault the app reads and writes. The prompt's vault key is the
+    /// existing vault, or the name of the new vault if `new_vault` is set.
+    /// The export path and options travel in [`ImportItemsPayload`].
+    ImportItems { new_vault: bool },
 
     /// `ap vault add`: unlock the vault at `path` to validate it, then register
     /// it as an external vault in the app config.
@@ -331,6 +338,15 @@ pub struct ImportPayload {
     pub selection: Vec<WireImportSelection>,
 }
 
+/// The export an [`VaultAction::ImportItems`] reads and where it writes. Kept
+/// out of [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct ImportItemsPayload {
+    pub import_path: PathBuf,
+    pub include_trashed: bool,
+    pub target: WireImportTarget,
+}
+
 /// The WebAuthn registration request for an [`VaultAction::CreatePasskey`],
 /// kept out of [`VaultAccessPrompt`].
 #[derive(Clone)]
@@ -381,6 +397,7 @@ pub(super) enum VaultPayload {
     UpdateLogin(UpdateLoginPayload),
     Export(ExportPayload),
     Import(ImportPayload),
+    ImportItems(ImportItemsPayload),
     CreatePasskey(CreatePasskeyPayload),
     AssertPasskey(AssertPasskeyPayload),
 }

@@ -376,6 +376,8 @@ pub enum Action {
     VaultExported,
     #[serde(rename = "vault.imported")]
     VaultImported,
+    #[serde(rename = "vault.items_imported")]
+    VaultItemsImported,
     #[serde(rename = "vault.version_restored")]
     VaultVersionRestored,
     #[serde(rename = "vault.versions_erased")]
@@ -488,6 +490,7 @@ impl Action {
             Action::VaultLinked => "vault.linked",
             Action::VaultExported => "vault.exported",
             Action::VaultImported => "vault.imported",
+            Action::VaultItemsImported => "vault.items_imported",
             Action::VaultVersionRestored => "vault.version_restored",
             Action::VaultVersionsErased => "vault.versions_erased",
             Action::VaultUnreadableMoved => "vault.unreadable_moved",
@@ -528,7 +531,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 66] = [
+    pub const ALL: [Action; 67] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -560,6 +563,7 @@ impl Action {
         Action::VaultLinked,
         Action::VaultExported,
         Action::VaultImported,
+        Action::VaultItemsImported,
         Action::VaultVersionRestored,
         Action::VaultVersionsErased,
         Action::VaultUnreadableMoved,
@@ -644,6 +648,7 @@ impl Action {
             Action::VaultLinked => "Added an external vault file.",
             Action::VaultExported => "Exported vaults to an encrypted bundle.",
             Action::VaultImported => "Imported vaults from an encrypted bundle.",
+            Action::VaultItemsImported => "Imported items from a 1Password export into a vault.",
             Action::VaultVersionRestored => {
                 "Replaced a vault with a version retained from before an earlier save."
             },
@@ -738,6 +743,7 @@ impl Action {
             | Action::VaultLinked
             | Action::VaultExported
             | Action::VaultImported
+            | Action::VaultItemsImported
             | Action::VaultVersionRestored
             | Action::VaultVersionsErased
             | Action::VaultUnreadableMoved
@@ -810,6 +816,7 @@ impl Action {
             | Action::VaultDeleted
             | Action::VaultLinked
             | Action::VaultImported
+            | Action::VaultItemsImported
             | Action::VaultVersionRestored
             | Action::VaultVersionsErased
             | Action::VaultUnreadableMoved

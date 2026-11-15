@@ -239,6 +239,25 @@ impl Vault {
         )
     }
 
+    /// An empty vault with the given file key bytes and cipher key, for tests
+    /// that read the vault back from its file.
+    #[cfg(test)]
+    pub(crate) fn new_with_file_key_for_test(
+        name: Option<String>,
+        key: String,
+        file_key: Vec<u8>,
+        cipher_key: &[u8],
+    ) -> Self {
+        let id = Uuid::new_v4();
+        Self::empty(
+            id,
+            key,
+            name,
+            VaultFileKey::new(file_key),
+            VaultCipher::new_with_bytes(cipher_key, id),
+        )
+    }
+
     /// Add entries of every kind the vault file holds, for tests. Item `kept`
     /// is in folder `Folder` and has section `Section`. It has credential
     /// `alpha` in that section with value `two` and one previous value, the

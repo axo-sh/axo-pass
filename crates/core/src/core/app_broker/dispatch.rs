@@ -2,7 +2,7 @@
 
 use super::access::{RequestScope, client_identity, request_actor, requester_for, vouched_caller};
 use super::in_flight::InFlightRequest;
-use super::wire::{WireRequest, WireResponse, decode_b64};
+use super::wire::{WireImportTarget, WireRequest, WireResponse, decode_b64};
 use super::{
     Authorizers, ConfirmPrompt, PassphraseKind, PassphrasePrompt, SignPrompt, age, gpg, keychain,
     ssh, vault,
@@ -551,6 +551,39 @@ pub(super) async fn serve_request(
                     prompt,
                     actor,
                     Some(vault::VaultPayload::Import(payload)),
+                    &in_flight,
+                )
+                .await
+            },
+            WireRequest::ImportItems {
+                import_path,
+                include_trashed,
+                target,
+                caller,
+            } => {
+                let (vault_key, new_vault) = match &target {
+                    WireImportTarget::New { name } => (name.clone(), true),
+                    WireImportTarget::Existing { vault_key } => (vault_key.clone(), false),
+                };
+                let prompt = vault::VaultAccessPrompt {
+                    vault_key,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    client: client_id.clone(),
+                    action: vault::VaultAction::ImportItems { new_vault },
+                };
+                let payload = vault::ImportItemsPayload {
+                    import_path: std::path::PathBuf::from(import_path),
+                    include_trashed,
+                    target,
+                };
+                log::debug!("App broker request: {prompt:?}");
+                vault::authorize_and_serve(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    prompt,
+                    actor,
+                    Some(vault::VaultPayload::ImportItems(payload)),
                     &in_flight,
                 )
                 .await

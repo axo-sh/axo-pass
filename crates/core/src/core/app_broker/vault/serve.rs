@@ -5,7 +5,7 @@ use super::super::wire::WireResponse;
 use super::super::{Authorizers, PromptOutcome};
 use super::audit::{access_event, record_access, record_failure};
 use super::logins::{choose_save_vault, serve_logins};
-use super::manage::{add_external_vault, export_vaults, import_vaults};
+use super::manage::{add_external_vault, export_vaults, import_items, import_vaults};
 use super::passkeys::{
     Ended, SignedPasskey, assert_passkey, choose_account, choose_placement, create_passkey,
 };
@@ -406,6 +406,7 @@ pub(super) fn serve_on_context(
             export_vaults(vaults, &vault_keys, payload, context)
         },
         VaultAction::ImportVaults { .. } => import_vaults(vaults, payload, context),
+        VaultAction::ImportItems { .. } => import_items(vaults, payload, context),
         VaultAction::AddVault { path } => add_external_vault(vaults, &path, context),
     }
 }

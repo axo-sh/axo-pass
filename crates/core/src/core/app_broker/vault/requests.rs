@@ -3,9 +3,9 @@ use secrecy::{ExposeSecret, SecretString};
 use super::super::BrokerError;
 use super::super::client::send_request;
 use super::super::wire::{
-    WireExportMode, WireImportIdentity, WireImportSelection, WirePrfAssertion,
-    WirePrfCredentialValues, WirePrfRegistration, WirePrfValues, WireRequest, WireResponse,
-    b64_decode, b64_encode, decode_prf_values,
+    WireExportMode, WireImportIdentity, WireImportSelection, WireImportSummary, WireImportTarget,
+    WirePrfAssertion, WirePrfCredentialValues, WirePrfRegistration, WirePrfValues, WireRequest,
+    WireResponse, b64_decode, b64_encode, decode_prf_values,
 };
 use super::{BrokerVaultItem, ResolvePurpose, VaultRef, WireLogin};
 use crate::audit::SubjectIds;
@@ -205,6 +205,27 @@ pub fn request_import_vaults(
     };
     exchange(&request, "vault import", |response| match response {
         WireResponse::VaultsImported { keys } => Ok(Some(keys)),
+        _ => Ok(None),
+    })
+}
+
+/// Ask the app to import the items of a `.1pif` export into `target`. Returns
+/// the key of the vault and what the import did. Blocking, same as
+/// [`request_vault_items`].
+pub fn request_import_items(
+    import_path: &str,
+    include_trashed: bool,
+    target: WireImportTarget,
+    caller: Option<&str>,
+) -> Result<(String, WireImportSummary), BrokerError> {
+    let request = WireRequest::ImportItems {
+        import_path: import_path.to_string(),
+        include_trashed,
+        target,
+        caller: caller.map(String::from),
+    };
+    exchange(&request, "item import", |response| match response {
+        WireResponse::ItemsImported { vault_key, summary } => Ok(Some((vault_key, summary))),
         _ => Ok(None),
     })
 }

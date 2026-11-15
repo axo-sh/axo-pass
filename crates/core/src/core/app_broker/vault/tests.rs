@@ -11,15 +11,18 @@ use super::super::PromptOutcome;
 use super::super::in_flight::InFlightRequest;
 use super::super::login_index::LoginIndex;
 use super::super::placement::PasskeyChoices;
-use super::super::wire::{WireImportIdentity, WireImportSelection, WireResponse};
+use super::super::wire::{
+    WireImportIdentity, WireImportSelection, WireImportSummary, WireImportTarget, WireResponse,
+};
 use super::audit::access_event;
 use super::logins::{save_login, serve_logins, update_login_password};
 use super::passkeys::record_passkey_report;
 use super::serve::{AccessIds, Served, authorize_and_serve, serve_on_context};
 use super::{
-    AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, ImportPayload,
-    LoginPage, ResolvePurpose, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt,
-    VaultAction, VaultAuthorization, VaultAuthorizer, VaultPayload, VaultRef, WriteSecretPayload,
+    AssertPasskeyPayload, ClientIdentity, CreatePasskeyPayload, ExportPayload, ImportItemsPayload,
+    ImportPayload, LoginPage, ResolvePurpose, SaveLoginPayload, UpdateLoginPayload,
+    VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer, VaultPayload, VaultRef,
+    WriteSecretPayload,
 };
 use crate::audit::test_support::test_dir;
 use crate::audit::{self, Action, Actor, AuditEvent, Outcome, PASSKEY_CREDENTIAL_ID, SubjectIds};
@@ -33,6 +36,7 @@ use crate::secrets::vaults::{FieldKind, MatchKind, VaultCatalog, VaultHandle, au
 
 mod access;
 mod files;
+mod import_items;
 mod recorded_ids;
 mod save;
 

@@ -271,7 +271,7 @@ final class VaultUnlockPromptModel {
         return ref.vaultKey == prompt.vaultKey ? path : "\(ref.vaultKey)/\(path)"
       }
     case .listItems, .listLogins, .fillLogin, .generateTotp, .saveLogin, .updateLoginPassword,
-      .exportVaults, .importVaults, .addVault, .createPasskey, .assertPasskey:
+      .exportVaults, .importVaults, .importItems, .addVault, .createPasskey, .assertPasskey:
       return []
     }
   }
@@ -317,6 +317,11 @@ final class VaultUnlockPromptModel {
       if let top = page.topHost {
         notes.append("The form is in a frame on \(page.host), inside a page on \(top).")
       }
+    case .importItems(let newVault):
+      // A new vault has nothing to skip, so the notice applies to an existing vault only.
+      if !newVault {
+        notes.append("A re-import only adds new items and does not update old ones.")
+      }
     default:
       break
     }
@@ -353,6 +358,11 @@ final class VaultUnlockPromptModel {
       what = "export \(count) \(count == 1 ? "vault" : "vaults") to \(prompt.vaultKey)"
     case .importVaults(let count):
       what = "import \(count) \(count == 1 ? "vault" : "vaults") from \(prompt.vaultKey)"
+    case .importItems(let newVault):
+      what =
+        newVault
+        ? "import 1Password items into a new vault named \(prompt.vaultKey)"
+        : "import 1Password items into vault \(prompt.vaultKey)"
     case .addVault(let path):
       what = "add the vault at \(path)"
     case .createPasskey(let rpId, _, _):
@@ -371,8 +381,8 @@ final class VaultUnlockPromptModel {
   private static func promptsEveryTime(_ action: VaultAction) -> Bool {
     switch action {
     case .readSecret, .readFile, .resolveSecrets, .writeSecret, .exportVaults, .importVaults,
-      .addVault, .createPasskey, .assertPasskey, .fillLogin, .generateTotp, .saveLogin,
-      .updateLoginPassword:
+      .importItems, .addVault, .createPasskey, .assertPasskey, .fillLogin, .generateTotp,
+      .saveLogin, .updateLoginPassword:
       return true
     case .listItems, .listLogins: return false
     }
@@ -419,6 +429,7 @@ final class VaultUnlockPromptModel {
     case .writeSecret: return "write"
     case .exportVaults: return "export"
     case .importVaults: return "import"
+    case .importItems: return "import-items"
     case .addVault: return "add"
     case .createPasskey: return "passkey-create"
     case .assertPasskey: return "passkey-assert"
@@ -457,6 +468,10 @@ final class VaultUnlockPromptModel {
       return [.plain("export \(count) \(count == 1 ? "vault" : "vaults")")]
     case .importVaults(let count):
       return [.plain("import \(count) \(count == 1 ? "vault" : "vaults")")]
+    case .importItems(let newVault):
+      return [
+        .plain(newVault ? "import 1Password items into a new vault" : "import 1Password items")
+      ]
     case .addVault: return [.plain("add a vault")]
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]

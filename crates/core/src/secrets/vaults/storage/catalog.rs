@@ -610,6 +610,20 @@ impl VaultCatalog {
         self.create_vault(vault)
     }
 
+    /// [`Self::create`] on `context`, such as the context of a broker request.
+    /// On new hardware it fails with `NewHardware` and moves no file.
+    pub fn create_on(
+        &self,
+        name: Option<String>,
+        key: &str,
+        context: AuthContext,
+    ) -> Result<VaultHandle, Error> {
+        let key = self.unclaimed_key(key, None)?;
+        self.ensure_keys(context.clone(), OnNewHardware::Fail)?;
+        let vault = self.unlocker.new_vault(name, key, context)?;
+        self.create_vault(vault)
+    }
+
     /// Write `vault` as a new file in the vaults directory, named by its id.
     /// Returns it unlocked.
     fn create_vault(&self, vault: Vault) -> Result<VaultHandle, Error> {

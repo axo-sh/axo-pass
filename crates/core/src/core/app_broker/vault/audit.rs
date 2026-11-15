@@ -113,6 +113,10 @@ pub(super) fn access_event(
             Action::VaultImported,
             Subject::new(SubjectKind::Vault, vault_key.clone()),
         ),
+        VaultAction::ImportItems { .. } => (
+            Action::VaultItemsImported,
+            Subject::new(SubjectKind::Vault, vault_key.clone()),
+        ),
         VaultAction::AddVault { path } => (
             Action::VaultLinked,
             Subject::new(SubjectKind::Vault, path.clone()),
@@ -208,6 +212,12 @@ pub(super) fn access_event(
         },
         Some(WireResponse::VaultsImported { keys }) => {
             event = event.detail("vault_count", keys.len().to_string());
+        },
+        Some(WireResponse::ItemsImported { vault_key, summary }) => {
+            event = event
+                .detail("imported_vault", vault_key.clone())
+                .detail("item_count", summary.added.to_string())
+                .detail("skipped_existing", summary.skipped_existing.to_string());
         },
         _ => {},
     }

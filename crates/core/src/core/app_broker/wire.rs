@@ -387,6 +387,17 @@ pub(super) enum WireRequest {
         caller: Option<String>,
     },
 
+    /// `ap vault import-1password`: import the items of a `.1pif` export. The
+    /// app reads the export, so no item secret crosses the socket.
+    ImportItems {
+        import_path: String,
+        #[serde(default)]
+        include_trashed: bool,
+        target: WireImportTarget,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+
     /// `ap vault add`: unlock the vault at `path` to validate it, then register
     /// it as an external vault in the app config.
     AddExternalVault {
@@ -557,6 +568,7 @@ impl WireRequest {
             | WireRequest::WriteVaultSecret { caller, .. }
             | WireRequest::ExportVaults { caller, .. }
             | WireRequest::ImportVaults { caller, .. }
+            | WireRequest::ImportItems { caller, .. }
             | WireRequest::AddExternalVault { caller, .. }
             | WireRequest::ListAgeKeys { caller, .. }
             | WireRequest::GetAgeIdentity { caller, .. }
@@ -685,6 +697,11 @@ pub(super) enum WireResponse {
     /// Keys of the vaults imported from the bundle.
     VaultsImported {
         keys: Vec<String>,
+    },
+    /// Result of a 1Password import into the vault `vault_key`.
+    ItemsImported {
+        vault_key: String,
+        summary: WireImportSummary,
     },
     /// The external vault that was registered.
     VaultLinked {
@@ -916,6 +933,55 @@ pub struct WireImportSelection {
     pub key: String,
     #[serde(default)]
     pub action: ImportAction,
+}
+
+/// Vault a 1Password import writes to, as it crosses the socket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireImportTarget {
+    /// Create a vault with this name. The app derives its key from the name.
+    New { name: String },
+    /// Import into the vault with this key. Nothing is created.
+    Existing { vault_key: String },
+}
+
+/// What a 1Password import did. It holds counts, titles, and paths, and no
+/// item secret.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireImportSummary {
+    pub added: u32,
+    pub files_added: u32,
+    pub files_skipped: u32,
+    pub skipped_existing: u32,
+    pub trashed: u32,
+    pub folders_created: u32,
+    /// Trashed records left out because trashed items were not requested.
+    pub skipped_trashed: u32,
+    /// Record uuids that repeat an earlier record. Each got a new item id.
+    pub repeated_uuids: Vec<String>,
+    /// Attachments that could not be read. The import continued without them.
+    pub file_failures: Vec<WireFileFailure>,
+    /// Data of the exported records that the import does not keep. Concealed
+    /// values are not included.
+    pub dropped: Vec<WireDropped>,
+}
+
+/// An attachment that could not be staged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFileFailure {
+    /// Title of the item that holds the file.
+    pub item: String,
+    pub path: String,
+    pub reason: String,
+}
+
+/// One kind of data of a record that the import does not keep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireDropped {
+    /// Title of the record.
+    pub item: String,
+    pub kind: String,
+    pub detail: String,
 }
 
 impl TryFrom<WireImportIdentity> for ImportIdentity {
