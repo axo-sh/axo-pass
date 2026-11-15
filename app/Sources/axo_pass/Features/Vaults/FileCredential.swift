@@ -203,7 +203,9 @@ struct FileBox: View {
       guard isEnabled, urls.count == 1, let url = urls.first, url.isFileURL else { return false }
       onReplaceWith(url)
       return true
-    } isTargeted: { isDropTargeted = $0 && isEnabled }
+    } isTargeted: {
+      isDropTargeted = $0 && isEnabled
+    }
   }
 
   private var actionMenu: some View {
@@ -212,7 +214,7 @@ struct FileBox: View {
       Button("Save…", action: onSave).disabled(!isEnabled)
       Button("Replace…", action: onReplace).disabled(!isEnabled)
       Divider()
-      Button("Delete", role: .destructive, action: onDelete)
+      Button("Delete…", role: .destructive, action: onDelete)
     } label: {
       Image(systemName: "ellipsis")
     }

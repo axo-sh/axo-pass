@@ -25,8 +25,8 @@ struct CredentialRow: View {
   let onCancelRename: () -> Void
   /// Save a new value for this credential, keeping its title, key and kind.
   let onQuickSaveValue: (_ value: String) -> Void
-  /// Delete this credential. Offered by login card rows. A passkey asks for
-  /// confirmation first.
+  /// Ask to delete this credential. Offered by login card rows. The credential
+  /// list confirms.
   let onDelete: () -> Void
   /// Move this passkey to another item or vault. Only passkey rows offer it.
   let onMove: () -> Void
@@ -63,7 +63,6 @@ struct CredentialRow: View {
 
   @Environment(VaultsModel.self) private var model
 
-  @State private var confirmingPasskeyDelete: Bool = false
   @State private var showingPasskeyDetails: Bool = false
   @State private var recentSignIns: [AuditLogRow] = []
   @State private var hoveringValue: Bool = false
@@ -108,16 +107,6 @@ struct CredentialRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 2)
     .padding(.horizontal, 6)
-    .confirmationDialog(
-      "Delete this passkey?", isPresented: $confirmingPasskeyDelete, titleVisibility: .visible
-    ) {
-      Button("Delete Passkey", role: .destructive, action: onDelete)
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "\(cred.passkey?.rpId ?? "The site") still lists this passkey until you remove it there. You will not be able to sign in with it again."
-      )
-    }
     .onChange(of: revealedText) { _, _ in
       // A quick edit opened before the reveal landed records the original as
       // soon as it arrives, whether or not the user has started typing.
@@ -143,7 +132,7 @@ struct CredentialRow: View {
       Divider()
       Button("Copy Reference", action: copyReference)
       Divider()
-      Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+      Button("Delete…", role: .destructive, action: onDelete)
     } else {
       Button("Rename") { onStartRename(.title) }
       Button("Change ID") { onStartRename(.key) }
@@ -154,7 +143,7 @@ struct CredentialRow: View {
       Divider()
       Button("Copy Reference", action: copyReference)
       Divider()
-      Button("Delete", role: .destructive, action: onDelete)
+      Button("Delete…", role: .destructive, action: onDelete)
     }
   }
 
@@ -489,7 +478,7 @@ struct CredentialRow: View {
         Button(justCopiedReference ? "Copied" : "Copy Reference", action: copyReference)
         Button("Move to…", action: onMove)
         Spacer()
-        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+        Button("Delete…", role: .destructive, action: onDelete)
       }
       .controlSize(.small)
     }
@@ -538,7 +527,7 @@ struct CredentialRow: View {
       ) {
         Button("Keep") { dismissReport(.rejection) }
           .help("Keep this passkey and offer it in AutoFill again")
-        Button("Delete…", role: .destructive) { confirmingPasskeyDelete = true }
+        Button("Delete…", role: .destructive, action: onDelete)
       }
     }
     if let name = cred.passkey?.suggestedName {

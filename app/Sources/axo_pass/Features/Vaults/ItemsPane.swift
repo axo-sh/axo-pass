@@ -33,6 +33,8 @@ struct ItemsPane: View {
   @State private var renamingItem: DisplayItem? = nil
   @State private var historyTarget: ItemHistoryTarget? = nil
   @State private var moveError: String? = nil
+  // Item the delete confirmation is open for.
+  @State private var deletingItem: DisplayItem? = nil
   // Collapsed folder ids.
   @State private var collapsedFolders: Set<String> = []
   // Drop highlight target. A folder id for drops into that folder, or an
@@ -134,6 +136,24 @@ struct ItemsPane: View {
     }
     .sheet(item: $historyTarget) { target in
       ItemHistorySheet(target: target)
+    }
+    .confirmationDialog(
+      "Delete \"\(deletingItem?.item.title ?? "this item")\"?",
+      isPresented: Binding(
+        get: { deletingItem != nil }, set: { if !$0 { deletingItem = nil } }),
+      titleVisibility: .visible,
+      presenting: deletingItem
+    ) { display in
+      Button("Delete", role: .destructive) {
+        Task {
+          await model.deleteItem(
+            vaultKey: display.vaultKey, itemKey: display.item.key, undoManager: undoManager)
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+        .keyboardShortcut(.defaultAction)
+    } message: { _ in
+      Text("You can restore the item from Recently Deleted.")
     }
   }
 
@@ -238,12 +258,7 @@ struct ItemsPane: View {
         }
       }
     }
-    Button("Delete", role: .destructive) {
-      Task {
-        await model.deleteItem(
-          vaultKey: display.vaultKey, itemKey: display.item.key, undoManager: undoManager)
-      }
-    }
+    Button("Delete…", role: .destructive) { deletingItem = display }
   }
 
   @ViewBuilder

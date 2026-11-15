@@ -218,9 +218,64 @@ extension CredentialList {
     }
   }
 
+  /// Ask to delete entries. Every delete entry point calls this. The
+  /// confirmation dialog calls `performDelete`.
+  func delete(_ selected: Set<CredentialEntry>) {
+    guard !withSectionChildren(selected).isEmpty else { return }
+    pendingDelete = selected
+  }
+
+  /// Title of the delete confirmation for `selected`.
+  func deleteTitle(_ selected: Set<CredentialEntry>) -> String {
+    let targets = withSectionChildren(selected)
+    let credentialCount = targets.filter { !$0.isSection }.count
+    let sectionCount = targets.count - credentialCount
+    if sectionCount == 0, credentialCount == 1, case .credential(let key)? = targets.first {
+      let title = item.credentials.first { $0.key == key }?.title ?? key
+      return "Delete \"\(title)\"?"
+    }
+    if sectionCount == 1, selected.count == 1, case .section(let id)? = selected.first {
+      let title = item.sections.first { $0.id == id }?.title ?? id
+      return credentialCount == 0
+        ? "Delete section \"\(title)\"?"
+        : "Delete section \"\(title)\" and its \(credentialsPhrase(credentialCount))?"
+    }
+    var parts: [String] = []
+    if credentialCount > 0 { parts.append(credentialsPhrase(credentialCount)) }
+    if sectionCount > 0 {
+      parts.append(sectionCount == 1 ? "1 section" : "\(sectionCount) sections")
+    }
+    return "Delete \(parts.joined(separator: " and "))?"
+  }
+
+  /// Message of the delete confirmation for `selected`. Passkeys add the sites
+  /// that still list them.
+  func deleteMessage(_ selected: Set<CredentialEntry>) -> String {
+    let keys = Set(
+      withSectionChildren(selected).compactMap { entry -> String? in
+        if case .credential(let key) = entry { return key }
+        return nil
+      })
+    let passkeys = item.credentials.filter { keys.contains($0.key) && $0.kind.kind == "passkey" }
+    var message = "You can restore deleted entries from Recently Deleted."
+    if passkeys.count == 1 {
+      let site = passkeys[0].passkey?.rpId ?? "The site"
+      message =
+        "\(site) still lists this passkey until you remove it there. You will not be able to sign in with it again. \(message)"
+    } else if passkeys.count > 1 {
+      message =
+        "Sites still list the deleted passkeys until you remove them there. You will not be able to sign in with them again. \(message)"
+    }
+    return message
+  }
+
+  private func credentialsPhrase(_ count: Int) -> String {
+    count == 1 ? "1 credential" : "\(count) credentials"
+  }
+
   /// Delete entries with undo. Deleting a section deletes its credentials.
   /// Errors show on the remaining rows.
-  func delete(_ selected: Set<CredentialEntry>) {
+  func performDelete(_ selected: Set<CredentialEntry>) {
     let targets = withSectionChildren(selected)
     guard !targets.isEmpty else { return }
     selection.subtract(targets)

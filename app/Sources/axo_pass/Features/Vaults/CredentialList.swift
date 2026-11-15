@@ -66,6 +66,8 @@ struct CredentialList: View {
   @State var shortcutCopied: String? = nil
   // Incremented to move focus to the outline.
   @State var outlineFocusRequest = 0
+  // Entries the delete confirmation is open for.
+  @State var pendingDelete: Set<CredentialEntry>? = nil
 
   var body: some View {
     CredentialOutline(
@@ -147,6 +149,19 @@ struct CredentialList: View {
         }
         .help("Show item history.")
       }
+    }
+    .confirmationDialog(
+      pendingDelete.map(deleteTitle) ?? "Delete?",
+      isPresented: Binding(
+        get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+      titleVisibility: .visible,
+      presenting: pendingDelete
+    ) { selected in
+      Button("Delete", role: .destructive) { performDelete(selected) }
+      Button("Cancel", role: .cancel) {}
+        .keyboardShortcut(.defaultAction)
+    } message: { selected in
+      Text(deleteMessage(selected))
     }
     .sheet(item: $historyTarget) { target in
       ItemHistorySheet(target: target)
@@ -423,7 +438,7 @@ struct CredentialList: View {
       items.append(.divider)
     }
 
-    items.append(.action("Delete") { delete(selected) })
+    items.append(.action("Delete…") { delete(selected) })
     return items
   }
 

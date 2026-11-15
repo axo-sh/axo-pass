@@ -21,7 +21,7 @@ struct VaultsSidebar: View {
   @Environment(IssuesModel.self) private var issues
   @Environment(WindowRequests.self) private var windows
   @State private var showingNewVaultSheet = false
-  @State private var deletingSyncedVault: SyncVaultRef? = nil
+  @State private var deletingVault: SyncVaultRef? = nil
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
@@ -158,16 +158,18 @@ struct VaultsSidebar: View {
     }
     .syncSheets()
     .confirmationDialog(
-      "Delete \(deletingSyncedVault?.name ?? "this vault") from this Mac?",
+      "Delete \(deletingVault?.name ?? "this vault") from this Mac?",
       isPresented: Binding(
-        get: { deletingSyncedVault != nil }, set: { if !$0 { deletingSyncedVault = nil } }),
-      presenting: deletingSyncedVault
+        get: { deletingVault != nil }, set: { if !$0 { deletingVault = nil } }),
+      presenting: deletingVault
     ) { vault in
       Button("Delete", role: .destructive) {
         Task { await model.deleteVault(vault.key) }
       }
-    } message: { _ in
-      Text(syncedVaultDeleteMessage)
+      Button("Cancel", role: .cancel) {}
+        .keyboardShortcut(.defaultAction)
+    } message: { vault in
+      Text(sync.state(vault.key)?.isOn == true ? syncedVaultDeleteMessage : vaultDeleteMessage)
     }
     // Read the sync state of each vault after the unlock and when the list
     // changes.
@@ -322,13 +324,7 @@ struct VaultsSidebar: View {
           Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("History…") { versionsVaultKey = vault.key }
           syncMenuItem(vault)
-          Button("Delete", role: .destructive) {
-            if sync.state(vault.key)?.isOn == true {
-              deletingSyncedVault = syncRef(vault)
-            } else {
-              Task { await model.deleteVault(vault.key) }
-            }
-          }
+          Button("Delete…", role: .destructive) { deletingVault = syncRef(vault) }
         }
       }
 

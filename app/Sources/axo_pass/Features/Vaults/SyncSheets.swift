@@ -63,6 +63,10 @@ let syncDisableMessage =
 let syncedVaultDeleteMessage =
   "This deletes the vault on this Mac only. Your other Macs still have it. Sync turns off first, so Axo Pass must be unlocked."
 
+/// Text of the delete confirmation of a vault that is not synced.
+let vaultDeleteMessage =
+  "This moves the vault and all of its items to the Trash. They do not go to Recently Deleted. To restore the vault, move its file out of the Trash in Finder."
+
 /// Text for a vault whose earlier turn-off waits for the synced folder.
 let syncDisableInProgressMessage =
   "Sync is still turning off for this vault. You can turn it on again once the change reaches the synced folder."
