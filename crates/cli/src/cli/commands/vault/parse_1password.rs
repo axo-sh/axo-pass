@@ -1,6 +1,7 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use axo_pass_core::secrets::vaults::vault_import::{ParsedItem, parse_1pif};
+use axo_pass_core::secrets::vaults::vault_import::{Dropped, ParsedItem, dropped_data, parse_1pif};
 use clap::{Parser, ValueHint};
 use clml::cprintln;
 use time::OffsetDateTime;
@@ -27,12 +28,17 @@ impl VaultParse1passwordCommand {
 
         let mut shown = 0;
         let mut skipped_trashed = 0;
+        let mut dropped_counts: BTreeMap<&str, usize> = BTreeMap::new();
         for item in &items {
             if item.trashed && !self.include_trashed {
                 skipped_trashed += 1;
                 continue;
             }
-            print_item(item, self.show_concealed);
+            let dropped = dropped_data(item);
+            for entry in &dropped {
+                *dropped_counts.entry(entry.kind).or_insert(0) += 1;
+            }
+            print_item(item, &dropped, self.show_concealed);
             shown += 1;
         }
 
@@ -40,6 +46,12 @@ impl VaultParse1passwordCommand {
             "\n<green>{shown}</green> item(s) shown, <yellow>{skipped_trashed}</yellow> trashed skipped, {} total",
             items.len()
         );
+        if !dropped_counts.is_empty() {
+            cprintln!("<red>Not imported</red> (items affected):");
+            for (kind, count) in &dropped_counts {
+                cprintln!("  {kind}: {count}");
+            }
+        }
         Ok(())
     }
 }
@@ -60,13 +72,15 @@ fn is_otp(value: &str) -> bool {
     value.starts_with("otpauth://")
 }
 
-fn print_item(item: &ParsedItem, show_concealed: bool) {
-    let trashed = if item.trashed {
-        " <red>(trashed)</red>"
+fn print_item(item: &ParsedItem, dropped: &[Dropped], show_concealed: bool) {
+    if item.trashed {
+        cprintln!(
+            "\n<blue,bold>{}</blue,bold> <red>(trashed)</red>",
+            item.title
+        );
     } else {
-        ""
-    };
-    cprintln!("\n<blue,bold>{}</blue,bold>{trashed}", item.title);
+        cprintln!("\n<blue,bold>{}</blue,bold>", item.title);
+    }
     cprintln!("  <dim>type:</dim> {}", item.type_name);
     cprintln!("  <dim>uuid:</dim> {}", item.uuid);
     if let Some(location) = &item.location
@@ -75,12 +89,11 @@ fn print_item(item: &ParsedItem, show_concealed: bool) {
         cprintln!("  <dim>url:</dim>  {location}");
     }
     for url in &item.urls {
-        let label = if url.label.is_empty() {
-            String::new()
+        if url.label.is_empty() {
+            cprintln!("  <dim>url:</dim>  {}", url.url);
         } else {
-            format!(" <dim>({})</dim>", url.label)
-        };
-        cprintln!("  <dim>url:</dim>  {}{label}", url.url);
+            cprintln!("  <dim>url:</dim>  {} <dim>({})</dim>", url.url, url.label);
+        }
     }
     if let Some(folder) = &item.folder_uuid {
         cprintln!("  <dim>folder:</dim> {folder}");
@@ -156,6 +169,16 @@ fn print_item(item: &ParsedItem, show_concealed: bool) {
 
     if let Some(notes) = &item.notes {
         cprintln!("  <dim>notes:</dim> {notes}");
+    }
+
+    for entry in dropped {
+        match &entry.concealed {
+            Some(secret) => {
+                let secret = display(secret.clone(), true, show_concealed);
+                cprintln!("  <red>not imported:</red> {entry} [{secret}]");
+            },
+            None => cprintln!("  <red>not imported:</red> {entry}"),
+        }
     }
 }
 

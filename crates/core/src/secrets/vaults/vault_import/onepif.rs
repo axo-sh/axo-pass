@@ -55,6 +55,13 @@ pub struct ParsedItem {
     pub extra: serde_json::Map<String, serde_json::Value>,
     /// Files in `attachments/<uuid>/` next to the data file, sorted by path.
     pub attachments: Vec<PathBuf>,
+    /// Top-level keys of the record that the parser does not read, with their
+    /// values. Keys are in sorted order.
+    pub unread: serde_json::Map<String, serde_json::Value>,
+    /// Names of web-form fields and labels of section fields with a blank
+    /// value. The parser drops blank section fields and the mapper skips
+    /// blank web-form fields.
+    pub blank_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +195,9 @@ struct RawItem {
     open_contents: RawOpenContents,
     #[serde(rename = "secureContents", default)]
     secure_contents: RawSecureContents,
+    /// Every key not listed above.
+    #[serde(flatten)]
+    other: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -272,6 +282,19 @@ impl RawItem {
             })
             .collect();
 
+        let blank_fields: Vec<String> = fields
+            .iter()
+            .filter(|f| is_blank(&f.value))
+            .map(|f| f.name.clone())
+            .chain(
+                sc.sections
+                    .iter()
+                    .flat_map(|s| &s.fields)
+                    .filter(|f| is_blank(&f.value))
+                    .map(|f| f.label.clone()),
+            )
+            .collect();
+
         // `passwords.Password` items keep the secret in `secureContents.password`
         // rather than a web-form field.
         if let Some(password) = sc.password
@@ -340,6 +363,8 @@ impl RawItem {
             updated_at: self.updated_at,
             extra: sc.extra,
             attachments: Vec::new(),
+            unread: self.other,
+            blank_fields,
         }
     }
 }

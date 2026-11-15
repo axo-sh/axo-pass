@@ -17,12 +17,12 @@ const UNTITLED_SECTION: &str = "Section";
 const NOTES_KEY: &str = "notes";
 const USERNAME_KEY: &str = "username";
 const PASSWORD_KEY: &str = "password";
-const FOLDER_TYPE: &str = "system.folder.Regular";
-const FOLDER_TYPE_PREFIX: &str = "system.folder.";
+pub(super) const FOLDER_TYPE: &str = "system.folder.Regular";
+pub(super) const FOLDER_TYPE_PREFIX: &str = "system.folder.";
 const OTP_PREFIX: &str = "otpauth://";
 /// Keys of `secureContents` that are not imported. `passwordHistory` holds
 /// previous passwords.
-const UNIMPORTED_KEYS: [&str; 1] = ["passwordHistory"];
+pub(super) const UNIMPORTED_KEYS: [&str; 1] = ["passwordHistory"];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MapOptions {
@@ -339,11 +339,16 @@ fn map_item(
     }
 }
 
+/// Whether `text` is an http or https URL.
+pub(super) fn is_web_url(text: &str) -> bool {
+    text.starts_with("http://") || text.starts_with("https://")
+}
+
 /// Websites from `URLs`, then `location` if it is an http or https URL.
 fn websites(item: &ParsedItem) -> Vec<Website> {
     let mut urls: Vec<&str> = item.urls.iter().map(|u| u.url.as_str()).collect();
     if let Some(location) = item.location.as_deref()
-        && (location.starts_with("http://") || location.starts_with("https://"))
+        && is_web_url(location)
     {
         urls.push(location);
     }
@@ -397,6 +402,11 @@ fn push_value(
     if is_blank(value) {
         return;
     }
+    let title = if title.trim().is_empty() {
+        blank_label_title(value)
+    } else {
+        title
+    };
     if let Value::Object(map) = value {
         let kind = kind_for_sub_value(&kind);
         for (sub_key, sub_value) in map {
@@ -427,6 +437,15 @@ fn push_value(
         kind,
         value: text,
     });
+}
+
+/// Title for a field with a blank label. 1Password 7 writes a one-time
+/// password with no label.
+fn blank_label_title(value: &Value) -> &'static str {
+    match value.as_str() {
+        Some(text) if text.starts_with(OTP_PREFIX) => "One-time password",
+        _ => "Field",
+    }
 }
 
 /// Add a concealed credential for a `secureContents` key that has no known
@@ -616,6 +635,33 @@ mod tests {
         let totp = credential(&section(item, "Security").credentials, "one-time-password");
         assert_eq!(totp.kind, FieldKind::Totp);
         assert_eq!(totp.value, "otpauth://totp/x?secret=abc");
+    }
+
+    #[test]
+    fn blank_label_totp_titled_one_time_password() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"O2","typeName":"webforms.WebForm","title":"Site","secureContents":{"sections":[{"title":"","fields":[{"k":"concealed","n":"TOTP_1","t":"","v":"otpauth://totp/x?secret=abc"}]}]}}
+        "#});
+        let item = &plan.items[0];
+
+        let totp = credential(
+            &section(item, UNTITLED_SECTION).credentials,
+            "one-time-password",
+        );
+        assert_eq!(totp.title, "One-time password");
+        assert_eq!(totp.kind, FieldKind::Totp);
+        assert_eq!(item.autofill.totp.as_deref(), Some("one-time-password"));
+    }
+
+    #[test]
+    fn blank_label_other_field_titled_field() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"O3","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"string","t":"","v":"x"}]}]}}
+        "#});
+        let creds = &section(&plan.items[0], "S").credentials;
+
+        assert_eq!(credential(creds, "field").title, "Field");
+        assert_eq!(credential(creds, "field").value, "x");
     }
 
     #[test]

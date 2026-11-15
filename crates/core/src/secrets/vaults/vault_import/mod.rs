@@ -1,5 +1,6 @@
 pub mod map;
 pub mod onepif;
+pub mod report;
 pub mod write;
 
 pub use map::{
@@ -9,6 +10,7 @@ pub use map::{
 pub use onepif::{
     OnePifError, ParsedField, ParsedItem, ParsedSection, ParsedSectionField, ParsedUrl, parse_1pif,
 };
+pub use report::{Dropped, dropped_data};
 pub use write::{
     FileFailure, FileValues, ImportSummary, StagedFiles, existing_item_ids, stage_plan_files,
     write_plan,
