@@ -337,7 +337,7 @@ impl RawItem {
 }
 
 /// True for a null or empty string value.
-fn is_blank(value: &serde_json::Value) -> bool {
+pub(super) fn is_blank(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => true,
         serde_json::Value::String(s) => s.is_empty(),
@@ -345,7 +345,7 @@ fn is_blank(value: &serde_json::Value) -> bool {
     }
 }
 
-fn json_value_to_string(value: serde_json::Value) -> String {
+pub(super) fn json_value_to_string(value: serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => String::new(),
         serde_json::Value::String(s) => s,
