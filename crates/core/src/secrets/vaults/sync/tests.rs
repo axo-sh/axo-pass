@@ -31,6 +31,7 @@ mod repair;
 mod report;
 mod resolve;
 mod round_trip;
+mod s3;
 mod separate;
 mod setup;
 mod sidecar;

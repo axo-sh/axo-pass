@@ -9,9 +9,11 @@
 //!
 //! The root of a vault's transport is in its sidecar. [`SyncTransports`]
 //! resolves a root to a transport. [`folder::FolderTransport`] is the local
-//! folder transport, which watches with FSEvents.
+//! folder transport, which watches with FSEvents. [`s3::S3Transport`] is the
+//! S3 transport, which watches by polling.
 
 pub mod folder;
+pub mod s3;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -222,6 +224,9 @@ pub enum TransportRoot {
     ICloud {},
     /// Folder the user picked.
     Folder { path: PathBuf },
+    /// S3 location saved under `name` in the credential store. The sidecar
+    /// holds no endpoint, bucket, or key.
+    S3 { name: String },
 }
 
 impl fmt::Display for TransportRoot {
@@ -229,6 +234,7 @@ impl fmt::Display for TransportRoot {
         match self {
             Self::ICloud {} => f.write_str("iCloud"),
             Self::Folder { path } => write!(f, "folder {}", path.display()),
+            Self::S3 { name } => write!(f, "S3 location {name}"),
         }
     }
 }

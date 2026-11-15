@@ -131,6 +131,8 @@ use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::sync::transport::FixedTransport;
 use crate::secrets::vaults::sync::transport::folder::FolderTransport;
 use crate::secrets::vaults::sync::transport::folder::io::CoordinatedIo;
+use crate::secrets::vaults::sync::transport::s3::S3Transport;
+use crate::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
 use crate::secrets::vaults::sync::txn::SyncTxn;
 
@@ -408,6 +410,15 @@ impl AppTransports {
                 let transport = FolderTransport::new(path.clone(), Arc::new(CoordinatedIo));
                 transport.check_root()?;
                 Ok(Arc::new(transport))
+            },
+            TransportRoot::S3 { name } => {
+                let store = default_credential_store().ok_or_else(|| {
+                    Error::SyncTransportError(format!("no credential store for {root}"))
+                })?;
+                let config = store.load(name)?.ok_or_else(|| {
+                    Error::SyncTransportError(format!("no settings are saved for {root}"))
+                })?;
+                Ok(Arc::new(S3Transport::connect(&config)?))
             },
             TransportRoot::ICloud {} => Err(Error::SyncTransportError(format!(
                 "no transport is built for {root}"

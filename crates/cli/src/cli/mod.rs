@@ -22,6 +22,7 @@ use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
 use crate::cli::commands::keychain::KeychainCommand;
 use crate::cli::commands::ssh_agent::SshAgentCommand;
+use crate::cli::commands::sync::SyncCommand;
 use crate::cli::commands::vault::VaultCommand;
 use crate::cli::commands::{pinentry, ssh_askpass};
 
@@ -72,6 +73,9 @@ pub enum AxoPassCommand {
 
     /// Commands for managing items and credentials
     Item(ItemCommand),
+
+    /// Commands for vault sync locations
+    Sync(SyncCommand),
 
     /// Get item credential secret(s)
     Read {
@@ -191,6 +195,7 @@ impl AxoPassCommand {
             AxoPassCommand::Keychain(keychain) => keychain.execute().await,
             AxoPassCommand::Vault(vault) => vault.execute().await,
             AxoPassCommand::Item(item) => item.execute().await,
+            AxoPassCommand::Sync(sync) => sync.execute().await,
             AxoPassCommand::Read {
                 item_reference,
                 delimiter,

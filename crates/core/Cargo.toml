@@ -41,6 +41,7 @@ percent-encoding = "2.3.2"
 psl = "2.1.241"
 regex = "1.13.1"
 rsa = "0.9.10"
+rusty-s3 = "0.8"
 secrecy = {version = "0.10.3", features = ["serde"]}
 serde.workspace = true
 serde_json.workspace = true
@@ -59,6 +60,7 @@ toml = "1.1.8"
 totp-rs = {version = "5.7", features = ["otpauth"]}
 tracing-appender = "0.2"
 tracing-subscriber = {version = "0.3", features = ["env-filter"]}
+ureq = {version = "3", default-features = false, features = ["rustls"]}
 url = "2.5.8"
 uuid = {version = "1.28.0", features = ["serde", "v4", "v7"]}
 zeroize = {version = "1.9.1", features = ["derive"]}

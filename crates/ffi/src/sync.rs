@@ -180,6 +180,8 @@ pub enum SyncRootInfo {
     Folder { path: String },
     /// `Vaults` in the iCloud container of the app. Not available yet.
     ICloud,
+    /// S3 location saved under `name` in the credential store.
+    S3 { name: String },
 }
 
 impl From<&TransportRoot> for SyncRootInfo {
@@ -189,6 +191,7 @@ impl From<&TransportRoot> for SyncRootInfo {
             TransportRoot::Folder { path } => Self::Folder {
                 path: path.display().to_string(),
             },
+            TransportRoot::S3 { name } => Self::S3 { name: name.clone() },
         }
     }
 }
@@ -200,6 +203,7 @@ impl From<SyncRootInfo> for TransportRoot {
             SyncRootInfo::Folder { path } => Self::Folder {
                 path: PathBuf::from(path),
             },
+            SyncRootInfo::S3 { name } => Self::S3 { name },
         }
     }
 }

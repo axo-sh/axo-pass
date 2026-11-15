@@ -232,6 +232,7 @@ func rootDescription(_ root: SyncRootInfo) -> String {
   switch root {
   case .folder(let path): return path
   case .iCloud: return "iCloud Drive"
+  case .s3(let name): return "S3 \(name)"
   }
 }
 

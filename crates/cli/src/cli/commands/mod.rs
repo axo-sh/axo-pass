@@ -10,4 +10,5 @@ pub mod pinentry;
 pub mod secret_resolver;
 pub mod ssh_agent;
 pub mod ssh_askpass;
+pub mod sync;
 pub mod vault;
