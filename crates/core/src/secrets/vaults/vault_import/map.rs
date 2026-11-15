@@ -13,6 +13,8 @@ pub const UUID_KEY: &str = "onepassword-uuid";
 /// Key of the credential that holds the original `typeName`.
 pub const TYPE_KEY: &str = "onepassword-type";
 
+/// Title of a section that has none in the export.
+const UNTITLED_SECTION: &str = "Section";
 const NOTES_KEY: &str = "notes";
 const USERNAME_KEY: &str = "username";
 const PASSWORD_KEY: &str = "password";
@@ -219,17 +221,24 @@ fn map_item(
         let mut section_credentials = Vec::new();
         for field in &section.fields {
             let kind = section_field_kind(field.kind.as_deref(), &field.value);
-            let target = if section.title.is_empty() {
-                &mut credentials
-            } else {
-                &mut section_credentials
-            };
             let value = date_value(&kind, &field.value);
-            push_value(&mut keys, target, &mut autofill, &field.label, &value, kind);
+            push_value(
+                &mut keys,
+                &mut section_credentials,
+                &mut autofill,
+                &field.label,
+                &value,
+                kind,
+            );
         }
-        if !section.title.is_empty() && !section_credentials.is_empty() {
+        if !section_credentials.is_empty() {
+            let title = if section.title.is_empty() {
+                UNTITLED_SECTION
+            } else {
+                section.title.as_str()
+            };
             sections.push(PlannedSection {
-                title: section.title.clone(),
+                title: title.to_string(),
                 credentials: section_credentials,
             });
         }
@@ -644,14 +653,17 @@ mod tests {
     }
 
     #[test]
-    fn untitled_section_fields_join_default_credentials() {
+    fn untitled_section_gets_placeholder_title() {
         let plan = plan(indoc! {r#"
             {"uuid":"U1","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"","fields":[{"k":"string","t":"loose","v":"x"}]}]}}
         "#});
         let item = &plan.items[0];
 
-        assert_eq!(credential(&item.credentials, "loose").value, "x");
-        assert!(item.sections.iter().all(|s| !s.title.is_empty()));
+        assert_eq!(
+            credential(&section(item, UNTITLED_SECTION).credentials, "loose").value,
+            "x"
+        );
+        assert!(item.credentials.iter().all(|c| c.key != "loose"));
     }
 
     #[test]
