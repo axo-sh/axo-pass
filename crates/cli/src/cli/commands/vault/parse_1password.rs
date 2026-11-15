@@ -60,7 +60,7 @@ fn print_item(item: &ParsedItem) {
         cprintln!(
             "  <cyan>{}</cyan>{designation}: {}",
             field.name,
-            field.value
+            field.text()
         );
     }
 
@@ -77,7 +77,7 @@ fn print_item(item: &ParsedItem) {
                 .as_deref()
                 .map(|k| format!(" <{k}>"))
                 .unwrap_or_default();
-            cprintln!("    <cyan>{}</cyan>{kind}: {}", field.label, field.value);
+            cprintln!("    <cyan>{}</cyan>{kind}: {}", field.label, field.text());
         }
     }
 

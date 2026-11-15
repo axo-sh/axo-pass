@@ -38,14 +38,45 @@ pub struct ParsedItem {
     pub fields: Vec<ParsedField>,
     /// Custom sections, each with its own labelled fields.
     pub sections: Vec<ParsedSection>,
+    /// Website links from `secureContents.URLs`.
+    pub urls: Vec<ParsedUrl>,
+    /// Folder reference from `folderUuid`.
+    pub folder_uuid: Option<String>,
+    /// Tags from `openContents.tags`. Only used for the import report.
+    pub tags: Vec<String>,
+    /// Creation time from `createdAt`, in Unix seconds. 1Password writes
+    /// seconds, but this has not been checked against a real export.
+    pub created_at: Option<i64>,
+    /// Modification time from `updatedAt`, in Unix seconds. Only used for the
+    /// import report.
+    pub updated_at: Option<i64>,
+    /// Keys of `secureContents` that the parser does not read into another
+    /// field, with their values. Keys are in sorted order.
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedUrl {
+    pub label: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedField {
     pub name: String,
     pub designation: Option<String>,
-    pub value: String,
+    /// Field value as written in the export. Usually a string.
+    pub value: serde_json::Value,
     pub field_type: Option<String>,
+    /// Other keys of the field, with their values.
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ParsedField {
+    /// Value as text. Non-string values use their JSON form.
+    pub fn text(&self) -> String {
+        json_value_to_string(self.value.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -57,18 +88,29 @@ pub struct ParsedSection {
 #[derive(Debug, Clone)]
 pub struct ParsedSectionField {
     pub label: String,
-    pub value: String,
+    /// Field value as written in the export. A string, number, boolean,
+    /// object, or array.
+    pub value: serde_json::Value,
     /// 1Password field kind, e.g. `concealed`, `string`, `email`.
     pub kind: Option<String>,
+    /// Other keys of the field, such as `n`, with their values.
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ParsedSectionField {
+    /// Value as text. Non-string values use their JSON form.
+    pub fn text(&self) -> String {
+        json_value_to_string(self.value.clone())
+    }
 }
 
 impl ParsedItem {
-    /// Value of the first web-form field with the given `designation`.
-    pub fn designated(&self, designation: &str) -> Option<&str> {
+    /// Value text of the first web-form field with the given `designation`.
+    pub fn designated(&self, designation: &str) -> Option<String> {
         self.fields
             .iter()
             .find(|f| f.designation.as_deref() == Some(designation))
-            .map(|f| f.value.as_str())
+            .map(ParsedField::text)
     }
 }
 
@@ -129,8 +171,30 @@ struct RawItem {
     location: Option<String>,
     #[serde(default)]
     trashed: bool,
+    #[serde(rename = "folderUuid", default)]
+    folder_uuid: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<i64>,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: Option<i64>,
+    #[serde(rename = "openContents", default)]
+    open_contents: RawOpenContents,
     #[serde(rename = "secureContents", default)]
     secure_contents: RawSecureContents,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawOpenContents {
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawUrl {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -144,6 +208,11 @@ struct RawSecureContents {
     /// Present on `passwords.Password` items.
     #[serde(default)]
     password: Option<String>,
+    #[serde(rename = "URLs", default)]
+    urls: Vec<RawUrl>,
+    /// Every key not listed above.
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,9 +222,11 @@ struct RawField {
     #[serde(default)]
     designation: Option<String>,
     #[serde(default)]
-    value: String,
+    value: serde_json::Value,
     #[serde(rename = "type", default)]
     field_type: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +245,8 @@ struct RawSectionField {
     value: serde_json::Value,
     #[serde(rename = "k", default)]
     kind: Option<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl RawItem {
@@ -188,6 +261,7 @@ impl RawItem {
                 designation: f.designation,
                 value: f.value,
                 field_type: f.field_type,
+                extra: f.extra,
             })
             .collect();
 
@@ -199,8 +273,9 @@ impl RawItem {
             fields.push(ParsedField {
                 name: "password".to_string(),
                 designation: Some("password".to_string()),
-                value: password,
+                value: serde_json::Value::String(password),
                 field_type: Some("P".to_string()),
+                extra: serde_json::Map::new(),
             });
         }
 
@@ -212,14 +287,14 @@ impl RawItem {
                     .fields
                     .into_iter()
                     .filter_map(|f| {
-                        let value = json_value_to_string(f.value);
-                        if value.is_empty() {
+                        if is_blank(&f.value) {
                             return None;
                         }
                         Some(ParsedSectionField {
                             label: f.label,
-                            value,
+                            value: f.value,
                             kind: f.kind,
+                            extra: f.extra,
                         })
                     })
                     .collect();
@@ -243,7 +318,30 @@ impl RawItem {
             notes: sc.notes_plain.filter(|n| !n.is_empty()),
             fields,
             sections,
+            urls: sc
+                .urls
+                .into_iter()
+                .filter(|u| !u.url.is_empty())
+                .map(|u| ParsedUrl {
+                    label: u.label,
+                    url: u.url,
+                })
+                .collect(),
+            folder_uuid: self.folder_uuid.filter(|f| !f.is_empty()),
+            tags: self.open_contents.tags,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            extra: sc.extra,
         }
+    }
+}
+
+/// True for a null or empty string value.
+fn is_blank(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::String(s) => s.is_empty(),
+        _ => false,
     }
 }
 
@@ -285,8 +383,11 @@ mod tests {
 
         let github = &items[0];
         assert_eq!(github.title, "GitHub");
-        assert_eq!(github.designated("username"), Some("me@example.com"));
-        assert_eq!(github.designated("password"), Some("hunter2"));
+        assert_eq!(
+            github.designated("username").as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(github.designated("password").as_deref(), Some("hunter2"));
         assert_eq!(github.location.as_deref(), Some("https://github.com"));
         assert_eq!(github.sections.len(), 1);
         // The empty-value field is dropped.
@@ -297,9 +398,200 @@ mod tests {
         );
 
         let wifi = &items[1];
-        assert_eq!(wifi.designated("password"), Some("correcthorse"));
+        assert_eq!(wifi.designated("password").as_deref(), Some("correcthorse"));
         assert_eq!(wifi.notes.as_deref(), Some("home network"));
 
         assert!(items[2].trashed);
+    }
+
+    /// Parse one record given as JSON.
+    fn parse_one(record: &str) -> ParsedItem {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("data.1pif"), record).unwrap();
+        parse_1pif(dir.path()).unwrap().remove(0)
+    }
+
+    #[test]
+    fn reads_urls() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"U1","typeName":"webforms.WebForm","title":"Site","secureContents":{"URLs":[{"label":"website","url":"https://a.example"},{"label":"","url":""},{"label":"login","url":"https://b.example"}]}}
+        "#});
+
+        assert_eq!(item.urls.len(), 2);
+        assert_eq!(item.urls[0].label, "website");
+        assert_eq!(item.urls[0].url, "https://a.example");
+        assert_eq!(item.urls[1].label, "login");
+        assert!(!item.extra.contains_key("URLs"));
+    }
+
+    #[test]
+    fn reads_folder_uuid() {
+        let item = parse_one(
+            r#"{"uuid":"F1","typeName":"securenotes.SecureNote","title":"N","folderUuid":"FOLDER1","secureContents":{}}"#,
+        );
+        assert_eq!(item.folder_uuid.as_deref(), Some("FOLDER1"));
+
+        let item = parse_one(
+            r#"{"uuid":"F2","typeName":"securenotes.SecureNote","title":"N","folderUuid":"","secureContents":{}}"#,
+        );
+        assert_eq!(item.folder_uuid, None);
+    }
+
+    #[test]
+    fn reads_tags() {
+        let item = parse_one(
+            r#"{"uuid":"T1","typeName":"securenotes.SecureNote","title":"N","openContents":{"tags":["work","bank"]},"secureContents":{}}"#,
+        );
+        assert_eq!(item.tags, ["work", "bank"]);
+    }
+
+    #[test]
+    fn reads_created_and_updated_times() {
+        let item = parse_one(
+            r#"{"uuid":"D1","typeName":"securenotes.SecureNote","title":"N","createdAt":1400000000,"updatedAt":1500000000,"secureContents":{}}"#,
+        );
+        assert_eq!(item.created_at, Some(1_400_000_000));
+        assert_eq!(item.updated_at, Some(1_500_000_000));
+
+        let item = parse_one(
+            r#"{"uuid":"D2","typeName":"securenotes.SecureNote","title":"N","secureContents":{}}"#,
+        );
+        assert_eq!(item.created_at, None);
+        assert_eq!(item.updated_at, None);
+    }
+
+    #[test]
+    fn keeps_type_name() {
+        let item = parse_one(
+            r#"{"uuid":"Y1","typeName":"wallet.financial.CreditCard","title":"Card","secureContents":{}}"#,
+        );
+        assert_eq!(item.type_name, "wallet.financial.CreditCard");
+    }
+
+    #[test]
+    fn keeps_unread_secure_contents_keys() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"X1","typeName":"wallet.financial.CreditCard","title":"Card","secureContents":{"ccnum":"4111","expiry_yy":2030,"cardholder":"Me","notesPlain":"n","sections":[],"fields":[]}}
+        "#});
+
+        assert_eq!(item.extra.len(), 3);
+        assert_eq!(item.extra["ccnum"], "4111");
+        assert_eq!(item.extra["expiry_yy"], 2030);
+        assert_eq!(item.extra["cardholder"], "Me");
+    }
+
+    #[test]
+    fn keeps_unread_section_field_keys() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"S1","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"string","n":"field1","t":"Label","v":"value","inputTraits":{"autocapitalization":"None"}}]}]}}
+        "#});
+
+        let field = &item.sections[0].fields[0];
+        assert_eq!(field.extra.len(), 2);
+        assert_eq!(field.extra["n"], "field1");
+        assert_eq!(field.extra["inputTraits"]["autocapitalization"], "None");
+    }
+
+    #[test]
+    fn keeps_unread_web_form_field_keys() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"W1","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"login","id":"user_id","designation":"username","value":"me","type":"T"}]}}
+        "#});
+
+        assert_eq!(item.fields[0].extra.len(), 1);
+        assert_eq!(item.fields[0].extra["id"], "user_id");
+    }
+
+    #[test]
+    fn section_field_number_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"V1","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"monthYear","t":"expires","v":203012}]}]}}
+        "#});
+
+        let field = &item.sections[0].fields[0];
+        assert_eq!(field.value, serde_json::json!(203012));
+        assert_eq!(field.text(), "203012");
+    }
+
+    #[test]
+    fn section_field_boolean_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"V2","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"string","t":"flag","v":false}]}]}}
+        "#});
+
+        let field = &item.sections[0].fields[0];
+        assert_eq!(field.value, serde_json::json!(false));
+        assert_eq!(field.text(), "false");
+    }
+
+    #[test]
+    fn section_field_object_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"V3","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"address","t":"home","v":{"street":"1 Main","city":"Town"}}]}]}}
+        "#});
+
+        let field = &item.sections[0].fields[0];
+        assert_eq!(field.value["street"], "1 Main");
+        assert_eq!(field.value["city"], "Town");
+    }
+
+    #[test]
+    fn section_field_array_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"V4","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"string","t":"list","v":["a","b"]}]}]}}
+        "#});
+
+        let field = &item.sections[0].fields[0];
+        assert_eq!(field.value, serde_json::json!(["a", "b"]));
+        assert_eq!(field.text(), r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn section_field_null_dropped_empty_array_kept() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"V5","typeName":"securenotes.SecureNote","title":"N","secureContents":{"sections":[{"title":"S","fields":[{"k":"string","t":"nothing","v":null},{"k":"string","t":"list","v":[]}]}]}}
+        "#});
+
+        assert_eq!(item.sections[0].fields.len(), 1);
+        assert_eq!(item.sections[0].fields[0].label, "list");
+    }
+
+    #[test]
+    fn web_form_number_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"P1","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"pin","designation":"password","value":1234,"type":"P"}]}}
+        "#});
+
+        assert_eq!(item.fields[0].value, serde_json::json!(1234));
+        assert_eq!(item.designated("password").as_deref(), Some("1234"));
+    }
+
+    #[test]
+    fn web_form_boolean_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"P2","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"remember","value":true,"type":"C"}]}}
+        "#});
+
+        assert_eq!(item.fields[0].value, serde_json::json!(true));
+        assert_eq!(item.fields[0].text(), "true");
+    }
+
+    #[test]
+    fn web_form_object_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"P3","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"opts","value":{"a":1},"type":"T"}]}}
+        "#});
+
+        assert_eq!(item.fields[0].value, serde_json::json!({"a": 1}));
+    }
+
+    #[test]
+    fn web_form_array_value() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"P4","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"choices","value":["x","y"],"type":"T"}]}}
+        "#});
+
+        assert_eq!(item.fields[0].value, serde_json::json!(["x", "y"]));
+        assert_eq!(item.fields[0].text(), r#"["x","y"]"#);
     }
 }
