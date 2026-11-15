@@ -6,6 +6,7 @@ enum ItemType: String, CaseIterable, Hashable {
   case logins
   case passkeys
   case oneTimeCodes
+  case files
   case other
 
   var title: String {
@@ -13,6 +14,7 @@ enum ItemType: String, CaseIterable, Hashable {
     case .logins: return "Logins"
     case .passkeys: return "Passkeys"
     case .oneTimeCodes: return "One-Time Codes"
+    case .files: return "Files"
     case .other: return "Other Items"
     }
   }
@@ -22,6 +24,7 @@ enum ItemType: String, CaseIterable, Hashable {
     case .logins: return "key"
     case .passkeys: return "person.badge.key"
     case .oneTimeCodes: return "clock.badge.checkmark"
+    case .files: return "doc"
     case .other: return "doc.text"
     }
   }
@@ -31,7 +34,9 @@ enum ItemType: String, CaseIterable, Hashable {
     case .logins: return item.isLogin
     case .passkeys: return !item.passkeyCredentials.isEmpty
     case .oneTimeCodes: return item.totpCredential != nil
-    case .other: return !item.isLogin && item.totpCredential == nil
+    case .files: return !item.fileCredentials.isEmpty
+    case .other:
+      return !item.isLogin && item.totpCredential == nil && item.fileCredentials.isEmpty
     }
   }
 }

@@ -96,6 +96,9 @@ extension ItemInfo {
   /// The item's passkeys.
   var passkeyCredentials: [CredentialInfo] { credentials.filter { $0.kind.kind == "passkey" } }
 
+  /// The item's file credentials.
+  var fileCredentials: [CredentialInfo] { credentials.filter { $0.kind.kind == "file" } }
+
   /// The credentials below the login card: everything except the role
   /// credentials and the passkeys, which a login shows in the card.
   var listCredentials: [CredentialInfo] {
