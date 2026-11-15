@@ -320,6 +320,17 @@ impl VaultHandle {
         vault.add_or_update_item(item_key, item_title)
     }
 
+    /// Add an item with the id `item_id`. See [`Vault::add_item_with_id`].
+    pub fn add_item_with_id(
+        &mut self,
+        item_id: Uuid,
+        item_key: &str,
+        item_title: &str,
+    ) -> Result<&VaultItemOverview, Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.add_item_with_id(item_id, item_key, item_title)
+    }
+
     pub fn change_item_key(
         &mut self,
         item_key: &str,

@@ -10,6 +10,6 @@ pub use onepif::{
     OnePifError, ParsedField, ParsedItem, ParsedSection, ParsedSectionField, ParsedUrl, parse_1pif,
 };
 pub use write::{
-    FileFailure, FileValues, ImportSummary, StagedFiles, existing_import_uuids, stage_plan_files,
+    FileFailure, FileValues, ImportSummary, StagedFiles, existing_item_ids, stage_plan_files,
     write_plan,
 };

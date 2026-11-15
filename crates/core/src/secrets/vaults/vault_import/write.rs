@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
-use super::map::{ImportPlan, PlannedCredential, PlannedItem, UUID_KEY};
+use super::map::{ImportPlan, PlannedCredential, PlannedItem};
 use crate::secrets::vaults::files::{FileInput, StagedFile, stage_file};
 use crate::secrets::vaults::storage::txn::{Target, VaultWriter};
 use crate::secrets::vaults::{Error, FieldKind, ItemAutofill, VaultHandle};
@@ -22,7 +22,7 @@ pub struct ImportSummary {
     pub files_added: usize,
     /// Planned files that were not staged, so no credential was written.
     pub files_skipped: usize,
-    /// Items left out because the vault already holds their 1Password uuid.
+    /// Items left out because the vault already holds an item with their id.
     pub skipped_existing: usize,
     /// Written items that were then deleted.
     pub trashed: usize,
@@ -31,27 +31,18 @@ pub struct ImportSummary {
     pub folders_created: usize,
 }
 
-/// 1Password uuids of items that an earlier import wrote to the vault. This
-/// includes items in Recently Deleted.
-pub fn existing_import_uuids(handle: &VaultHandle) -> Result<HashSet<String>, Error> {
-    let mut uuids = HashSet::new();
-    for item in handle.list_items()? {
-        if let Some(secret) = handle.get_secret(&item.key, UUID_KEY)? {
-            uuids.insert(secret.expose_secret().clone());
-        }
-    }
-    for deleted in handle.list_deleted_items()? {
-        let uuid_credential = deleted
-            .item
-            .credentials
-            .values()
-            .find(|c| c.key == UUID_KEY);
-        if let Some(credential) = uuid_credential {
-            let secret = handle.get_deleted_secret(deleted.item.id, credential.id)?;
-            uuids.insert(secret.expose_secret().clone());
-        }
-    }
-    Ok(uuids)
+/// Ids of the items in the vault, including items in Recently Deleted. An
+/// imported item has the 1Password record uuid as its id, so a planned item
+/// whose id is in this set was imported before.
+pub fn existing_item_ids(handle: &VaultHandle) -> Result<HashSet<Uuid>, Error> {
+    let mut ids: HashSet<Uuid> = handle.list_items()?.iter().map(|item| item.id).collect();
+    ids.extend(handle.list_deleted_items()?.iter().map(|d| d.item.id));
+    Ok(ids)
+}
+
+/// Whether `item` has an id that is in `existing`.
+fn already_imported(item: &PlannedItem, existing: &HashSet<Uuid>) -> bool {
+    item.id.is_some_and(|id| existing.contains(&id))
 }
 
 /// A planned file that could not be staged.
@@ -73,20 +64,21 @@ pub struct StagedFiles {
     pub failures: Vec<FileFailure>,
 }
 
-/// Stage every planned file of the items whose uuid is not in `skip`. A file
-/// that cannot be read or staged is recorded as a failure.
+/// Stage every planned file of the items whose id is not in `skip`, which is
+/// from [`existing_item_ids`]. A file that cannot be read or staged is
+/// recorded as a failure.
 pub fn stage_plan_files(
     writer: &VaultWriter,
     target: &Target,
     plan: &ImportPlan,
-    skip: &HashSet<String>,
+    skip: &HashSet<Uuid>,
 ) -> StagedFiles {
     let mut staged = StagedFiles {
         files: Vec::new(),
         values: FileValues::new(),
         failures: Vec::new(),
     };
-    for item in plan.items.iter().filter(|i| !skip.contains(&i.uuid)) {
+    for item in plan.items.iter().filter(|i| !already_imported(i, skip)) {
         for planned in &item.files {
             let result = File::open(&planned.path)
                 .map_err(|e| e.to_string())
@@ -115,8 +107,9 @@ pub fn stage_plan_files(
     staged
 }
 
-/// Write a plan to a vault. Items whose uuid is already in the vault are
-/// skipped. An item key that is taken gets a numeric suffix. A file credential
+/// Write a plan to a vault. Items whose id is already in the vault are
+/// skipped. A planned item keeps its id, so an item without one gets a new id.
+/// An item key that is taken gets a numeric suffix. A file credential
 /// is written for each planned file that has a value in `files`. The caller
 /// runs this in one vault transaction and saves. An error leaves the handle
 /// partly written, so the caller must discard it.
@@ -126,7 +119,7 @@ pub fn write_plan(
     files: &FileValues,
 ) -> Result<ImportSummary, Error> {
     let mut summary = ImportSummary::default();
-    let existing = existing_import_uuids(handle)?;
+    let existing = existing_item_ids(handle)?;
     let mut taken: HashSet<String> = handle
         .list_items()?
         .iter()
@@ -153,7 +146,7 @@ pub fn write_plan(
     }
 
     for item in &plan.items {
-        if existing.contains(&item.uuid) {
+        if already_imported(item, &existing) {
             summary.skipped_existing += 1;
             continue;
         }
@@ -184,7 +177,10 @@ fn write_item(
     folder: Option<Uuid>,
     files: &FileValues,
 ) -> Result<(usize, usize), Error> {
-    handle.add_item(key, &item.title)?;
+    match item.id {
+        Some(id) => handle.add_item_with_id(id, key, &item.title)?,
+        None => handle.add_item(key, &item.title)?,
+    };
     if let Some(at) = item.created_at {
         handle.set_item_created_at(key, at)?;
     }
@@ -369,8 +365,10 @@ mod tests {
             .clone()
     }
 
+    const LOGIN_UUID: &str = "5930154CFAB244FB920D5189DA0FAB9C";
+
     const LOGIN: &str = indoc! {r#"
-        {"uuid":"L1","typeName":"webforms.WebForm","title":"GitHub","createdAt":1400000000,"folderUuid":"F1","secureContents":{"URLs":[{"label":"website","url":"https://github.com"}],"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"hunter2","type":"P"}],"sections":[{"title":"Security","fields":[{"k":"concealed","t":"otp","v":"otpauth://totp/x?secret=abc"}]}],"notesPlain":"hello"}}
+        {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","createdAt":1400000000,"folderUuid":"F1","secureContents":{"URLs":[{"label":"website","url":"https://github.com"}],"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"hunter2","type":"P"}],"sections":[{"title":"Security","fields":[{"k":"concealed","t":"otp","v":"otpauth://totp/x?secret=abc"}]}],"notesPlain":"hello"}}
         {"uuid":"F1","typeName":"system.folder.Regular","title":"Work","secureContents":{}}
     "#};
 
@@ -397,7 +395,51 @@ mod tests {
         );
         assert_eq!(secret(&vault, "github", "password"), "hunter2");
         assert_eq!(secret(&vault, "github", "notes"), "hello");
-        assert_eq!(secret(&vault, "github", "onepassword-uuid"), "L1");
+        assert_eq!(
+            secret(&vault, "github", "onepassword-type"),
+            "webforms.WebForm"
+        );
+    }
+
+    #[test]
+    fn item_written_with_record_uuid_as_id() {
+        let mut vault = handle();
+        apply(&mut vault, &plan_of(LOGIN)).unwrap();
+
+        let item = vault.get_item_overview("github").unwrap().unwrap();
+        assert_eq!(item.id, Uuid::parse_str(LOGIN_UUID).unwrap());
+    }
+
+    #[test]
+    fn item_without_usable_uuid_gets_new_id_and_imports_again() {
+        let mut vault = handle();
+        let plan = plan_of(indoc! {r#"
+            {"uuid":"not-a-uuid","typeName":"securenotes.SecureNote","title":"Note","secureContents":{}}
+        "#});
+
+        apply(&mut vault, &plan).unwrap();
+        let second = apply(&mut vault, &plan).unwrap();
+
+        assert_eq!(second.added, 1);
+        assert_eq!(second.skipped_existing, 0);
+        assert_eq!(vault.list_items().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn add_item_with_id_refuses_taken_id_key_and_deleted_id() {
+        let mut vault = handle();
+        let id = Uuid::new_v4();
+        vault.add_item_with_id(id, "one", "One").unwrap();
+
+        let same_id = vault.add_item_with_id(id, "two", "Two");
+        assert!(matches!(same_id, Err(Error::InvalidItemKey(_))));
+
+        let same_key = vault.add_item_with_id(Uuid::new_v4(), "one", "Again");
+        assert!(matches!(same_key, Err(Error::DuplicateItemKey(_))));
+
+        vault.delete_item("one").unwrap();
+        let deleted_id = vault.add_item_with_id(id, "three", "Three");
+        assert!(matches!(deleted_id, Err(Error::InvalidItemKey(_))));
     }
 
     #[test]
@@ -414,7 +456,7 @@ mod tests {
         };
         assert_eq!(section_of("otp").as_deref(), Some("Security"));
         assert_eq!(
-            section_of("onepassword-uuid").as_deref(),
+            section_of("onepassword-type").as_deref(),
             Some(IMPORT_SECTION)
         );
         assert_eq!(section_of("password"), None);

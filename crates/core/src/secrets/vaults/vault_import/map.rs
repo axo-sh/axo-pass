@@ -2,14 +2,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::onepif::{ParsedItem, is_blank, json_value_to_string};
 use crate::secrets::vaults::{CATEGORY_LOGIN, FieldKind, MatchKind, TextField, Website};
 
 /// Title of the section that holds the import bookkeeping credentials.
 pub const IMPORT_SECTION: &str = "Imported from 1Password";
-/// Key of the credential that holds the 1Password uuid.
-pub const UUID_KEY: &str = "onepassword-uuid";
 /// Key of the credential that holds the original `typeName`.
 pub const TYPE_KEY: &str = "onepassword-type";
 
@@ -38,6 +37,9 @@ pub struct ImportPlan {
     pub folders: Vec<PlannedFolder>,
     /// Trashed items left out because `include_trashed` is unset.
     pub skipped_trashed: usize,
+    /// Record uuids that an earlier record of the export already has. The
+    /// repeated item gets a new id, so a re-import does not recognize it.
+    pub repeated_uuids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +55,11 @@ pub struct PlannedItem {
     /// that is already in the vault is not checked here.
     pub key: String,
     pub title: String,
+    /// Record uuid as written in the export.
     pub uuid: String,
+    /// Vault item id, the record uuid. `None` if the uuid is not a uuid or an
+    /// earlier record has it. The vault then gives the item a new id.
+    pub id: Option<Uuid>,
     pub category: Option<&'static str>,
     /// Unix seconds.
     pub created_at: Option<i64>,
@@ -125,6 +131,8 @@ pub fn map_items(items: &[ParsedItem], options: MapOptions) -> ImportPlan {
     let mut item_keys = KeyAllocator::default();
     let mut planned = Vec::new();
     let mut skipped_trashed = 0;
+    let mut seen_ids = HashSet::new();
+    let mut repeated_uuids = Vec::new();
     for item in items {
         if item.type_name.starts_with(FOLDER_TYPE_PREFIX) {
             continue;
@@ -143,24 +151,34 @@ pub fn map_items(items: &[ParsedItem], options: MapOptions) -> ImportPlan {
             .folder_uuid
             .clone()
             .filter(|uuid| folders.iter().any(|f| &f.uuid == uuid));
-        planned.push(map_item(item, key, title, folder_uuid));
+        let id = Uuid::parse_str(&item.uuid).ok();
+        let id = match id {
+            Some(id) if !seen_ids.insert(id) => {
+                repeated_uuids.push(item.uuid.clone());
+                None
+            },
+            other => other,
+        };
+        planned.push(map_item(item, id, key, title, folder_uuid));
     }
 
     ImportPlan {
         items: planned,
         folders,
         skipped_trashed,
+        repeated_uuids,
     }
 }
 
 fn map_item(
     item: &ParsedItem,
+    id: Option<Uuid>,
     key: String,
     title: &str,
     folder_uuid: Option<String>,
 ) -> PlannedItem {
     let mut keys = KeyAllocator::default();
-    for reserved in [NOTES_KEY, UUID_KEY, TYPE_KEY] {
+    for reserved in [NOTES_KEY, TYPE_KEY] {
         keys.used.insert(reserved.to_string());
     }
     let mut autofill = PlannedAutofill::default();
@@ -288,24 +306,17 @@ fn map_item(
 
     autofill.websites = websites(item);
 
-    let mut import_credentials = Vec::new();
-    for (key, title, value) in [
-        (UUID_KEY, "1Password UUID", &item.uuid),
-        (TYPE_KEY, "1Password type", &item.type_name),
-    ] {
-        if !value.is_empty() {
-            import_credentials.push(PlannedCredential {
-                key: key.to_string(),
-                title: title.to_string(),
+    if !item.type_name.is_empty() {
+        sections.push(PlannedSection {
+            title: IMPORT_SECTION.to_string(),
+            credentials: vec![PlannedCredential {
+                key: TYPE_KEY.to_string(),
+                title: "1Password type".to_string(),
                 kind: FieldKind::Text(TextField::default()),
-                value: value.clone(),
-            });
-        }
+                value: item.type_name.clone(),
+            }],
+        });
     }
-    sections.push(PlannedSection {
-        title: IMPORT_SECTION.to_string(),
-        credentials: import_credentials,
-    });
 
     let category =
         (autofill.username.is_some() || autofill.password.is_some()).then_some(CATEGORY_LOGIN);
@@ -314,6 +325,7 @@ fn map_item(
         key,
         title: title.to_string(),
         uuid: item.uuid.clone(),
+        id,
         category,
         created_at: item.created_at,
         folder_uuid,
@@ -722,12 +734,44 @@ mod tests {
     }
 
     #[test]
-    fn import_section_holds_uuid_and_type() {
+    fn import_section_holds_type_only() {
         let plan = plan(LOGIN);
         let creds = &section(&plan.items[0], IMPORT_SECTION).credentials;
 
-        assert_eq!(credential(creds, UUID_KEY).value, "L1");
+        assert_eq!(creds.len(), 1);
         assert_eq!(credential(creds, TYPE_KEY).value, "webforms.WebForm");
+    }
+
+    #[test]
+    fn record_uuid_becomes_item_id() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"securenotes.SecureNote","title":"N","secureContents":{}}
+        "#});
+
+        let expected = Uuid::parse_str("5930154cfab244fb920d5189da0fab9c").unwrap();
+        assert_eq!(plan.items[0].id, Some(expected));
+        assert_eq!(plan.items[0].uuid, "5930154CFAB244FB920D5189DA0FAB9C");
+        assert!(plan.repeated_uuids.is_empty());
+    }
+
+    #[test]
+    fn uuid_that_is_not_a_uuid_gives_no_id() {
+        let plan = plan(LOGIN);
+
+        assert_eq!(plan.items[0].id, None);
+        assert!(plan.repeated_uuids.is_empty());
+    }
+
+    #[test]
+    fn repeated_uuid_keeps_first_id_and_is_reported() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"securenotes.SecureNote","title":"First","secureContents":{}}
+            {"uuid":"5930154cfab244fb920d5189da0fab9c","typeName":"securenotes.SecureNote","title":"Second","secureContents":{}}
+        "#});
+
+        assert!(plan.items[0].id.is_some());
+        assert_eq!(plan.items[1].id, None);
+        assert_eq!(plan.repeated_uuids, ["5930154cfab244fb920d5189da0fab9c"]);
     }
 
     #[test]

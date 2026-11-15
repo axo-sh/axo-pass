@@ -1396,6 +1396,28 @@ impl Vault {
         Ok(item_overview_ref)
     }
 
+    /// Add an item with the id `id`, which is for an item that has an id
+    /// outside the vault. Fails with `DuplicateItemKey` if the key is taken,
+    /// and with `InvalidItemKey` if a live or deleted item has the id.
+    pub fn add_item_with_id(
+        &mut self,
+        id: ItemId,
+        item_key: &str,
+        item_title: &str,
+    ) -> Result<&VaultItemOverview, Error> {
+        if self.items.contains_key(&id) || self.deleted_items.contains_key(&id) {
+            return Err(Error::InvalidItemKey(format!("item {id} exists")));
+        }
+        let mut overview = VaultItemOverview::try_new(item_title, item_key)?;
+        if self.item_index.contains_key(&overview.key) {
+            return Err(Error::DuplicateItemKey(overview.key));
+        }
+        overview.id = id;
+        self.item_index.insert(overview.key.clone(), id);
+        self.item_blobs.remove(&id);
+        Ok(self.items.entry(id).or_insert(overview))
+    }
+
     /// Change the key of an item. Its credentials keep their keys. Fails with
     /// `DuplicateItemKey` if `new_key` belongs to another item.
     pub fn change_item_key(
