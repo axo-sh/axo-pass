@@ -1,6 +1,6 @@
 mod export;
 mod import;
-mod parse_1password;
+mod import_1password;
 mod utils;
 
 use std::path::PathBuf;
@@ -13,7 +13,6 @@ use clml::cprintln;
 
 use crate::cli::commands::vault::export::VaultExportCommand;
 use crate::cli::commands::vault::import::VaultImportCommand;
-use crate::cli::commands::vault::parse_1password::VaultParse1passwordCommand;
 
 #[derive(Parser, Debug)]
 #[command(flatten_help = true, help_template = "{usage-heading} {usage}")]
@@ -33,11 +32,9 @@ enum VaultSubcommand {
     /// Export one or more vaults to a portable bundle file
     Export(VaultExportCommand),
 
-    /// Import vaults from an export bundle
+    /// Import vaults from an export bundle, or items from a 1Password .1pif
+    /// export
     Import(VaultImportCommand),
-
-    /// Parse a 1Password .1pif export and print its contents
-    OnePasswordImport(VaultParse1passwordCommand),
 }
 
 impl VaultCommand {
@@ -58,12 +55,6 @@ impl VaultCommand {
             },
             VaultSubcommand::Import(vault_import_cmd) => {
                 if let Err(e) = vault_import_cmd.execute() {
-                    cprintln!("<red>Error:</red> {e}");
-                    std::process::exit(1);
-                }
-            },
-            VaultSubcommand::OnePasswordImport(cmd) => {
-                if let Err(e) = cmd.execute() {
                     cprintln!("<red>Error:</red> {e}");
                     std::process::exit(1);
                 }
