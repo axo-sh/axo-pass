@@ -8,6 +8,9 @@ use thiserror::Error;
 /// export.
 const RECORD_SEPARATOR: &str = "***5642bee8-a5ff-11dc-8314-0800200c9a66***";
 
+/// Key of `secureContents` that holds previous passwords.
+const HISTORY_KEY: &str = "passwordHistory";
+
 #[derive(Debug, Error)]
 pub enum OnePifError {
     #[error("1pif path not found: {0}")]
@@ -62,6 +65,19 @@ pub struct ParsedItem {
     /// value. The parser drops blank section fields and the mapper skips
     /// blank web-form fields.
     pub blank_fields: Vec<String>,
+    /// Previous passwords from `passwordHistory`, in export order. A malformed
+    /// entry is left out and noted in `parse_notes`.
+    pub password_history: Vec<ParsedHistoryEntry>,
+    /// Problems found while reading the record. A note holds no secret value.
+    pub parse_notes: Vec<String>,
+}
+
+/// A previous password from `secureContents.passwordHistory`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedHistoryEntry {
+    pub value: String,
+    /// Unix seconds.
+    pub time: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +355,9 @@ impl RawItem {
             })
             .collect();
 
+        let mut extra = sc.extra;
+        let (password_history, parse_notes) = read_history(extra.remove(HISTORY_KEY));
+
         ParsedItem {
             uuid: self.uuid,
             type_name: self.type_name,
@@ -361,12 +380,46 @@ impl RawItem {
             tags: self.open_contents.tags,
             created_at: self.created_at,
             updated_at: self.updated_at,
-            extra: sc.extra,
+            extra,
             attachments: Vec::new(),
             unread: self.other,
             blank_fields,
+            password_history,
+            parse_notes,
         }
     }
+}
+
+/// Entries of a `passwordHistory` value, and a note for each entry that has
+/// no string value or no integer time.
+fn read_history(value: Option<serde_json::Value>) -> (Vec<ParsedHistoryEntry>, Vec<String>) {
+    let mut entries = Vec::new();
+    let mut notes = Vec::new();
+    match value {
+        None | Some(serde_json::Value::Null) => {},
+        Some(serde_json::Value::Array(list)) => {
+            for (index, raw) in list.iter().enumerate() {
+                let number = index + 1;
+                let value = raw
+                    .get("value")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|v| !v.is_empty());
+                let time = raw.get("time").and_then(serde_json::Value::as_i64);
+                match (value, time) {
+                    (Some(value), Some(time)) => entries.push(ParsedHistoryEntry {
+                        value: value.to_string(),
+                        time,
+                    }),
+                    (None, _) => {
+                        notes.push(format!("password history entry {number} has no value"))
+                    },
+                    (_, None) => notes.push(format!("password history entry {number} has no time")),
+                }
+            }
+        },
+        Some(_) => notes.push("password history is not a list".to_string()),
+    }
+    (entries, notes)
 }
 
 /// Files in `attachments/<uuid>/` of the export folder `root`, sorted by path.
@@ -689,6 +742,61 @@ mod tests {
         "#});
 
         assert_eq!(item.fields[0].value, serde_json::json!({"a": 1}));
+    }
+
+    #[test]
+    fn reads_password_history() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"H1","typeName":"webforms.WebForm","title":"Site","secureContents":{"passwordHistory":[{"value":"old1","time":1634666640},{"value":"old2","time":1634666650}]}}
+        "#});
+
+        assert_eq!(
+            item.password_history,
+            [
+                ParsedHistoryEntry {
+                    value: "old1".to_string(),
+                    time: 1_634_666_640,
+                },
+                ParsedHistoryEntry {
+                    value: "old2".to_string(),
+                    time: 1_634_666_650,
+                },
+            ]
+        );
+        assert!(item.parse_notes.is_empty());
+        assert!(!item.extra.contains_key("passwordHistory"));
+    }
+
+    #[test]
+    fn malformed_history_entries_noted_without_values() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"H2","typeName":"webforms.WebForm","title":"Site","secureContents":{"passwordHistory":[{"value":"good","time":5},{"time":6},{"value":"secret-no-time"},{"value":"secret-float-time","time":1.5},{"value":"","time":7},"text"]}}
+        "#});
+
+        assert_eq!(item.password_history.len(), 1);
+        assert_eq!(item.password_history[0].value, "good");
+        assert_eq!(
+            item.parse_notes,
+            [
+                "password history entry 2 has no value",
+                "password history entry 3 has no time",
+                "password history entry 4 has no time",
+                "password history entry 5 has no value",
+                "password history entry 6 has no value",
+            ]
+        );
+        assert!(item.parse_notes.iter().all(|n| !n.contains("secret")));
+    }
+
+    #[test]
+    fn history_that_is_not_a_list_noted() {
+        let item = parse_one(indoc! {r#"
+            {"uuid":"H3","typeName":"webforms.WebForm","title":"Site","secureContents":{"passwordHistory":"oops"}}
+        "#});
+
+        assert!(item.password_history.is_empty());
+        assert_eq!(item.parse_notes, ["password history is not a list"]);
+        assert!(!item.extra.contains_key("passwordHistory"));
     }
 
     #[test]

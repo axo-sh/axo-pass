@@ -107,6 +107,32 @@ fn changing_value_keeps_old_value_in_history() {
     );
 }
 
+#[test]
+fn added_history_values_precede_stored_entries_and_keep_times() {
+    let mut vault = vault_with_credentials("item", &["alpha"]);
+    set_value(&mut vault, "item", "alpha", "second");
+
+    let entries = [
+        (10, secrecy::SecretString::from("a")),
+        (20, secrecy::SecretString::from("b")),
+    ];
+    vault.add_history_values("item", "alpha", &entries).unwrap();
+
+    assert_eq!(secret_of(&vault, "item", "alpha"), "second");
+    let vault = reload(&vault);
+    assert_eq!(
+        history_values(&vault, "item", "alpha"),
+        vec!["secret", "b", "a"]
+    );
+    let times: Vec<i64> = vault
+        .list_history("item", "alpha")
+        .unwrap()
+        .iter()
+        .map(|h| h.at)
+        .collect();
+    assert_eq!(&times[1..], [20, 10]);
+}
+
 /// Kinds of the stored history entries of a live credential, oldest first.
 fn history_kinds(vault: &Vault, item_key: &str, cred_key: &str) -> Vec<HistoryKind> {
     let item_id = item_id_of(vault, item_key);

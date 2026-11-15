@@ -250,6 +250,85 @@ fn summary_reports_dropped_data_without_secrets() {
     assert!(!json.contains("hunter2"));
 }
 
+const HISTORY_EXPORT: &str = indoc! {r#"
+    {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","secureContents":{"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"hunter2","type":"P"}],"passwordHistory":[{"value":"old-one","time":1634666640},{"value":"bad-entry"},{"value":"old-two","time":1634666650}]}}
+"#};
+
+/// Export folder in `dir` with the record of [`HISTORY_EXPORT`].
+fn write_history_export(dir: &Path) -> PathBuf {
+    let export = dir.join("history.1pif");
+    fs::create_dir_all(&export).unwrap();
+    fs::write(export.join("data.1pif"), HISTORY_EXPORT).unwrap();
+    export
+}
+
+/// Previous values of a credential as `(value, time)`, oldest first.
+fn history(vault: &VaultHandle, item: &str, credential: &str) -> Vec<(String, i64)> {
+    let mut entries: Vec<(String, i64)> = vault
+        .list_history(item, credential)
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            let value = vault.get_history_value(item, credential, entry.id).unwrap();
+            (value.expose_secret().clone(), entry.at)
+        })
+        .collect();
+    entries.reverse();
+    entries
+}
+
+#[test]
+fn login_history_imported_and_kept_out_of_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = write_history_export(dir.path());
+    let fx = Fixture::new();
+
+    let (key, summary) = import(&fx, &export, new_vault("Work")).unwrap();
+
+    assert_eq!(summary.added, 1);
+    let vault = fx.read(&key);
+    assert_eq!(
+        history(&vault, "github", "password"),
+        [
+            ("old-one".to_string(), 1_634_666_640),
+            ("old-two".to_string(), 1_634_666_650),
+        ]
+    );
+    assert!(
+        summary
+            .dropped
+            .iter()
+            .any(|d| d.item == "GitHub" && d.kind == "parse note" && d.detail.contains("entry 2"))
+    );
+    let json = serde_json::to_string(&summary).unwrap();
+    for secret in ["old-one", "old-two", "bad-entry", "hunter2"] {
+        assert!(!json.contains(secret), "{secret} in summary");
+    }
+}
+
+#[test]
+fn failed_import_writes_no_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let export = write_history_export(dir.path());
+    let fx = Fixture::new();
+    fx.app_add("personal", "token", "secret");
+    let mut plan = plan_of(&export);
+    let repeat = plan.items[0].clone();
+    plan.items.push(repeat);
+
+    let result = import_plan(
+        &fx.vaults,
+        &existing("personal"),
+        &plan,
+        ForeignContext::for_test(),
+    );
+
+    assert!(result.is_err());
+    let vault = fx.read("personal");
+    assert!(vault.get_item_overview("github").unwrap().is_none());
+    assert_eq!(vault.list_items().unwrap().len(), 1);
+}
+
 #[test]
 fn import_audited_as_items_imported_with_vault_ids() {
     let _audit = test_dir();

@@ -255,6 +255,14 @@ fn write_credential<'a>(
     if let Some(at) = item.created_at {
         handle.set_credential_created_at(item_key, &credential.key, at)?;
     }
+    if !credential.history.is_empty() {
+        let entries: Vec<(i64, SecretString)> = credential
+            .history
+            .iter()
+            .map(|entry| (entry.time, SecretString::from(entry.value.clone())))
+            .collect();
+        handle.add_history_values(item_key, &credential.key, &entries)?;
+    }
     let overview = handle
         .get_secret_overview(item_key, &credential.key)?
         .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{}", credential.key)))?;
@@ -607,6 +615,88 @@ mod tests {
         assert!(result.is_err());
         let blobs = fx.writer.blob_store(fx.vault.vault_id().unwrap()).list();
         assert!(blobs.unwrap().is_empty());
+    }
+
+    const LOGIN_WITH_HISTORY: &str = indoc! {r#"
+        {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","createdAt":1400000000,"secureContents":{"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"current","type":"P"}],"passwordHistory":[{"value":"first","time":1634666640},{"value":"second","time":1634666650}]}}
+    "#};
+
+    /// Previous values of a credential as `(value, time)`, oldest first.
+    fn history(handle: &VaultHandle, item: &str, credential: &str) -> Vec<(String, i64)> {
+        let mut entries: Vec<(String, i64)> = handle
+            .list_history(item, credential)
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let value = handle
+                    .get_history_value(item, credential, entry.id)
+                    .unwrap();
+                (value.expose_secret().clone(), entry.at)
+            })
+            .collect();
+        entries.reverse();
+        entries
+    }
+
+    #[test]
+    fn history_written_oldest_first_at_original_times() {
+        let mut vault = handle();
+
+        apply(&mut vault, &plan_of(LOGIN_WITH_HISTORY)).unwrap();
+
+        assert_eq!(secret(&vault, "github", "password"), "current");
+        assert_eq!(
+            history(&vault, "github", "password"),
+            [
+                ("first".to_string(), 1_634_666_640),
+                ("second".to_string(), 1_634_666_650),
+            ]
+        );
+        assert!(history(&vault, "github", "username").is_empty());
+    }
+
+    #[test]
+    fn reimport_adds_no_history() {
+        let mut vault = handle();
+        let plan = plan_of(LOGIN_WITH_HISTORY);
+        apply(&mut vault, &plan).unwrap();
+
+        let summary = apply(&mut vault, &plan).unwrap();
+
+        assert_eq!(summary.skipped_existing, 1);
+        assert_eq!(history(&vault, "github", "password").len(), 2);
+    }
+
+    #[test]
+    fn history_entry_equal_to_current_not_written() {
+        let mut vault = handle();
+        let plan = plan_of(indoc! {r#"
+            {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","secureContents":{"fields":[{"name":"pass","designation":"password","value":"current","type":"P"}],"passwordHistory":[{"value":"old","time":10},{"value":"current","time":20}]}}
+        "#});
+
+        apply(&mut vault, &plan).unwrap();
+
+        assert_eq!(
+            history(&vault, "github", "password"),
+            [("old".to_string(), 10)]
+        );
+    }
+
+    #[test]
+    fn malformed_history_entry_skipped_import_continues() {
+        let mut vault = handle();
+        let plan = plan_of(indoc! {r#"
+            {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","secureContents":{"fields":[{"name":"pass","designation":"password","value":"current","type":"P"}],"passwordHistory":[{"value":"bad"},{"value":"good","time":10}]}}
+            {"uuid":"N1","typeName":"securenotes.SecureNote","title":"Note","secureContents":{}}
+        "#});
+
+        let summary = apply(&mut vault, &plan).unwrap();
+
+        assert_eq!(summary.added, 2);
+        assert_eq!(
+            history(&vault, "github", "password"),
+            [("good".to_string(), 10)]
+        );
     }
 
     #[test]

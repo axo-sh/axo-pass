@@ -162,6 +162,14 @@ fn print_item(item: &ParsedItem, dropped: &[Dropped], show_concealed: bool) {
         cprintln!("  <yellow>{key}</yellow> <dim>(other)</dim>: {value}");
     }
 
+    for entry in &item.password_history {
+        let value = display(entry.value.clone(), true, show_concealed);
+        cprintln!(
+            "  <dim>previous password:</dim> {value} <dim>({})</dim>",
+            format_time(entry.time)
+        );
+    }
+
     for path in &item.attachments {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         cprintln!("  <dim>attachment:</dim> {name}");

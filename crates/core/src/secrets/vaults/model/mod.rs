@@ -1945,6 +1945,41 @@ impl Vault {
         ))
     }
 
+    /// Add `value-updated` history entries to a credential. `entries` are
+    /// replaced values with the Unix seconds of the replacement, oldest first.
+    /// The entries are placed before the stored entries, so the stored order
+    /// stays oldest first if the stored entries are newer. The current value
+    /// is not changed.
+    pub(crate) fn add_history_values(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        entries: &[(i64, SecretString)],
+    ) -> Result<(), Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let encrypted = entries
+            .iter()
+            .map(|(at, value)| {
+                let entry = DecryptedHistoryEntry {
+                    id: Uuid::new_v4(),
+                    metadata: HistoryMetadata {
+                        at: *at,
+                        kind: HistoryKind::ValueUpdated,
+                    },
+                    value: Some(SecretBox::new(Box::new(value.expose_secret().to_string()))),
+                };
+                self.cipher.encrypt_history_entry(item_id, cred_id, &entry)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if !encrypted.is_empty() {
+            self.history
+                .entry(cred_id)
+                .or_default()
+                .splice(0..0, encrypted);
+        }
+        Ok(())
+    }
+
     /// Create a section after the existing sections of an item. Existing
     /// sections are assigned positions in current display order, since
     /// sections without positions sort by title.

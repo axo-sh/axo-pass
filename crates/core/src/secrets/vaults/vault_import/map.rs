@@ -20,9 +20,6 @@ const PASSWORD_KEY: &str = "password";
 pub(super) const FOLDER_TYPE: &str = "system.folder.Regular";
 pub(super) const FOLDER_TYPE_PREFIX: &str = "system.folder.";
 const OTP_PREFIX: &str = "otpauth://";
-/// Keys of `secureContents` that are not imported. `passwordHistory` holds
-/// previous passwords.
-pub(super) const UNIMPORTED_KEYS: [&str; 1] = ["passwordHistory"];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MapOptions {
@@ -105,6 +102,17 @@ pub struct PlannedCredential {
     pub title: String,
     pub kind: FieldKind,
     pub value: String,
+    /// Previous values, oldest first. Only the autofill password credential
+    /// has any. None equals `value`.
+    pub history: Vec<PlannedHistory>,
+}
+
+/// A previous value of a credential.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedHistory {
+    pub value: String,
+    /// Unix seconds.
+    pub time: i64,
 }
 
 /// Autofill data. Slots hold credential keys.
@@ -216,6 +224,7 @@ fn map_item(
                 title: name.to_string(),
                 kind,
                 value: field.text(),
+                history: Vec::new(),
             });
             continue;
         }
@@ -232,6 +241,12 @@ fn map_item(
             &field.value,
             kind,
         );
+    }
+
+    if let Some(slot_key) = &autofill.password
+        && let Some(credential) = credentials.iter_mut().find(|c| &c.key == slot_key)
+    {
+        credential.history = planned_history(item, &credential.value);
     }
 
     let mut sections = Vec::new();
@@ -264,9 +279,6 @@ fn map_item(
 
     let mut type_credentials = Vec::new();
     for (extra_key, value) in &item.extra {
-        if UNIMPORTED_KEYS.contains(&extra_key.as_str()) {
-            continue;
-        }
         push_secret_value(&mut keys, &mut type_credentials, extra_key, value);
     }
     if !type_credentials.is_empty() {
@@ -301,6 +313,7 @@ fn map_item(
                 multiline: Some(true),
             }),
             value: notes.clone(),
+            history: Vec::new(),
         });
     }
 
@@ -314,6 +327,7 @@ fn map_item(
                 title: "1Password type".to_string(),
                 kind: FieldKind::Text(TextField::default()),
                 value: item.type_name.clone(),
+                history: Vec::new(),
             }],
         });
     }
@@ -337,6 +351,30 @@ fn map_item(
         files,
         autofill,
     }
+}
+
+/// Whether the mapper fills the autofill password slot of `item`. Password
+/// history has no other place to go.
+pub(super) fn has_password_slot(item: &ParsedItem) -> bool {
+    item.fields
+        .iter()
+        .any(|f| f.designation.as_deref() == Some("password") && !is_blank(&f.value))
+}
+
+/// History entries of `item`, oldest first. An entry equal to the `current`
+/// password is left out.
+fn planned_history(item: &ParsedItem, current: &str) -> Vec<PlannedHistory> {
+    let mut history: Vec<PlannedHistory> = item
+        .password_history
+        .iter()
+        .filter(|entry| entry.value != current)
+        .map(|entry| PlannedHistory {
+            value: entry.value.clone(),
+            time: entry.time,
+        })
+        .collect();
+    history.sort_by_key(|entry| entry.time);
+    history
 }
 
 /// Whether `text` is an http or https URL.
@@ -436,6 +474,7 @@ fn push_value(
         title: title.to_string(),
         kind,
         value: text,
+        history: Vec::new(),
     });
 }
 
@@ -470,6 +509,7 @@ fn push_secret_value(
         title: title.to_string(),
         kind: FieldKind::Confidential(TextField::default()),
         value: json_value_to_string(value.clone()),
+        history: Vec::new(),
     });
 }
 
@@ -764,8 +804,16 @@ mod tests {
         assert_eq!(files[1].key, "a-b-pdf-2");
     }
 
+    fn history_of(credential: &PlannedCredential) -> Vec<(&str, i64)> {
+        credential
+            .history
+            .iter()
+            .map(|h| (h.value.as_str(), h.time))
+            .collect()
+    }
+
     #[test]
-    fn password_history_not_imported() {
+    fn password_history_not_a_credential() {
         let plan = plan(indoc! {r#"
             {"uuid":"H1","typeName":"webforms.WebForm","title":"Site","secureContents":{"passwordHistory":[{"value":"old","time":1}],"ccnum":"4111"}}
         "#});
@@ -777,6 +825,52 @@ mod tests {
             .map(|c| c.key.as_str())
             .collect();
         assert_eq!(keys, ["ccnum"]);
+    }
+
+    #[test]
+    fn history_attached_to_password_slot_oldest_first() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"H2","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"current","type":"P"}],"passwordHistory":[{"value":"third","time":30},{"value":"first","time":10},{"value":"second","time":20}]}}
+        "#});
+        let item = &plan.items[0];
+
+        let password = credential(&item.credentials, "password");
+        assert_eq!(
+            history_of(password),
+            [("first", 10), ("second", 20), ("third", 30)]
+        );
+        let username = credential(&item.credentials, "username");
+        assert!(username.history.is_empty());
+    }
+
+    #[test]
+    fn history_entry_equal_to_current_skipped() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"H3","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"pass","designation":"password","value":"current","type":"P"}],"passwordHistory":[{"value":"old","time":10},{"value":"current","time":20}]}}
+        "#});
+
+        let password = credential(&plan.items[0].credentials, "password");
+        assert_eq!(history_of(password), [("old", 10)]);
+    }
+
+    #[test]
+    fn history_on_password_item_attached() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"H4","typeName":"passwords.Password","title":"Wifi","secureContents":{"password":"current","passwordHistory":[{"value":"old","time":10}]}}
+        "#});
+
+        let password = credential(&plan.items[0].credentials, "password");
+        assert_eq!(history_of(password), [("old", 10)]);
+    }
+
+    #[test]
+    fn history_without_password_slot_not_planned() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"H5","typeName":"webforms.WebForm","title":"Site","secureContents":{"fields":[{"name":"login","designation":"username","value":"me","type":"T"}],"passwordHistory":[{"value":"old","time":10}]}}
+        "#});
+        let item = &plan.items[0];
+
+        assert!(item.credentials.iter().all(|c| c.history.is_empty()));
     }
 
     #[test]

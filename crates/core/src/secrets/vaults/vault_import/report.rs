@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::map::{FOLDER_TYPE, FOLDER_TYPE_PREFIX, UNIMPORTED_KEYS, is_web_url};
+use super::map::{FOLDER_TYPE, FOLDER_TYPE_PREFIX, has_password_slot, is_web_url};
 use super::onepif::{ParsedItem, json_value_to_string};
 
 /// Top-level keys that hold 1Password bookkeeping. They are not reported.
@@ -70,24 +70,22 @@ pub fn dropped_data(item: &ParsedItem) -> Vec<Dropped> {
         dropped.push(Dropped::new("modified time", at.to_string()));
     }
 
-    for key in UNIMPORTED_KEYS {
-        if let Some(value) = item.extra.get(key) {
-            let serde_json::Value::Array(entries) = value else {
-                continue;
-            };
-            if entries.is_empty() {
-                continue;
-            }
-            let mut entry = Dropped::new("password history", format!("{} entries", entries.len()));
-            entry.concealed = Some(
-                entries
-                    .iter()
-                    .map(|e| text(e.get("value").unwrap_or(e)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            dropped.push(entry);
-        }
+    if !item.password_history.is_empty() && !has_password_slot(item) {
+        let mut entry = Dropped::new(
+            "password history",
+            format!("{} entries, no password field", item.password_history.len()),
+        );
+        entry.concealed = Some(
+            item.password_history
+                .iter()
+                .map(|e| e.value.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        dropped.push(entry);
+    }
+    for note in &item.parse_notes {
+        dropped.push(Dropped::new("parse note", note.clone()));
     }
 
     if !item.blank_fields.is_empty() {
@@ -211,14 +209,40 @@ mod tests {
     }
 
     #[test]
-    fn password_history_values_concealed() {
+    fn history_without_password_field_reported_concealed() {
         let entries = entries_of(indoc! {r#"
             {"uuid":"A5","typeName":"webforms.WebForm","title":"N","secureContents":{"passwordHistory":[{"value":"old1","time":1},{"value":"old2","time":2}]}}
         "#});
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].to_string(), "password history: 2 entries");
+        assert_eq!(
+            entries[0].to_string(),
+            "password history: 2 entries, no password field"
+        );
         assert_eq!(entries[0].concealed.as_deref(), Some("old1, old2"));
+    }
+
+    #[test]
+    fn history_with_password_field_not_reported() {
+        let dropped = dropped_of(indoc! {r#"
+            {"uuid":"A5","typeName":"webforms.WebForm","title":"N","secureContents":{"fields":[{"name":"pass","designation":"password","value":"now","type":"P"}],"passwordHistory":[{"value":"old1","time":1}]}}
+        "#});
+
+        assert!(dropped.is_empty(), "{dropped:?}");
+    }
+
+    #[test]
+    fn malformed_history_entry_reported_without_value() {
+        let entries = entries_of(indoc! {r#"
+            {"uuid":"A5","typeName":"webforms.WebForm","title":"N","secureContents":{"fields":[{"name":"pass","designation":"password","value":"now","type":"P"}],"passwordHistory":[{"value":"secret-old"}]}}
+        "#});
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].to_string(),
+            "parse note: password history entry 1 has no time"
+        );
+        assert_eq!(entries[0].concealed, None);
     }
 
     #[test]

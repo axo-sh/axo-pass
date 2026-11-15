@@ -602,6 +602,19 @@ impl VaultHandle {
         vault.set_item_credential_created_at(item_key, cred_key, at)
     }
 
+    /// Add replaced values to the history of a credential, with the Unix
+    /// seconds of each replacement. `entries` are oldest first. The current
+    /// value is not changed.
+    pub(crate) fn add_history_values(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        entries: &[(i64, SecretString)],
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.add_history_values(item_key, cred_key, entries)
+    }
+
     pub fn set_item_autofill(
         &mut self,
         item_key: &str,

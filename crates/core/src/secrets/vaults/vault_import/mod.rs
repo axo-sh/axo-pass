@@ -5,10 +5,11 @@ pub mod write;
 
 pub use map::{
     ImportPlan, MapOptions, PlannedAutofill, PlannedCredential, PlannedFile, PlannedFolder,
-    PlannedItem, PlannedSection, map_items,
+    PlannedHistory, PlannedItem, PlannedSection, map_items,
 };
 pub use onepif::{
-    OnePifError, ParsedField, ParsedItem, ParsedSection, ParsedSectionField, ParsedUrl, parse_1pif,
+    OnePifError, ParsedField, ParsedHistoryEntry, ParsedItem, ParsedSection, ParsedSectionField,
+    ParsedUrl, parse_1pif,
 };
 pub use report::{Dropped, dropped_data};
 pub use write::{
