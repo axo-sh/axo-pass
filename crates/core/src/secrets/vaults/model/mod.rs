@@ -1552,6 +1552,32 @@ impl Vault {
         })
     }
 
+    /// Set the creation time of an item, in Unix seconds.
+    pub fn set_item_created_at(&mut self, item_key: &str, at: i64) -> Result<(), Error> {
+        self.edit_item(item_key, |item| {
+            item.created_at = at;
+            Ok(())
+        })
+    }
+
+    /// Set the creation time of a credential, in Unix seconds.
+    pub fn set_item_credential_created_at(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        at: i64,
+    ) -> Result<(), Error> {
+        let (item_id, cred_id) = self.get_credential_ids(item_key, cred_key)?;
+        let cred = self
+            .items
+            .get_mut(&item_id)
+            .and_then(|item| item.credentials.get_mut(&cred_id))
+            .ok_or_else(|| Error::InvalidCredentialKey(format!("{item_key}/{cred_key}")))?;
+        cred.created_at = at;
+        self.cred_blobs.remove(&cred_id);
+        Ok(())
+    }
+
     /// Replace an item's autofill data. Rejects a role slot that points at a
     /// credential outside the item, one credential in both slots, and two
     /// websites with one URL.

@@ -576,6 +576,21 @@ impl VaultHandle {
         vault.set_item_category(item_key, category)
     }
 
+    pub fn set_item_created_at(&mut self, item_key: &str, at: i64) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.set_item_created_at(item_key, at)
+    }
+
+    pub fn set_credential_created_at(
+        &mut self,
+        item_key: &str,
+        cred_key: &str,
+        at: i64,
+    ) -> Result<(), Error> {
+        let vault = self.get_unlocked_vault_mut()?;
+        vault.set_item_credential_created_at(item_key, cred_key, at)
+    }
+
     pub fn set_item_autofill(
         &mut self,
         item_key: &str,
