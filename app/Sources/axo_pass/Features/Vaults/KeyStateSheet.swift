@@ -53,7 +53,7 @@ struct KeyStateSheet: View {
       Button("Sign Again") { resign() }
     } message: {
       Text(
-        "Axo Pass creates a new signing key and signs every vault file and previous version again. Sign again only if no one else could change the vault files while the key was missing. A synced vault then stops syncing until you pair with another Mac or use its recovery kit."
+        "Axo Pass creates a new signing key and signs every vault file and previous version again. Sign again only if you are the only person who could change the vault files while the key was missing. A synced vault then stops syncing until you pair with another Mac or use its recovery kit."
       )
     }
   }
@@ -71,7 +71,7 @@ struct KeyStateSheet: View {
       .fixedSize(horizontal: false, vertical: true)
 
       if sync.newHardwareVaults.isEmpty {
-        Text("No vault on this Mac syncs.")
+        Text("Vaults on this Mac do not sync.")
           .foregroundStyle(.secondary)
       } else {
         Text(
@@ -122,7 +122,7 @@ struct KeyStateSheet: View {
       Text("Signing Key Lost").font(.headline)
 
       Text(
-        "The signing key of this Mac is missing from the keychain, so no vault passes its check and none opens. The encryption key of this Mac is present, so the vaults can be signed again with a new key."
+        "The signing key of this Mac is missing from the keychain, so every vault fails its check and stays closed. The encryption key of this Mac is present, so the vaults can be signed again with a new key."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -201,7 +201,7 @@ struct KeyStateSheet: View {
       Text("Keychain Error").font(.headline)
 
       Text(
-        "Axo Pass cannot read its keys from the keychain, so no vault opens. No key was created, and no file was changed."
+        "Axo Pass cannot read its keys from the keychain, so every vault stays closed. Axo Pass did not create a key or change a file."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)

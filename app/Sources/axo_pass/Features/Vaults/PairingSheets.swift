@@ -270,7 +270,7 @@ struct PairingPromptSheet: View {
         .onChange(of: code) { noMatch = false }
 
       if noMatch {
-        Text("This code matches no request. Check the code on the new Mac.")
+        Text("This code does not match any request. Check the code on the new Mac.")
           .font(.caption)
           .foregroundStyle(.red)
       }
@@ -333,7 +333,7 @@ struct PairingPromptSheet: View {
         .fixedSize(horizontal: false, vertical: true)
 
       if vaults.isEmpty {
-        Text("This Mac syncs none of the vaults that the new Mac asks for.")
+        Text("This Mac does not sync any of the vaults that the new Mac asks for.")
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       } else {
@@ -598,7 +598,7 @@ struct KitImportSheet: View {
       return false
     case .noKey:
       step = .refused(
-        "No file in the synced folder opens with this recovery kit. Check that the kit is for a vault in this folder."
+        "This recovery kit does not open any file in the synced folder. Check that the kit is for a vault in this folder."
       )
       return false
     }

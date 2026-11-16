@@ -618,7 +618,7 @@ struct CredentialRow: View {
         label: "Attestation",
         value: "None",
         help:
-          "Sites receive no attestation statement. The Axo Pass AAGUID is sent but is not signed, so sites cannot verify it."
+          "Sites do not receive an attestation statement. The Axo Pass AAGUID is sent but is not signed, so sites cannot verify it."
       ),
       PasskeyProperty(
         label: "Algorithm",

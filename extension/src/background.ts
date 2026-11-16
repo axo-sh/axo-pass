@@ -490,7 +490,7 @@ const codeTarget = async (target: FrameTarget, recordId: string): Promise<PopupF
     return {state: 'host', result};
   }
   if (result.code === null) {
-    return {state: 'refused', reason: 'That login has no one-time code.'};
+    return {state: 'refused', reason: 'That login does not have a one-time code.'};
   }
 
   return sendToFrame(target, {type: 'fill-code', origin, code: result.code.code});

@@ -522,7 +522,7 @@ final class VaultsModel {
     case .userFallback: return nil
     case .biometryNotEnrolled:
       return
-        "No fingerprints are enrolled. Use your login password, or add one in System Settings › Touch ID & Password."
+        "This Mac does not have enrolled fingerprints. Use your login password, or add one in System Settings › Touch ID & Password."
     case .biometryLockout:
       return "Touch ID is locked after too many failed attempts. Use your login password instead."
     case .passcodeNotSet:

@@ -19,7 +19,9 @@ func syncNotice(_ report: SyncReportInfo) -> String? {
     return "Sync is paused."
   case .active?, nil: break
   }
-  if report.recoveryKitMissing { return "No recovery kit opens this vault. Save a new kit." }
+  if report.recoveryKitMissing {
+    return "This vault does not open with any recovery kit. Save a new kit."
+  }
   return nil
 }
 
@@ -189,9 +191,11 @@ struct SyncStatusSheet: View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Synced Folder").font(.subheadline.weight(.semibold))
       if report.needsFolder || report.root == nil {
-        Text("This vault has no synced folder on this Mac. Choose the folder that holds it again.")
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+        Text(
+          "This vault does not have a synced folder on this Mac. Choose the folder that holds it again."
+        )
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
         Button("Choose Folder…") { chooseFolder() }
           .disabled(isWorking)
       } else if let root = report.root {
@@ -228,7 +232,7 @@ struct SyncStatusSheet: View {
         causeRow((stopText(cause), nil))
         stopActions(cause, report)
       case nil:
-        Text("This vault has no sync status.")
+        Text("This vault does not have a sync status.")
           .foregroundStyle(.secondary)
       }
     }
@@ -305,7 +309,7 @@ struct SyncStatusSheet: View {
     VStack(alignment: .leading, spacing: 6) {
       Text("Recovery Kit").font(.subheadline.weight(.semibold))
       Text(
-        "No recovery kit opens the current sync key of this vault. If no other Mac is available, a kit is the only way to open the synced vault."
+        "The current sync key of this vault does not open with any recovery kit. If no other Mac is available, a kit is the only way to open the synced vault."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -320,7 +324,7 @@ struct SyncStatusSheet: View {
           Text("Conflicts").font(.subheadline.weight(.semibold))
           Text(
             report.conflicts == 0
-              ? "No values show as conflicts."
+              ? "Values do not show as conflicts."
               : report.conflicts == 1
                 ? "1 value shows as a conflict." : "\(report.conflicts) values show as conflicts."
           )
@@ -558,7 +562,7 @@ struct MissingVaultsSheet: View {
       .fixedSize(horizontal: false, vertical: true)
 
       if sync.missingVaults.isEmpty {
-        Text("No vault is missing.")
+        Text("All vaults are present.")
           .foregroundStyle(.secondary)
       } else {
         VStack(alignment: .leading, spacing: 10) {

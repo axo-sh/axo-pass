@@ -488,7 +488,7 @@ struct VaultImportSheet: View {
     switch info.missingFiles {
     case 0: return files
     case info.files:
-      return "\(files), none with contents in the bundle. They import as missing."
+      return "\(files), without contents in the bundle. They import as missing."
     default:
       return
         "\(files), \(info.missingFiles) without contents in the bundle. Those import as missing."

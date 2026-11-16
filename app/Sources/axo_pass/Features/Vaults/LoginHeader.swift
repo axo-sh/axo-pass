@@ -685,7 +685,9 @@ struct WebsitesEditor: View {
         Text("No passkey")
           .font(.caption)
           .foregroundStyle(.tertiary)
-          .help("None of this login's passkeys were created for \(host), so none is offered there.")
+          .help(
+            "This login's passkeys were all created for other sites, so AutoFill does not offer them on \(host)."
+          )
       }
     }
   }

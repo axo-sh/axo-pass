@@ -179,7 +179,7 @@ enum Issue: Hashable, Identifiable {
     case .syncUnreadable(let vault, _):
       return "Sync status of \(vault.name) could not be read"
     case .recoveryKitMissing(let vault):
-      return "No recovery kit opens \(vault.name)"
+      return "\(vault.name) does not open with any recovery kit"
     case .pairingRequests(_, let count):
       return count == 1 ? "1 pairing request" : "\(count) pairing requests"
     case .agentNotRunning(let staleSocket, _):
@@ -203,7 +203,8 @@ enum Issue: Hashable, Identifiable {
       return "\(key.name) has expired"
     case .gpgOrphanedPassphrases(let count):
       return count == 1
-        ? "1 saved GPG passphrase has no key" : "\(count) saved GPG passphrases have no key"
+        ? "1 saved GPG passphrase does not have a key"
+        : "\(count) saved GPG passphrases do not have a key"
     case .autofillOff:
       return "AutoFill is off"
     case .browserManifestMissing(_, let name):

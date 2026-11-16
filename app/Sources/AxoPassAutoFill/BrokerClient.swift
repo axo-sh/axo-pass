@@ -206,7 +206,7 @@ struct BrokerClient {
       throw error(from: response, fallback: "Unexpected response to the code request.")
     }
     guard let code = (response["code"] as? [String: Any])?["code"] as? String else {
-      throw BrokerError.failed("That login has no one-time code.")
+      throw BrokerError.failed("That login does not have a one-time code.")
     }
     return code
   }
