@@ -246,9 +246,9 @@ private struct PaletteField: View {
           .lineLimit(1)
         Image(systemName: "chevron.right")
           .font(.caption)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.secondary)
       }
-      TextField(prompt, text: $text)
+      TextField("", text: $text, prompt: Text(prompt).foregroundStyle(.secondary))
         .textFieldStyle(.plain)
         .focused($focused)
     }
@@ -283,7 +283,7 @@ private struct ResultRow: View {
         .layoutPriority(1)
       if let value {
         Text("›")
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.secondary)
         Text(value)
           .font(.system(.body, design: .monospaced))
           .foregroundStyle(.secondary)
@@ -308,7 +308,7 @@ private struct ResultRow: View {
         } else {
           Text(result.kind.label)
             .font(.caption)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(.secondary)
         }
       }
     }
@@ -323,7 +323,7 @@ private struct ResultRow: View {
 
   private var titleText: Text {
     result.breadcrumb.reduce(Text("")) { text, name in
-      text + Text(name).foregroundStyle(.secondary) + Text(" › ").foregroundStyle(.tertiary)
+      text + Text(name).foregroundStyle(.secondary) + Text(" › ").foregroundStyle(.secondary)
     } + Text(result.title)
   }
 }
@@ -397,7 +397,7 @@ private struct PaletteBackground: NSViewRepresentable {
 
   func makeNSView(context _: Context) -> NSVisualEffectView {
     let view = NSVisualEffectView()
-    view.material = .popover
+    view.material = .hudWindow
     view.blendingMode = .behindWindow
     view.state = .active
     view.maskImage = Self.makeMask()
