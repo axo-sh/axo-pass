@@ -120,6 +120,10 @@ li:focus-within {
 }
 
 .login:focus-visible {
+  outline: none;
+}
+
+li:has(.login:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -184,6 +188,14 @@ button.code svg.i {
 button.code:hover,
 button.code:focus-visible {
   background: var(--btn-hover);
+}
+
+button.code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+li:has(button.code:focus-visible) {
   outline: none;
 }
 

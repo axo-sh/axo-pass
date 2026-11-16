@@ -457,6 +457,10 @@ const render = (view: View | null, loading = 'Loading…'): void => {
       } else {
         root.append(el('p', 'empty', 'No other logins.'));
       }
+      // The search field takes focus itself. Otherwise the first login is selected.
+      if (!root.querySelector('input')) {
+        root.querySelector<HTMLElement>('button.login')?.focus();
+      }
       return;
     }
     case 'error':
@@ -476,6 +480,22 @@ const render = (view: View | null, loading = 'Loading…'): void => {
       return;
   }
 };
+
+/** Move focus through the search field and the logins with the arrow keys. */
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+    return;
+  }
+  const stops = [...root.querySelectorAll<HTMLElement>('input, button.login')];
+  if (!stops.length) {
+    return;
+  }
+  event.preventDefault();
+  const at = stops.indexOf(document.activeElement as HTMLElement);
+  const step = event.key === 'ArrowDown' ? 1 : -1;
+  const next = at < 0 ? (step > 0 ? 0 : stops.length - 1) : (at + step + stops.length) % stops.length;
+  stops[next]?.focus();
+});
 
 void load(false);
 void loadCapture(false);
