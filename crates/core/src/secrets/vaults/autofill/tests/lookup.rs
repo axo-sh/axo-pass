@@ -215,14 +215,18 @@ fn login_listing_summary_carries_no_secret_or_key() {
     let mut vw = VaultHandle::new_for_test("personal");
     github_login(&mut vw);
     let found = collect_items(&vw, Some("github.com")).unwrap();
-    let summary = found[0].summary().unwrap();
+    let summary = found[0].summary(false).unwrap();
     assert_eq!(summary.title, "GitHub");
     assert_eq!(summary.username.as_deref(), Some("tp"));
     assert_eq!(summary.matched.host, "github.com");
     let json = serde_json::to_string(&summary).unwrap();
     assert!(!json.contains("hunter2"));
     assert!(!json.contains("password"));
-    assert!(collect_items(&vw, None).unwrap()[0].summary().is_none());
+    assert!(
+        collect_items(&vw, None).unwrap()[0]
+            .summary(false)
+            .is_none()
+    );
 }
 
 #[test]

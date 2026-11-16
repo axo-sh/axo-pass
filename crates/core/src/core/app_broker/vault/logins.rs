@@ -81,61 +81,77 @@ pub(super) fn serve_logins(
         _ => {},
     }
 
-    let mut logins = Vec::new();
-    let mut everything = Vec::new();
+    if let VaultAction::ListLogins { page, all } = &prompt.action {
+        let listing = list_logins(vaults, page, *all, &AuthContext::Foreign(context));
+        // A listing names many logins and uses none, so it records no ids.
+        return Ok(LoginResult::new(listing.response, AccessIds::None));
+    }
 
     for (vault_key, mut vh) in vaults.list() {
         if let Err(e) = vaults.unlock(&mut vh, AuthContext::Foreign(context.clone())) {
             log::error!("Failed to unlock vault {vault_key}: {e}");
             continue;
         }
+        if let Some(served) = serve_record(&vh, &prompt.action)? {
+            return Ok(served);
+        }
+    }
+    Err("No login matches that record on this page".to_string())
+}
+
+/// Logins of a listing and how many vaults it read.
+struct Listing {
+    response: WireResponse,
+    unlocked_vaults: usize,
+}
+
+/// List the logins for `page` from every vault that unlocks on `auth`, and with
+/// `all`, the logins that do not match. Vaults that fail to load or unlock are
+/// skipped.
+fn list_logins(vaults: &VaultCatalog, page: &LoginPage, all: bool, auth: &AuthContext) -> Listing {
+    let mut logins = Vec::new();
+    let mut everything = Vec::new();
+    let mut unlocked_vaults = 0;
+
+    for (vault_key, mut vh) in vaults.list() {
+        if let Err(e) = vaults.unlock(&mut vh, auth.clone()) {
+            log::error!("Failed to unlock vault {vault_key}: {e}");
+            continue;
+        }
+        unlocked_vaults += 1;
         let vh = &mut vh;
-        match &prompt.action {
-            VaultAction::ListLogins { page, all } => {
-                match autofill::collect_items(vh, Some(&page.frame_url)) {
-                    Ok(found) => logins.extend(found),
-                    Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
-                }
-                if *all {
-                    match autofill::collect_items(vh, None) {
-                        Ok(found) => everything.extend(found),
-                        Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
-                    }
-                }
-            },
-            action => {
-                if let Some(served) = serve_record(vh, action)? {
-                    return Ok(served);
-                }
-            },
+        match autofill::collect_items(vh, Some(&page.frame_url)) {
+            Ok(found) => logins.extend(found),
+            Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+        }
+        if all {
+            match autofill::collect_items(vh, None) {
+                Ok(found) => everything.extend(found),
+                Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+            }
         }
     }
 
-    match prompt.action {
-        VaultAction::ListLogins { .. } => {
-            logins.sort_by_key(autofill::AutofillItem::sort_key);
-            // Only logins set up for AutoFill are listed. An item with a
-            // confidential field but no website is a secret, not a login.
-            everything.retain(|item| {
-                !item.websites.is_empty() && !logins.iter().any(|m| m.record_id == item.record_id)
-            });
-            everything.sort_by_key(|item| item.title.to_lowercase());
-            // A listing names many logins and uses none, so it records no ids.
-            Ok(LoginResult::new(
-                WireResponse::Logins {
-                    logins: logins
-                        .iter()
-                        .filter_map(autofill::AutofillItem::summary)
-                        .collect(),
-                    others: everything
-                        .iter()
-                        .map(autofill::AutofillItem::other)
-                        .collect(),
-                },
-                AccessIds::None,
-            ))
+    logins.sort_by_key(autofill::AutofillItem::sort_key);
+    // Only logins set up for AutoFill are listed. An item with a confidential
+    // field but no website is a secret, not a login.
+    everything.retain(|item| {
+        !item.websites.is_empty() && !logins.iter().any(|m| m.record_id == item.record_id)
+    });
+    everything.sort_by_key(|item| item.title.to_lowercase());
+    let show_vault = unlocked_vaults > 1;
+    Listing {
+        response: WireResponse::Logins {
+            logins: logins
+                .iter()
+                .filter_map(|item| item.summary(show_vault))
+                .collect(),
+            others: everything
+                .iter()
+                .map(|item| item.other(show_vault))
+                .collect(),
         },
-        _ => Err("No login matches that record on this page".to_string()),
+        unlocked_vaults,
     }
 }
 

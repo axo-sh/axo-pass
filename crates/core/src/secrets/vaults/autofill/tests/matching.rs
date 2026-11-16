@@ -351,6 +351,7 @@ fn exact_host_match_beats_domain_match() {
 fn matches_sort_by_rank_then_title() {
     let item = |title: &str, rank: Option<MatchRank>| AutofillItem {
         vault_key: "personal".to_string(),
+        vault_name: None,
         item_key: title.to_lowercase(),
         record_id: String::new(),
         title: title.to_string(),

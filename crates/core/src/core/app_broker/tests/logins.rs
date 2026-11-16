@@ -71,6 +71,7 @@ async fn locked_listing_answers_from_index_without_prompt() {
 
     let item = |record_id: &str, site: &str| AutofillItem {
         vault_key: "personal".to_string(),
+        vault_name: None,
         item_key: record_id.to_string(),
         record_id: record_id.to_string(),
         title: record_id.to_string(),

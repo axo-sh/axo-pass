@@ -178,6 +178,8 @@ export interface LoginSummary {
   record_id: string;
   title: string;
   username: string | null;
+  /** Set only if the user has more than one vault. */
+  vault_name?: string | null;
   matched: MatchedWebsite;
   has_totp: boolean;
 }
@@ -187,6 +189,8 @@ export interface OtherLogin {
   record_id: string;
   title: string;
   username: string | null;
+  /** Set only if the user has more than one vault. */
+  vault_name?: string | null;
   has_totp: boolean;
 }
 
@@ -309,6 +313,7 @@ const summary = (value: unknown, what: string): LoginSummary => {
     record_id: string(o.record_id, `${what}.record_id`),
     title: string(o.title, `${what}.title`),
     username: nullable(o.username, (v) => string(v, `${what}.username`)),
+    vault_name: nullable(o.vault_name, (v) => string(v, `${what}.vault_name`)),
     matched: matched(o.matched, `${what}.matched`),
     has_totp: boolean(o.has_totp, `${what}.has_totp`),
   };
@@ -320,6 +325,7 @@ const other = (value: unknown, what: string): OtherLogin => {
     record_id: string(o.record_id, `${what}.record_id`),
     title: string(o.title, `${what}.title`),
     username: nullable(o.username, (v) => string(v, `${what}.username`)),
+    vault_name: nullable(o.vault_name, (v) => string(v, `${what}.vault_name`)),
     has_totp: boolean(o.has_totp, `${what}.has_totp`),
   };
 };

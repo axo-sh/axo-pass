@@ -66,7 +66,15 @@ impl LoginIndex {
             })
             .collect();
         found.sort_by_key(AutofillItem::sort_key);
-        Some(found.iter().filter_map(AutofillItem::summary).collect())
+        let show_vault = items
+            .iter()
+            .any(|item| item.vault_key != items[0].vault_key);
+        Some(
+            found
+                .iter()
+                .filter_map(|item| item.summary(show_vault))
+                .collect(),
+        )
     }
 
     /// Replace the login items a passkey may be stored in.
@@ -132,6 +140,7 @@ mod tests {
     fn login(record_id: &str, title: &str, site: &str) -> AutofillItem {
         AutofillItem {
             vault_key: "personal".to_string(),
+            vault_name: None,
             item_key: title.to_lowercase(),
             record_id: record_id.to_string(),
             title: title.to_string(),

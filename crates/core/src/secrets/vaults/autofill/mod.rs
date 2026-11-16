@@ -59,6 +59,9 @@ pub struct MatchedWebsite {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutofillItem {
     pub vault_key: String,
+    /// Display name of the vault. `None` if the vault has no name.
+    #[serde(default)]
+    pub vault_name: Option<String>,
     pub item_key: String,
     /// `<vault uuid>/<item uuid>/<password credential uuid>`. Survives renames
     /// of the item and its credentials.
@@ -91,24 +94,31 @@ impl AutofillItem {
     /// What a client may learn about a match: enough to show the account and
     /// say why it matched. `None` when the item was collected without a
     /// service.
-    pub fn summary(&self) -> Option<LoginSummary> {
+    pub fn summary(&self, show_vault: bool) -> Option<LoginSummary> {
         Some(LoginSummary {
             record_id: self.record_id.clone(),
             title: self.title.clone(),
             username: self.username.clone(),
+            vault_name: self.shown_vault_name(show_vault),
             matched: self.matched.clone()?,
             has_totp: self.has_totp,
         })
     }
 
     /// What a client may learn about a login that does not match the page.
-    pub fn other(&self) -> OtherLogin {
+    pub fn other(&self, show_vault: bool) -> OtherLogin {
         OtherLogin {
             record_id: self.record_id.clone(),
             title: self.title.clone(),
             username: self.username.clone(),
+            vault_name: self.shown_vault_name(show_vault),
             has_totp: self.has_totp,
         }
+    }
+
+    /// Vault name for a client list. Left out if the user has one vault.
+    fn shown_vault_name(&self, show_vault: bool) -> Option<String> {
+        self.vault_name.clone().filter(|_| show_vault)
     }
 }
 
@@ -119,6 +129,10 @@ pub struct OtherLogin {
     pub record_id: String,
     pub title: String,
     pub username: Option<String>,
+    /// Name of the vault holding the login. Set only if the user has more than
+    /// one vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
     pub has_totp: bool,
 }
 
@@ -129,6 +143,10 @@ pub struct LoginSummary {
     pub record_id: String,
     pub title: String,
     pub username: Option<String>,
+    /// Name of the vault holding the login. Set only if the user has more than
+    /// one vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
     /// The stored website that matched, and how.
     pub matched: MatchedWebsite,
     /// Whether the login has a one-time code.
@@ -186,6 +204,7 @@ fn candidate(
 
     Ok(Some(AutofillItem {
         vault_key: vw.key.clone(),
+        vault_name: vw.vault_name().map(str::to_string),
         item_key: overview.key.clone(),
         record_id: format!(
             "{}/{}/{}",

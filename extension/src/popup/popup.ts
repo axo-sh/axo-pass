@@ -278,9 +278,7 @@ const loginList = (
     const button = el('button', 'login');
     const text = el('span', 'tx');
     text.append(el('span', 'title', login.title));
-    const detail = [login.username, 'matched' in login ? `Matched ${login.matched.host}` : null]
-      .filter(Boolean)
-      .join(' · ');
+    const detail = [login.username, login.vault_name].filter(Boolean).join(' · ');
     if (detail) {
       text.append(el('span', 'detail', detail));
     }
