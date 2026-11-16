@@ -457,8 +457,11 @@ async fn authorize_and_sign(
             PromptOutcome::Succeeded,
         ),
         // A dismissed prompt is the user's answer, so report a cancellation
-        // rather than a failure.
-        Err(KeychainError::UserCancelled) => (WireResponse::Cancelled, PromptOutcome::Cancelled),
+        // rather than a failure. This includes our own Cancel button, which
+        // invalidates the context.
+        Err(KeychainError::UserCancelled | KeychainError::AuthenticationExpired) => {
+            (WireResponse::Cancelled, PromptOutcome::Cancelled)
+        },
         Err(e) => {
             let message = e.to_string();
             (

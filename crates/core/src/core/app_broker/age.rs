@@ -242,7 +242,11 @@ pub(super) async fn get_identity(
                 PromptOutcome::Failed(message),
             )
         },
-        Err(KeychainError::UserCancelled) => (WireResponse::Cancelled, PromptOutcome::Cancelled),
+        // A dismissed prompt, whether through the biometric sheet or our own
+        // Cancel button, which invalidates the context.
+        Err(KeychainError::UserCancelled | KeychainError::AuthenticationExpired) => {
+            (WireResponse::Cancelled, PromptOutcome::Cancelled)
+        },
         Err(e) => {
             let message = e.to_string();
             (
