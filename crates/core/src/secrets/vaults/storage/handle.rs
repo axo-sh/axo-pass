@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
 use crate::core::auth::{AuthContext, probe_shared_context};
-use crate::core::dirs::app_data_dir;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
@@ -144,11 +143,6 @@ impl VaultHandle {
             path: vault_path.to_path_buf(),
             state: VaultState::Locked { name: header.name },
         }
-    }
-
-    /// Unlock with the sync files under the app data directory.
-    pub fn unlock(&mut self) -> Result<(), Error> {
-        self.unlock_on(&app_data_dir(), AuthContext::SharedThreadLocal)
     }
 
     /// Unlock on a specific [`AuthContext`]. The app broker passes

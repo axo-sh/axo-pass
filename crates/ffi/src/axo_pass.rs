@@ -2,10 +2,7 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker;
-use axo_pass_core::core::auth::{
-    AuthContext, AuthMethod, adopt_shared_context, external_auth_lock, invalidate_auth,
-    run_on_auth_thread,
-};
+use axo_pass_core::core::auth::{adopt_shared_context, external_auth_lock, invalidate_auth};
 use axo_pass_core::secrets::vaults::storage::txn::VaultWriter;
 use axo_pass_core::secrets::vaults::sync::manager::{AppUnlock, SyncManager};
 use axo_pass_core::secrets::vaults::{VaultCatalog, VaultsManager};
@@ -98,40 +95,6 @@ impl AxoPass {
         }
         unsafe { adopt_shared_context(context_ptr as *mut std::ffi::c_void) }
             .map_err(FfiError::from)
-    }
-
-    /// Evaluate the device owner policy on the shared LAContext. Mirrors
-    /// `unlock_axo` in the Tauri app.
-    ///
-    /// The shared context never prompts, so this succeeds only if the app has
-    /// already adopted an authenticated context. Otherwise it fails with
-    /// `AuthExpired`. The macOS app unlocks through `adopt_auth_context`.
-    pub async fn unlock(&self) -> Result<(), FfiError> {
-        let result: Result<(), FfiError> = tokio::task::spawn_blocking(|| {
-            run_on_auth_thread(
-                AuthContext::SharedThreadLocal,
-                AuthMethod::Policy {
-                    reason: "unlock Axo Pass".to_string(),
-                },
-                |_| {},
-            )
-            .map_err(FfiError::from)
-        })
-        .await
-        .map_err(|e| FfiError::Internal(e.to_string()))?;
-
-        let (outcome, message) = match &result {
-            Ok(()) => (audit::Outcome::Succeeded, None),
-            Err(FfiError::AuthCancelled) => (audit::Outcome::Cancelled, None),
-            Err(e) => (audit::Outcome::Failed, Some(e.to_string())),
-        };
-        let mut event =
-            audit::AuditEvent::new(audit::process_source(), audit::Action::VaultUnlock, outcome);
-        if let Some(message) = message {
-            event = event.message(message);
-        }
-        audit::record_async(event).await;
-        result
     }
 
     /// Drop every decrypted vault from memory and invalidate the shared

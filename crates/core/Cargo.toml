@@ -32,7 +32,6 @@ jiff = "0.2.38"
 libc = "0.2"
 libproc = "0.14.11"
 log.workspace = true
-lru = "0.18.5"
 md5 = "0.8"
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"

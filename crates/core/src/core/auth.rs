@@ -1,12 +1,10 @@
 mod la_context;
 use std::ffi::c_void;
-use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::thread;
 
 use anyhow::anyhow;
-use lru::LruCache;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2_foundation::NSString;
 use objc2_local_authentication::{LAAccessControlOperation, LAContext, LAPolicy};
@@ -96,7 +94,6 @@ struct AuthWork {
 #[derive(Debug, Clone)]
 pub enum AuthContext {
     SharedThreadLocal,
-    WithContext(String),
     OneTime,
     /// A context the caller owns, so it can attach an `LAAuthenticationView`
     /// and draw the prompt itself. Used by the app broker, where the app
@@ -121,9 +118,6 @@ pub enum AuthMethod {
     },
 }
 
-// Store up to 16 LAContext instances for reuse.
-static LA_CONTEXT_CACHE_SIZE: usize = 16;
-
 /// Dedicated thread that owns the shared LAContext. All auth-requiring keychain
 /// operations on it run on this thread, so the unlock the app hands over with
 /// [`adopt_shared_context`] covers them all.
@@ -146,22 +140,17 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
             // policy on it returns without showing a prompt.
             let mut shared_authenticated = false;
 
-            // Cache of keyed contexts
-            let mut la_cache: LruCache<String, Retained<LAContext>> =
-                LruCache::new(NonZero::new(LA_CONTEXT_CACHE_SIZE).unwrap());
-
             // One pool per message rather than one around the loop: a pool
             // only frees what it holds when it drains, and this loop never
             // ends. Nothing that outlives an iteration may be borrowed from
-            // the pool. `thread_la_context` and the cache entries are owned
-            // `Retained` values, so draining cannot free them.
+            // the pool. `thread_la_context` is an owned `Retained` value, so
+            // draining cannot free it.
             for msg in rx {
                 autoreleasepool(|_| match msg {
                     AuthMessage::Invalidate(reply) => {
-                        log::debug!("Invalidating all LAContext instances");
+                        log::debug!("Replacing the shared LAContext");
                         thread_la_context = init_shared_la_context();
                         shared_authenticated = false;
-                        la_cache.clear();
                         let _ = reply.send(());
                     },
                     AuthMessage::AdoptContext(context, reply) => {
@@ -174,12 +163,6 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                     AuthMessage::Work(work) => {
                         let is_shared = matches!(work.context, AuthContext::SharedThreadLocal);
                         let selected_la_ctx = match work.context {
-                            AuthContext::WithContext(ref key) => {
-                                log::debug!("Running auth work with context {key}");
-                                la_cache
-                                    .get_or_insert(key.clone(), || unsafe { LAContext::new() })
-                                    .clone()
-                            },
                             AuthContext::SharedThreadLocal => thread_la_context.clone(),
                             AuthContext::OneTime => unsafe { LAContext::new() },
                             AuthContext::Foreign(_) => {
@@ -218,13 +201,12 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                             },
                             Err(KeychainError::AuthenticationExpired) => {
                                 log::warn!(
-                                    "{:?} expired, invalidating all LAContext instances",
+                                    "{:?} expired, replacing the shared LAContext",
                                     work.context
                                 );
                                 // Replace shared thread-local la context
                                 thread_la_context = init_shared_la_context();
                                 shared_authenticated = false;
-                                la_cache.clear();
                                 let _ = work
                                     .auth_reply
                                     .send(Err(KeychainError::AuthenticationExpired));
@@ -524,7 +506,7 @@ where
     )
 }
 
-/// Invalidate all cached LAContext instances, requiring re-authentication.
+/// Replace the shared LAContext, requiring the app to unlock again.
 pub fn invalidate_auth() {
     let (tx, rx) = mpsc::channel();
     AUTH_THREAD
@@ -543,29 +525,9 @@ pub fn signing_reason(managed_key_label: &str, caller: Option<&str>) -> String {
     }
 }
 
-pub fn sign_with_managed_key(
-    managed_key_label: &str,
-    data: &[u8],
-    caller: Option<&str>,
-) -> Result<Signature, String> {
-    let policy = ManagedSshKey::find(managed_key_label)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("{managed_key_label} not found"))?
-        .policy();
-    sign_with_managed_key_on(
-        AuthContext::WithContext(managed_key_label.to_string()),
-        managed_key_label,
-        policy,
-        data,
-        caller,
-    )
-    .map_err(|e| e.to_string())
-}
-
 /// Sign on a specific [`AuthContext`]. The app broker passes
 /// [`AuthContext::Foreign`] so the app that owns the context draws the prompt.
-/// Unlike [`sign_with_managed_key`] this keeps the error typed, so a caller can
-/// tell a cancelled prompt from a failure.
+/// The error is typed, so a caller can tell a cancelled prompt from a failure.
 ///
 /// `policy` selects the prompt. A [`KeyPolicy::AlwaysRequireAuth`] key is
 /// authorized by evaluating its access control. A [`KeyPolicy::Default`] key
