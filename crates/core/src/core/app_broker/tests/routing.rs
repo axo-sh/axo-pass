@@ -145,7 +145,7 @@ async fn routes_keychain_password_listing() {
     };
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key_id, "stub");
-    // The app is unlocked, so the listing raises no prompt.
+    // The app is unlocked, so the listing does not raise a prompt.
     assert!(
         broker
             .authorizer

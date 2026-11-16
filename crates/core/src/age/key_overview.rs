@@ -34,7 +34,7 @@ pub fn list_age_keys() -> Result<Vec<AgeKeyOverview>, AgeError> {
 /// [`list_age_keys`] on a specific [`AuthContext`]. The app broker passes
 /// [`AuthContext::Foreign`] if the app is locked, so the app that owns the
 /// context draws the prompt. The listing authenticates the context, so the
-/// reads of each secret that follow add no prompt.
+/// reads of each secret that follow do not prompt again.
 pub fn list_age_keys_on(context: AuthContext) -> Result<Vec<AgeKeyOverview>, KeychainError> {
     let entries = PasswordEntry::list_on(context.clone())?;
 

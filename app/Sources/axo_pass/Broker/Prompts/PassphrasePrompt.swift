@@ -183,7 +183,8 @@ final class PassphrasePromptModel {
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in
-        // A listing has no passphrase to type, so Cancel ends the request.
+        // A listing does not take a typed passphrase, so Cancel ends the
+        // request.
         if prompt.kind.isListing {
           self?.cancelUnlock(prompt: prompt)
         } else {
@@ -231,9 +232,9 @@ final class PassphrasePromptModel {
     pending.continuation.resume(returning: answer)
   }
 
-  /// One grant per key and requesting process. Nil for a listing, which names
-  /// no key. Any other prompt with no key grip never reaches `begin`, since
-  /// there is nothing in the keychain to unlock.
+  /// One grant per key and requesting process. Nil for a listing, which does
+  /// not name a key. Any other prompt without a key grip never reaches `begin`,
+  /// since it does not name a keychain entry to unlock.
   private static func grantKey(_ prompt: PassphrasePrompt) -> GrantKey? {
     let kind: GrantSubject.Kind
     switch prompt.kind {
@@ -249,8 +250,8 @@ final class PassphrasePromptModel {
 }
 
 extension PassphraseKind {
-  /// Whether this is a listing for `ap keychain` or `ap age`, which names no
-  /// key and has no passphrase to type.
+  /// Whether this is a listing for `ap keychain` or `ap age`, which does not
+  /// name a key or take a typed passphrase.
   var isListing: Bool {
     self == .keychainList || self == .ageList
   }
@@ -291,7 +292,7 @@ private struct PassphraseUnlockView: View {
         CallerChainView(
           chain: prompt.callerChain,
           summary: PromptCaller.requesterName(chain: prompt.callerChain))
-        // A listing carries no prompt text to show.
+        // A listing does not carry prompt text to show.
         if !prompt.kind.isListing {
           PinentryTranscript(prompt: prompt)
         }

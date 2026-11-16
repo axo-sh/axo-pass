@@ -1,9 +1,9 @@
 //! `ap keychain`'s side of the broker: listing the saved generic passwords and
 //! deleting a managed Secure Enclave key.
 //!
-//! A listing reads on the shared context if the app is unlocked, and raises no
-//! prompt. If the app is locked, the app draws a prompt on a context it owns
-//! ([`read_or_prompt`]).
+//! A listing reads on the shared context if the app is unlocked, and does not
+//! raise a prompt. If the app is locked, the app draws a prompt on a context it
+//! owns ([`read_or_prompt`]).
 
 use std::sync::Arc;
 

@@ -7,9 +7,9 @@
 //! therefore runs in the app. The age encryption itself stays in `ap`, which
 //! hands back the resolved identity, the same split as `ap ssh-askpass`.
 //!
-//! Keygen and delete raise no prompt. Listing raises one only if the app is
-//! locked. Reading an identity's secret is gated on a biometric prompt drawn on
-//! a context the app owns, the same as [`super::gpg::get_passphrase`].
+//! Keygen and delete do not raise a prompt. Listing raises one only if the app
+//! is locked. Reading an identity's secret is gated on a biometric prompt drawn
+//! on a context the app owns, the same as [`super::gpg::get_passphrase`].
 
 use anyhow::anyhow;
 use secrecy::{ExposeSecret, SecretString};

@@ -25,10 +25,10 @@ pub enum PassphraseKind {
     Ssh,
     Age,
     /// Listing of the saved passwords for `ap keychain`, if the app is locked.
-    /// Names no key.
+    /// Does not name a key.
     KeychainList,
-    /// Listing of the age keys for `ap age`, if the app is locked. Names no
-    /// key.
+    /// Listing of the age keys for `ap age`, if the app is locked. Does not
+    /// name a key.
     AgeList,
 }
 

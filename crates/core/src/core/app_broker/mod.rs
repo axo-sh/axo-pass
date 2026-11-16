@@ -108,8 +108,8 @@ pub const LAUNCH_FLAG: &str = "--broker";
 
 #[derive(Debug, Error)]
 pub enum BrokerError {
-    /// No app is listening and none could be started. The caller should fall
-    /// back to its own prompt.
+    /// No app is listening and none could be started. The request fails,
+    /// since only the app can reach the keychain.
     #[error("App broker unavailable")]
     Unavailable,
 

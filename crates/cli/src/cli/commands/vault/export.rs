@@ -112,8 +112,9 @@ impl VaultExportCommand {
 }
 
 /// Resolve a managed age recipient by name to its `age1...` public string.
-/// `ap` holds no keychain entitlements, so the recipient list comes from the
-/// app; this raises no prompt, as only the public half is read.
+/// `ap` does not hold keychain entitlements, so the recipient list comes from
+/// the app. The app reads each age secret to derive its recipient, so it
+/// prompts if it is locked.
 fn resolve_managed_recipient(name: &str) -> Result<String, String> {
     let caller = Provenance::resolve_current_parent().and_then(|p| p.caller());
     match app_broker::request_age_keys(caller.as_deref()) {
