@@ -236,6 +236,7 @@ pub(super) async fn serve_request(
                         caller_chain: caller_chain.clone(),
                         client: client_id.clone(),
                         action: vault::VaultAction::FillLogin {
+                            details: authorizers.logins.details(&record_id),
                             page,
                             record_id,
                             account: account.filter(|a| !a.trim().is_empty()),

@@ -116,6 +116,18 @@ impl AutofillItem {
         }
     }
 
+    /// Hosts of the item's websites, without duplicates.
+    pub fn hosts(&self) -> Vec<String> {
+        let mut hosts: Vec<String> = Vec::new();
+        for website in &self.websites {
+            let host = Site::parse(&website.url).map_or(website.url.clone(), |s| s.host);
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+        }
+        hosts
+    }
+
     /// Vault name for a client list. Left out if the user has one vault.
     fn shown_vault_name(&self, show_vault: bool) -> Option<String> {
         self.vault_name.clone().filter(|_| show_vault)

@@ -122,6 +122,9 @@ pub enum VaultAction {
         record_id: String,
         account: Option<String>,
         unmatched: bool,
+        /// What the login index knows about the login. The broker fills it in
+        /// before the prompt. `None` if the login is not indexed.
+        details: Option<LoginDetails>,
     },
 
     /// The current one-time code of one login. Prompts every time.
@@ -206,6 +209,16 @@ pub enum VaultAction {
         /// indexed passkeys or none.
         user_name: Option<String>,
     },
+}
+
+/// A login as the access prompt describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginDetails {
+    pub title: String,
+    pub username: Option<String>,
+    pub vault_name: Option<String>,
+    /// Hosts the login is saved for, without duplicates.
+    pub hosts: Vec<String>,
 }
 
 /// The page a login request is for, reduced to what the prompt shows and a

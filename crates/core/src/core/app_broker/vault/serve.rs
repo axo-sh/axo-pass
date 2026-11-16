@@ -439,6 +439,7 @@ mod tests {
                 record_id: "r".to_string(),
                 account: account.map(String::from),
                 unmatched: false,
+                details: None,
             },
         }
     }
@@ -483,6 +484,7 @@ mod tests {
             record_id: "r".to_string(),
             account: None,
             unmatched: false,
+            details: None,
         };
         assert!(refused_reuse(&prompt, true).is_some());
         assert_eq!(refused_reuse(&prompt, false), None);

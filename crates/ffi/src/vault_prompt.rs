@@ -35,8 +35,10 @@ pub enum VaultAction {
         record_id: String,
         account: Option<String>,
         /// The login is one that does not match the page, picked from the full
-        /// list. The broker asks the user to confirm it.
+        /// list. The prompt says so.
         unmatched: bool,
+        /// What the login index knows about the login.
+        details: Option<LoginDetails>,
     },
     /// The AutoFill extension is asking for the one-time code of one login on
     /// `page`.
@@ -237,6 +239,28 @@ impl From<app_broker::LoginPage> for LoginPage {
     }
 }
 
+/// A login as the access prompt describes it. Mirrors
+/// [`app_broker::LoginDetails`].
+#[derive(uniffi::Record, Clone)]
+pub struct LoginDetails {
+    pub title: String,
+    pub username: Option<String>,
+    pub vault_name: Option<String>,
+    /// Hosts the login is saved for.
+    pub hosts: Vec<String>,
+}
+
+impl From<app_broker::LoginDetails> for LoginDetails {
+    fn from(details: app_broker::LoginDetails) -> Self {
+        Self {
+            title: details.title,
+            username: details.username,
+            vault_name: details.vault_name,
+            hosts: details.hosts,
+        }
+    }
+}
+
 /// Mirrors [`app_broker::ResolvePurpose`].
 #[derive(uniffi::Enum, Clone, Copy)]
 pub enum ResolvePurpose {
@@ -303,11 +327,13 @@ impl From<app_broker::VaultAction> for VaultAction {
                 record_id,
                 account,
                 unmatched,
+                details,
             } => Self::FillLogin {
                 page: page.into(),
                 record_id,
                 account,
                 unmatched,
+                details: details.map(Into::into),
             },
             app_broker::VaultAction::GenerateTotp { page, record_id } => Self::GenerateTotp {
                 page: page.into(),
@@ -672,6 +698,7 @@ mod tests {
             record_id: "r".to_string(),
             account: None,
             unmatched: false,
+            details: None,
         }
     }
 

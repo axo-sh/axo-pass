@@ -133,7 +133,7 @@ final class VaultUnlockPromptModel {
   /// The broker filled a login for a verified browser from an earlier approval.
   /// No prompt appeared, so the notification is the only sign of the fill.
   func notifyPreapproved(prompt: VaultAccessPrompt, account: String?) {
-    guard case .fillLogin(let page, _, _, _) = prompt.action else { return }
+    guard case .fillLogin(let page, _, _, _, _) = prompt.action else { return }
     let content = UNMutableNotificationContent()
     content.title = "Login filled"
     var body = "Filled \(account ?? "a login") on \(page.host)"
@@ -157,7 +157,7 @@ final class VaultUnlockPromptModel {
   private static func fillGrantOffer(for prompt: VaultAccessPrompt) -> FillGrantOffer? {
     guard Preferences.reuseApprovals, prompt.callerIdentity != nil,
       case .browser(let browser) = prompt.client,
-      case .fillLogin(let page, _, _, let unmatched) = prompt.action, !unmatched, !page.crossSite
+      case .fillLogin(let page, _, _, let unmatched, _) = prompt.action, !unmatched, !page.crossSite
     else { return nil }
     return FillGrantOffer(browser: browser, host: page.host, choice: GrantChoice())
   }
@@ -246,6 +246,7 @@ final class VaultUnlockPromptModel {
       appRequester: Self.appRequester(for: prompt.action),
       headline: Self.headline(for: prompt.action),
       login: Self.login(for: prompt.action),
+      loginRows: Self.loginRows(for: prompt.action),
       secrets: Self.secrets(for: prompt),
       notes: Self.notes(for: prompt),
       fillGrant: fillGrant,
@@ -279,7 +280,7 @@ final class VaultUnlockPromptModel {
   /// The app a login request is for, when the AutoFill extension named one.
   private static func appRequester(for action: VaultAction) -> String? {
     switch action {
-    case .listLogins(let page, _), .fillLogin(let page, _, _, _), .generateTotp(let page, _):
+    case .listLogins(let page, _), .fillLogin(let page, _, _, _, _), .generateTotp(let page, _):
       return page.requester
     default:
       return nil
@@ -289,12 +290,29 @@ final class VaultUnlockPromptModel {
   /// The account a request will use, shown in its own card instead of the headline.
   private static func login(for action: VaultAction) -> String? {
     switch action {
-    case .fillLogin(_, _, let account, _), .updateLoginPassword(_, _, let account): return account
+    case .fillLogin(_, _, let account, _, _), .updateLoginPassword(_, _, let account):
+      return account
     case .saveLogin(_, let username, _): return username
     case .createPasskey(_, let userName, _): return userName.isEmpty ? nil : userName
     case .assertPasskey(_, let userName): return userName
     default: return nil
     }
+  }
+
+  /// What the login index knows about the login a fill is for.
+  private static func loginRows(for action: VaultAction) -> [PromptDetailRow] {
+    guard case .fillLogin(_, _, _, _, let details?) = action else { return [] }
+    var rows = [PromptDetailRow(label: "Title", value: details.title)]
+    if let username = details.username, !username.isEmpty {
+      rows.append(PromptDetailRow(label: "Username", value: username))
+    }
+    if let vault = details.vaultName, !vault.isEmpty {
+      rows.append(PromptDetailRow(label: "Vault", value: vault))
+    }
+    if !details.hosts.isEmpty {
+      rows.append(PromptDetailRow(label: "Saved for", value: details.hosts.joined(separator: ", ")))
+    }
+    return rows
   }
 
   /// Facts the user should see before approving a login request. Every login
@@ -308,8 +326,16 @@ final class VaultUnlockPromptModel {
         "Axo Pass could not verify the browser that sent this request. Any app on this Mac "
           + "could have sent it.")
     }
+    if case .fillLogin(let page, _, _, true, let details) = prompt.action {
+      if let hosts = details?.hosts, !hosts.isEmpty {
+        notes.append(
+          "This login is saved for \(hosts.joined(separator: ", ")), not for \(page.host).")
+      } else {
+        notes.append("This login is not saved for \(page.host).")
+      }
+    }
     switch prompt.action {
-    case .fillLogin(let page, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _, _),
+    case .fillLogin(let page, _, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _, _),
       .updateLoginPassword(let page, _, _):
       if !page.secure {
         notes.append("This page is not secure (http). Anyone on the network can read the password.")
@@ -344,7 +370,7 @@ final class VaultUnlockPromptModel {
       what = "list items in vault \(prompt.vaultKey)"
     case .listLogins(let page, _):
       what = "find logins for \(page.host)"
-    case .fillLogin(let page, _, let account, _):
+    case .fillLogin(let page, _, let account, _, _):
       what = "fill \(account ?? "a login") on \(page.host)"
     case .generateTotp(let page, _):
       what = "get a one-time code for \(page.host)"
@@ -398,7 +424,7 @@ final class VaultUnlockPromptModel {
   private static func grantKey(_ prompt: VaultAccessPrompt) -> GrantKey {
     let id: String
     switch prompt.action {
-    case .fillLogin(_, let recordId, _, _), .generateTotp(_, let recordId),
+    case .fillLogin(_, let recordId, _, _, _), .generateTotp(_, let recordId),
       .updateLoginPassword(_, let recordId, _):
       id = recordId
     case .listLogins: id = "logins"
@@ -422,7 +448,7 @@ final class VaultUnlockPromptModel {
     case .resolveSecrets: return "resolve"
     case .listItems: return "list"
     case .listLogins(let page, _): return "list-logins:\(page.domain)"
-    case .fillLogin(let page, _, _, _): return "fill:\(page.domain)"
+    case .fillLogin(let page, _, _, _, _): return "fill:\(page.domain)"
     case .generateTotp(let page, _): return "totp:\(page.domain)"
     case .saveLogin(let page, _, _): return "save:\(page.domain)"
     case .updateLoginPassword(let page, _, _): return "update:\(page.domain)"
@@ -455,7 +481,7 @@ final class VaultUnlockPromptModel {
       return all
         ? [.plain("list all logins")]
         : [.plain("find logins for "), .bold(page.host)]
-    case .fillLogin(let page, _, _, _):
+    case .fillLogin(let page, _, _, _, _):
       return [.plain("fill a login on "), .bold(page.host)] + insideTopHost(page)
     case .generateTotp(let page, _):
       return [.plain("get a one-time code for "), .bold(page.host)] + insideTopHost(page)
@@ -509,10 +535,8 @@ private struct FillGrantCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Toggle(
-        "Fill this login on \(offer.host) in \(offer.browser) without asking", isOn: $choice.allow
-      )
-      .toggleStyle(.checkbox)
+      Toggle("Allow autofill of this login on \(offer.host)", isOn: $choice.allow)
+        .toggleStyle(.checkbox)
 
       if choice.allow {
         // Indent to line up with the checkbox label.
@@ -524,7 +548,7 @@ private struct FillGrantCard: View {
           }
           .pickerStyle(.menu)
           .fixedSize()
-          Text("Each fill shows a notification. Locking Axo Pass or the Mac ends it.")
+          Text("Requires Axo Pass to be unlocked. Each autofill shows a notification.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -712,6 +736,8 @@ private struct VaultUnlockView: View {
   let appRequester: String?
   let headline: [HeadlinePart]
   let login: String?
+  /// Facts about the login, shown when its card is expanded.
+  let loginRows: [PromptDetailRow]
   let secrets: [String]
   let notes: [String]
   /// Set for a fill from a verified browser, which may be reused.
@@ -729,15 +755,28 @@ private struct VaultUnlockView: View {
       PromptHeadline(parts: title)
 
       ForEach(notes, id: \.self) { note in
-        Label(note, systemImage: "exclamationmark.triangle")
-          .font(.callout)
-          .foregroundStyle(.orange)
-          .multilineTextAlignment(.leading)
+        Label {
+          Text(note)
+            .foregroundStyle(.primary)
+            .lineSpacing(3)
+        } icon: {
+          Image(systemName: "exclamationmark.triangle")
+            .foregroundStyle(.orange)
+        }
+        .multilineTextAlignment(.leading)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(.orange, lineWidth: 2)
+        )
       }
 
       VStack(spacing: 8) {
         if let login {
-          PromptSubjectCard(systemImage: "person.fill", title: login, detail: nil)
+          PromptSubjectCard(
+            systemImage: Self.looksLikeHost(login) ? "network" : "person.fill", title: login,
+            detail: nil, rows: loginRows)
         }
         if let placement {
           PasskeyPlacementCard(state: placement)
@@ -769,6 +808,12 @@ private struct VaultUnlockView: View {
   }
 
   private static let safariBundleId = "com.apple.Safari"
+
+  /// Whether a login label reads as a site name rather than an account name.
+  /// A login without a username is labeled with its title, often a hostname.
+  private static func looksLikeHost(_ label: String) -> Bool {
+    label.contains(".") && !label.contains("@") && !label.contains(where: \.isWhitespace)
+  }
 
   /// App shown in the connection header in place of the caller chain. An
   /// AutoFill request from a browser is shown as coming from Safari.

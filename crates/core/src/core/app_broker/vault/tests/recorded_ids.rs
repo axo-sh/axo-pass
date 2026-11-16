@@ -338,6 +338,7 @@ fn login_listing_records_no_ids_and_fill_and_code_record_login() {
             record_id: record_id.clone(),
             account: None,
             unmatched: false,
+            details: None,
         }),
         AccessIds::One(password)
     );

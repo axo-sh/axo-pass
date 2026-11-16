@@ -11,7 +11,7 @@ use super::{
 };
 use crate::audit::{Actor, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
-use crate::secrets::vaults::{DEFAULT_VAULT, Site, VaultCatalog, VaultHandle, autofill};
+use crate::secrets::vaults::{DEFAULT_VAULT, VaultCatalog, VaultHandle, autofill};
 
 /// Result of a login request. Includes a question for the user if the response
 /// requires user confirmation.
@@ -174,36 +174,22 @@ fn serve_record(vh: &VaultHandle, action: &VaultAction) -> Result<Option<LoginRe
     if page.cross_site {
         return serve_cross_site(vh, page, found, totp, unmatched);
     }
-    // A login picked from the list of logins that do not match is filled only
-    // after the user confirms it.
-    let (item, other_site) = match found {
-        Some(item) => (item, false),
+    // A login picked from the list of logins that do not match is filled on
+    // the user's approval of the access prompt, which says the login is for
+    // another site. It needs no second prompt.
+    let item = match found {
+        Some(item) => item,
         None if unmatched => {
             match autofill::find_login_record(vh, record_id)
                 .map_err(|e| format!("Failed to look up the login: {e}"))?
             {
-                Some(item) => (item, true),
+                Some(item) => item,
                 None => return Ok(None),
             }
         },
         None => return Ok(None),
     };
-
-    let confirm = other_site.then(|| ConfirmPrompt {
-        description: Some(format!(
-            "\"{}\" is saved for {}, not {}.\n\nFill it on {}?",
-            item.title,
-            stored_hosts(&item),
-            page.host,
-            page.host
-        )),
-        ok_label: Some("Fill".to_string()),
-        cancel_label: Some("Cancel".to_string()),
-    });
-
-    let mut served = read_record(vh, &item, totp)?;
-    served.confirm = confirm;
-    Ok(Some(served))
+    read_record(vh, &item, totp).map(Some)
 }
 
 /// Serve a fill or a one-time code for a form in a frame of another site. The
@@ -267,11 +253,7 @@ fn read_record(
 /// The hosts a login is stored for, as a comma-separated list for a question to
 /// the user.
 fn stored_hosts(item: &autofill::AutofillItem) -> String {
-    let sites: Vec<String> = item
-        .websites
-        .iter()
-        .map(|website| Site::parse(&website.url).map_or(website.url.clone(), |s| s.host))
-        .collect();
+    let sites = item.hosts();
     if sites.is_empty() {
         "no website".to_string()
     } else {
@@ -345,8 +327,8 @@ pub(super) fn update_login_password(
         let stored = stored_hosts(&item);
         ConfirmPrompt {
             description: Some(format!(
-                "A form on {host} submitted a new password for \"{title}\", which is saved for \
-                 {stored}, not {host}.\n\nUpdate its password?",
+                "Update the password of **{title}**?\n\nA form on {host} submitted a new \
+                 password. This login is saved for {stored}, not {host}.",
                 host = page.host,
                 title = item.title,
             )),
@@ -495,6 +477,7 @@ mod tests {
             record_id: record_id.to_string(),
             account: None,
             unmatched,
+            details: None,
         }
     }
 
@@ -596,6 +579,7 @@ mod tests {
             record_id: record_id.to_string(),
             account: None,
             unmatched,
+            details: None,
         }
     }
 
@@ -621,12 +605,7 @@ mod tests {
         let served = serve_record(&vh, &fill(&record_id, page, true))
             .unwrap()
             .unwrap();
-        let question = served.confirm.expect("the user must confirm");
-        let text = question.description.unwrap();
-        assert!(
-            text.contains("github.com") && text.contains("example.org"),
-            "{text}"
-        );
+        assert!(served.confirm.is_none());
         assert!(matches!(served.response, WireResponse::LoginFill { .. }));
     }
 

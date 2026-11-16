@@ -567,7 +567,7 @@ private struct PassphraseMessageView: View {
         .foregroundStyle(isWarning ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
         .frame(width: 64, height: 64)
 
-      PromptHeadline(.plain(headline))
+      PromptHeadline(parts: headlineParts)
         .fixedSize(horizontal: false, vertical: true)
 
       if let detail {
@@ -617,6 +617,14 @@ private struct PassphraseMessageView: View {
       return cancelLabel == nil ? "Message from GPG" : "GPG needs your answer"
     }
     return isWarning ? String(first.dropFirst(Self.warningPrefix.count)) : first
+  }
+
+  /// The headline with `**bold**` runs split out.
+  private var headlineParts: [HeadlinePart] {
+    headline.components(separatedBy: "**").enumerated().compactMap { index, text in
+      guard !text.isEmpty else { return nil }
+      return index % 2 == 1 ? .bold(text) : .plain(text)
+    }
   }
 
   private var detail: String? {

@@ -10,6 +10,7 @@
 
 use std::sync::Mutex;
 
+use super::vault::LoginDetails;
 use crate::secrets::vaults::autofill::{self, AutofillItem, LoginPlace, LoginSummary};
 
 #[derive(Default)]
@@ -48,6 +49,19 @@ impl LoginIndex {
                 None => items.push(item),
             }
         }
+    }
+
+    /// What an access prompt shows about the indexed login `record_id`. `None`
+    /// if nothing has been indexed or the login is not in the index.
+    pub fn details(&self, record_id: &str) -> Option<LoginDetails> {
+        let guard = self.lock();
+        let item = guard.as_ref()?.iter().find(|i| i.record_id == record_id)?;
+        Some(LoginDetails {
+            title: item.title.clone(),
+            username: item.username.clone(),
+            vault_name: item.vault_name.clone(),
+            hosts: item.hosts(),
+        })
     }
 
     /// The indexed logins that match `frame_url`, best match first. `None` when
