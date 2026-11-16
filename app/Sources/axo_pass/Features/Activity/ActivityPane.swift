@@ -111,6 +111,7 @@ struct ActivityPane: View {
     let event = events[0]
     let opener = SubjectOpener(
       vaults: vaults, issues: issues, sshModel: sshModel, gpgModel: gpgModel)
+    let title = Self.subjectTitle(event, opener: opener)
     let content = HStack(spacing: 12) {
       Text(Self.time(event))
         .foregroundStyle(.secondary)
@@ -120,14 +121,19 @@ struct ActivityPane: View {
         symbol: UsedTodayStyle.symbol(event.displayKind),
         color: UsedTodayStyle.color(event.displayKind))
       HStack(spacing: 6) {
-        Text(opener.title(event.ref, label: event.label))
+        if let prefix = ActivityStyle.prefix(event) {
+          Text(prefix)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+        }
+        Text(title)
           .lineLimit(1)
           .truncationMode(.middle)
           .layoutPriority(1)
         if let tag = opener.keyTag(event.ref) {
           KeyIdTag(text: tag)
         }
-        Text(ActivityStyle.predicate(events))
+        Text(ActivityStyle.predicate(events, title: title))
           .lineLimit(1)
           .truncationMode(.tail)
       }
@@ -238,6 +244,13 @@ struct ActivityPane: View {
     return groups
   }
 
+  /// Subject title of a row. A login fill shows the username if the vault is
+  /// loaded, otherwise the item title.
+  static func subjectTitle(_ event: ActivityEvent, opener: SubjectOpener) -> String {
+    if event.action == "login.fill", let username = opener.username(event.ref) { return username }
+    return opener.title(event.ref, label: event.label)
+  }
+
   private static let timeWidth: CGFloat = 64
 
   private static func time(_ event: ActivityEvent) -> String {
@@ -324,22 +337,35 @@ private enum ActivityStyle {
     }
   }
 
+  /// Text before the subject title. Set for successful autofills, which read
+  /// "Autofilled X on Y in Firefox".
+  static func prefix(_ event: ActivityEvent) -> String? {
+    event.record.outcome == .succeeded && event.action == "login.fill" ? "Autofilled" : nil
+  }
+
   /// Row text after the subject title, such as "signed for git to
-  /// github.com". Programs and hosts are in the primary color. Programs are
-  /// monospaced. Uses that did not succeed read as requests.
-  static func predicate(_ events: [ActivityEvent]) -> AttributedString {
+  /// github.com". Programs and hosts are in the primary color. Browser
+  /// events add the site if it differs from the title. Uses that did not
+  /// succeed read as requests.
+  static func predicate(_ events: [ActivityEvent], title: String) -> AttributedString {
     let event = events[0]
     let phrase = phrase(event)
-    var text = secondary(phrase.verb)
+    let leads = prefix(event) != nil
+    var text = leads ? AttributedString() : secondary(phrase.verb)
     let caller = event.caller.flatMap {
       UsedTodayStyle.showsCaller($0, kind: event.kind) ? $0 : nil
     }
     let program = phrase.isBrowser ? event.browser ?? caller : caller
+    if phrase.isBrowser, let site = event.site,
+      site.caseInsensitiveCompare(title) != .orderedSame
+    {
+      text += secondary(leads ? "on " : " on ")
+      text += AttributedString(site)
+    }
     if let program {
-      text += secondary(" \(phrase.preposition) ")
-      var name = AttributedString(program)
-      if !phrase.isBrowser || event.browser == nil { name.font = .body.monospaced() }
-      text += name
+      let separator = leads && text.characters.isEmpty ? "" : " "
+      text += secondary("\(separator)\(phrase.preposition) ")
+      text += AttributedString(program)
     }
     if event.displayKind == .sshKey {
       var hosts: [String] = []

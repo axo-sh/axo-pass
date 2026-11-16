@@ -145,6 +145,11 @@ struct ActivityEvent: Identifiable {
     record.detail["host"].flatMap { $0.isEmpty ? nil : $0 }
   }
 
+  /// Site a login request was made for, if recorded.
+  var site: String? {
+    record.detail["service_host"].flatMap { $0.isEmpty ? nil : $0 }
+  }
+
   /// Nil for item listings, grant events, and events with no subject.
   init?(_ record: AuditEventRecord) {
     guard record.action != "item.listed", !record.action.hasPrefix("auth."),

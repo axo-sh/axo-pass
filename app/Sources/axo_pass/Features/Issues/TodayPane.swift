@@ -433,6 +433,12 @@ struct SubjectOpener {
     return (vaultKey, itemId)
   }
 
+  /// Username of the login item `ref` points to, if its vault is loaded.
+  func username(_ ref: AuditSubjectRef) -> String? {
+    guard let location = itemLocation(ref) else { return nil }
+    return vaults.cachedUsername(vaultKey: location.vaultKey, itemId: location.itemId)
+  }
+
   /// Display title of a subject. GPG keys are named by the key name in place
   /// of the keygrip. SSH keys labeled by fingerprint show as "SSH key", since
   /// the id tag already shows the fingerprint.

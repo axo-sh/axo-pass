@@ -636,6 +636,13 @@ final class VaultsModel {
     }
   }
 
+  /// Username of item `itemId` in vault `vaultKey`. Nil if the vault is not
+  /// loaded, the item is gone, or it has no username.
+  func cachedUsername(vaultKey: String, itemId: String) -> String? {
+    let username = itemCache[vaultKey]?.first { $0.id == itemId }?.username
+    return username?.isEmpty == false ? username : nil
+  }
+
   /// Number of items of `type` in all vaults. Nil until every vault is loaded.
   func itemCount(of type: ItemType) -> Int? {
     var count = 0
