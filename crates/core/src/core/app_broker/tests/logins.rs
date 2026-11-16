@@ -1,4 +1,9 @@
-use super::support::{CHROME, PAGE, TestBroker, accepting_policy, browser_host_broker};
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use super::support::{CHROME, HANGING, PAGE, TestBroker, accepting_policy, browser_host_broker};
 use crate::core::app_broker::VaultAction;
 use crate::core::app_broker::access::RequestScope;
 use crate::core::app_broker::wire::WireResponse;
@@ -286,4 +291,60 @@ async fn refuses_save_with_no_password_or_page_before_prompting() {
         assert!(matches!(response, WireResponse::Failed { .. }), "{line}");
     }
     assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
+}
+
+/// Send a listing that waits on its prompt until the connection is dropped.
+fn send_hanging_listing(broker: &TestBroker) -> UnixStream {
+    let stream = UnixStream::connect(&broker.socket_path).unwrap();
+    let line = format!(r#"{{"request":"list_logins",{PAGE},{HANGING}}}"#);
+    (&stream).write_all(line.as_bytes()).unwrap();
+    (&stream).write_all(b"\n").unwrap();
+    stream
+}
+
+/// A locked listing needs no prompt, so it is answered while an earlier
+/// request waits on the user.
+#[tokio::test(flavor = "multi_thread")]
+async fn locked_listing_not_queued_behind_prompt() {
+    let broker = browser_host_broker().await;
+    broker.logins.replace(Vec::new());
+
+    let busy = send_hanging_listing(&broker);
+    tokio::task::block_in_place(|| broker.authorizer.wait_for_hung_prompt());
+
+    // Times out after five seconds if the broker queues it behind the prompt.
+    let line = format!(r#"{{"request":"list_logins_locked",{PAGE},{CHROME}}}"#);
+    let response: WireResponse = broker.request_parsed(&line);
+    assert!(matches!(
+        response,
+        WireResponse::LockedLogins { indexed: true, .. }
+    ));
+    assert_eq!(broker.authorizer.prompts_hung.load(Ordering::SeqCst), 1);
+    drop(busy);
+}
+
+/// Requests that may prompt take turns, so a second prompt starts only after
+/// the first is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn prompting_requests_wait_for_turn() {
+    let broker = browser_host_broker().await;
+
+    let first = send_hanging_listing(&broker);
+    tokio::task::block_in_place(|| broker.authorizer.wait_for_hung_prompt());
+    let _second = send_hanging_listing(&broker);
+
+    tokio::task::block_in_place(|| {
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(broker.authorizer.prompts_hung.load(Ordering::SeqCst), 1);
+
+        drop(first);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while broker.authorizer.prompts_hung.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "the second prompt never started after the first ended"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
 }

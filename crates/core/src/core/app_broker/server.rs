@@ -5,6 +5,7 @@ use std::fs::{self, Permissions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -121,6 +122,7 @@ pub(super) async fn serve_on(
 }
 
 async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: Vec<Client>) {
+    let turns = Arc::new(tokio::sync::Mutex::new(()));
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -147,11 +149,17 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: 
                 log::debug!("App broker peer: {peer:#?}");
 
                 let authorizers = authorizers.clone();
-                // Serially, not spawned: two prompts at once would contend for
-                // the screen and the system's authentication session.
-                if let Err(e) = handle_connection(stream, &peer, scope, authorizers).await {
-                    log::debug!("App broker connection failed: {e}");
-                }
+                let turns = turns.clone();
+                // Each connection runs in its own task so that a pending prompt
+                // does not hold up a locked listing. Requests that may prompt
+                // take turns, see `handle_connection`.
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        handle_connection(stream, &peer, scope, authorizers, &turns).await
+                    {
+                        log::debug!("App broker connection failed: {e}");
+                    }
+                });
             },
             Err(e) => {
                 log::error!("App broker accept failed: {e}");
@@ -166,6 +174,7 @@ async fn handle_connection(
     peer: &PeerIdentity,
     scope: RequestScope,
     authorizers: Authorizers,
+    turns: &tokio::sync::Mutex<()>,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = AsyncBufReader::new(read_half);
@@ -173,6 +182,14 @@ async fn handle_connection(
     reader.read_line(&mut request_line).await?;
     let request: WireRequest = serde_json::from_str(&request_line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    // Requests that may prompt are served one at a time, as two prompts at once
+    // would contend for the screen and the system's authentication session. A
+    // locked listing never prompts and does not wait.
+    let _turn = match request {
+        WireRequest::ListLoginsLocked { .. } => None,
+        _ => Some(turns.lock().await),
+    };
 
     // A client that gave up while its connection waited to be accepted has
     // already closed it. Its request is not served at all, so the app shows no

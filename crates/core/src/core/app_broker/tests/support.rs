@@ -12,9 +12,9 @@ use crate::core::app_broker::access::{Client, RequestScope};
 use crate::core::app_broker::server::serve_on;
 use crate::core::app_broker::wire::WireResponse;
 use crate::core::app_broker::{
-    Authorizers, BrokerPasswordEntry, CollectedPassphrase, ConfirmPrompt, KeychainLister,
-    LoginIndex, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome,
-    SignAuthorizer, SignPrompt, vault,
+    Authorizers, BrokerPasswordEntry, ClientIdentity, CollectedPassphrase, ConfirmPrompt,
+    KeychainLister, LoginIndex, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
+    PromptOutcome, SignAuthorizer, SignPrompt, vault,
 };
 use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::provenance::PeerPolicy;
@@ -40,11 +40,28 @@ pub(in crate::core::app_broker) struct StubAuthorizer {
     pub(super) vault_prompts: Mutex<Vec<vault::VaultAccessPrompt>>,
     pub(super) peers: Mutex<Vec<audit::Actor>>,
     pub(super) ended: AtomicUsize,
-    prompts_hung: AtomicUsize,
+    pub(super) prompts_hung: AtomicUsize,
     pub(super) prompts_dropped: AtomicUsize,
+    /// Signalled when the broker abandons a vault request, as the app's
+    /// prompt does when its client disconnects.
+    abandoned: tokio::sync::Notify,
 }
 
 impl StubAuthorizer {
+    /// Wait for a user who never answers, until the request is abandoned.
+    /// Starting and ending the wait are both counted.
+    async fn hang(&self) {
+        self.prompts_hung.fetch_add(1, Ordering::SeqCst);
+        struct Dropped<'a>(&'a AtomicUsize);
+        impl Drop for Dropped<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let _dropped = Dropped(&self.prompts_dropped);
+        self.abandoned.notified().await;
+    }
+
     /// Block until a `"hang"` prompt has started. Verifying a peer can take
     /// hundreds of milliseconds, so a fixed sleep may end before the
     /// request reaches its prompt.
@@ -131,15 +148,7 @@ impl PassphraseAuthorizer for StubAuthorizer {
     /// ever dropped. Starting and dropping it are both counted.
     async fn confirm(&self, prompt: ConfirmPrompt) -> bool {
         if prompt.description.as_deref() == Some("hang") {
-            self.prompts_hung.fetch_add(1, Ordering::SeqCst);
-            struct Dropped<'a>(&'a AtomicUsize);
-            impl Drop for Dropped<'_> {
-                fn drop(&mut self) {
-                    self.0.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-            let _dropped = Dropped(&self.prompts_dropped);
-            std::future::pending::<()>().await;
+            self.hang().await;
         }
         true
     }
@@ -154,12 +163,21 @@ impl vault::VaultAuthorizer for StubAuthorizer {
         prompt: vault::VaultAccessPrompt,
         peer: audit::Actor,
     ) -> Result<vault::VaultAuthorization, String> {
+        if matches!(
+            &prompt.client,
+            ClientIdentity::Browser { extension: Some(extension), .. } if extension == "hang"
+        ) {
+            self.hang().await;
+            return Err("abandoned".to_string());
+        }
         self.vault_prompts.lock().unwrap().push(prompt);
         self.peers.lock().unwrap().push(peer);
         Err("stub authorizer".to_string())
     }
 
-    async fn abandon(&self) {}
+    async fn abandon(&self) {
+        self.abandoned.notify_one();
+    }
 
     async fn end(&self, _prompt: vault::VaultAccessPrompt, _outcome: PromptOutcome) {
         self.ended.fetch_add(1, Ordering::SeqCst);
@@ -293,6 +311,11 @@ pub(super) fn rejecting_policy() -> PeerPolicy {
 pub(super) const PAGE: &str =
     r#""url":"https://example.com","frame_url":"https://example.com/login""#;
 pub(super) const CHROME: &str = r#""client":{"browser":{"name":"Google Chrome","team_id":"EQHXZ8M8AV"},"extension":"chrome-extension://abc/"}"#;
+
+/// A browser whose vault prompts are never answered, see
+/// [`StubAuthorizer::hang`].
+pub(super) const HANGING: &str =
+    r#""client":{"browser":{"name":"Google Chrome","team_id":"EQHXZ8M8AV"},"extension":"hang"}"#;
 
 pub(super) async fn browser_host_broker() -> TestBroker {
     TestBroker::start_with_scope(accepting_policy(), RequestScope::BrowserHost).await
