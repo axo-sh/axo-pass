@@ -399,8 +399,8 @@ pub enum VaultClient {
     /// A process the broker verified from its own peer.
     Process,
     /// A browser the browser host verified as its parent. `name` is its
-    /// display name.
-    Browser { name: String },
+    /// display name and `team_id` is its signing team.
+    Browser { name: String, team_id: String },
     /// A browser host that could not verify the browser that started it. The
     /// prompt warns that the request may come from any process.
     UnverifiedBrowser,
@@ -410,8 +410,9 @@ impl From<&app_broker::ClientIdentity> for VaultClient {
     fn from(client: &app_broker::ClientIdentity) -> Self {
         match client {
             app_broker::ClientIdentity::Process => Self::Process,
-            app_broker::ClientIdentity::Browser { name, .. } => {
-                Self::Browser { name: name.clone() }
+            app_broker::ClientIdentity::Browser { name, team_id, .. } => Self::Browser {
+                name: name.clone(),
+                team_id: team_id.clone(),
             },
             app_broker::ClientIdentity::Unverified { .. } => Self::UnverifiedBrowser,
         }

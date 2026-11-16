@@ -42,7 +42,7 @@ mod serve;
 #[cfg(test)]
 mod tests;
 
-pub(super) use logins::{list_logins_locked, vault_choices};
+pub(super) use logins::{list_logins_locked, serve_granted_listing, vault_choices};
 pub(super) use passkeys::{list_passkeys_locked, passkey_choices, record_passkey_report};
 pub use requests::{
     ExportSummary, FileReadSummary, request_add_external_vault, request_assert_passkey,

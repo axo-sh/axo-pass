@@ -3,6 +3,7 @@ mod audit;
 mod axo_pass;
 mod broker;
 mod browser;
+mod browser_grants;
 mod bundle;
 mod error;
 mod files;

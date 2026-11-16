@@ -1,13 +1,13 @@
-use super::super::ConfirmPrompt;
 use super::super::login_index::LoginIndex;
 use super::super::placement::{PlacementVault, VaultChoices};
 use super::super::wire::WireResponse;
-use super::audit::record_locked_listing;
+use super::super::{ConfirmPrompt, browser_grants};
+use super::audit::{record_granted_listing, record_locked_listing};
 use super::passkeys::Ended;
 use super::serve::{AccessIds, open_vault};
 use super::{
-    LoginPage, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt, VaultAction,
-    VaultAuthorizer, VaultPayload,
+    ClientIdentity, LoginPage, SaveLoginPayload, UpdateLoginPayload, VaultAccessPrompt,
+    VaultAction, VaultAuthorizer, VaultPayload,
 };
 use crate::audit::{Actor, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
@@ -153,6 +153,42 @@ fn list_logins(vaults: &VaultCatalog, page: &LoginPage, all: bool, auth: &AuthCo
         },
         unlocked_vaults,
     }
+}
+
+/// Answer a listing without a prompt, for a browser that holds a listing grant.
+/// The listing runs on the app's shared context, which the app adopted at
+/// unlock, so a locked app unlocks no vault. Returns `None` then, and for a
+/// request that no grant covers. The request prompts instead.
+pub(in super::super) async fn serve_granted_listing(
+    vaults: &VaultCatalog,
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
+) -> Option<WireResponse> {
+    let (VaultAction::ListLogins { page, all }, ClientIdentity::Browser { name, team_id, .. }) =
+        (&prompt.action, &prompt.client)
+    else {
+        return None;
+    };
+    let (vaults, page, all) = (vaults.clone(), page.clone(), *all);
+    let (browser, team_id) = (name.clone(), team_id.clone());
+    let response = tokio::task::spawn_blocking(move || {
+        match browser_grants::is_granted(&browser, &team_id) {
+            Ok(true) => {},
+            Ok(false) => return None,
+            Err(e) => {
+                log::warn!("Could not read browser listing grants: {e}");
+                return None;
+            },
+        }
+        let listing = list_logins(&vaults, &page, all, &AuthContext::SharedThreadLocal);
+        (listing.unlocked_vaults > 0).then_some(listing.response)
+    })
+    .await
+    .inspect_err(|e| log::warn!("Granted listing task failed: {e}"))
+    .ok()
+    .flatten()?;
+    record_granted_listing(prompt, actor, &response, name);
+    Some(response)
 }
 
 /// Serve a fill or a one-time code from a vault handle, when the record is a

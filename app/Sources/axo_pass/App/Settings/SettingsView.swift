@@ -289,6 +289,8 @@ private struct AutoFillSettingsView: View {
   @State private var browsers: [BrowserManifestStatus] = []
   @State private var installing: BrowserKind? = nil
   @State private var installError: String? = nil
+  @State private var listingGrants: [BrowserListingGrant] = []
+  private let core = AxoPass()
 
   var body: some View {
     Form {
@@ -340,6 +342,29 @@ private struct AutoFillSettingsView: View {
         "Lets the Axo Pass extension in Chrome and Firefox reach this app. Axo Pass installs and repairs these on launch."
       )
       .settingsCaption()
+      Divider()
+      LabeledContent("Allowed to list logins:") {
+        VStack(alignment: .leading, spacing: 6) {
+          if listingGrants.isEmpty {
+            Text("No browsers")
+              .foregroundStyle(.secondary)
+          }
+          ForEach(listingGrants, id: \.teamId) { grant in
+            HStack(spacing: 8) {
+              Text(grant.name)
+              Text(Self.expiryText(grant))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+              Button("Remove") { Task { await removeListingGrant(grant) } }
+                .controlSize(.small)
+            }
+          }
+        }
+      }
+      Text(
+        "Browsers allowed to list logins while Axo Pass is unlocked. Fills, one-time codes, and saves still prompt. Add a browser from its listing prompt."
+      )
+      .settingsCaption()
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 12)
@@ -354,6 +379,24 @@ private struct AutoFillSettingsView: View {
   private func refresh() async {
     browsers = browserManifestStatuses()
     isEnabled = await ASCredentialIdentityStore.shared.state().isEnabled
+    listingGrants = (try? await core.listBrowserListingGrants()) ?? []
+  }
+
+  private func removeListingGrant(_ grant: BrowserListingGrant) async {
+    do {
+      try await core.removeBrowserListingGrant(name: grant.name, teamId: grant.teamId)
+    } catch {
+      installError = String(describing: error)
+    }
+    listingGrants = (try? await core.listBrowserListingGrants()) ?? []
+  }
+
+  /// A grant can pass its expiration while shown. It stops applying then.
+  private static func expiryText(_ grant: BrowserListingGrant) -> String {
+    guard let expiresAt = grant.expiresAt else { return "No expiration" }
+    let date = Date(timeIntervalSince1970: TimeInterval(expiresAt))
+    if date <= Date() { return "Expired" }
+    return "Expires \(date.formatted(.relative(presentation: .named)))"
   }
 
   private func install(_ browser: BrowserKind) async {

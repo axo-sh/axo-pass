@@ -184,8 +184,20 @@ pub(super) async fn serve_request(
                         action: vault::VaultAction::ListLogins { page, all },
                     };
                     log::debug!("App broker request: {prompt:?}");
-                    vault::authorize_and_serve_logins(&authorizers, prompt, actor, None, &in_flight)
+                    if let Some(response) =
+                        vault::serve_granted_listing(&authorizers.vaults, &prompt, &actor).await
+                    {
+                        response
+                    } else {
+                        vault::authorize_and_serve_logins(
+                            &authorizers,
+                            prompt,
+                            actor,
+                            None,
+                            &in_flight,
+                        )
                         .await
+                    }
                 },
                 Err(message) => WireResponse::Failed { message },
             },

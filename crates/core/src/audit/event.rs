@@ -450,6 +450,10 @@ pub enum Action {
     AuthGrantReused,
     #[serde(rename = "auth.grant_expired")]
     AuthGrantExpired,
+    #[serde(rename = "auth.browser_grant_add")]
+    AuthBrowserGrantAdd,
+    #[serde(rename = "auth.browser_grant_remove")]
+    AuthBrowserGrantRemove,
 
     #[serde(rename = "broker.peer_rejected")]
     BrokerPeerRejected,
@@ -525,13 +529,15 @@ impl Action {
             Action::AuthGrantCreated => "auth.grant_created",
             Action::AuthGrantReused => "auth.grant_reused",
             Action::AuthGrantExpired => "auth.grant_expired",
+            Action::AuthBrowserGrantAdd => "auth.browser_grant_add",
+            Action::AuthBrowserGrantRemove => "auth.browser_grant_remove",
             Action::BrokerPeerRejected => "broker.peer_rejected",
         }
     }
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 67] = [
+    pub const ALL: [Action; 69] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -598,6 +604,8 @@ impl Action {
         Action::AuthGrantCreated,
         Action::AuthGrantReused,
         Action::AuthGrantExpired,
+        Action::AuthBrowserGrantAdd,
+        Action::AuthBrowserGrantRemove,
         Action::BrokerPeerRejected,
     ];
 
@@ -703,6 +711,10 @@ impl Action {
             Action::AuthGrantCreated => "Approved access that can be reused for a short time.",
             Action::AuthGrantReused => "Used an earlier approval, so no prompt was shown.",
             Action::AuthGrantExpired => "An earlier approval ran out.",
+            Action::AuthBrowserGrantAdd => "Let a browser list logins without a prompt.",
+            Action::AuthBrowserGrantRemove => {
+                "Removed a browser's access to list logins without a prompt."
+            },
             Action::BrokerPeerRejected => {
                 "Refused a request from a process that failed verification."
             },
@@ -775,9 +787,11 @@ impl Action {
             | Action::PasskeyMoved
             | Action::PasskeyReported
             | Action::PasskeyRenamed => Category::Passkey,
-            Action::AuthGrantCreated | Action::AuthGrantReused | Action::AuthGrantExpired => {
-                Category::Grant
-            },
+            Action::AuthGrantCreated
+            | Action::AuthGrantReused
+            | Action::AuthGrantExpired
+            | Action::AuthBrowserGrantAdd
+            | Action::AuthBrowserGrantRemove => Category::Grant,
             Action::BrokerPeerRejected => Category::Broker,
         }
     }
@@ -805,6 +819,8 @@ impl Action {
             | Action::SshManagedKeyDelete
             | Action::SshAppGrantAdd
             | Action::SshAppGrantRemove
+            | Action::AuthBrowserGrantAdd
+            | Action::AuthBrowserGrantRemove
             | Action::SshPassphraseDeleted
             | Action::GpgPassphraseSaved
             | Action::GpgPassphraseDeleted

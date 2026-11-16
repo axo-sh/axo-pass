@@ -17,6 +17,24 @@ pub(super) fn record_access(
     audit::record(access_event(prompt, actor, outcome, response, ids, message));
 }
 
+/// Record a listing a browser grant answered without a prompt.
+pub(super) fn record_granted_listing(
+    prompt: &VaultAccessPrompt,
+    actor: &Actor,
+    response: &WireResponse,
+    browser: &str,
+) {
+    let event = access_event(
+        prompt,
+        actor,
+        Outcome::Succeeded,
+        Some(response),
+        &AccessIds::None,
+        None,
+    );
+    audit::record(event.detail("grant", format!("browser:{browser}")));
+}
+
 /// Record a vault access that ended without a response or any entity ids.
 pub(super) fn record_failure(
     prompt: &VaultAccessPrompt,

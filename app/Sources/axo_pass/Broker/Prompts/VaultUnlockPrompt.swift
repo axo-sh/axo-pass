@@ -45,6 +45,12 @@ final class VaultUnlockPromptModel {
   /// Set while the account list is on screen.
   private var accountChoice: CheckedContinuation<UInt32?, Never>?
 
+  /// The offer of lasting listing access on the prompt `begin` is serving, and
+  /// the requester it was offered to. Kept until the prompt ends, when a chosen
+  /// grant is saved.
+  private var listingGrant: ListingGrantOffer?
+  private var listingPeer: RequestActor?
+
   /// Holds the cross-process auth lock during an evaluation. Set by
   /// `VaultsModel` when the broker starts.
   var core: AxoPass?
@@ -80,6 +86,9 @@ final class VaultUnlockPromptModel {
       break
     }
     let fillGrant = reused ? nil : Self.fillGrantOffer(for: prompt)
+    let listingOffer = reused ? nil : Self.listingGrantOffer(for: prompt)
+    listingGrant = listingOffer
+    listingPeer = peer
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
@@ -88,12 +97,14 @@ final class VaultUnlockPromptModel {
     if reused {
       showTask = nil
     } else if Self.promptsEveryTime(prompt.action) {
-      showPanel(prompt: prompt, view: grant.view, fillGrant: fillGrant)
+      showPanel(
+        prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer)
     } else {
       showTask = Task { [weak self] in
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
-        self?.showPanel(prompt: prompt, view: grant.view, fillGrant: fillGrant)
+        self?.showPanel(
+          prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer)
       }
     }
 
@@ -137,7 +148,7 @@ final class VaultUnlockPromptModel {
     let content = UNMutableNotificationContent()
     content.title = "Login filled"
     var body = "Filled \(account ?? "a login") on \(page.host)"
-    if case .browser(let name) = prompt.client {
+    if case .browser(let name, _) = prompt.client {
       body += " in \(name)"
     }
     content.body = body + "."
@@ -156,10 +167,20 @@ final class VaultUnlockPromptModel {
   /// Settings.
   private static func fillGrantOffer(for prompt: VaultAccessPrompt) -> FillGrantOffer? {
     guard Preferences.reuseApprovals, prompt.callerIdentity != nil,
-      case .browser(let browser) = prompt.client,
+      case .browser(let browser, _) = prompt.client,
       case .fillLogin(let page, _, _, let unmatched, _) = prompt.action, !unmatched, !page.crossSite
     else { return nil }
     return FillGrantOffer(browser: browser, host: page.host, choice: GrantChoice())
+  }
+
+  /// The choice to let a verified browser list logins without a prompt. Offered
+  /// on a listing only, and not when reuse is turned off in Settings.
+  private static func listingGrantOffer(for prompt: VaultAccessPrompt) -> ListingGrantOffer? {
+    guard Preferences.reuseApprovals,
+      case .browser(let browser, let teamId) = prompt.client, !teamId.isEmpty,
+      case .listLogins = prompt.action
+    else { return nil }
+    return ListingGrantOffer(browser: browser, teamId: teamId, choice: GrantChoice())
   }
 
   /// The vault and item the user chose for a passkey, read once the evaluation
@@ -200,7 +221,10 @@ final class VaultUnlockPromptModel {
   }
 
   /// The access finished, successfully or not.
-  func end(prompt: VaultAccessPrompt, outcome: PromptOutcome) {
+  ///
+  /// Saves a chosen listing grant before returning. The broker holds the next
+  /// request until this returns, and that request must find the grant.
+  func end(prompt: VaultAccessPrompt, outcome: PromptOutcome) async {
     // The broker stops waiting on a client that disconnects mid-choice.
     finishAccountChoice(nil)
     placement = nil
@@ -209,6 +233,20 @@ final class VaultUnlockPromptModel {
     showTask = nil
     panel.hide()
     grants.end(Self.grantKey(prompt), outcome: outcome)
+
+    let offer = listingGrant
+    let peer = listingPeer
+    listingGrant = nil
+    listingPeer = nil
+    if case .succeeded = outcome, let offer, offer.choice.allow {
+      do {
+        try await core?.addBrowserListingGrant(
+          name: offer.browser, teamId: offer.teamId,
+          expiresInSeconds: offer.choice.expiration.seconds, peer: peer)
+      } catch {
+        NSLog("VaultUnlockPrompt: could not save listing grant: %@", String(describing: error))
+      }
+    }
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
@@ -234,7 +272,8 @@ final class VaultUnlockPromptModel {
   // MARK: - Panel
 
   private func showPanel(
-    prompt: VaultAccessPrompt, view: LAAuthenticationView, fillGrant: FillGrantOffer?
+    prompt: VaultAccessPrompt, view: LAAuthenticationView, fillGrant: FillGrantOffer?,
+    listingGrant: ListingGrantOffer?
   ) {
     let content = VaultUnlockView(
       // A registration or a save picks its vault in its own card instead.
@@ -250,6 +289,7 @@ final class VaultUnlockPromptModel {
       secrets: Self.secrets(for: prompt),
       notes: Self.notes(for: prompt),
       fillGrant: fillGrant,
+      listingGrant: listingGrant,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
@@ -519,6 +559,49 @@ struct FillGrantOffer {
   let choice: GrantChoice
 }
 
+/// The offer on a browser listing prompt to list logins without asking, until
+/// the user removes it in Settings or it expires.
+struct ListingGrantOffer {
+  let browser: String
+  let teamId: String
+  let choice: GrantChoice
+}
+
+private struct ListingGrantCard: View {
+  let offer: ListingGrantOffer
+  @Bindable var choice: GrantChoice
+
+  init(offer: ListingGrantOffer) {
+    self.offer = offer
+    self.choice = offer.choice
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Toggle("Allow logins to be listed", isOn: $choice.allow)
+        .toggleStyle(.checkbox)
+
+      if choice.allow {
+        // Indent to line up with the checkbox label.
+        VStack(alignment: .leading, spacing: 4) {
+          Picker("Duration:", selection: $choice.expiration) {
+            ForEach(GrantExpiration.allCases, id: \.self) { expiration in
+              Text(expiration.label).tag(expiration)
+            }
+          }
+          .pickerStyle(.menu)
+          .fixedSize()
+          Text("Requires Axo Pass to be unlocked. Revoke this in Settings.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 20)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
 extension GrantExpiration {
   /// Durations a browser fill may be reused for. 12 hours is the longest.
   static let browserFill: [GrantExpiration] = [.fiveMinutes, .oneHour, .twelveHours]
@@ -742,6 +825,8 @@ private struct VaultUnlockView: View {
   let notes: [String]
   /// Set for a fill from a verified browser, which may be reused.
   let fillGrant: FillGrantOffer?
+  /// Set for a listing from a verified browser, which may be allowed for good.
+  let listingGrant: ListingGrantOffer?
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
@@ -799,6 +884,10 @@ private struct VaultUnlockView: View {
 
       if let fillGrant {
         FillGrantCard(offer: fillGrant)
+      }
+
+      if let listingGrant {
+        ListingGrantCard(offer: listingGrant)
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
