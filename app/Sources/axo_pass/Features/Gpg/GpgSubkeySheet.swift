@@ -58,7 +58,7 @@ struct GpgSubkeySheet: View {
     .frame(width: 460)
     .sheet(isPresented: $showingSavePassphraseSheet) {
       GpgSavePassphraseSheet(keyName: subkeyName) { passphrase in
-        guard let keygrip = subkey.keygrip else { return "This subkey does not have a keygrip" }
+        guard let keygrip = subkey.keygrip else { return "Keygrip unavailable" }
         return await model.savePassphrase(
           keyId: subkey.keyId, keygrip: keygrip, passphrase: passphrase)
       }

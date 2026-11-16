@@ -407,7 +407,7 @@ struct VaultImportSheet: View {
                     Text(row.info.name ?? row.info.defaultKey ?? row.info.id)
                       .lineLimit(1)
                     if row.info.idExists {
-                      Text("This vault is already on this Mac.")
+                      Text("Vault is already on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                       if row.skipOnly {

@@ -440,7 +440,7 @@ struct CredentialRow: View {
         }
         if cred.passkey?.suggestedName != nil {
           PasskeyBadge(text: "New name", color: .blue)
-            .help("The site reported a new account name.")
+            .help("Site reported a new account name.")
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -472,7 +472,7 @@ struct CredentialRow: View {
         passkeyDetail("Reference", reference, monospaced: true)
       }
       if cred.passkey == nil {
-        Text("The passkey record could not be read.")
+        Text("Passkey record could not be read.")
           .font(.caption)
           .foregroundStyle(.red)
       }

@@ -81,7 +81,7 @@ private struct GpgKeyDetail: View {
     }
     .sheet(isPresented: $showingSavePassphraseSheet) {
       GpgSavePassphraseSheet(keyName: key.name) { passphrase in
-        guard let keygrip = key.keygrip else { return "This key does not have a keygrip" }
+        guard let keygrip = key.keygrip else { return "Keygrip unavailable" }
         return await model.savePassphrase(
           keyId: key.keyId, keygrip: keygrip, passphrase: passphrase)
       }

@@ -335,7 +335,7 @@ private struct DeletedSecretRow: View {
         try? await Task.sleep(for: .seconds(1.2))
         justCopied = false
       } else {
-        error = "The value is not text."
+        error = "Value is not text."
       }
     } catch {
       self.error = String(describing: error)

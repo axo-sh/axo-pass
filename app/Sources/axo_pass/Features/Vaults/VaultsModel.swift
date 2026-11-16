@@ -774,7 +774,7 @@ final class VaultsModel {
     do {
       let secret = try await credentialSecret(
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
-      return secureCopy(secret) ? nil : "The value is not text."
+      return secureCopy(secret) ? nil : "Value is not text."
     } catch {
       return String(describing: error)
     }

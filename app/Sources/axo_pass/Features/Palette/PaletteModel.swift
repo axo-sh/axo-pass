@@ -697,7 +697,7 @@ final class PaletteModel {
         PaletteAction(id: "pub", title: "Copy Public Key", systemImage: "doc.on.doc") {
           [gpgModel] in
           guard let armored = await gpgModel.exportPublicKey(fingerprint: fingerprint) else {
-            return gpgModel.loadError ?? "The public key could not be exported."
+            return gpgModel.loadError ?? "Public key could not be exported."
           }
           return Self.copyPlain(armored)
         },

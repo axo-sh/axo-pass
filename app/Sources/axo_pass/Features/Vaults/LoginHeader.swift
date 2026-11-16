@@ -202,7 +202,7 @@ extension CredentialList {
 
   private var repairBanner: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Label("This login does not have a password", systemImage: "exclamationmark.triangle")
+      Label("Password missing", systemImage: "exclamationmark.triangle")
         .font(.headline)
       Text("Choose which credential to use as the password.")
         .foregroundStyle(.secondary)
@@ -675,12 +675,12 @@ struct WebsitesEditor: View {
         Label("Passkey", systemImage: "person.badge.key.fill")
           .font(.caption)
           .foregroundStyle(.tint)
-          .help("This login's passkey is offered on \(host).")
+          .help("Passkey is offered on \(host).")
       case .subdomain(let rp):
         Label("Passkey on \(rp) only", systemImage: "person.badge.key")
           .font(.caption)
           .foregroundStyle(.secondary)
-          .help("This login's passkey is offered on \(rp) and its subdomains, not all of \(host).")
+          .help("Passkey is offered on \(rp) and its subdomains, not all of \(host).")
       case .none:
         Text("No passkey")
           .font(.caption)
@@ -752,7 +752,7 @@ struct WebsitesEditor: View {
           .font(.caption)
           .foregroundStyle(.tint)
           .help(
-            "This login's passkey is offered on \(site), but it is not one of the login's websites."
+            "Passkey is offered on \(site), but it is not one of the login's websites."
           )
       }
       Spacer()

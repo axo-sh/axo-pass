@@ -254,7 +254,7 @@ struct FileBox: View {
       Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
     case .authentication, nil:
       if file == nil {
-        Text("The file record could not be read.").font(.caption).foregroundStyle(.red)
+        Text("File record could not be read.").font(.caption).foregroundStyle(.red)
       } else if file?.local == false {
         Label(
           "Not downloaded yet. It downloads when you open or save it.",

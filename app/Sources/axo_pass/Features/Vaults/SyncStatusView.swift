@@ -54,7 +54,7 @@ private func signatureText(_ reason: SignatureFailureInfo) -> String {
 private func pausedText(_ cause: PausedCauseInfo) -> (text: String, detail: String?) {
   switch cause {
   case .unreachable(let error):
-    return ("The synced folder cannot be reached.", error)
+    return ("Synced folder cannot be reached.", error)
   case .publishFailed(let error):
     return ("Changes on this Mac could not be copied to the synced folder.", error)
   case .quarantined(let files):
@@ -232,7 +232,7 @@ struct SyncStatusSheet: View {
         causeRow((stopText(cause), nil))
         stopActions(cause, report)
       case nil:
-        Text("This vault does not have a sync status.")
+        Text("Sync status unavailable.")
           .foregroundStyle(.secondary)
       }
     }

@@ -221,7 +221,7 @@ struct KeyStateSheet: View {
   private var normalStep: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Keys of This Mac").font(.headline)
-      Text("The keys of this Mac are in the keychain.")
+      Text("Keys are in the keychain.")
         .foregroundStyle(.secondary)
       HStack {
         Spacer()
