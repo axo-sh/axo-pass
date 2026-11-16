@@ -68,27 +68,27 @@ extension CredentialList {
   }
 
   /// The parts of the login in the order the card shows them: username,
-  /// password, one-time code, passkeys, websites. A missing username, password,
-  /// or code shows as a row that adds it.
+  /// password, one-time code, passkeys, websites. The card shows only fields
+  /// the login has. A missing field chosen in the Add menu shows as an editor
+  /// in its place.
   private var loginCardEntries: [LoginCardEntry] {
     var entries: [LoginCardEntry] = []
     if let username = item.usernameCredential {
       entries.append(.credential(username, label: "Username"))
-    } else {
+    } else if addingLoginField == .username {
       entries.append(.add(.username))
     }
     if let password = item.passwordCredential {
       entries.append(.credential(password, label: "Password"))
-    } else {
+    } else if addingLoginField == .password {
       entries.append(.add(.password))
     }
     if let totp = item.totpCredential {
-      entries.append(.credential(totp, label: "Code"))
-    }
-    entries += item.passkeyCredentials.map { .credential($0, label: "Passkey") }
-    if item.totpCredential == nil {
+      entries.append(.credential(totp, label: "One-Time Code"))
+    } else if addingLoginField == .totp {
       entries.append(.add(.totp))
     }
+    entries += item.passkeyCredentials.map { .credential($0, label: "Passkey") }
     entries.append(.websites)
     return entries
   }
@@ -97,10 +97,7 @@ extension CredentialList {
   private func loginCard(isEmphasized: Bool) -> some View {
     let entries = loginCardEntries
     return VStack(alignment: .leading, spacing: 0) {
-      ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-        if index > 0, !isAddEntry(entry) || !isAddEntry(entries[index - 1]) {
-          Divider().padding(.leading, 14)
-        }
+      ForEach(entries) { entry in
         if case .credential(let cred, let label) = entry {
           cardCredentialRow(cred, label: label, isEmphasized: isEmphasized)
         } else {
@@ -116,22 +113,23 @@ extension CredentialList {
     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator, lineWidth: 1))
   }
 
-  /// Consecutive add rows sit together without a divider between them.
+  /// Field editor rows have less vertical padding. The editor has its own.
   private func isAddEntry(_ entry: LoginCardEntry) -> Bool {
     if case .add = entry { return true }
     return false
   }
 
   /// Credential row of the login card. A click selects it and moves focus to
-  /// the outline, so ⌘C copies it.
+  /// the outline, so ⌘C copies it. A row with an open context menu shows the
+  /// menu target outline, as in the outline.
   private func cardCredentialRow(_ cred: CredentialInfo, label: String, isEmphasized: Bool)
     -> some View
   {
     let isSelected = cardSelection == cred.key
+    let isHighlighted = isSelected && isEmphasized
     // Hierarchical colors turn light on the accent highlight, as in the outline.
     return credentialRowBody(cred, fieldLabel: label)
-      .environment(\.backgroundProminence, isSelected && isEmphasized ? .increased : .standard)
-      .padding(.vertical, 6)
+      .environment(\.backgroundProminence, isHighlighted ? .increased : .standard)
       .background {
         if isSelected {
           RoundedRectangle(cornerRadius: 6)
@@ -139,6 +137,23 @@ extension CredentialList {
               Color(
                 nsColor: isEmphasized
                   ? .selectedContentBackgroundColor : .unemphasizedSelectedContentBackgroundColor))
+        }
+      }
+      .overlay {
+        if cardMenuTarget == cred.key {
+          // The accent color, or white over the accent highlight.
+          MenuTargetOutline(radius: 6, openTop: false, openBottom: false)
+            .stroke(
+              Color(
+                nsColor: isHighlighted ? .alternateSelectedControlTextColor : .controlAccentColor),
+              lineWidth: MenuTargetOutline.lineWidth)
+        }
+      }
+      .onContextMenuTracking { isOpen in
+        if isOpen {
+          cardMenuTarget = cred.key
+        } else if cardMenuTarget == cred.key {
+          cardMenuTarget = nil
         }
       }
       .contentShape(.rect)
@@ -153,9 +168,10 @@ extension CredentialList {
     case .credential(let cred, let label):
       credentialRowBody(cred, fieldLabel: label)
     case .add(let field):
-      AddLoginFieldRow(field: field, item: item, vaultKey: vaultKey)
+      LoginFieldEditor(
+        field: field, item: item, vaultKey: vaultKey, onClose: { addingLoginField = nil })
     case .websites:
-      WebsitesEditor(item: item, vaultKey: vaultKey)
+      WebsitesEditor(item: item, vaultKey: vaultKey, adding: $addingWebsite)
     }
   }
 
@@ -168,33 +184,29 @@ extension CredentialList {
   private var conversionBanner: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label("Use this item for AutoFill?", systemImage: "key.viewfinder")
-        .font(.subheadline.weight(.semibold))
-      Text(
-        "It has a password and a website. Axo Pass can offer it in Safari and other apps. Credential keys stay as they are."
-      )
-      .font(.caption)
-      .foregroundStyle(.secondary)
+        .font(.headline)
+      Text("It has a password and a website, so Axo Pass can fill it in Safari and other apps.")
+        .foregroundStyle(.secondary)
       HStack {
         Button("Use for AutoFill") {
           Task { await model.convertItemToLogin(vaultKey: vaultKey, itemKey: item.key) }
         }
         Button("Dismiss") { model.dismissConversion(item) }
       }
-      .controlSize(.small)
+      .padding(.top, 2)
     }
-    .padding(10)
+    .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
   }
 
   private var repairBanner: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Label("This login has no password field", systemImage: "exclamationmark.triangle")
-        .font(.subheadline.weight(.semibold))
-      Text("The credential it filled as the password is gone or can no longer be one.")
-        .font(.caption)
+      Label("This login does not have a password", systemImage: "exclamationmark.triangle")
+        .font(.headline)
+      Text("Choose which credential to use as the password.")
         .foregroundStyle(.secondary)
-      Menu("Use as password") {
+      Menu("Use as Password") {
         ForEach(item.passwordCandidates, id: \.key) { cred in
           Button(cred.title) {
             Task { await setRole(cred, role: "password", assign: true) }
@@ -202,10 +214,10 @@ extension CredentialList {
         }
       }
       .fixedSize()
-      .controlSize(.small)
       .disabled(item.passwordCandidates.isEmpty)
+      .padding(.top, 2)
     }
-    .padding(10)
+    .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
   }
@@ -284,21 +296,20 @@ private struct MergeBanner: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       Label("Another login for \(site)", systemImage: "square.on.square")
-        .font(.subheadline.weight(.semibold))
-      Text("“\(other.title)” \(otherSummary). Merging moves its credentials here and deletes it.")
-        .font(.caption)
+        .font(.headline)
+      Text("“\(other.title)” \(otherSummary). Merge them to keep everything in one place.")
         .foregroundStyle(.secondary)
       HStack {
         Button("Merge into This Login…") { confirming = true }
           .disabled(merging)
         Button("Dismiss") { model.dismissMerge(item, other) }
       }
-      .controlSize(.small)
+      .padding(.top, 2)
       if let error {
-        Text(error).font(.caption).foregroundStyle(.red)
+        Text(error).foregroundStyle(.red)
       }
     }
-    .padding(10)
+    .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     .confirmationDialog(
@@ -309,7 +320,7 @@ private struct MergeBanner: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "Its \(credentialCount) move to “\(item.title)”, and “\(other.title)” is deleted. Anything “\(item.title)” already has, such as the same username, is skipped. References to “\(other.key)” stop working."
+        "Its \(credentialCount) move to “\(item.title)”, except any it already has. “\(other.title)” is then deleted, and references to “\(other.key)” stop working."
       )
     }
   }
@@ -354,15 +365,16 @@ enum LoginField: String {
   case username, password, totp
 }
 
-/// A faint "Add password" row that opens an inline editor. Saving creates the
-/// credential and gives it the field's role.
-private struct AddLoginFieldRow: View {
+/// Inline editor for a login field the login lacks. Saving creates the
+/// credential and gives it the field role.
+private struct LoginFieldEditor: View {
   @Environment(VaultsModel.self) private var model
   let field: LoginField
   let item: ItemInfo
   let vaultKey: String
+  /// Called when the editor closes by Cancel or Save.
+  let onClose: () -> Void
 
-  @State private var adding = false
   @State private var draft = ""
   @State private var saving = false
   @State private var error: String?
@@ -370,68 +382,47 @@ private struct AddLoginFieldRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      if adding {
-        // Matches the quick editor of a login card row.
-        HStack(alignment: .center, spacing: 12) {
-          LoginFieldLabel(label)
-          ValueTextEditor(text: $draft, placeholder: placeholder)
-            .focused($focused)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-              RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(.tint, lineWidth: 2)
-            )
-          HStack(spacing: 4) {
-            if field == .password {
-              Button("Generate") {
-                if let generated = model.generatePassword() { draft = generated }
-              }
+      // Matches the quick editor of a login card row.
+      HStack(alignment: .center, spacing: 12) {
+        LoginFieldLabel(label)
+        ValueTextEditor(text: $draft, placeholder: placeholder)
+          .focused($focused)
+          .padding(.vertical, 6)
+          .padding(.horizontal, 8)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+          .overlay(
+            RoundedRectangle(cornerRadius: 6)
+              .strokeBorder(.tint, lineWidth: 2)
+          )
+        HStack(spacing: 4) {
+          if field == .password {
+            Button("Generate") {
+              if let generated = model.generatePassword() { draft = generated }
             }
-            Button("Cancel") {
-              adding = false
-              draft = ""
-              error = nil
-            }
-            Button("Save", action: save)
-              .keyboardShortcut(.defaultAction)
-              .disabled(saving || draft.trimmingCharacters(in: .whitespaces).isEmpty)
           }
-          .buttonStyle(.bordered)
-          .controlSize(.small)
+          Button("Cancel", action: onClose)
+            .keyboardShortcut(.cancelAction)
+          Button("Add", action: save)
+            .keyboardShortcut(.defaultAction)
+            .disabled(saving || draft.trimmingCharacters(in: .whitespaces).isEmpty)
         }
-        if let error {
-          Text(error).font(.caption).foregroundStyle(.red)
-            .padding(.leading, loginFieldLabelWidth + 12)
-        }
-      } else {
-        Button {
-          adding = true
-          focused = true
-        } label: {
-          Label(addTitle, systemImage: "plus.circle")
-            .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.borderless)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+      }
+      if let error {
+        Text(error).font(.caption).foregroundStyle(.red)
+          .padding(.leading, loginFieldLabelWidth + 12)
       }
     }
     .padding(.horizontal, 6)
+    .onAppear { focused = true }
   }
 
   private var label: String {
     switch field {
     case .username: return "Username"
     case .password: return "Password"
-    case .totp: return "Code"
-    }
-  }
-
-  private var addTitle: String {
-    switch field {
-    case .username: return "Add Username"
-    case .password: return "Add Password"
-    case .totp: return "Set Up One-Time Code"
+    case .totp: return "One-Time Code"
     }
   }
 
@@ -496,8 +487,7 @@ private struct AddLoginFieldRow: View {
         error = model.actionError
         return
       }
-      draft = ""
-      adding = false
+      onClose()
     }
   }
 }
@@ -539,17 +529,24 @@ struct TotpCodeValue: View {
             .font(.callout.monospacedDigit())
             .foregroundStyle(left <= 5 ? Color.orange : Color.secondary)
         }
-        if justCopied || showsCopied {
-          Image(systemName: "checkmark").foregroundStyle(.green)
-        } else if hovering {
-          Button("Copy", action: copy)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
+        // The button always lays out so the row height is constant. The copy
+        // confirmation overlays it.
+        let copied = justCopied || showsCopied
+        Button("Copy", action: copy)
+          .buttonStyle(.bordered)
+          .controlSize(.small)
+          .opacity(hovering && !copied ? 1 : 0)
+          .allowsHitTesting(hovering && !copied)
+          .overlay {
+            if copied {
+              Image(systemName: "checkmark").foregroundStyle(.green)
+            }
+          }
       }
     }
     .contentShape(.rect)
     .onHover { hovering = $0 }
+    .animation(.easeInOut(duration: 0.12), value: hovering)
     .task(id: credKey) { await refreshLoop() }
   }
 
@@ -591,22 +588,24 @@ struct TotpCodeValue: View {
 }
 
 /// The websites a login applies to, each with its match kind, beside the
-/// "Websites" field name.
+/// "Websites" field name. Add Website in the Add menu opens the new website
+/// field.
 struct WebsitesEditor: View {
   @Environment(VaultsModel.self) private var model
   let item: ItemInfo
   let vaultKey: String
+  @Binding var adding: Bool
 
-  @State private var adding = false
   @State private var draft = ""
   @State private var error: String?
+  @FocusState private var focused: Bool
 
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       LoginFieldLabel(item.websites.count == 1 ? "Website" : "Websites")
       VStack(alignment: .leading, spacing: 6) {
         if item.websites.isEmpty, item.passkeySites.isEmpty, !adding {
-          Text("None. AutoFill offers this login nowhere.")
+          Text("None. AutoFill won't offer this login.")
             .foregroundStyle(.secondary)
         }
 
@@ -619,27 +618,34 @@ struct WebsitesEditor: View {
         }
 
         if adding {
-          HStack {
-            TextField("github.com", text: $draft)
-              .textFieldStyle(.roundedBorder)
-              .onSubmit(commitDraft)
-            Button("Cancel") {
-              adding = false
-              draft = ""
+          // Matches the login field editor.
+          HStack(alignment: .center, spacing: 12) {
+            ValueTextEditor(
+              text: $draft, placeholder: "github.com",
+              font: .systemFont(ofSize: NSFont.systemFontSize)
+            )
+            .focused($focused)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+              RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(.tint, lineWidth: 2)
+            )
+            .onAppear { focused = true }
+            HStack(spacing: 4) {
+              Button("Cancel") {
+                adding = false
+                draft = ""
+              }
+              .keyboardShortcut(.cancelAction)
+              Button("Add", action: commitDraft)
+                .keyboardShortcut(.defaultAction)
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Button("Add", action: commitDraft)
-              .keyboardShortcut(.defaultAction)
-              .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
           }
-          .controlSize(.small)
-        } else {
-          Button {
-            adding = true
-          } label: {
-            Label("Add Website", systemImage: "plus.circle")
-              .foregroundStyle(.secondary)
-          }
-          .buttonStyle(.borderless)
         }
 
         if let error {
@@ -684,16 +690,19 @@ struct WebsitesEditor: View {
     }
   }
 
+  /// Website row. The first line is what the match kind matches. The stored
+  /// URL is shown below it if it says more.
   private func websiteRow(_ index: Int, _ website: WebsiteInfo) -> some View {
-    HStack(alignment: .firstTextBaseline) {
+    let scope = websiteMatchScope(website: website) ?? website.url
+    return HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 1) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(displayHost(of: website.url) ?? website.url)
+          Text(scope)
             .lineLimit(1)
             .truncationMode(.middle)
           passkeyBadge(for: displayHost(of: website.url))
         }
-        if website.url != displayHost(of: website.url) {
+        if Self.bareURL(website.url) != scope {
           Text(website.url)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -758,8 +767,18 @@ struct WebsitesEditor: View {
     }
   }
 
+  /// Stored URL without an `https://` scheme, a leading `www.`, or a trailing
+  /// slash, for comparing with the match scope.
+  private static func bareURL(_ url: String) -> String {
+    var bare = url.trimmingCharacters(in: .whitespacesAndNewlines)
+    if bare.lowercased().hasPrefix("https://") { bare.removeFirst(8) }
+    if bare.lowercased().hasPrefix("www.") { bare.removeFirst(4) }
+    if bare.hasSuffix("/") { bare.removeLast() }
+    return bare
+  }
+
   private static let matchKinds: [(kind: String, label: String)] = [
-    ("domain", "This site and subdomains"),
+    ("domain", "Domain and subdomains"),
     ("host", "Only this host"),
     ("starts-with", "Pages starting with this URL"),
   ]

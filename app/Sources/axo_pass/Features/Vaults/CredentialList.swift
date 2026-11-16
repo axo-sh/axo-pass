@@ -41,7 +41,7 @@ struct CredentialList: View {
   // Local override of the row order while a move is being saved. Cleared once
   // the save finishes and the model has reloaded.
   @State var pendingEntries: [CredentialEntry]? = nil
-  // Section created by New Section with an unconfirmed title. Escape while
+  // Section created by Add Section with an unconfirmed title. Escape while
   // naming deletes it.
   @State private var unnamedSection: String? = nil
   // Section creation error. Shown separately since there is no row for it.
@@ -68,6 +68,13 @@ struct CredentialList: View {
   @State var outlineFocusRequest = 0
   // Entries the delete confirmation is open for.
   @State var pendingDelete: Set<CredentialEntry>? = nil
+  // Key of the login card credential a context menu is open for. Its row shows
+  // the menu target outline.
+  @State var cardMenuTarget: String? = nil
+  // Login field whose editor the login card shows.
+  @State var addingLoginField: LoginField? = nil
+  // Login card shows the new website field.
+  @State var addingWebsite = false
 
   var body: some View {
     CredentialOutline(
@@ -134,13 +141,11 @@ struct CredentialList: View {
         .disabled(!hasConcealed || !revealing.isEmpty)
 
         Menu {
-          Button("New Credential…") { showingNewCredentialSheet = true }
-          Button("Add File…") { addFile() }
-          Button("New Section") { newSection() }
+          addMenuButtons
         } label: {
           Label("Add", systemImage: "plus")
         }
-        .help("New credential, file, or section.")
+        .help("Add to this item.")
 
         Button {
           historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey)
@@ -282,9 +287,55 @@ struct CredentialList: View {
       Button("Copy Item Key", action: copyItemKey)
       Button("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) }
       Divider()
-      Button("New Credential…") { showingNewCredentialSheet = true }
-      Button("Add File…") { addFile() }
-      Button("New Section") { newSection() }
+      addMenuButtons
+    }
+  }
+
+  /// Add menu entry.
+  private struct AddAction {
+    let title: String
+    let action: () -> Void
+  }
+
+  /// Add menu entries in groups. A login lists its missing fields first, in
+  /// login card order.
+  private var addActionGroups: [[AddAction]] {
+    let general = [
+      AddAction(title: "Add Credential…") { showingNewCredentialSheet = true },
+      AddAction(title: "Add File…") { addFile() },
+      AddAction(title: "Add Section") { newSection() },
+    ]
+    guard item.isLogin else { return [general] }
+    var login: [AddAction] = []
+    if item.usernameCredential == nil {
+      login.append(AddAction(title: "Add Username") { addingLoginField = .username })
+    }
+    if item.passwordCredential == nil {
+      login.append(AddAction(title: "Add Password") { addingLoginField = .password })
+    }
+    if item.totpCredential == nil {
+      login.append(AddAction(title: "Add One-Time Code") { addingLoginField = .totp })
+    }
+    login.append(AddAction(title: "Add Website") { addingWebsite = true })
+    return [login, general]
+  }
+
+  /// Add menu entries as menu buttons.
+  @ViewBuilder
+  private var addMenuButtons: some View {
+    ForEach(Array(addActionGroups.enumerated()), id: \.offset) { index, group in
+      if index > 0 { Divider() }
+      ForEach(group, id: \.title) { entry in
+        Button(entry.title, action: entry.action)
+      }
+    }
+  }
+
+  /// Add menu entries as outline context menu items.
+  private var addMenuItems: [OutlineMenuItem] {
+    addActionGroups.enumerated().flatMap { index, group in
+      (index > 0 ? [OutlineMenuItem.divider] : [])
+        + group.map { entry in OutlineMenuItem.action(entry.title, entry.action) }
     }
   }
 
@@ -407,11 +458,9 @@ struct CredentialList: View {
       return [
         .action("Rename Item…") { showingRenameItemSheet = true },
         .action("Copy Item Key") { copyItemKey() },
+        .action("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) },
         .divider,
-        .action("New Credential…") { showingNewCredentialSheet = true },
-        .action("Add File…") { addFile() },
-        .action("New Section") { newSection() },
-      ]
+      ] + addMenuItems
     }
 
     var items: [OutlineMenuItem] = []
@@ -450,7 +499,7 @@ struct CredentialList: View {
       guard let cred = item.credentials.first(where: { $0.key == key }) else { return [] }
       var items: [OutlineMenuItem] = [
         .action("Rename") { renaming = .credential(key, .title) },
-        .action("Change ID") { renaming = .credential(key, .key) },
+        .action("Change Key") { renaming = .credential(key, .key) },
         .divider,
       ]
       if cred.kind.kind == "file" {

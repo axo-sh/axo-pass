@@ -16,7 +16,7 @@ struct NewCredentialSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("New Credential").font(.headline)
+      Text("Add Credential").font(.headline)
       Form {
         LabeledContent("Title") {
           TextField("", text: $title)
@@ -47,7 +47,8 @@ struct NewCredentialSheet: View {
       HStack {
         Spacer()
         Button("Cancel") { dismiss() }
-        Button("Create") {
+          .keyboardShortcut(.cancelAction)
+        Button("Add") {
           Task {
             isSubmitting = true
             errorMessage = nil

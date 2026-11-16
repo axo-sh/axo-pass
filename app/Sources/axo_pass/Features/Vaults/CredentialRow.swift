@@ -91,7 +91,22 @@ struct CredentialRow: View {
   /// Copied by the Copy button or a copy shortcut.
   private var copied: Bool { justCopied || showsCopied }
 
+  /// A login card row has its own context menu over the whole row, padding
+  /// included, so the menu area matches the selection highlight and menu
+  /// target outline.
+  @ViewBuilder
   var body: some View {
+    if fieldLabel != nil {
+      content
+        .padding(.vertical, 6)
+        .contentShape(.rect)
+        .contextMenu { cardMenu }
+    } else {
+      content
+    }
+  }
+
+  private var content: some View {
     VStack(alignment: .leading, spacing: 8) {
       if isPasskey {
         passkeyView
@@ -135,7 +150,7 @@ struct CredentialRow: View {
       Button("Delete…", role: .destructive, action: onDelete)
     } else {
       Button("Rename") { onStartRename(.title) }
-      Button("Change ID") { onStartRename(.key) }
+      Button("Change Key") { onStartRename(.key) }
       Divider()
       Button("History…", action: onShowPreviousValues)
       Divider()
@@ -155,10 +170,10 @@ struct CredentialRow: View {
     case "passkey", "file", "unknown":
       EmptyView()
     case "totp":
-      roleButton("totp", assign: "Use for one-time code", clear: "Stop using for one-time code")
+      roleButton("totp", assign: "Use for One-Time Code", clear: "Stop Using for One-Time Code")
     default:
-      roleButton("username", assign: "Use as username", clear: "Stop using as username")
-      roleButton("password", assign: "Use as password", clear: "Stop using as password")
+      roleButton("username", assign: "Use as Username", clear: "Stop Using as Username")
+      roleButton("password", assign: "Use as Password", clear: "Stop Using as Password")
     }
   }
 
@@ -203,6 +218,7 @@ struct CredentialRow: View {
         if quickEditing {
           Button("Cancel") { cancelQuickEdit() }
             .controlSize(.small)
+            .keyboardShortcut(.cancelAction)
           Button("Save") { commitQuickEdit() }
             .controlSize(.small)
             .keyboardShortcut(.defaultAction)
@@ -693,6 +709,7 @@ struct CredentialRow: View {
           quickEditor
           HStack(spacing: 4) {
             Button("Cancel") { cancelQuickEdit() }
+              .keyboardShortcut(.cancelAction)
             Button("Save") { commitQuickEdit() }
               .keyboardShortcut(.defaultAction)
               .disabled(quickDraft.isEmpty || quickDraft == quickOriginal)
@@ -712,15 +729,13 @@ struct CredentialRow: View {
         fieldRename(renaming)
       }
     }
-    .contentShape(.rect)
-    .contextMenu { cardMenu }
   }
 
   /// Rename line of a login card row. The card shows a field name in place of
   /// the title and id, so the one being renamed is shown here.
   private func fieldRename(_ field: RenameField) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
-      LoginFieldLabel(field == .title ? "Title" : "ID")
+      LoginFieldLabel(field == .title ? "Title" : "Key")
       switch field {
       case .title:
         InlineRenameField(
@@ -743,17 +758,31 @@ struct CredentialRow: View {
   private var fieldValue: some View {
     let concealed = cred.kind.concealed
     let shown = revealedText ?? (concealed ? "••••••••" : " ")
-    return Text(shown)
+    let text = Text(shown)
       .font(.system(.body, design: .monospaced))
       .foregroundStyle(revealedText == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
-      .textSelection(.enabled)
       .lineLimit(1)
       .truncationMode(.tail)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .task(id: "\(vaultKey)/\(itemKey)/\(cred.key)") {
-        // A plain value shows without a click; a concealed one waits for one.
-        if !concealed, secret == nil, !isRevealing { onReveal() }
+      .contentShape(.rect)
+    return Group {
+      if concealed {
+        // Clicking the value toggles it, as in the credential box.
+        Button {
+          secret == nil ? onReveal() : onHide()
+        } label: {
+          text
+        }
+        .buttonStyle(.plain)
+      } else {
+        text
       }
+    }
+    .textSelection(.enabled)
+    .task(id: "\(vaultKey)/\(itemKey)/\(cred.key)") {
+      // A plain value shows without a click; a concealed one waits for one.
+      if !concealed, secret == nil, !isRevealing { onReveal() }
+    }
   }
 
   /// The actions stay in the layout while hidden, so the row keeps the same
@@ -906,7 +935,7 @@ private struct PasskeyNotice<Actions: View>: View {
 }
 
 /// Width of the field name column in the login card.
-let loginFieldLabelWidth: CGFloat = 84
+let loginFieldLabelWidth: CGFloat = 104
 
 /// The field name column of a login card row.
 struct LoginFieldLabel: View {
