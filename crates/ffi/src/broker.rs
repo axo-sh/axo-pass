@@ -223,6 +223,8 @@ pub enum PassphraseKind {
     Gpg,
     Ssh,
     Age,
+    KeychainList,
+    AgeList,
 }
 
 impl From<app_broker::PassphraseKind> for PassphraseKind {
@@ -231,6 +233,8 @@ impl From<app_broker::PassphraseKind> for PassphraseKind {
             app_broker::PassphraseKind::Gpg => Self::Gpg,
             app_broker::PassphraseKind::Ssh => Self::Ssh,
             app_broker::PassphraseKind::Age => Self::Age,
+            app_broker::PassphraseKind::KeychainList => Self::KeychainList,
+            app_broker::PassphraseKind::AgeList => Self::AgeList,
         }
     }
 }

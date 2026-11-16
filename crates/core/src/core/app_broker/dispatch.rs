@@ -771,9 +771,9 @@ pub(super) async fn serve_request(
                 };
                 vault::record_passkey_report(&*authorizers.vault, report, actor).await
             },
-            WireRequest::ListAgeKeys { .. } => {
+            WireRequest::ListAgeKeys { caller } => {
                 log::debug!("App broker request: list age keys");
-                age::list_keys().await
+                age::list_keys(&*authorizers.passphrase, caller, actor, &in_flight).await
             },
             WireRequest::GetAgeIdentity { key_id, caller } => {
                 log::debug!("App broker request: get age identity {key_id}");
@@ -787,9 +787,16 @@ pub(super) async fn serve_request(
                 log::debug!("App broker request: delete age key {key_id}");
                 age::delete_key(key_id, actor).await
             },
-            WireRequest::ListKeychainPasswords { .. } => {
+            WireRequest::ListKeychainPasswords { caller } => {
                 log::debug!("App broker request: list keychain passwords");
-                keychain::list_passwords(&*authorizers.keychain).await
+                keychain::list_passwords(
+                    authorizers.keychain.clone(),
+                    &*authorizers.passphrase,
+                    caller,
+                    actor,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::DeleteManagedKey { label, .. } => {
                 log::debug!("App broker request: delete managed key {label}");

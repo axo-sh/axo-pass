@@ -137,9 +137,16 @@ impl PasswordEntry {
     }
 
     pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {
+        Self::list_on(AuthContext::SharedThreadLocal)
+    }
+
+    /// List the entries, authenticating on a specific [`AuthContext`]. The app
+    /// broker passes [`AuthContext::Foreign`] if the app is locked, so the app
+    /// that owns the context draws the prompt.
+    pub fn list_on(auth_context: AuthContext) -> Result<Vec<PasswordEntry>, KeychainError> {
         // needs authentication: without it, we don't get all items
         run_on_auth_thread(
-            AuthContext::SharedThreadLocal,
+            auth_context,
             AuthMethod::AccessControl {
                 access_control: AccessControl::GenericPassword,
                 operation: LAAccessControlOperation::UseItem,

@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::support::{STUB_PASSPHRASE, TestBroker, accepting_policy};
+use crate::core::app_broker::PassphraseKind;
 use crate::core::app_broker::wire::{WireResponse, b64_decode_raw};
 
 /// A confirm-on-use request reaches the sign authorizer, worded for a key
@@ -144,6 +145,37 @@ async fn routes_keychain_password_listing() {
     };
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key_id, "stub");
+    // The app is unlocked, so the listing raises no prompt.
+    assert!(
+        broker
+            .authorizer
+            .passphrase_kinds
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// If the app is locked, a keychain password listing asks the app for a
+/// prompt instead of reading on the shared context.
+#[tokio::test(flavor = "multi_thread")]
+async fn locked_keychain_listing_prompts() {
+    let broker = TestBroker::start(accepting_policy()).await;
+    broker.authorizer.locked.store(true, Ordering::SeqCst);
+
+    let response = broker.request_parsed(r#"{"request":"list_keychain_passwords","caller":"ap"}"#);
+
+    // The stub declines to hand back a context, so the listing fails with its
+    // message.
+    assert!(
+        matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
+        "unexpected response to a locked keychain listing"
+    );
+    assert_eq!(
+        *broker.authorizer.passphrase_kinds.lock().unwrap(),
+        vec![PassphraseKind::KeychainList]
+    );
+    assert_eq!(broker.authorizer.ended.load(Ordering::SeqCst), 1);
 }
 
 /// Deleting a managed key that does not exist answers `Failed` rather than

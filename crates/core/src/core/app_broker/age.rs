@@ -7,9 +7,9 @@
 //! therefore runs in the app. The age encryption itself stays in `ap`, which
 //! hands back the resolved identity, the same split as `ap ssh-askpass`.
 //!
-//! Listing, keygen and delete raise no prompt. Reading an identity's secret is
-//! gated on a biometric prompt drawn on a context the app owns, the same as
-//! [`super::gpg::get_passphrase`].
+//! Keygen and delete raise no prompt. Listing raises one only if the app is
+//! locked. Reading an identity's secret is gated on a biometric prompt drawn on
+//! a context the app owns, the same as [`super::gpg::get_passphrase`].
 
 use anyhow::anyhow;
 use secrecy::{ExposeSecret, SecretString};
@@ -17,10 +17,11 @@ use serde::{Deserialize, Serialize};
 
 use super::client::send_request;
 use super::in_flight::InFlightRequest;
+use super::keychain::read_or_prompt;
 use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome};
 use crate::age::errors::AgeError;
-use crate::age::key_overview::list_age_keys;
+use crate::age::key_overview::list_age_keys_on;
 use crate::age::recipients::{delete_recipient, generate_age_key};
 use crate::audit;
 use crate::core::auth::AuthContext;
@@ -44,6 +45,7 @@ pub fn request_age_keys(caller: Option<&str>) -> Result<Vec<BrokerAgeKey>, Broke
     };
     match send_request(&request)? {
         WireResponse::AgeKeys { keys } => Ok(keys),
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
         WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
         _ => Err(BrokerError::Failed(
             "Unexpected response to age key listing".to_string(),
@@ -112,24 +114,35 @@ pub fn request_delete_age_key(key_id: &str, caller: Option<&str>) -> Result<(), 
 
 // Server (the app).
 
-pub(super) async fn list_keys() -> WireResponse {
-    tokio::task::spawn_blocking(list_age_keys)
-        .await
-        .unwrap_or_else(|e| Err(AgeError::Broker(e.to_string())))
-        .map_or_else(
-            |e| WireResponse::Failed {
-                message: e.to_string(),
-            },
-            |keys| WireResponse::AgeKeys {
-                keys: keys
-                    .into_iter()
-                    .map(|k| BrokerAgeKey {
-                        name: k.name,
-                        recipient: k.recipient,
-                    })
-                    .collect(),
-            },
-        )
+/// List the age keys on the shared context, or behind a prompt if the app is
+/// locked ([`read_or_prompt`]).
+pub(super) async fn list_keys(
+    authorizer: &dyn PassphraseAuthorizer,
+    caller: Option<String>,
+    peer: audit::Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    let prompt = PassphrasePrompt {
+        kind: PassphraseKind::AgeList,
+        key_id: None,
+        description: None,
+        prompt: None,
+        error_message: None,
+        caller,
+        caller_chain: peer.chain_detail.clone(),
+    };
+    match read_or_prompt(authorizer, prompt, peer, in_flight, list_age_keys_on).await {
+        Ok(keys) => WireResponse::AgeKeys {
+            keys: keys
+                .into_iter()
+                .map(|k| BrokerAgeKey {
+                    name: k.name,
+                    recipient: k.recipient,
+                })
+                .collect(),
+        },
+        Err(response) => response,
+    }
 }
 
 pub(super) async fn create_key(key_id: String, actor: audit::Actor) -> WireResponse {

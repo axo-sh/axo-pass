@@ -8,10 +8,16 @@ import SwiftUI
 ///
 /// If the passphrase is saved in the keychain, shows the biometric prompt (same as SSH signing).
 /// Otherwise, or if gpg just rejected the saved passphrase, shows a text field for the passphrase.
+/// Also shows the biometric prompt for the `ap keychain` and `ap age` listings if the app is locked.
 @MainActor
 final class PassphrasePromptModel {
   private let grants = AuthorizationGrants(label: "PassphrasePrompt", controlSize: .small)
   private var showTask: Task<Void, Never>?
+
+  /// Context of a listing prompt, which `ap keychain` and `ap age` ask for if
+  /// the app is locked. A listing names no key, so it takes no grant and is
+  /// never reused.
+  private var listingContext: LAContext?
 
   /// Resumed when the user answers the text field, the confirmation, or the
   /// message. Only one prompt is ever on screen: the broker serves requests
@@ -40,7 +46,20 @@ final class PassphrasePromptModel {
   /// prompt on screen.
   func begin(prompt: PassphrasePrompt, peer: RequestActor) -> UInt64 {
     typedPassphraseRequested = false
-    let grant = grants.begin(Self.grantKey(prompt), peer: peer)
+    let context: LAContext
+    let view: LAAuthenticationView
+    if let key = Self.grantKey(prompt) {
+      let grant = grants.begin(key, peer: peer)
+      context = grant.context
+      view = grant.view
+    } else {
+      listingContext?.invalidate()
+      context = LAContext()
+      // Creating the view suppresses the system dialog for this context, so it
+      // has to exist before the broker evaluates.
+      view = LAAuthenticationView(context: context, controlSize: .small)
+      listingContext = context
+    }
 
     // A context that is still authenticated reads the keychain with no prompt
     // at all. Delay the panel briefly so that case does not flash a window.
@@ -48,10 +67,10 @@ final class PassphrasePromptModel {
     showTask = Task { [weak self] in
       try? await Task.sleep(for: .milliseconds(250))
       guard !Task.isCancelled else { return }
-      self?.showUnlockPanel(prompt: prompt, view: grant.view)
+      self?.showUnlockPanel(prompt: prompt, view: view)
     }
 
-    return contextPointer(grant.context)
+    return contextPointer(context)
   }
 
   /// The read finished, successfully or not.
@@ -59,7 +78,17 @@ final class PassphrasePromptModel {
     showTask?.cancel()
     showTask = nil
     panel.hide()
-    grants.end(Self.grantKey(prompt), outcome: outcome)
+    if let key = Self.grantKey(prompt) {
+      grants.end(key, outcome: outcome)
+    } else {
+      endListing()
+    }
+  }
+
+  /// Invalidate the listing context, so it cannot be evaluated again.
+  private func endListing() {
+    listingContext?.invalidate()
+    listingContext = nil
   }
 
   /// Ask the user to type the passphrase. Nil means they dismissed the prompt.
@@ -119,7 +148,11 @@ final class PassphrasePromptModel {
   /// context fails the read in flight, which the broker reports as a
   /// cancellation.
   func cancelUnlock(prompt: PassphrasePrompt) {
-    grants.forget(Self.grantKey(prompt))
+    if let key = Self.grantKey(prompt) {
+      grants.forget(key)
+    } else {
+      endListing()
+    }
   }
 
   /// Dismiss the biometric prompt and ask the broker for the text field
@@ -139,6 +172,7 @@ final class PassphrasePromptModel {
   /// Drop every passphrase authorization, so the next request prompts again.
   func forgetAll() {
     grants.forgetAll()
+    endListing()
   }
 
   // MARK: - Panels
@@ -148,7 +182,14 @@ final class PassphrasePromptModel {
       prompt: prompt,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
-      onCancel: { [weak self] in self?.requestTypedPassphrase(prompt: prompt) }
+      onCancel: { [weak self] in
+        // A listing has no passphrase to type, so Cancel ends the request.
+        if prompt.kind.isListing {
+          self?.cancelUnlock(prompt: prompt)
+        } else {
+          self?.requestTypedPassphrase(prompt: prompt)
+        }
+      }
     )
     panel.show(content)
   }
@@ -190,22 +231,33 @@ final class PassphrasePromptModel {
     pending.continuation.resume(returning: answer)
   }
 
-  /// One grant per key and requesting process. A prompt with no key grip never
-  /// reaches `begin`, since there is nothing in the keychain to unlock.
-  private static func grantKey(_ prompt: PassphrasePrompt) -> GrantKey {
-    let kind: GrantSubject.Kind =
-      switch prompt.kind {
-      case .ssh: .ssh
-      case .gpg: .gpg
-      case .age: .age
-      }
+  /// One grant per key and requesting process. Nil for a listing, which names
+  /// no key. Any other prompt with no key grip never reaches `begin`, since
+  /// there is nothing in the keychain to unlock.
+  private static func grantKey(_ prompt: PassphrasePrompt) -> GrantKey? {
+    let kind: GrantSubject.Kind
+    switch prompt.kind {
+    case .ssh: kind = .ssh
+    case .gpg: kind = .gpg
+    case .age: kind = .age
+    case .keychainList, .ageList: return nil
+    }
     let id = prompt.keyId ?? ""
     let subject = GrantSubject(kind: kind, id: id, label: nil)
     return GrantKey(subject: subject, caller: prompt.caller, callerIdentity: prompt.callerIdentity)
   }
 }
 
-/// The inline biometric prompt for a passphrase already in the keychain.
+extension PassphraseKind {
+  /// Whether this is a listing for `ap keychain` or `ap age`, which names no
+  /// key and has no passphrase to type.
+  var isListing: Bool {
+    self == .keychainList || self == .ageList
+  }
+}
+
+/// The inline biometric prompt for a passphrase already in the keychain, or for
+/// a listing if the app is locked.
 private struct PassphraseUnlockView: View {
   let prompt: PassphrasePrompt
   let icon: AuthenticationIcon
@@ -214,16 +266,18 @@ private struct PassphraseUnlockView: View {
   let onCancel: () -> Void
 
   private var title: [HeadlinePart] {
-    let key =
+    let (action, standalone) =
       switch prompt.kind {
-      case .ssh: "your SSH key"
-      case .gpg: "your OpenPGP key"
-      case .age: "your age key"
+      case .ssh: ("unlock your SSH key", "Unlock your SSH key")
+      case .gpg: ("unlock your OpenPGP key", "Unlock your OpenPGP key")
+      case .age: ("unlock your age key", "Unlock your age key")
+      case .keychainList: ("list your saved passwords", "List your saved passwords")
+      case .ageList: ("list your age keys", "List your age keys")
       }
     if let who = PromptCaller.appName(caller: prompt.caller, chain: prompt.callerChain) {
-      return [.bold(who), .plain(" wants to unlock \(key)")]
+      return [.bold(who), .plain(" wants to \(action)")]
     }
-    return [.plain("Unlock \(key)")]
+    return [.plain(standalone)]
   }
 
   var body: some View {
@@ -237,7 +291,10 @@ private struct PassphraseUnlockView: View {
         CallerChainView(
           chain: prompt.callerChain,
           summary: PromptCaller.requesterName(chain: prompt.callerChain))
-        PinentryTranscript(prompt: prompt)
+        // A listing carries no prompt text to show.
+        if !prompt.kind.isListing {
+          PinentryTranscript(prompt: prompt)
+        }
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)
@@ -341,7 +398,7 @@ private struct KeyInfoBox: View {
     switch prompt.kind {
     case .ssh: "Fingerprint"
     case .gpg: "Key grip"
-    case .age: "Key"
+    case .age, .keychainList, .ageList: "Key"
     }
   }
 
@@ -350,6 +407,8 @@ private struct KeyInfoBox: View {
     case .ssh: "SSH key"
     case .gpg: "OpenPGP key"
     case .age: "age key"
+    case .keychainList: "saved passwords"
+    case .ageList: "age keys"
     }
   }
 
@@ -375,7 +434,7 @@ private struct KeyInfoBox: View {
         return "ID " + match.1
       }
       return keyId.map { String($0.prefix(8)) }
-    case .age:
+    case .age, .keychainList, .ageList:
       return keyId.map { String($0.prefix(8)) }
     }
   }
@@ -463,8 +522,10 @@ private struct PinentryTranscript: View {
         line(label: "#", text: "gpg", labelColor: .secondary, textColor: .secondary)
       case .ssh:
         line(label: "#", text: "ssh", labelColor: .secondary, textColor: .secondary)
-      case .age:
+      case .age, .ageList:
         line(label: "#", text: "age", labelColor: .secondary, textColor: .secondary)
+      case .keychainList:
+        line(label: "#", text: "keychain", labelColor: .secondary, textColor: .secondary)
       }
 
       if let errorMessage = prompt.errorMessage, !errorMessage.isEmpty {

@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,11 +13,12 @@ use crate::core::app_broker::server::serve_on;
 use crate::core::app_broker::wire::WireResponse;
 use crate::core::app_broker::{
     Authorizers, BrokerPasswordEntry, CollectedPassphrase, ConfirmPrompt, KeychainLister,
-    LoginIndex, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome, SignAuthorizer, SignPrompt,
-    vault,
+    LoginIndex, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt, PromptOutcome,
+    SignAuthorizer, SignPrompt, vault,
 };
-use crate::core::auth::ForeignContext;
+use crate::core::auth::{AuthContext, ForeignContext};
 use crate::core::provenance::PeerPolicy;
+use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntryType;
 use crate::ssh::app_grants::GrantApp;
 
@@ -31,6 +32,11 @@ pub(super) const STUB_PASSPHRASE: &str = "hunter2";
 pub(in crate::core::app_broker) struct StubAuthorizer {
     pub(super) prompts: Mutex<Vec<SignPrompt>>,
     pub(super) passphrase_prompts: Mutex<Vec<PassphrasePrompt>>,
+    /// Kinds of the passphrase prompts passed to `begin`.
+    pub(super) passphrase_kinds: Mutex<Vec<PassphraseKind>>,
+    /// Whether the keychain listing fails on the shared context, as it does
+    /// in a locked app.
+    pub(super) locked: AtomicBool,
     pub(super) vault_prompts: Mutex<Vec<vault::VaultAccessPrompt>>,
     pub(super) peers: Mutex<Vec<audit::Actor>>,
     pub(super) ended: AtomicUsize,
@@ -55,10 +61,16 @@ impl StubAuthorizer {
 }
 
 /// Answers with a fixed entry instead of reading the login keychain, which
-/// would raise an authorization prompt and stall the suite.
-#[async_trait]
+/// would raise an authorization prompt and stall the suite. If `locked` is
+/// set, the shared context fails as it does in a locked app.
 impl KeychainLister for StubAuthorizer {
-    async fn list_passwords(&self) -> Result<Vec<BrokerPasswordEntry>, String> {
+    fn list_passwords(
+        &self,
+        context: AuthContext,
+    ) -> Result<Vec<BrokerPasswordEntry>, KeychainError> {
+        if self.locked.load(Ordering::SeqCst) && matches!(context, AuthContext::SharedThreadLocal) {
+            return Err(KeychainError::AuthenticationExpired);
+        }
         Ok(vec![BrokerPasswordEntry {
             password_type: PasswordEntryType::SSHKey,
             key_id: "stub".to_string(),
@@ -89,9 +101,10 @@ impl SignAuthorizer for StubAuthorizer {
 impl PassphraseAuthorizer for StubAuthorizer {
     async fn begin(
         &self,
-        _prompt: PassphrasePrompt,
+        prompt: PassphrasePrompt,
         peer: audit::Actor,
     ) -> Result<ForeignContext, String> {
+        self.passphrase_kinds.lock().unwrap().push(prompt.kind);
         self.peers.lock().unwrap().push(peer);
         Err("stub authorizer".to_string())
     }

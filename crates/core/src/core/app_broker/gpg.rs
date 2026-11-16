@@ -24,6 +24,12 @@ pub enum PassphraseKind {
     Gpg,
     Ssh,
     Age,
+    /// Listing of the saved passwords for `ap keychain`, if the app is locked.
+    /// Names no key.
+    KeychainList,
+    /// Listing of the age keys for `ap age`, if the app is locked. Names no
+    /// key.
+    AgeList,
 }
 
 /// What the app needs to describe a passphrase prompt, from either gpg-agent
