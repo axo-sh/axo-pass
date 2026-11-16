@@ -308,7 +308,7 @@ private struct SigningPromptView: View {
       if let grantCandidate {
         VStack(alignment: .leading, spacing: 6) {
           Toggle(
-            "Allow \(grantCandidate.displayName) to use this SSH key without confirmation",
+            "Don't ask again for \(grantCandidate.displayName) using this SSH key.",
             isOn: $grantChoice.allow
           )
           .toggleStyle(.checkbox)

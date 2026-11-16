@@ -578,7 +578,7 @@ private struct ListingGrantCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Toggle("Allow logins to be listed", isOn: $choice.allow)
+      Toggle("Don't ask again for \(offer.browser).", isOn: $choice.allow)
         .toggleStyle(.checkbox)
 
       if choice.allow {
@@ -591,9 +591,13 @@ private struct ListingGrantCard: View {
           }
           .pickerStyle(.menu)
           .fixedSize()
-          Text("Requires Axo Pass to be unlocked. Revoke this in Settings.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          Text(
+            "While Axo Pass is unlocked, allow \(offer.browser) to list all autofill logins. "
+              + "Using a login will still prompt for permission. "
+              + "You can view and revoke this grant in Settings."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
         .padding(.leading, 20)
       }
@@ -618,7 +622,7 @@ private struct FillGrantCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Toggle("Allow autofill of this login on \(offer.host)", isOn: $choice.allow)
+      Toggle("Don't ask again for autofill of this login on \(offer.host).", isOn: $choice.allow)
         .toggleStyle(.checkbox)
 
       if choice.allow {
@@ -631,9 +635,13 @@ private struct FillGrantCard: View {
           }
           .pickerStyle(.menu)
           .fixedSize()
-          Text("Requires Axo Pass to be unlocked. Each autofill shows a notification.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Allowed without a prompt, while Axo Pass is unlocked:")
+            Text("• Filling this login on \(offer.host) in \(offer.browser).")
+            Text("Each autofill shows a notification. Revoke this in Settings.")
+          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
         .padding(.leading, 20)
       }
