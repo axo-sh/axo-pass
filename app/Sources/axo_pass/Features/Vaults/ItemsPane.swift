@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// dragged in from elsewhere does not decode into a drop.
 struct ItemDrag: Codable, Transferable {
   let vaultKey: String
-  let itemKey: String
+  let itemKeys: [String]
 
   static var transferRepresentation: some TransferRepresentation {
     CodableRepresentation(contentType: .axoItemDrag)
@@ -48,15 +48,44 @@ struct ItemsPane: View {
     return model.folders(for: key)
   }
 
+  /// List selection. One row selects through `selectedItemRef` so the detail
+  /// pane follows. Two or more rows are held in `multiSelection` and the detail
+  /// pane is empty.
+  private var listSelection: Binding<Set<ItemRef>> {
+    Binding(
+      get: {
+        if let ref = model.selectedItemRef { return [ref] }
+        let visible = Set(model.displayItems.map(\.id))
+        return model.multiSelection.intersection(visible)
+      },
+      set: { selection in
+        if selection.count > 1 {
+          model.selectedItemRef = nil
+          model.multiSelection = selection
+        } else {
+          model.multiSelection = []
+          model.selectedItemRef = selection.first
+        }
+      })
+  }
+
+  /// Items an action on `display` applies to. All selected items if `display`
+  /// is part of a multi-row selection, otherwise `display` alone.
+  private func actionTargets(_ display: DisplayItem) -> [DisplayItem] {
+    guard model.multiSelection.contains(display.id) else { return [display] }
+    return model.displayItems.filter {
+      $0.vaultKey == display.vaultKey && model.multiSelection.contains($0.id)
+    }
+  }
+
   var body: some View {
-    @Bindable var model = model
     Group {
       if model.isLoadingSelectedItems {
         DelayedProgressView()
       } else if (model.selectedVault != nil || model.isAllVaults)
         && !(model.displayItems.isEmpty && folders.isEmpty)
       {
-        List(selection: $model.selectedItemRef) {
+        List(selection: listSelection) {
           if folders.isEmpty {
             itemRows(model.displayItems)
           } else {
@@ -167,7 +196,11 @@ struct ItemsPane: View {
     ItemRow(item: display.item)
       .tag(display.id)
       .padding(6)
-      .draggable(ItemDrag(vaultKey: display.vaultKey, itemKey: display.item.key))
+      .listRowSeparator(.hidden)
+      .draggable(
+        ItemDrag(
+          vaultKey: display.vaultKey, itemKeys: actionTargets(display).map(\.item.key))
+      )
       .contextMenu { itemMenu(display) }
   }
 
@@ -191,6 +224,7 @@ struct ItemsPane: View {
       }
     }
     .padding(6)
+    .listRowSeparator(.hidden)
     .contextMenu { folderMenu(folder) }
     .modifier(dropModifier(targetID: folder.id, folderId: folder.id))
 
@@ -225,8 +259,8 @@ struct ItemsPane: View {
     ) { drag in
       guard drag.vaultKey == model.selectedVaultKey else { return false }
       Task {
-        try? await model.moveItem(
-          vaultKey: drag.vaultKey, itemKey: drag.itemKey, folderId: folderId)
+        try? await model.moveItems(
+          vaultKey: drag.vaultKey, itemKeys: drag.itemKeys, folderId: folderId)
       }
       return true
     }
@@ -234,31 +268,34 @@ struct ItemsPane: View {
 
   @ViewBuilder
   private func itemMenu(_ display: DisplayItem) -> some View {
+    let targets = actionTargets(display)
     let vaultFolders = model.folders(for: display.vaultKey)
     if !vaultFolders.isEmpty {
       Menu("Move to") {
         ForEach(vaultFolders, id: \.id) { folder in
-          Button(folder.title) { move(display, to: folder.id) }
-            .disabled(display.item.folderId == folder.id)
+          Button(folder.title) { move(targets, to: folder.id) }
+            .disabled(targets.allSatisfy { $0.item.folderId == folder.id })
         }
         Divider()
-        Button("No Folder") { move(display, to: nil) }
-          .disabled(display.item.folderId == nil)
+        Button("No Folder") { move(targets, to: nil) }
+          .disabled(targets.allSatisfy { $0.item.folderId == nil })
       }
     }
-    Button("Rename…") { renamingItem = display }
-    Button("History…") {
-      historyTarget = ItemHistoryTarget(display.item, vaultKey: display.vaultKey)
-    }
-    let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
-    if !otherVaults.isEmpty {
-      Menu("Move to Vault") {
-        ForEach(otherVaults, id: \.key) { vault in
-          Button(vault.name ?? vault.key) { moveToVault(display, destVaultKey: vault.key) }
+    if targets.count == 1 {
+      Button("Rename…") { renamingItem = display }
+      Button("History…") {
+        historyTarget = ItemHistoryTarget(display.item, vaultKey: display.vaultKey)
+      }
+      let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
+      if !otherVaults.isEmpty {
+        Menu("Move to Vault") {
+          ForEach(otherVaults, id: \.key) { vault in
+            Button(vault.name ?? vault.key) { moveToVault(display, destVaultKey: vault.key) }
+          }
         }
       }
+      Button("Delete…", role: .destructive) { deletingItem = display }
     }
-    Button("Delete…", role: .destructive) { deletingItem = display }
   }
 
   @ViewBuilder
@@ -307,10 +344,11 @@ struct ItemsPane: View {
     }
   }
 
-  private func move(_ display: DisplayItem, to folderId: String?) {
+  private func move(_ displays: [DisplayItem], to folderId: String?) {
+    guard let vaultKey = displays.first?.vaultKey else { return }
     Task {
-      try? await model.moveItem(
-        vaultKey: display.vaultKey, itemKey: display.item.key, folderId: folderId)
+      try? await model.moveItems(
+        vaultKey: vaultKey, itemKeys: displays.map(\.item.key), folderId: folderId)
     }
   }
 

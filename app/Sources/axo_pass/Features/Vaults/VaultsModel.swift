@@ -194,6 +194,9 @@ final class VaultsModel {
   // Debounces the AutoFill re-index; see `scheduleAutofillRefresh`.
   private var autofillRefreshTask: Task<Void, Never>? = nil
   var selectedItemRef: ItemRef? = nil
+  /// Rows selected together in the item list. Only used while two or more rows
+  /// are selected and `selectedItemRef` is nil.
+  var multiSelection: Set<ItemRef> = []
 
   // Surfaces failures from vault/item/credential mutations (create, rename,
   // delete) to whichever pane triggered them.
@@ -1649,6 +1652,16 @@ final class VaultsModel {
   func moveItem(vaultKey: String, itemKey: String, folderId: String?) async throws {
     try await mutate(vaultKey) {
       try await core.moveItem(vaultKey: vaultKey, itemKey: itemKey, folderId: folderId)
+    }
+  }
+
+  /// Move items into a folder in one vault write. A nil `folderId` removes them
+  /// from their folders.
+  func moveItems(vaultKey: String, itemKeys: [String], folderId: String?) async throws {
+    try await mutate(vaultKey) {
+      for itemKey in itemKeys {
+        try await core.moveItem(vaultKey: vaultKey, itemKey: itemKey, folderId: folderId)
+      }
     }
   }
 
