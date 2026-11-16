@@ -453,7 +453,7 @@ final class VaultUnlockPromptModel {
     case .listItems: return [.plain("list a vault")]
     case .listLogins(let page, let all):
       return all
-        ? [.plain("list logins, starting with those for "), .bold(page.host)]
+        ? [.plain("list all logins")]
         : [.plain("find logins for "), .bold(page.host)]
     case .fillLogin(let page, _, _, _):
       return [.plain("fill a login on "), .bold(page.host)] + insideTopHost(page)

@@ -15,11 +15,13 @@ enum PromptCaller {
   }
 
   /// Returns the executable file name of the innermost process, such as
-  /// `ssh-keygen`. Uses the command when the executable path is unknown.
+  /// `ssh-keygen`. Uses the command when the executable path is unknown. The
+  /// browser native messaging host is shown as the browser extension.
   static func requesterName(chain: [ProcessNode]) -> String {
     guard let node = chain.first else { return "Unknown process" }
     let name =
       node.executable.map { URL(fileURLWithPath: $0).lastPathComponent } ?? node.command
+    if name == "AxoPassBrowserHost" { return "Axo Pass browser extension" }
     return name.isEmpty ? "Unknown process" : name
   }
 
