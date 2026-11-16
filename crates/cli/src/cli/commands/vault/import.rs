@@ -24,14 +24,18 @@ pub struct VaultImportCommand {
     import_path: PathBuf,
 
     /// Import only vaults matching this selector (its key, name, or id).
-    /// Repeatable. Imports every vault if not given. For a 1Password export,
-    /// the key of the existing vault to import into.
+    /// Repeatable. Imports every vault if not given.
     #[arg(long = "vault")]
     select: Vec<String>,
 
     /// 1Password export only: name of the new vault. Defaults to "1Password".
-    #[arg(long, conflicts_with = "select")]
+    #[arg(long, conflicts_with = "into")]
     name: Option<String>,
+
+    /// 1Password export only: key of an existing vault to import into. Creates
+    /// no vault.
+    #[arg(long)]
+    into: Option<String>,
 
     /// 1Password export only: import items that 1Password marked as trashed.
     #[arg(long)]
@@ -64,33 +68,31 @@ impl VaultImportCommand {
     /// a vault bundle. Options of the other kind of import are an error.
     pub(super) fn one_password(&self) -> Result<Option<OnePasswordImport>, String> {
         if !is_1pif(&self.import_path) {
-            if self.name.is_some() || self.include_trashed || self.dry_run {
+            if self.name.is_some() || self.into.is_some() || self.include_trashed || self.dry_run {
                 return Err(
-                    "--name, --include-trashed, and --dry-run apply only to a 1Password .1pif \
-                     export"
+                    "--name, --into, --include-trashed, and --dry-run apply only to a 1Password \
+                     .1pif export"
                         .to_string(),
                 );
             }
             return Ok(None);
         }
-        if !self.key_overrides.is_empty()
+        if !self.select.is_empty()
+            || !self.key_overrides.is_empty()
             || self.vault_key.is_some()
             || self.existing.is_some()
             || self.import_encryption.is_set()
         {
             return Err(
-                "--key, a vault key, --existing, and the decryption options do not apply to a \
-                 1Password .1pif export"
+                "--vault, --key, a vault key, --existing, and the decryption options do not \
+                 apply to a 1Password .1pif export. Use --into to import into an existing vault."
                     .to_string(),
             );
-        }
-        if self.select.len() > 1 {
-            return Err("A 1Password import takes one --vault".to_string());
         }
         Ok(Some(OnePasswordImport {
             path: self.import_path.clone(),
             name: self.name.clone(),
-            vault: self.select.first().cloned(),
+            vault: self.into.clone(),
             include_trashed: self.include_trashed,
             dry_run: self.dry_run,
         }))

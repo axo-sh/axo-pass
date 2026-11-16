@@ -79,7 +79,7 @@ impl OnePasswordImport {
         Ok(())
     }
 
-    /// Vault that receives the items. A new vault unless `--vault` is given.
+    /// Vault that receives the items. A new vault unless `--into` is given.
     fn target(&self) -> WireImportTarget {
         match &self.vault {
             Some(vault_key) => WireImportTarget::Existing {
@@ -180,7 +180,7 @@ fn render_report(
         let _ = writeln!(out, "Created vault {vault_key}.");
         let _ = writeln!(
             out,
-            "A re-import needs --vault {vault_key}. Without --vault, each run creates another vault."
+            "A re-import needs --into {vault_key}. Without --into, each run creates another vault."
         );
     }
 
@@ -317,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn name_conflicts_with_vault() {
-        let err = parse(&["x.1pif", "--name", "A", "--vault", "b"]).unwrap_err();
+    fn name_conflicts_with_into() {
+        let err = parse(&["x.1pif", "--name", "A", "--into", "b"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
@@ -343,9 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn vault_selects_existing_target() {
+    fn into_selects_existing_target() {
         assert_eq!(
-            import(&["x.1pif", "--vault", "work"]).target(),
+            import(&["x.1pif", "--into", "work"]).target(),
             WireImportTarget::Existing {
                 vault_key: "work".to_string()
             }
@@ -353,8 +353,14 @@ mod tests {
     }
 
     #[test]
-    fn repeated_vault_refused() {
-        let cmd = parse(&["x.1pif", "--vault", "a", "--vault", "b"]).unwrap();
+    fn vault_selector_refused_for_1pif() {
+        let cmd = parse(&["x.1pif", "--vault", "a"]).unwrap();
+        assert!(cmd.one_password().is_err());
+    }
+
+    #[test]
+    fn into_refused_for_bundle() {
+        let cmd = parse(&["x.axo", "--into", "a"]).unwrap();
         assert!(cmd.one_password().is_err());
     }
 
@@ -400,7 +406,7 @@ mod tests {
         let text = render_report(&outcome, &sample_summary(), None);
 
         assert!(text.contains("Created vault vault-1password."));
-        assert!(text.contains("--vault vault-1password"));
+        assert!(text.contains("--into vault-1password"));
         assert!(text.contains("Added 3 items."));
         assert!(text.contains("Skipped 4 items that were already imported."));
         assert!(text.contains("Trashed items skipped: 5."));
