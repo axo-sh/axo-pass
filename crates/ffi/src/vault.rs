@@ -422,6 +422,13 @@ impl TryFrom<WebsiteInfo> for Website {
     }
 }
 
+/// What a website matches, for display. See [`autofill::match_scope`]. `None`
+/// if the URL or match kind is invalid.
+#[uniffi::export]
+pub fn website_match_scope(website: WebsiteInfo) -> Option<String> {
+    autofill::match_scope(&Website::try_from(website).ok()?)
+}
+
 /// A credential's part in autofill: "username", "password", or "totp".
 fn parse_role(role: &str) -> Result<autofill::Role, FfiError> {
     match role {

@@ -1,7 +1,34 @@
 use super::super::{
-    AutofillItem, MatchKind, MatchRank, MatchedWebsite, identity_hosts, match_service,
+    AutofillItem, MatchKind, MatchRank, MatchedWebsite, identity_hosts, match_scope, match_service,
 };
 use super::{domain, matches, site};
+
+#[test]
+fn match_scope_follows_match_kind() {
+    let url = "https://signin.aws.amazon.com/switchrole?account=1&displayName=dev";
+    let scope = |kind| match_scope(&site(url, kind)).unwrap();
+    assert_eq!(scope(MatchKind::Domain), "amazon.com");
+    assert_eq!(scope(MatchKind::Host), "signin.aws.amazon.com");
+    assert_eq!(
+        scope(MatchKind::StartsWith),
+        "signin.aws.amazon.com/switchrole?account=1&displayName=dev"
+    );
+    assert_eq!(scope(MatchKind::Never), "signin.aws.amazon.com");
+}
+
+#[test]
+fn match_scope_keeps_nondefault_port() {
+    let website = site("http://localhost:3000/app", MatchKind::StartsWith);
+    assert_eq!(match_scope(&website).unwrap(), "localhost:3000/app");
+    let website = site("https://www.example.com:443/", MatchKind::StartsWith);
+    assert_eq!(match_scope(&website).unwrap(), "example.com");
+}
+
+#[test]
+fn match_scope_uses_public_suffix_list() {
+    let website = site("https://shop.example.co.uk", MatchKind::Domain);
+    assert_eq!(match_scope(&website).unwrap(), "example.co.uk");
+}
 
 #[test]
 fn identity_hosts_follow_match_kind() {

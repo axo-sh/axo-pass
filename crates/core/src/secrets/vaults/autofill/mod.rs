@@ -965,6 +965,26 @@ fn match_website(website: &Website, target: &ParsedUrl) -> Option<MatchedWebsite
     })
 }
 
+/// What a website matches, for display. A `domain` website gives its
+/// registrable domain, a `host` or `never` website gives its host, and a
+/// `starts-with` website gives its host and path. A port other than 80 or 443
+/// is kept. `None` if the URL does not parse.
+pub fn match_scope(website: &Website) -> Option<String> {
+    let parsed = ParsedUrl::parse(&website.url)?;
+    let host = match parsed.port {
+        Some(port) if port != 80 && port != 443 => format!("{}:{port}", parsed.host),
+        _ => parsed.host,
+    };
+    Some(match website.match_kind {
+        MatchKind::Domain => parsed.domain,
+        MatchKind::Host | MatchKind::Never => host,
+        MatchKind::StartsWith => match parsed.path.as_deref() {
+            None | Some("/") => host,
+            Some(path) => format!("{host}{path}"),
+        },
+    })
+}
+
 /// Two ports agree when they are equal, or when either side names none. A bare
 /// domain names none.
 fn ports_agree(stored: Option<u16>, target: Option<u16>) -> bool {
