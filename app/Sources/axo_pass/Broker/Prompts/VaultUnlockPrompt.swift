@@ -168,9 +168,12 @@ final class VaultUnlockPromptModel {
   private static func fillGrantOffer(for prompt: VaultAccessPrompt) -> FillGrantOffer? {
     guard Preferences.reuseApprovals, prompt.callerIdentity != nil,
       case .browser(let browser, _) = prompt.client,
-      case .fillLogin(let page, _, _, let unmatched, _) = prompt.action, !unmatched, !page.crossSite
+      case .fillLogin(let page, _, let account, let unmatched, let details) = prompt.action,
+      !unmatched, !page.crossSite
     else { return nil }
-    return FillGrantOffer(browser: browser, host: page.host, choice: GrantChoice())
+    let username = details?.username.flatMap { $0.isEmpty ? nil : $0 }
+    let login = username ?? details?.title ?? account ?? "this login"
+    return FillGrantOffer(browser: browser, login: login, host: page.host, choice: GrantChoice())
   }
 
   /// The choice to let a verified browser list logins without a prompt. Offered
@@ -555,6 +558,7 @@ final class VaultUnlockPromptModel {
 /// without asking for a while.
 struct FillGrantOffer {
   let browser: String
+  let login: String
   let host: String
   let choice: GrantChoice
 }
@@ -622,7 +626,7 @@ private struct FillGrantCard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Toggle("Don't ask again for autofill of this login on \(offer.host).", isOn: $choice.allow)
+      Toggle("Don't ask again for \(offer.login) on \(offer.host).", isOn: $choice.allow)
         .toggleStyle(.checkbox)
 
       if choice.allow {
