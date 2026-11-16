@@ -548,10 +548,11 @@ final class VaultsModel {
       AuditBridge.recordVault(.autolocked, trigger: trigger.rawValue)
     }
     unlockTask = nil
-    // A lock drops every authorization the user has given: signing, and the
-    // GPG passphrases pinentry unlocked.
+    // A lock drops every authorization the user has given: signing, the GPG
+    // passphrases pinentry unlocked, and vault access for browser requests.
     signingPrompt.forgetAll()
     passphrasePrompt.forgetAll()
+    vaultUnlockPrompt.forgetAll()
     undoFailure = nil
     // Fail whatever prompt is on screen, which is not always on `authContext`,
     // then drop the authenticated context itself.
