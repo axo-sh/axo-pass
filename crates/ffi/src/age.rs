@@ -24,6 +24,7 @@ impl From<AgeKeyOverview> for AgeKeyEntry {
 impl AxoPass {
     /// List the age identities held in the keychain. Derives each recipient
     /// from its secret, so this reads every entry on the shared auth context.
+    /// Fails with `AuthExpired` if the app is locked.
     pub async fn list_age_keys(&self) -> Result<Vec<AgeKeyEntry>, FfiError> {
         tokio::task::spawn_blocking(list_age_keys)
             .await

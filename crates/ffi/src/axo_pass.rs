@@ -100,13 +100,12 @@ impl AxoPass {
             .map_err(FfiError::from)
     }
 
-    /// Authenticate globally via Touch ID / password, showing the system
-    /// dialog. One prompt covers all subsequent vault operations for the
-    /// lifetime of the LAContext. Mirrors `unlock_axo` in the Tauri app.
+    /// Evaluate the device owner policy on the shared LAContext. Mirrors
+    /// `unlock_axo` in the Tauri app.
     ///
-    /// The macOS app unlocks through `adopt_auth_context` instead so it can
-    /// draw the prompt inline. This remains for callers with no UI, such as the
-    /// `ap` CLI.
+    /// The shared context never prompts, so this succeeds only if the app has
+    /// already adopted an authenticated context. Otherwise it fails with
+    /// `AuthExpired`. The macOS app unlocks through `adopt_auth_context`.
     pub async fn unlock(&self) -> Result<(), FfiError> {
         let result: Result<(), FfiError> = tokio::task::spawn_blocking(|| {
             run_on_auth_thread(
@@ -136,7 +135,8 @@ impl AxoPass {
     }
 
     /// Drop every decrypted vault from memory and invalidate the shared
-    /// LAContext. Reading items again costs a decryption and a fresh prompt.
+    /// LAContext. Reading items again costs a decryption and a new unlock by
+    /// the app.
     /// Mirrors `lock_axo` in the Tauri app.
     pub fn lock(&self) -> Result<(), FfiError> {
         self.manager

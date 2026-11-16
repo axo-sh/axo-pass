@@ -197,8 +197,8 @@ final class SshModel {
     return events.map(AuditLogRow.init)
   }
 
-  /// Read a key's saved passphrase back from the keychain. Prompts for Touch
-  /// ID. Returns nil and sets `loadError` on failure.
+  /// Read a key's saved passphrase back from the keychain on the app unlock.
+  /// Does not prompt. Returns nil and sets `loadError` on failure.
   func revealPassword(fingerprint: String) async -> String? {
     do {
       return try await core.revealKeyPassword(passwordType: .sshKey, keyId: fingerprint)

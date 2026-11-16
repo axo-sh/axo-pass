@@ -9,10 +9,7 @@ use anyhow::anyhow;
 use lru::LruCache;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2_foundation::NSString;
-use objc2_local_authentication::{
-    LAAccessControlOperation, LAContext, LAPolicy,
-    LATouchIDAuthenticationMaximumAllowableReuseDuration,
-};
+use objc2_local_authentication::{LAAccessControlOperation, LAContext, LAPolicy};
 use ssh_key::Signature;
 
 use crate::core::auth::la_context::create_la_auth_callback;
@@ -20,18 +17,6 @@ use crate::core::dirs::app_data_dir;
 use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
-
-// How long a Touch ID match can be reused, capped by the system at
-// LATouchIDAuthenticationMaximumAllowableReuseDuration (300s as of macOS 15).
-//
-// This does not bound how long the app stays unlocked. It governs reuse of a
-// match across evaluations, but re-evaluating the same live LAContext returns
-// success from the context's own state without consulting it. Measured with
-// this set to 5s: a re-evaluation 25s later succeeded in 5ms with no prompt.
-// An unlock therefore lasts as long as the LAContext object, and only
-// invalidate_auth() ends it. An idle timeout would have to be enforced by the
-// caller.
-const TOUCH_ID_REUSE_DURATION_SECS: f64 = 300.0; // 5 minutes
 
 enum AuthMessage {
     Work(AuthWork),
@@ -139,9 +124,16 @@ pub enum AuthMethod {
 // Store up to 16 LAContext instances for reuse.
 static LA_CONTEXT_CACHE_SIZE: usize = 16;
 
-/// Dedicated thread that owns a single LAContext with Touch ID reuse duration
-/// enabled. All auth-requiring keychain operations run on this thread so they
-/// share the same LAContext and a single Touch ID prompt covers them all.
+/// Dedicated thread that owns the shared LAContext. All auth-requiring keychain
+/// operations on it run on this thread, so the unlock the app hands over with
+/// [`adopt_shared_context`] covers them all.
+///
+/// The shared context never shows a prompt. Until the app adopts an
+/// authenticated context, work that would evaluate it fails with
+/// `AuthenticationExpired`. Re-evaluating an adopted context returns success
+/// from its own state without prompting, so an unlock lasts until
+/// [`invalidate_auth`] ends it. An idle timeout has to be enforced by the
+/// caller.
 static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel::<AuthMessage>();
     thread::Builder::new()
@@ -194,25 +186,33 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 unreachable!("foreign contexts run on the caller's thread")
                             },
                         };
-                        // A shared auth context does not show a prompt, so we skip the
-                        // auth lock. Otherwise an open prompt panel would block vault reads.
-                        // This includes access control evaluations, since the device owner
-                        // auth already satisfies the user presence the items require.
-                        let lock = if is_shared
-                            && shared_authenticated
+                        // The shared context has no LAAuthenticationView, so evaluating
+                        // it before the app adopts an authenticated context would show
+                        // the system dialog. Fail instead, and let the app unlock with
+                        // its own prompt.
+                        if is_shared
+                            && !shared_authenticated
                             && !matches!(work.auth, AuthMethod::None)
                         {
+                            log::debug!("Shared context is not authenticated, refusing to prompt");
+                            let _ = work
+                                .auth_reply
+                                .send(Err(KeychainError::AuthenticationExpired));
+                            return;
+                        }
+                        // An authenticated shared context does not show a prompt, so we
+                        // skip the auth lock. Otherwise an open prompt panel would block
+                        // vault reads. This includes access control evaluations, since the
+                        // device owner auth already satisfies the user presence the items
+                        // require.
+                        let lock = if is_shared {
                             AuthLock::Skip
                         } else {
                             AuthLock::Wait
                         };
-                        let is_policy = matches!(work.auth, AuthMethod::Policy { .. });
                         match authenticate(selected_la_ctx.clone(), work.auth, lock) {
                             Ok(_) => {
                                 log::debug!("Authentication successful ({:?})", work.context);
-                                if is_shared && is_policy {
-                                    shared_authenticated = true;
-                                }
                                 let _ = work.auth_reply.send(Ok(()));
                                 (work.work)(selected_la_ctx);
                             },
@@ -253,26 +253,7 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
 });
 
 fn init_shared_la_context() -> Retained<LAContext> {
-    let ctx = unsafe { LAContext::new() };
-    set_reuse_duration(&ctx);
-    ctx
-}
-
-fn set_reuse_duration(ctx: &LAContext) {
-    unsafe {
-        if TOUCH_ID_REUSE_DURATION_SECS > LATouchIDAuthenticationMaximumAllowableReuseDuration {
-            log::warn!(
-                "Requested Touch ID reuse duration of {TOUCH_ID_REUSE_DURATION_SECS}s exceeds the system maximum of {LATouchIDAuthenticationMaximumAllowableReuseDuration}s. Capping to the maximum."
-            );
-            ctx.setTouchIDAuthenticationAllowableReuseDuration(
-                LATouchIDAuthenticationMaximumAllowableReuseDuration,
-            );
-        } else {
-            // this takes an NSTimeInterval, which is a c_double
-            // which is "almost always f64" per the std::os::raw docs
-            ctx.setTouchIDAuthenticationAllowableReuseDuration(TOUCH_ID_REUSE_DURATION_SECS);
-        }
-    }
+    unsafe { LAContext::new() }
 }
 
 /// Adopt an `LAContext` created outside this crate as the shared context, so
@@ -286,10 +267,6 @@ fn set_reuse_duration(ctx: &LAContext) {
 /// reference; this takes an additional one.
 pub unsafe fn adopt_shared_context(context_ptr: *mut c_void) -> Result<(), KeychainError> {
     let context = unsafe { ForeignContext::from_ptr(context_ptr) }?;
-    // The reuse duration is deliberately not set here: it only affects
-    // evaluations that follow it, and the caller has already evaluated. See the
-    // note on TOUCH_ID_REUSE_DURATION_SECS for why it would not matter anyway.
-
     let (tx, rx) = mpsc::channel();
     AUTH_THREAD
         .lock()

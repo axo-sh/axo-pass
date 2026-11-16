@@ -155,7 +155,8 @@ impl VaultsManager {
     }
 
     /// Drop every decrypted vault from memory. Pair with `invalidate_auth` so
-    /// that reading items again costs both a decryption and a fresh prompt.
+    /// that reading items again costs both a decryption and a new unlock by the
+    /// app.
     pub fn lock_all(&mut self) {
         for (key, vault) in self.vaults.iter_mut() {
             log::debug!("Locking vault {key}");

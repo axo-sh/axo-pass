@@ -148,6 +148,18 @@ impl AxoPassCommand {
                         .with_writer(io::stderr as fn() -> io::Stderr),
                 )
                 .init();
+        } else {
+            // Show errors in release builds. Commands report failures with
+            // log::error! and exit, so without a logger they fail silently.
+            tracing_subscriber::registry()
+                .with(EnvFilter::new("error,ssh_agent_lib=off"))
+                .with(
+                    fmt::layer()
+                        .without_time()
+                        .with_target(false)
+                        .with_writer(io::stderr as fn() -> io::Stderr),
+                )
+                .init();
         }
 
         let detach = match self {

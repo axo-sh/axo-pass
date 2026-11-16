@@ -60,8 +60,8 @@ final class AgeModel {
     }
   }
 
-  /// Read a key's secret identity back from the keychain. Prompts for Touch ID.
-  /// Returns nil and sets `loadError` on failure.
+  /// Read a key's secret identity back from the keychain on the app unlock.
+  /// Does not prompt. Returns nil and sets `loadError` on failure.
   func revealSecret(name: String) async -> String? {
     do {
       return try await core.revealKeyPassword(passwordType: .ageKey, keyId: name)

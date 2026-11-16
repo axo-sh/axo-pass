@@ -455,8 +455,9 @@ impl AxoPass {
         result
     }
 
-    /// Read a saved key passphrase back from the keychain, prompting for Touch
-    /// ID. Errors with `NotFound` when no passphrase is saved for the key.
+    /// Read a saved key passphrase back from the keychain on the shared
+    /// context, without prompting. Errors with `AuthExpired` if the app is
+    /// locked, and with `NotFound` if no passphrase is saved for the key.
     pub async fn reveal_key_password(
         &self,
         password_type: PasswordEntryType,

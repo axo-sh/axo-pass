@@ -553,9 +553,10 @@ impl AxoPass {
 }
 
 /// Decrypt vault `vault_key` from disk if it is not already in memory. Uses
-/// the shared LAContext, so there is no re-prompt after a successful
-/// `unlock`. The manager mutex is released while the vault unlocks, since the
-/// read can run a transaction ([`VaultsManager::unlock_vault`]).
+/// the shared LAContext the app adopted at unlock, so this never prompts. Fails
+/// with `AuthExpired` if the app is locked. The manager mutex is released while
+/// the vault unlocks, since the read can run a transaction
+/// ([`VaultsManager::unlock_vault`]).
 pub(crate) fn ensure_unlocked(
     manager: &Mutex<VaultsManager>,
     vault_key: &str,
@@ -860,9 +861,9 @@ impl AxoPass {
             .collect())
     }
 
-    /// List items for a vault. Decrypts the vault from disk using the
-    /// shared LAContext — no additional Touch ID prompt if `unlock` has
-    /// already been called. Triggers auth if called before `unlock`.
+    /// List items for a vault. Decrypts the vault from disk using the shared
+    /// LAContext, without prompting. Fails with `AuthExpired` if the app is
+    /// locked.
     pub async fn list_items(&self, vault_key: String) -> Result<Vec<ItemInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         tokio::task::spawn_blocking(move || {

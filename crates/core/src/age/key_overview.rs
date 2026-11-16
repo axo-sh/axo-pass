@@ -21,8 +21,9 @@ pub struct AgeKeyOverview {
 
 /// List every age identity in the keychain, newest name order.
 ///
-/// Reads each entry's secret to derive its recipient. After the app is unlocked
-/// this reuses the shared auth context, the same as reading a vault item.
+/// Reads each entry's secret to derive its recipient on the shared auth
+/// context, the same as reading a vault item. This never prompts. It fails if
+/// the app is locked.
 pub fn list_age_keys() -> Result<Vec<AgeKeyOverview>, AgeError> {
     let entries = PasswordEntry::list()
         .map_err(|e| AgeError::FailedToRetrieveRecipient("age key list".to_owned(), e))?;
