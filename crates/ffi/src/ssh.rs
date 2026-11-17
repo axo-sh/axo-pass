@@ -6,6 +6,7 @@ use axo_pass_core::ssh::agent_client::{self, AgentStatus as CoreAgentStatus, def
 use axo_pass_core::ssh::agent_conf::{self as ssh_agent_conf, State as CoreSshAgentConfState};
 use axo_pass_core::ssh::key_overview::{
     SshKeyAgentKind as CoreSshKeyAgent, SshKeyLocation as CoreSshKeyLocation, SshKeyOverview,
+    VaultKeyLocation,
 };
 use axo_pass_core::ssh::related_hosts::{self, RelatedHost};
 use axo_pass_core::ssh::ssh_keys::SshKeyType as CoreSshKeyType;
@@ -16,7 +17,10 @@ use crate::*;
 
 #[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
 pub enum SshKeyLocation {
-    Vault,
+    /// Secure Enclave key.
+    SecureEnclave,
+    /// SSH key credential in a vault.
+    VaultKey,
     Transient,
     SshDir,
 }
@@ -106,12 +110,36 @@ pub struct SshKeyEntry {
     pub agents: Vec<SshKeyAgent>,
     /// The Axo agent advertises this `~/.ssh` key and loads it on first use.
     pub autoload: bool,
+    /// Where the key is stored. Set for vault keys only.
+    pub vault_key: Option<SshVaultKeyLocation>,
+}
+
+/// Credential that holds a vault SSH key. Mirrors [`VaultKeyLocation`].
+#[derive(uniffi::Record, Clone)]
+pub struct SshVaultKeyLocation {
+    pub vault_key: String,
+    pub item_key: String,
+    pub credential_key: String,
+    /// Identifier of the credential, stable across renames.
+    pub credential_id: Option<String>,
+}
+
+impl From<VaultKeyLocation> for SshVaultKeyLocation {
+    fn from(l: VaultKeyLocation) -> Self {
+        SshVaultKeyLocation {
+            vault_key: l.vault_key,
+            item_key: l.item_key,
+            credential_key: l.credential_key,
+            credential_id: l.credential_id.map(|id| id.to_string()),
+        }
+    }
 }
 
 impl From<CoreSshKeyLocation> for SshKeyLocation {
     fn from(l: CoreSshKeyLocation) -> Self {
         match l {
-            CoreSshKeyLocation::Vault => SshKeyLocation::Vault,
+            CoreSshKeyLocation::SecureEnclave => SshKeyLocation::SecureEnclave,
+            CoreSshKeyLocation::VaultKey => SshKeyLocation::VaultKey,
             CoreSshKeyLocation::Transient => SshKeyLocation::Transient,
             CoreSshKeyLocation::SshDir => SshKeyLocation::SshDir,
         }
@@ -144,6 +172,7 @@ impl From<SshKeyOverview> for SshKeyEntry {
             policy: overview.policy.map(SshKeyPolicy::from),
             agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
             autoload: overview.autoload,
+            vault_key: overview.vault_key.map(SshVaultKeyLocation::from),
         }
     }
 }
@@ -682,5 +711,44 @@ impl AxoPass {
             .map_err(|e| FfiError::Internal(e.to_string()))?
             .map(SshAgentConfStatus::from)
             .map_err(FfiError::Internal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locations_map_to_matching_variants() {
+        let pairs = [
+            (
+                CoreSshKeyLocation::SecureEnclave,
+                SshKeyLocation::SecureEnclave,
+            ),
+            (CoreSshKeyLocation::VaultKey, SshKeyLocation::VaultKey),
+            (CoreSshKeyLocation::Transient, SshKeyLocation::Transient),
+            (CoreSshKeyLocation::SshDir, SshKeyLocation::SshDir),
+        ];
+
+        for (core, ffi) in pairs {
+            assert!(SshKeyLocation::from(core) == ffi);
+        }
+    }
+
+    #[test]
+    fn vault_key_location_carries_credential_id() {
+        let id = uuid::Uuid::from_u128(5);
+
+        let location = SshVaultKeyLocation::from(VaultKeyLocation {
+            vault_key: "personal".to_string(),
+            item_key: "github".to_string(),
+            credential_key: "ssh-key".to_string(),
+            credential_id: Some(id),
+        });
+
+        assert_eq!(location.vault_key, "personal");
+        assert_eq!(location.item_key, "github");
+        assert_eq!(location.credential_key, "ssh-key");
+        assert_eq!(location.credential_id, Some(id.to_string()));
     }
 }

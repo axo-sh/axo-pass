@@ -1,6 +1,7 @@
 use axo_pass_core::age::errors::AgeError;
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::vaults::Error as VaultError;
+use axo_pass_core::secrets::vaults::ssh_keys::SshKeyError;
 use axo_pass_core::ssh::agent_client::{self};
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -31,6 +32,18 @@ pub enum FfiError {
     /// record. The payload is the blob name.
     #[error("File contents are damaged")]
     FileBlobMismatch(String),
+
+    /// An SSH key to import is encrypted and no passphrase was given.
+    #[error("The SSH key is encrypted and needs a passphrase")]
+    SshKeyPassphraseRequired,
+
+    /// The passphrase does not decrypt the SSH key to import.
+    #[error("The passphrase does not decrypt the SSH key")]
+    SshKeyWrongPassphrase,
+
+    /// The vault already holds the SSH key. The payload is its fingerprint.
+    #[error("This vault already holds the SSH key {0}")]
+    SshKeyDuplicate(String),
 
     /// The request itself was invalid (e.g. a malformed vault/item/credential
     /// key, or a value that fails a precondition like "already exists").
@@ -100,6 +113,26 @@ impl From<VaultError> for FfiError {
             | VaultError::VaultIdExists(_)
             | VaultError::ResignNotOffered) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<SshKeyError> for FfiError {
+    fn from(e: SshKeyError) -> Self {
+        match e {
+            SshKeyError::PassphraseRequired => FfiError::SshKeyPassphraseRequired,
+            SshKeyError::WrongPassphrase => FfiError::SshKeyWrongPassphrase,
+            SshKeyError::Duplicate { fingerprint } => FfiError::SshKeyDuplicate(fingerprint),
+            SshKeyError::Vault(e) => FfiError::from(e),
+            SshKeyError::InvalidPrivateKey(_)
+            | SshKeyError::InvalidPublicKey(_)
+            | SshKeyError::NoPublicKey(_)
+            | SshKeyError::Encrypted
+            | SshKeyError::PublicKeyMismatch
+            | SshKeyError::NotSshKey(_) => FfiError::InvalidInput(e.to_string()),
+            other @ (SshKeyError::Malformed(_) | SshKeyError::FingerprintMismatch { .. }) => {
+                FfiError::Internal(other.to_string())
+            },
         }
     }
 }

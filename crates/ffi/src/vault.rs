@@ -19,6 +19,7 @@ use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use crate::files::{FileInfo, refuse_file};
+use crate::ssh_vault_keys::{sweep_ssh_pubkey_files, sync_ssh_key_listing};
 use crate::*;
 
 #[derive(uniffi::Record, Clone)]
@@ -705,7 +706,7 @@ fn vault_subject(vault_key: &str) -> audit::Subject {
 }
 
 /// Audit subject for an item, named `vault/item`.
-fn item_subject(vault_key: &str, item_key: &str) -> audit::Subject {
+pub(crate) fn item_subject(vault_key: &str, item_key: &str) -> audit::Subject {
     audit::Subject::new(audit::SubjectKind::Item, format!("{vault_key}/{item_key}"))
 }
 
@@ -1026,8 +1027,9 @@ impl AxoPass {
             index.replace(found_items.clone());
             index.replace_places(places);
             let known: Vec<String> = m.iter_vault_keys().collect();
-            if let Err(e) = ssh_vault_keys::refresh(&vault_keys_path(), &known, ssh_keys) {
-                log::error!("Failed to write the vault SSH key listing: {e}");
+            match ssh_vault_keys::refresh(&vault_keys_path(), &known, ssh_keys) {
+                Ok(entries) => sweep_ssh_pubkey_files(&entries),
+                Err(e) => log::error!("Failed to write the vault SSH key listing: {e}"),
             }
             Ok(found_items
                 .into_iter()
@@ -1765,6 +1767,7 @@ impl AxoPass {
         )
         .record_async()
         .await;
+        sync_ssh_key_listing(Arc::clone(&self.manager), vault_key).await;
         Ok(())
     }
 
@@ -2081,6 +2084,7 @@ impl AxoPass {
         )
         .record_async()
         .await;
+        sync_ssh_key_listing(Arc::clone(&self.manager), key).await;
         Ok(())
     }
 

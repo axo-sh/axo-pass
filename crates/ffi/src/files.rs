@@ -132,7 +132,7 @@ fn open_source(path: &str) -> Result<File, FfiError> {
 /// Run `write` on a temp file next to `dest`, and rename the temp file to
 /// `dest` if `write` succeeds. The temp file is private to the owner and is
 /// removed on failure, so `dest` never holds partial contents.
-fn write_atomically<T>(
+pub(crate) fn write_atomically<T>(
     dest: &Path,
     write: impl FnOnce(&mut BufWriter<File>) -> Result<T, FfiError>,
 ) -> Result<T, FfiError> {
