@@ -375,6 +375,30 @@ fn set_comment_updates_record_and_public_key() {
 }
 
 #[test]
+fn set_ssh_access_saves_flags() {
+    let mut vw = VaultHandle::new_for_test("personal");
+    let added = generate(&mut vw, new_item("Key"), "").unwrap();
+
+    set_ssh_access(&mut vw, &added.item_key, &added.credential_key, false, true).unwrap();
+
+    let record = record_of(&vw, &added);
+    assert!(!record.auto_load);
+    assert!(record.ssh_use);
+}
+
+#[test]
+fn set_ssh_access_ssh_use_off_clears_auto_load() {
+    let mut vw = VaultHandle::new_for_test("personal");
+    let added = generate(&mut vw, new_item("Key"), "").unwrap();
+
+    set_ssh_access(&mut vw, &added.item_key, &added.credential_key, true, false).unwrap();
+
+    let record = record_of(&vw, &added);
+    assert!(!record.auto_load);
+    assert!(!record.ssh_use);
+}
+
+#[test]
 fn set_comment_refused_for_other_credential() {
     let mut vw = VaultHandle::new_for_test("personal");
     vw.add_item("login", "Login").unwrap();

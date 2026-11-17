@@ -121,6 +121,28 @@ pub fn set_comment(
     Ok(record.public_key.clone())
 }
 
+/// Set whether the agent advertises (`auto_load`) and signs with (`ssh_use`)
+/// the key in credential `cred_key`. Turning off `ssh_use` also turns off
+/// `auto_load`.
+pub fn set_ssh_access(
+    vw: &mut VaultHandle,
+    item_key: &str,
+    cred_key: &str,
+    auto_load: bool,
+    ssh_use: bool,
+) -> Result<(), SshKeyError> {
+    let (title, mut record) = read_record(vw, item_key, cred_key)?;
+    record.set_access(auto_load, ssh_use);
+    vw.add_secret(
+        item_key,
+        cred_key,
+        &title,
+        FieldKind::SshKey,
+        record.to_value()?,
+    )?;
+    Ok(())
+}
+
 /// OpenSSH public key line of the key in credential `cred_key`.
 pub fn public_key_line(
     vw: &VaultHandle,

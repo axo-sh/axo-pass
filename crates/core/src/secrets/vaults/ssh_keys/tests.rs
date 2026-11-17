@@ -163,3 +163,37 @@ fn unknown_record_fields_ignored() {
     let parsed = SshKeyRecord::from_value(&value.to_string()).unwrap();
     assert_eq!(parsed, record);
 }
+
+#[test]
+fn access_flags_default_to_true_and_are_omitted() {
+    let record = SshKeyRecord::new(&ed25519_key(), "").unwrap();
+
+    let value = serde_json::to_value(&record).unwrap();
+
+    assert!(!value.as_object().unwrap().contains_key("auto_load"));
+    assert!(!value.as_object().unwrap().contains_key("ssh_use"));
+    let parsed = SshKeyRecord::from_value(&value.to_string()).unwrap();
+    assert!(parsed.auto_load);
+    assert!(parsed.ssh_use);
+}
+
+#[test]
+fn access_flags_off_roundtrip() {
+    let mut record = SshKeyRecord::new(&ed25519_key(), "").unwrap();
+    record.set_access(false, true);
+
+    let back = SshKeyRecord::from_value(record.to_value().unwrap().expose_secret()).unwrap();
+
+    assert!(!back.auto_load);
+    assert!(back.ssh_use);
+}
+
+#[test]
+fn ssh_use_off_turns_auto_load_off() {
+    let mut record = SshKeyRecord::new(&ed25519_key(), "").unwrap();
+
+    record.set_access(true, false);
+
+    assert!(!record.ssh_use);
+    assert!(!record.auto_load);
+}

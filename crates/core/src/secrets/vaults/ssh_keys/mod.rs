@@ -2,7 +2,8 @@
 //!
 //! One key is one credential of kind [`FieldKind::SshKey`](super::FieldKind),
 //! whose value is a JSON [`SshKeyRecord`]: the unencrypted OpenSSH private key,
-//! the public key line, the comment, and the key policy. The vault encrypts the
+//! the public key line, the comment, the key policy, and the agent access
+//! flags. The vault encrypts the
 //! value with the rest of the vault, and it travels in export bundles.
 //!
 //! The broker signs with the key inside the app (`app_broker/ssh.rs`). The
@@ -79,10 +80,27 @@ pub struct SshKeyRecord {
     /// How use of the key is authorized. New and imported keys use `default`.
     #[serde(default = "default_policy")]
     pub policy: KeyPolicy,
+
+    /// The agent advertises the key to SSH clients. Always false if `ssh_use`
+    /// is false.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub auto_load: bool,
+
+    /// The agent signs with the key.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub ssh_use: bool,
 }
 
 fn default_policy() -> KeyPolicy {
     KeyPolicy::Default
+}
+
+pub(crate) fn default_true() -> bool {
+    true
+}
+
+pub(crate) fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl std::fmt::Debug for SshKeyRecord {
@@ -91,6 +109,8 @@ impl std::fmt::Debug for SshKeyRecord {
             .field("public_key", &self.public_key)
             .field("comment", &self.comment)
             .field("policy", &self.policy)
+            .field("auto_load", &self.auto_load)
+            .field("ssh_use", &self.ssh_use)
             .finish_non_exhaustive()
     }
 }
@@ -118,7 +138,16 @@ impl SshKeyRecord {
             public_key,
             comment: comment.to_string(),
             policy: KeyPolicy::Default,
+            auto_load: true,
+            ssh_use: true,
         })
+    }
+
+    /// Set whether the agent advertises and signs with the key. Turning off
+    /// `ssh_use` also turns off `auto_load`.
+    pub fn set_access(&mut self, auto_load: bool, ssh_use: bool) {
+        self.ssh_use = ssh_use;
+        self.auto_load = auto_load && ssh_use;
     }
 
     /// Set the comment, in the record and in the public key line.
