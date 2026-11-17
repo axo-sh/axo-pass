@@ -1305,6 +1305,18 @@ final class VaultsModel {
     }
   }
 
+  /// Set whether the agent advertises (`autoLoad`) and signs with (`sshUse`) a
+  /// vault key. Turning off `sshUse` also turns off `autoLoad`.
+  func setSshKeyAccess(
+    location: SshVaultKeyLocation, autoLoad: Bool, sshUse: Bool
+  ) async throws {
+    try await mutateSshKey(location.vaultKey) {
+      try await core.setVaultSshKeyAccess(
+        vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: location.credentialKey,
+        autoLoad: autoLoad, sshUse: sshUse)
+    }
+  }
+
   /// Write the public key file of a vault key again. Returns its path.
   func writeSshKeyPubkey(location: SshVaultKeyLocation) async throws -> String {
     try await core.writeVaultSshKeyPubkey(

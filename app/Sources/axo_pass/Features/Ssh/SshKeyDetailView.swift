@@ -24,6 +24,7 @@ private struct SshKeyDetail: View {
   @Environment(VaultsModel.self) private var vaults
   @State private var commentDraft = ""
   @State private var commentError: String? = nil
+  @State private var accessError: String? = nil
   @State private var recentEvents: [AuditLogRow] = []
   @State private var appGrants: [SshAppGrant] = []
   @State private var relatedHosts: [SshRelatedHost] = []
@@ -87,14 +88,17 @@ private struct SshKeyDetail: View {
                 }
                 autoloadRow
               }
-              // Editable, so it follows the read-only rows.
+              // Editable, so it follows the read-only rows. The agent
+              // settings come last.
               if key.vaultKey != nil {
-                if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase
-                  || showsAutoload
-                {
+                if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase {
                   Divider()
                 }
                 commentRow
+                Divider()
+                sshUseRow
+                Divider()
+                autoloadRow
               }
             }
           }
@@ -171,12 +175,11 @@ private struct SshKeyDetail: View {
   /// keys and agent-only identities have none.
   private var showsPassphrase: Bool { key.location == .sshDir }
 
-  /// Only a key file on disk can be auto-loaded.
   /// A key file on disk can be auto-loaded. A configured key shows here
   /// wherever it was found, e.g. one added to the agent by hand, so it can be
-  /// turned off.
+  /// turned off. A vault key shows it with its other agent settings.
   private var showsAutoload: Bool {
-    key.autoload || (key.location == .sshDir && key.path != nil)
+    key.vaultKey == nil && (key.autoload || (key.location == .sshDir && key.path != nil))
   }
 
   /// Every key can hold app grants except a Secure Enclave key that always
@@ -246,6 +249,9 @@ private struct SshKeyDetail: View {
       }
       if key.autoload {
         KeyBadge(text: "Auto-load", size: .regular)
+      }
+      if !key.sshUse {
+        KeyBadge(text: "SSH use off", size: .regular)
       }
       // Secure Enclave keys have no passphrase to save.
       if key.location == .sshDir {
@@ -525,30 +531,102 @@ private struct SshKeyDetail: View {
     }
   }
 
-  /// The Axo agent lists the key from the start and reads it from disk the
-  /// first time something signs with it.
+  /// The Axo agent lists the key from the start. A `~/.ssh` key is read from
+  /// disk the first time something signs with it. A vault key that is not
+  /// listed can still sign if a client names it.
   private var autoloadRow: some View {
     // An untitled checkbox has no text baseline, so this row centers it on the
     // label instead of using the inspector style's baseline alignment.
-    HStack(alignment: .center, spacing: 8) {
-      Text("Auto-load")
-        .foregroundStyle(.secondary)
-        .frame(width: 100, alignment: .leading)
-      Toggle(
-        "Auto-load",
-        isOn: Binding(
-          get: { key.autoload },
-          set: { enabled in
-            guard let path = key.path else { return }
-            Task {
-              await model.setAutoload(
-                fingerprintSha256: key.fingerprintSha256, path: path, enabled: enabled)
-            }
-          })
-      )
-      .toggleStyle(.checkbox)
-      .labelsHidden()
-      Spacer()
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .center, spacing: 8) {
+        Text("Auto-load")
+          .foregroundStyle(.secondary)
+          .frame(width: 100, alignment: .leading)
+        Toggle(
+          "Auto-load",
+          isOn: Binding(
+            get: { key.autoload },
+            set: { enabled in setAutoload(enabled) })
+        )
+        .toggleStyle(.checkbox)
+        .labelsHidden()
+        .disabled(key.vaultKey != nil && !key.sshUse)
+        Spacer()
+      }
+      settingNote(autoloadNote)
+      if let accessError {
+        Text(accessError)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+    }
+  }
+
+  /// Whether the agent signs with a vault key. Off also turns off auto-load.
+  private var sshUseRow: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .center, spacing: 8) {
+        Text("Allow SSH use")
+          .foregroundStyle(.secondary)
+          .frame(width: 100, alignment: .leading)
+        Toggle(
+          "Allow SSH use",
+          isOn: Binding(
+            get: { key.sshUse },
+            set: { enabled in setSshUse(enabled) })
+        )
+        .toggleStyle(.checkbox)
+        .labelsHidden()
+        Spacer()
+      }
+      settingNote("Allow ssh and git to sign with this key. Signatures still require confirmation.")
+    }
+  }
+
+  private var autoloadNote: String {
+    if key.vaultKey != nil {
+      return "Automatically add key to SSH agent on startup."
+    }
+    return
+      "List this key from the start and read it from disk the first time something signs with it."
+  }
+
+  /// Explanation under a setting row, aligned with the checkbox. The inset is
+  /// the label width plus the row spacing.
+  private func settingNote(_ text: String) -> some View {
+    Text(text)
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+      .padding(.leading, 108)
+  }
+
+  private func setAutoload(_ enabled: Bool) {
+    if let location = key.vaultKey {
+      saveVaultAccess(location: location, autoLoad: enabled, sshUse: key.sshUse)
+      return
+    }
+    guard let path = key.path else { return }
+    Task {
+      await model.setAutoload(
+        fingerprintSha256: key.fingerprintSha256, path: path, enabled: enabled)
+    }
+  }
+
+  private func setSshUse(_ enabled: Bool) {
+    guard let location = key.vaultKey else { return }
+    saveVaultAccess(location: location, autoLoad: key.autoload && enabled, sshUse: enabled)
+  }
+
+  private func saveVaultAccess(location: SshVaultKeyLocation, autoLoad: Bool, sshUse: Bool) {
+    Task {
+      do {
+        try await vaults.setSshKeyAccess(location: location, autoLoad: autoLoad, sshUse: sshUse)
+        accessError = nil
+        await model.reload()
+      } catch {
+        accessError = String(describing: error)
+      }
     }
   }
 
