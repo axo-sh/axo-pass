@@ -441,10 +441,13 @@ struct SubjectOpener {
 
   /// Display title of a subject. GPG keys are named by the key name in place
   /// of the keygrip. SSH keys labeled by fingerprint show as "SSH key", since
-  /// the id tag already shows the fingerprint.
+  /// the id tag already shows the fingerprint. If the event was recorded
+  /// without account details, the title is looked up from the loaded keys,
+  /// items, and vaults, and is `label` if none matches.
   func title(_ ref: AuditSubjectRef, label: String) -> String {
     switch ref.kind {
     case .sshKey:
+      if !ref.hasName { return sshKeyComment(ref) ?? label }
       return label.hasPrefix("SHA256:") ? "SSH key" : label
     case .gpgKey:
       guard let key = gpgKey(keygrip: ref.subjectId) else {
@@ -453,7 +456,29 @@ struct SubjectOpener {
       if !key.name.isEmpty { return key.name }
       return key.email ?? key.fingerprint
     default:
-      return label
+      return ref.hasName ? label : storedName(ref) ?? label
+    }
+  }
+
+  /// Comment of the loaded SSH key with the fingerprint of `ref`.
+  private func sshKeyComment(_ ref: AuditSubjectRef) -> String? {
+    let prefix = "SHA256:"
+    let id = ref.subjectId
+    let hash = id.hasPrefix(prefix) ? String(id.dropFirst(prefix.count)) : id
+    let comment = sshModel.keys.first { $0.fingerprintSha256 == hash }?.comment
+    return comment?.isEmpty == false ? comment : nil
+  }
+
+  /// Item title or vault name of `ref`, if the vault is loaded.
+  private func storedName(_ ref: AuditSubjectRef) -> String? {
+    switch ref.kind {
+    case .vault:
+      return ref.vaultId.flatMap { vaults.vaultName(id: $0) }
+    case .item, .credential, .login, .passkey:
+      guard let location = itemLocation(ref) else { return nil }
+      return vaults.cachedTitle(vaultKey: location.vaultKey, itemId: location.itemId)
+    default:
+      return nil
     }
   }
 

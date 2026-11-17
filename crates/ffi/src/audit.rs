@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use axo_pass_core::audit;
+use axo_pass_core::core::protected_settings::ProtectedSettings;
 
 use crate::*;
 
@@ -235,7 +236,13 @@ impl From<audit::AuditEvent> for AuditEventRecord {
         let requester = e.requester().into();
         let action = e.action.as_str().to_string();
         let (subject_kind, subject_id, subject_label, subject_fingerprint) = match e.subject {
-            Some(s) => (Some(s.kind.into()), Some(s.id), s.label, s.fingerprint),
+            // The id is empty if the event was recorded without details.
+            Some(s) => (
+                Some(s.kind.into()),
+                Some(s.id).filter(|id| !id.is_empty()),
+                s.label,
+                s.fingerprint,
+            ),
             None => (None, None, None, None),
         };
         let actor = e.actor.unwrap_or_default();
@@ -386,6 +393,31 @@ impl AxoPass {
     /// button.
     pub fn audit_log_path(&self) -> String {
         audit::audit_log_path().display().to_string()
+    }
+
+    /// Whether the audit log records names, paths, and hosts. Stored in the
+    /// protected settings in the keychain, which `ap` reads through the app on
+    /// every write.
+    pub fn audit_include_details(&self) -> bool {
+        ProtectedSettings::load().audit_include_details
+    }
+
+    /// Turn recording of account details in the audit log on or off. Does not
+    /// change events already written. See `clear_audit_details`.
+    pub fn set_audit_include_details(&self, on: bool) -> Result<(), FfiError> {
+        ProtectedSettings::update(|settings| settings.audit_include_details = on)
+            .map(|_| ())
+            .map_err(|e| FfiError::Internal(e.to_string()))
+    }
+
+    /// Rewrite the audit files without account details. Returns the number of
+    /// events changed.
+    pub async fn clear_audit_details(&self) -> Result<u64, FfiError> {
+        tokio::task::spawn_blocking(audit::clear_details)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map(|changed| changed as u64)
+            .map_err(|e| FfiError::Internal(e.to_string()))
     }
 
     /// Record a grant lifecycle event. These explain why a key use raised no

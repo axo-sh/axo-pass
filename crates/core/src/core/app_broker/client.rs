@@ -19,6 +19,10 @@ use crate::core::dirs::app_data_dir;
 /// giving up. Disconnecting ends the prompt, see `InFlightRequest`.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a query for a setting waits for the app to answer. The app answers
+/// from memory or the keychain, so a longer wait means it is stuck.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// How long to wait for a cold app launch to start serving.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -45,24 +49,45 @@ pub(super) fn send_request_for(
             wait_for_broker()?
         },
     };
+    exchange(&stream, request, requester, RESPONSE_TIMEOUT)
+}
 
+/// Send `request` to an app that is already running. Fails with
+/// [`BrokerError::Unavailable`] if nothing is listening, and never starts the
+/// app. Gives up after [`QUERY_TIMEOUT`]. For requests made while recording
+/// something else, which must not start the app or wait on a prompt.
+pub(super) fn query_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
+    let stream = connect().map_err(|_| BrokerError::Unavailable)?;
+    exchange(&stream, request, None, QUERY_TIMEOUT)
+}
+
+/// Write `request` to `stream` and read the response line, waiting at most
+/// `timeout` for the response.
+fn exchange(
+    stream: &std::os::unix::net::UnixStream,
+    request: &WireRequest,
+    requester: Option<BorrowedFd<'_>>,
+    timeout: Duration,
+) -> Result<WireResponse, BrokerError> {
     stream
-        .set_read_timeout(Some(RESPONSE_TIMEOUT))
+        .set_read_timeout(Some(timeout))
+        .and_then(|()| stream.set_write_timeout(Some(timeout)))
         .map_err(|e| BrokerError::Failed(e.to_string()))?;
 
     let mut line = serde_json::to_vec(request).map_err(|e| BrokerError::Failed(e.to_string()))?;
     line.push(b'\n');
-    (&stream)
+    let mut writer = stream;
+    writer
         .write_all(&line)
-        .and_then(|_| (&stream).flush())
+        .and_then(|()| writer.flush())
         .map_err(|e| BrokerError::Failed(format!("Failed to send request: {e}")))?;
 
     if let Some(requester) = requester {
-        wait_for_response(&stream, requester)?;
+        wait_for_response(stream, requester)?;
     }
 
     let mut response_line = String::new();
-    BufReader::new(&stream)
+    BufReader::new(stream)
         .read_line(&mut response_line)
         .map_err(|e| match e.kind() {
             // macOS reports an expired socket read timeout as WouldBlock.

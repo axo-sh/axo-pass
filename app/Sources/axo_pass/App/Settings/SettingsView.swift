@@ -17,7 +17,7 @@ struct SettingsView: View {
   var body: some View {
     TabView {
       GeneralSettingsView()
-        .settingsPane()
+        .scrollingSettingsPane()
         .tabItem { SettingsTab.label("General", symbol: "gearshape") }
       VaultsSettingsView()
         .settingsPane()
@@ -139,6 +139,8 @@ private struct GeneralSettingsView: View {
   private var reuseApprovals = Preferences.defaultReuseApprovals
   @AppStorage(Preferences.Key.paletteHotKey)
   private var paletteHotKey: HotKey?
+  @State private var audit = AuditSettingsModel()
+  @State private var confirmingClear = false
 
   var body: some View {
     Form {
@@ -175,6 +177,49 @@ private struct GeneralSettingsView: View {
         """
       )
       .settingsCaption()
+
+      Toggle(
+        "Include account details in the activity log",
+        isOn: Binding(get: { audit.includeDetails }, set: { audit.setIncludeDetails($0) }))
+      Text(
+        """
+        Records site names, hosts, key comments, item and vault names, file paths, and error \
+        text for each event. Details are stored in plaintext, and any program that runs as you \
+        can read them. Events are always recorded. This setting turns off only the details, \
+        and does not change entries already written. The setting is kept in the keychain, \
+        where other programs cannot change it. Events that `ap` records while this app is \
+        not running are written without details.
+        """
+      )
+      .settingsCaption()
+
+      LabeledContent("") {
+        HStack(spacing: 8) {
+          Button("Clear details from existing entries…") { confirmingClear = true }
+            .disabled(audit.isClearing)
+          if let result = audit.clearResult {
+            Text(result).captionStyle()
+          }
+        }
+      }
+      if let error = audit.error {
+        Text(error)
+          .foregroundStyle(.red)
+          .settingsCaption()
+      }
+    }
+    .confirmationDialog(
+      "Clear details from existing entries?", isPresented: $confirmingClear,
+      titleVisibility: .visible
+    ) {
+      Button("Clear Details", role: .destructive) {
+        Task { await audit.clearDetails() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "Rewrites every audit file without site names, hosts, key comments, item and vault names, file paths, and error text. This cannot be undone."
+      )
     }
   }
 
@@ -735,6 +780,15 @@ extension View {
     self
       .padding(20)
       .frame(width: 440, height: 340, alignment: .top)
+  }
+
+  /// Same size as `settingsPane`, with content that is taller than the pane
+  /// scrolled.
+  fileprivate func scrollingSettingsPane() -> some View {
+    ScrollView {
+      self.padding(20)
+    }
+    .frame(width: 440, height: 340, alignment: .top)
   }
 
   /// The look of explanatory text under a control: smaller and secondary.

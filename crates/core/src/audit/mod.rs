@@ -44,7 +44,7 @@ pub use event::{
     set_process_source,
 };
 pub use reader::{AuditFilter, AuditPage, DetailId, read};
-pub use writer::{audit_dir, audit_log_path, record, record_async};
+pub use writer::{audit_dir, audit_log_path, clear_details, include_details, record, record_async};
 
 /// Record an `ssh.managed_key_delete` event from a delete result of `(label,
 /// SHA256 fingerprint)`. Shared by the app broker (deleting by label) and the
@@ -82,8 +82,8 @@ pub fn record_managed_key_delete(actor: Option<Actor>, result: &Result<(String, 
 pub(crate) mod test_support {
     use std::sync::{Mutex, MutexGuard};
 
-    /// The audit dir is process-global via an env var, so tests that set it
-    /// must not run concurrently.
+    /// The audit dir and the details setting are process-global via env vars,
+    /// so tests that set them must not run concurrently.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     pub(crate) struct TestDir {
@@ -91,14 +91,24 @@ pub(crate) mod test_support {
         _dir: tempfile::TempDir,
     }
 
+    impl TestDir {
+        /// Turn the account details setting on or off.
+        pub(crate) fn details(&self, on: bool) {
+            unsafe { std::env::set_var("AXO_PASS_AUDIT_DETAILS", if on { "1" } else { "0" }) };
+        }
+    }
+
+    /// A scratch audit dir with the account details setting on.
     pub(crate) fn test_dir() -> TestDir {
         let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", dir.path()) };
-        TestDir {
+        let test_dir = TestDir {
             _guard: guard,
             _dir: dir,
-        }
+        };
+        test_dir.details(true);
+        test_dir
     }
 }
 

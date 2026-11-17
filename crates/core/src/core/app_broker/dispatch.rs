@@ -7,6 +7,7 @@ use super::{
     Authorizers, ConfirmPrompt, PassphraseKind, PassphrasePrompt, SignPrompt, age, gpg, keychain,
     ssh, vault,
 };
+use crate::core::protected_settings::ProtectedSettings;
 use crate::core::provenance::PeerIdentity;
 use crate::secrets::vaults::autofill::check_rp_id;
 use crate::secrets::vaults::passkey::signals::Report;
@@ -839,6 +840,17 @@ pub(super) async fn serve_request(
                     .unless_abandoned(authorizers.passphrase.message(description))
                     .await;
                 WireResponse::Acknowledged
+            },
+            WireRequest::GetProtectedSettings => {
+                log::debug!("App broker request: protected settings");
+                tokio::task::spawn_blocking(ProtectedSettings::load)
+                    .await
+                    .map_or_else(
+                        |e| WireResponse::Failed {
+                            message: format!("Failed to read the settings: {e}"),
+                        },
+                        |settings| WireResponse::ProtectedSettings { settings },
+                    )
             },
         })
     };

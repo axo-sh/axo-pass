@@ -67,6 +67,29 @@ pub struct AuditEvent {
     pub message: Option<String>,
 }
 
+/// Detail keys that hold names, paths, hosts, or origins. Omitted from events
+/// recorded without account details.
+const DETAIL_KEYS_WITH_NAMES: [&str; 18] = [
+    "service_host",
+    "top_host",
+    "frame_origin",
+    "origins",
+    "vault",
+    "imported_vault",
+    "dest_vault",
+    "dest_item",
+    "source_item",
+    "new_name",
+    "new_key",
+    "credential",
+    "key_label",
+    "host",
+    "user",
+    "hostkey_fingerprint",
+    "file",
+    "path",
+];
+
 /// Ids of the vault, item, and credential an event names. Ids stay the same
 /// across renames and moves, unlike the key path in the subject.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -114,6 +137,31 @@ impl AuditEvent {
             detail: BTreeMap::new(),
             message: None,
         }
+    }
+
+    /// Remove names, paths, hosts, and error text. Keeps ids, counts, scopes,
+    /// and the whole actor, which says which process asked.
+    pub fn without_details(mut self) -> Self {
+        self.message = None;
+        for key in DETAIL_KEYS_WITH_NAMES {
+            self.detail.remove(key);
+        }
+        let short_id = |key: &str| self.detail.get(key).cloned();
+        if let Some(subject) = self.subject.as_mut() {
+            subject.label = None;
+            subject.id = match subject.kind {
+                SubjectKind::GpgKey => std::mem::take(&mut subject.id),
+                SubjectKind::SshKey if subject.id.starts_with("SHA256:") => {
+                    std::mem::take(&mut subject.id)
+                },
+                SubjectKind::SshKey => subject.fingerprint.clone().unwrap_or_default(),
+                SubjectKind::Vault => short_id("vault_id").unwrap_or_default(),
+                SubjectKind::Item => short_id("item_id").unwrap_or_default(),
+                SubjectKind::Credential => short_id("credential_id").unwrap_or_default(),
+                SubjectKind::AgeIdentity => String::new(),
+            };
+        }
+        self
     }
 
     pub fn subject(mut self, subject: Subject) -> Self {

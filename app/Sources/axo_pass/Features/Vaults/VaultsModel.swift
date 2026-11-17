@@ -643,6 +643,20 @@ final class VaultsModel {
     return username?.isEmpty == false ? username : nil
   }
 
+  /// Title of item `itemId` in vault `vaultKey`. Nil if the vault is not
+  /// loaded or the item is gone.
+  func cachedTitle(vaultKey: String, itemId: String) -> String? {
+    let title = itemCache[vaultKey]?.first { $0.id == itemId }?.title
+    return title?.isEmpty == false ? title : nil
+  }
+
+  /// Name of the listed vault with the short vault id `id`. Nil if the vault
+  /// has no name.
+  func vaultName(id: String) -> String? {
+    let name = vaults.first { $0.id == id }?.name
+    return name?.isEmpty == false ? name : nil
+  }
+
   /// Number of items of `type` in all vaults. Nil until every vault is loaded.
   func itemCount(of type: ItemType) -> Int? {
     var count = 0

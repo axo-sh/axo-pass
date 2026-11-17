@@ -260,13 +260,15 @@ struct ActivityPane: View {
   // MARK: - Days
 
   /// Events with runs of matching SSH signatures merged. A run has the same
-  /// key, program, and outcome with no other event between. Each run is
-  /// listed newest first.
+  /// key, program, and outcome with no other event between. Keys are compared
+  /// by key id, since a label is missing from events recorded without account
+  /// details. Each run is listed newest first.
   private func collapsed(_ events: [ActivityEvent]) -> [[ActivityEvent]] {
     var runs: [[ActivityEvent]] = []
     for event in events {
       if let last = runs.last?.first, event.action == "ssh.sign",
-        last.action == event.action, last.label == event.label, last.caller == event.caller,
+        last.action == event.action, last.ref.subjectId == event.ref.subjectId,
+        last.caller == event.caller,
         last.record.outcome == event.record.outcome
       {
         runs[runs.count - 1].append(event)

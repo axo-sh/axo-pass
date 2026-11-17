@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ssh::{ManagedIdentity, SignPurpose};
 use super::{BrokerError, age, keychain, vault};
+use crate::core::protected_settings::ProtectedSettings;
 use crate::core::provenance::ProcessNode;
 use crate::secrets::password::PasswordPolicy;
 use crate::secrets::vaults::bundle::{ExportMode, ImportAction, ImportIdentity, WorkFactor};
@@ -542,6 +543,10 @@ pub(super) enum WireRequest {
     Message {
         description: Option<String>,
     },
+
+    /// `ap` reads the settings kept in the app's keychain. Raises no prompt.
+    /// The client never starts the app for this request.
+    GetProtectedSettings,
 }
 
 impl WireRequest {
@@ -584,7 +589,8 @@ impl WireRequest {
             | WireRequest::ReportAcceptedPasskeys { .. }
             | WireRequest::ReportPasskeyName { .. }
             | WireRequest::Confirm { .. }
-            | WireRequest::Message { .. } => None,
+            | WireRequest::Message { .. }
+            | WireRequest::GetProtectedSettings => None,
         }
     }
 
@@ -618,6 +624,9 @@ impl WireRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub(super) enum WireResponse {
+    ProtectedSettings {
+        settings: ProtectedSettings,
+    },
     Identities {
         keys: Vec<ManagedIdentity>,
     },

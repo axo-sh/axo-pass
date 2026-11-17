@@ -1,3 +1,6 @@
+use std::os::unix::fs::PermissionsExt;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::ext::NumericalDuration;
@@ -430,4 +433,224 @@ fn malformed_lines_skipped_and_counted() {
     let page = read(&AuditFilter::default());
     assert_eq!(page.events.len(), 1);
     assert_eq!(page.skipped_lines, 2);
+}
+
+/// Strings that appear only in fields omitted without account details.
+const NAME_SENTINELS: [&str; 12] = [
+    "github.example.com",
+    "https://frame.example.com",
+    "Personal/GitHub/password",
+    "Work Vault",
+    "ada@example.com",
+    "work-laptop.example.net",
+    "SHA256:hostkey",
+    "/Users/ada/secret.txt",
+    "permission denied for /Users/ada",
+    "ada-signing-key",
+    "key comment",
+    "age1recipient",
+];
+
+fn login_fill_event() -> AuditEvent {
+    AuditEvent::new(Source::App, Action::CredentialRead, Outcome::Failed)
+        .subject(
+            Subject::new(SubjectKind::Credential, "Personal/GitHub/password").label("GitHub login"),
+        )
+        .subject_ids(SubjectIds::credential(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        ))
+        .actor(Actor {
+            caller: Some("Firefox".into()),
+            pid: Some(7),
+            executable: Some("/Applications/Firefox.app/Contents/MacOS/firefox".into()),
+            bundle_id: Some("org.mozilla.firefox".into()),
+            team_id: Some("43AQ936H96".into()),
+            chain: vec!["firefox".into(), "launchd".into()],
+            ..Default::default()
+        })
+        .detail("service_host", "github.example.com")
+        .detail("top_host", "github.example.com")
+        .detail("frame_origin", "https://frame.example.com")
+        .detail("vault", "Work Vault")
+        .detail("credential", "Personal/GitHub/password")
+        .detail("login_request", "fill")
+        .detail("via", "broker")
+        .detail("browser", "Firefox")
+        .message("permission denied for /Users/ada")
+}
+
+fn ssh_sign_event() -> AuditEvent {
+    AuditEvent::new(Source::Agent, Action::SshSign, Outcome::Succeeded)
+        .subject(
+            Subject::new(SubjectKind::SshKey, "SHA256:abc")
+                .label("key comment")
+                .fingerprint("SHA256:abc"),
+        )
+        .detail("host", "work-laptop.example.net")
+        .detail("user", "ada@example.com")
+        .detail("hostkey_fingerprint", "SHA256:hostkey")
+        .detail("key_label", "ada-signing-key")
+        .detail("algorithm", "ssh-ed25519")
+}
+
+fn age_encrypt_event() -> AuditEvent {
+    AuditEvent::new(Source::Cli, Action::AgeEncrypt, Outcome::Succeeded)
+        .subject(Subject::new(SubjectKind::AgeIdentity, "work").label("age1recipient"))
+        .detail("file", "/Users/ada/secret.txt")
+        .detail("recipients", "2")
+}
+
+fn audit_file_text() -> String {
+    std::fs::read_to_string(audit_log_path()).unwrap()
+}
+
+#[test]
+fn details_omitted_when_setting_off() {
+    let t = test_dir();
+    t.details(false);
+    record(login_fill_event());
+    record(ssh_sign_event());
+    record(age_encrypt_event());
+
+    let text = audit_file_text();
+    for sentinel in NAME_SENTINELS {
+        assert!(!text.contains(sentinel), "{sentinel} was written:\n{text}");
+    }
+    for line in text.lines() {
+        let value: Value = serde_json::from_str(line).unwrap();
+        assert!(value["subject"].get("label").is_none(), "{line}");
+        assert!(value.get("message").is_none(), "{line}");
+    }
+
+    let events = read(&AuditFilter::default()).events;
+    let fill = events
+        .iter()
+        .find(|e| e.action == Action::CredentialRead)
+        .unwrap();
+    let actor = fill.actor.as_ref().unwrap();
+    assert_eq!(actor.caller.as_deref(), Some("Firefox"));
+    assert_eq!(actor.bundle_id.as_deref(), Some("org.mozilla.firefox"));
+    assert_eq!(actor.team_id.as_deref(), Some("43AQ936H96"));
+    assert_eq!(actor.pid, Some(7));
+    assert_eq!(
+        actor.executable.as_deref(),
+        Some("/Applications/Firefox.app/Contents/MacOS/firefox")
+    );
+    assert_eq!(actor.chain, ["firefox", "launchd"]);
+    assert_eq!(fill.detail["login_request"], "fill");
+    assert_eq!(fill.detail["via"], "broker");
+    assert_eq!(fill.detail["browser"], "Firefox");
+    assert_eq!(
+        fill.subject.as_ref().unwrap().id,
+        fill.detail["credential_id"]
+    );
+    let sign = events.iter().find(|e| e.action == Action::SshSign).unwrap();
+    let subject = sign.subject.as_ref().unwrap();
+    assert_eq!(subject.id, "SHA256:abc");
+    assert_eq!(subject.fingerprint.as_deref(), Some("SHA256:abc"));
+    let age = events
+        .iter()
+        .find(|e| e.action == Action::AgeEncrypt)
+        .unwrap();
+    assert_eq!(age.detail["recipients"], "2");
+}
+
+#[test]
+fn requester_derived_when_setting_off() {
+    let t = test_dir();
+    t.details(false);
+    let host = "/Applications/Axo Pass.app/Contents/MacOS/AxoPassBrowserHost";
+    record(
+        AuditEvent::new(Source::App, Action::ItemListed, Outcome::Succeeded).actor(Actor {
+            executable: Some(host.into()),
+            ..Default::default()
+        }),
+    );
+
+    let events = read(&AuditFilter {
+        requesters: vec![Requester::Browser],
+        ..Default::default()
+    })
+    .events;
+    assert_eq!(events.len(), 1);
+}
+
+#[test]
+fn details_recorded_when_setting_on() {
+    let t = test_dir();
+    t.details(true);
+    record(login_fill_event());
+    record(ssh_sign_event());
+    record(age_encrypt_event());
+
+    let text = audit_file_text();
+    for sentinel in NAME_SENTINELS {
+        assert!(
+            text.contains(sentinel),
+            "{sentinel} was not written:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn clear_details_rewrites_detailed_events_only() {
+    let _t = test_dir();
+    record(login_fill_event());
+    record(event(Action::VaultUnlock, Outcome::Succeeded));
+    record(ssh_sign_event());
+    let mut content = audit_file_text();
+    let unlock_line = content
+        .lines()
+        .find(|l| l.contains("vault.unlock"))
+        .unwrap()
+        .to_string();
+    content.push_str("this is not json\n");
+    std::fs::write(audit_log_path(), content).unwrap();
+
+    assert_eq!(clear_details().unwrap(), 2);
+
+    let text = audit_file_text();
+    for sentinel in NAME_SENTINELS {
+        assert!(!text.contains(sentinel), "{sentinel} was kept:\n{text}");
+    }
+    assert!(text.lines().any(|l| l == unlock_line));
+    assert!(text.lines().any(|l| l == "this is not json"));
+    assert_eq!(text.lines().count(), 4);
+    assert_eq!(clear_details().unwrap(), 0);
+
+    let mode = std::fs::metadata(audit_log_path())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn clear_details_keeps_concurrent_appends() {
+    let _t = test_dir();
+    record(login_fill_event());
+    const APPENDS: usize = 300;
+
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..APPENDS {
+                record(ssh_sign_event());
+            }
+            done.store(true, Ordering::SeqCst);
+        });
+        while !done.load(Ordering::SeqCst) {
+            clear_details().unwrap();
+        }
+    });
+
+    let events = read(&AuditFilter {
+        actions: vec![Action::SshSign],
+        ..Default::default()
+    })
+    .events;
+    assert_eq!(events.len(), APPENDS);
+    assert_eq!(read(&AuditFilter::default()).skipped_lines, 0);
 }

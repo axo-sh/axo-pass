@@ -39,6 +39,7 @@ mod login_index;
 mod mach;
 mod placement;
 mod server;
+mod settings;
 pub mod ssh;
 #[cfg(test)]
 mod tests;
@@ -63,6 +64,7 @@ pub use placement::{
     PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault, VaultChoices,
 };
 pub use server::serve;
+pub use settings::request_protected_settings;
 pub use ssh::{
     ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
     request_authorize_key_use, request_signature, request_ssh_passphrase,

@@ -164,7 +164,9 @@ private struct AuditEventInspector: View {
             }
           }
 
-          if row.record.subjectId != nil || row.record.subjectLabel != nil {
+          if row.record.subjectKind != nil || row.record.subjectId != nil
+            || row.record.subjectLabel != nil
+          {
             InsetGroupedSection {
               if let kind = row.subjectKindText { LabeledContent("Kind", value: kind) }
               if let id = row.record.subjectId { LabeledContent("Subject", value: id) }

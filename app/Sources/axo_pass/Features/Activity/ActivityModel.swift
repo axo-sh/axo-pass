@@ -162,6 +162,7 @@ struct ActivityEvent: Identifiable {
     caller = UsedTodayEntry.callerName(record)
     ref = AuditSubjectRef(
       kind: subject.kind, subjectId: subject.id, vaultId: record.detail["vault_id"],
-      vaultKey: record.detail["vault"], itemId: UsedTodayEntry.itemId(of: record))
+      vaultKey: record.detail["vault"], itemId: UsedTodayEntry.itemId(of: record),
+      hasName: subject.hasName)
   }
 }

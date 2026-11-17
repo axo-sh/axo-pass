@@ -7,6 +7,7 @@ pub mod files;
 pub mod find_bin_folder;
 pub mod interpolate;
 mod objc_helpers;
+pub mod protected_settings;
 pub mod provenance;
 pub mod read_input;
 pub mod updates;

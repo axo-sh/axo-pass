@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use super::support::{STUB_PASSPHRASE, TestBroker, accepting_policy};
 use crate::core::app_broker::PassphraseKind;
+use crate::core::app_broker::access::RequestScope;
 use crate::core::app_broker::wire::{WireResponse, b64_decode_raw};
 
 /// A confirm-on-use request reaches the sign authorizer, worded for a key
@@ -192,4 +193,42 @@ async fn answers_managed_key_deletion_for_unknown_label() {
         matches!(response, WireResponse::Failed { .. }),
         "unexpected response to an unknown managed key deletion"
     );
+}
+
+/// The settings request is answered without a prompt. The test binary has no
+/// keychain access group, so the settings are the defaults.
+#[tokio::test(flavor = "multi_thread")]
+async fn answers_protected_settings_request() {
+    let broker = TestBroker::start(accepting_policy()).await;
+
+    let response = broker.request_parsed(r#"{"request":"get_protected_settings"}"#);
+
+    let WireResponse::ProtectedSettings { settings } = response else {
+        panic!("unexpected response to a settings request");
+    };
+    assert!(!settings.audit_include_details);
+    assert!(
+        broker
+            .authorizer
+            .passphrase_kinds
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Only `ap` reads the settings. The AutoFill extension and the browser host
+/// are refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_settings_refused_to_extension_and_browser_host() {
+    for scope in [RequestScope::AutofillExtension, RequestScope::BrowserHost] {
+        let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
+
+        let response = broker.request_parsed(r#"{"request":"get_protected_settings"}"#);
+
+        assert!(
+            matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
+            "{scope:?} read the settings"
+        );
+    }
 }
