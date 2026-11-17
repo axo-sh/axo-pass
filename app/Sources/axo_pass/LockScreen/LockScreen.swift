@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LockScreen: View {
   @Environment(VaultsModel.self) private var model
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     VStack(spacing: 12) {
@@ -15,7 +16,7 @@ struct LockScreen: View {
           .overlay(alignment: .center) {
             AxoLogo()
               .frame(width: 450, height: 450)
-              .opacity(0.04)
+              .opacity(colorScheme == .light ? 0.08 : 0.04)
               .allowsHitTesting(false)
               .offset(y: -30)
           }
