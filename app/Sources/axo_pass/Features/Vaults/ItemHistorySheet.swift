@@ -124,8 +124,8 @@ struct ItemHistorySheet: View {
   private static func label(_ kind: ItemHistoryKind) -> String {
     switch kind {
     case .itemCreated: return "Created item"
-    case .valueCreated: return "Added value"
-    case .valueUpdated: return "Changed value"
+    case .valueCreated: return "Added credential"
+    case .valueUpdated: return "Changed credential value"
     case .credentialDeleted: return "Deleted credential"
     case .other: return "Changed credential"
     }
