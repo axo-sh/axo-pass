@@ -510,7 +510,7 @@ struct SubjectOpener {
   }
 }
 
-/// Uppercase section title of the Today page, with an optional count badge.
+/// Section title of the Today page, with an optional count badge.
 struct TodaySectionHeader: View {
   let title: String
   let count: Int?
@@ -525,8 +525,6 @@ struct TodaySectionHeader: View {
   var body: some View {
     HStack(spacing: 8) {
       Text(title)
-        .textCase(.uppercase)
-        .kerning(0.6)
         .foregroundStyle(.secondary)
       if let count {
         Text("\(count)")
@@ -536,7 +534,7 @@ struct TodaySectionHeader: View {
           .background(tint.opacity(0.18), in: Capsule())
       }
     }
-    .font(.caption)
+    .font(.subheadline)
     .fontWeight(.semibold)
     .padding(.top, 24)
     .padding(.bottom, 8)

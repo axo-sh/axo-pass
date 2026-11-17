@@ -56,7 +56,7 @@ private struct AgeKeyDetail: View {
         }
 
         if !recentEvents.isEmpty {
-          sectionTitle("Recent Activity")
+          sectionTitle("Recent activity")
           InsetGroupedSection { activityTable }
         }
       }
@@ -132,8 +132,8 @@ private struct AgeKeyDetail: View {
   // MARK: - Rows
 
   private func sectionTitle(_ text: String) -> some View {
-    Text(text.uppercased())
-      .font(.caption)
+    Text(text)
+      .font(.subheadline)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -141,8 +141,8 @@ private struct AgeKeyDetail: View {
   }
 
   private func columnHeader(_ text: String) -> some View {
-    Text(text.uppercased())
-      .font(.caption2)
+    Text(text)
+      .font(.caption)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
   }

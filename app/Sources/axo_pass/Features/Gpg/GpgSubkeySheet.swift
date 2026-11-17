@@ -131,7 +131,7 @@ struct GpgSubkeySheet: View {
 
   private func labelledBlock(_ label: String, value: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(label.uppercased())
+      Text(label)
         .font(.caption)
         .fontWeight(.semibold)
         .foregroundStyle(.secondary)

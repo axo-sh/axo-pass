@@ -41,7 +41,7 @@ private struct SshKeyDetail: View {
         header
         badges.padding(.top, 10).padding(.bottom, 16)
         if let publicKeyText {
-          sectionTitle("Public Key")
+          sectionTitle("Public key")
           InsetGroupedSection {
             CharWrappingText(text: publicKeyText, dimsOuterFields: true)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -93,15 +93,15 @@ private struct SshKeyDetail: View {
           }
         }
         if !relatedHosts.isEmpty {
-          sectionTitle("Known Hosts")
+          sectionTitle("Known hosts")
           InsetGroupedSection { hostsTable }
         }
         if grantsApply {
-          sectionTitle("Allowed Apps")
+          sectionTitle("Allowed apps")
           InsetGroupedSection { allowedApps }
         }
         if !recentEvents.isEmpty {
-          sectionTitle("Recent Activity")
+          sectionTitle("Recent activity")
           InsetGroupedSection { activityTable }
         }
       }
@@ -244,8 +244,8 @@ private struct SshKeyDetail: View {
   // MARK: - Rows
 
   private func sectionTitle(_ text: String) -> some View {
-    Text(text.uppercased())
-      .font(.caption)
+    Text(text)
+      .font(.subheadline)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -287,7 +287,7 @@ private struct SshKeyDetail: View {
       GridRow {
         columnHeader("Host")
         columnHeader("User")
-        columnHeader("Last Used").gridColumnAlignment(.trailing)
+        columnHeader("Last used").gridColumnAlignment(.trailing)
       }
       Divider().gridCellColumns(3)
       ForEach(Array(relatedHosts.enumerated()), id: \.offset) { _, host in
@@ -416,8 +416,8 @@ private struct SshKeyDetail: View {
   }
 
   private func columnHeader(_ text: String) -> some View {
-    Text(text.uppercased())
-      .font(.caption2)
+    Text(text)
+      .font(.caption)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
   }

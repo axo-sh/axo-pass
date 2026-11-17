@@ -525,8 +525,8 @@ struct CredentialRow: View {
   }
 
   private func columnHeader(_ text: String) -> some View {
-    Text(text.uppercased())
-      .font(.caption2)
+    Text(text)
+      .font(.caption)
       .fontWeight(.semibold)
       .foregroundStyle(.secondary)
   }

@@ -78,8 +78,8 @@ struct AuditHelpSheet: View {
         let rows = actions.filter { $0.category == category }
         if !rows.isEmpty {
           VStack(alignment: .leading, spacing: 6) {
-            Text(category.label.uppercased())
-              .font(.caption)
+            Text(category.label)
+              .font(.subheadline)
               .fontWeight(.semibold)
               .foregroundStyle(.secondary)
               .padding(.leading, tableInset)
