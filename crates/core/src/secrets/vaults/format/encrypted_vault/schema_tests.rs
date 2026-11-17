@@ -225,6 +225,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         | FieldKind::Totp
         | FieldKind::Passkey
         | FieldKind::File
+        | FieldKind::SshKey
         | FieldKind::Unknown(_) => {},
     };
     let kinds = [
@@ -243,6 +244,7 @@ fn credential_metadata() -> Vec<VaultCredentialMetadata> {
         FieldKind::Totp,
         FieldKind::Passkey,
         FieldKind::File,
+        FieldKind::SshKey,
         FieldKind::Unknown(json!({"type": "wifi", "ssid": "home"})),
     ];
     let minimal = |kind: FieldKind| VaultCredentialMetadata {

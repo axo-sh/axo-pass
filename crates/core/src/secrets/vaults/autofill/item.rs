@@ -12,6 +12,9 @@ use crate::secrets::vaults::model::{VaultItemCredentialOverview, VaultItemOvervi
 /// The `category` value for items created as logins.
 pub const CATEGORY_LOGIN: &str = "login";
 
+/// The `category` value for items that hold an SSH key.
+pub const CATEGORY_SSH_KEY: &str = "ssh-key";
+
 /// A credential's part in autofill.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -95,7 +98,11 @@ impl ItemAutofill {
     ) -> Option<&'a VaultItemCredentialOverview> {
         let cred = item.credentials.get(&slot?)?;
         match cred.kind {
-            FieldKind::Passkey | FieldKind::File | FieldKind::Totp | FieldKind::Unknown(_) => None,
+            FieldKind::Passkey
+            | FieldKind::File
+            | FieldKind::SshKey
+            | FieldKind::Totp
+            | FieldKind::Unknown(_) => None,
             _ => Some(cred),
         }
     }

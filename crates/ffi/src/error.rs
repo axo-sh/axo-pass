@@ -76,6 +76,7 @@ impl From<VaultError> for FfiError {
             },
             other @ (VaultError::FileMoveRefused(_)
             | VaultError::FileKindChange(_)
+            | VaultError::SshKeyKindChange(_)
             | VaultError::InvalidFolderOrder
             | VaultError::DuplicateCredentialKey(_)
             | VaultError::DuplicateItemKey(_)

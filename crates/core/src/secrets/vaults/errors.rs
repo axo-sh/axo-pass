@@ -195,6 +195,9 @@ pub enum Error {
     #[error("Credential {0} cannot change to or from a file")]
     FileKindChange(String),
 
+    #[error("Credential {0} cannot change to or from an SSH key")]
+    SshKeyKindChange(String),
+
     #[error("Failed to create new encryption: {0}")]
     KeyCreationFailed(KeychainError),
 

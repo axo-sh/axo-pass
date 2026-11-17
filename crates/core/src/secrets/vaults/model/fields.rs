@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::Zeroize;
 
+use crate::secrets::vaults::errors::Error;
+
 #[derive(Serialize, Deserialize, Zeroize, Default, Clone, PartialEq, Eq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TextField {
@@ -42,6 +44,11 @@ pub enum FieldKind {
     /// It is never editable as text. A credential never changes to or from
     /// this kind.
     File,
+    /// An SSH private key. The credential value is a JSON `SshKeyRecord` (see
+    /// `ssh_keys/mod.rs`), holding the private key, so it is confidential. It
+    /// is never editable as text. A credential never changes to or from this
+    /// kind.
+    SshKey,
     /// Unknown or newer kind written by another client. Rendered read-only.
     #[serde(untagged)]
     Unknown(Value),
@@ -85,6 +92,19 @@ impl FieldKind {
             })
         )
     }
+}
+
+/// Fail with `SshKeyKindChange` if a credential `cred_key` of kind `from`
+/// would change to kind `to` and exactly one of them is the SSH key kind.
+pub(super) fn check_ssh_key_kind_change(
+    cred_key: &str,
+    from: &FieldKind,
+    to: &FieldKind,
+) -> Result<(), Error> {
+    if matches!(from, FieldKind::SshKey) != matches!(to, FieldKind::SshKey) {
+        return Err(Error::SshKeyKindChange(cred_key.to_string()));
+    }
+    Ok(())
 }
 
 impl Zeroize for FieldKind {
@@ -161,6 +181,7 @@ mod tests {
             r#"{"type":"email","x":1}"#,
             r#"{"type":"passkey","x":1}"#,
             r#"{"type":"file","x":1}"#,
+            r#"{"type":"ssh-key","x":1}"#,
             r#"{"multiline":true,"type":"text","x":1}"#,
             r#"{"type":"confidential","x":{"y":[1,2]}}"#,
         ] {
@@ -170,8 +191,8 @@ mod tests {
         }
     }
 
-    /// `FieldKind` of the build before the file kind, as an older reader
-    /// deserializes it.
+    /// `FieldKind` of the build before the file and SSH key kinds, as an older
+    /// reader deserializes it.
     #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
     #[serde(tag = "type", rename_all = "kebab-case")]
     enum OlderFieldKind {
@@ -204,6 +225,37 @@ mod tests {
     }
 
     #[test]
+    fn ssh_key_kind_unknown_on_older_reader() {
+        let json = serde_json::to_string(&FieldKind::SshKey).unwrap();
+        assert_eq!(json, r#"{"type":"ssh-key"}"#);
+
+        let older: OlderFieldKind = serde_json::from_str(&json).unwrap();
+        assert!(matches!(older, OlderFieldKind::Unknown(_)), "{older:?}");
+
+        // An older client that rewrites the metadata writes the same object.
+        let back = serde_json::to_string(&older).unwrap();
+        assert_eq!(
+            serde_json::from_str::<FieldKind>(&back).unwrap(),
+            FieldKind::SshKey
+        );
+    }
+
+    #[test]
+    fn ssh_key_kind_change_refused_in_both_directions() {
+        let text = FieldKind::default();
+        for (from, to) in [
+            (&text, &FieldKind::SshKey),
+            (&FieldKind::SshKey, &text),
+            (&FieldKind::SshKey, &FieldKind::File),
+        ] {
+            let err = check_ssh_key_kind_change("key", from, to).unwrap_err();
+            assert!(matches!(err, Error::SshKeyKindChange(_)), "{err}");
+        }
+        check_ssh_key_kind_change("key", &FieldKind::SshKey, &FieldKind::SshKey).unwrap();
+        check_ssh_key_kind_change("key", &text, &FieldKind::Totp).unwrap();
+    }
+
+    #[test]
     fn every_known_kind_reads_as_itself() {
         let kinds = [
             FieldKind::Text(TextField { multiline: None }),
@@ -220,6 +272,7 @@ mod tests {
             FieldKind::Totp,
             FieldKind::Passkey,
             FieldKind::File,
+            FieldKind::SshKey,
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).unwrap();

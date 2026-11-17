@@ -5,11 +5,12 @@ pub mod files;
 pub mod format;
 pub mod model;
 pub mod passkey;
+pub mod ssh_keys;
 pub mod storage;
 pub mod sync;
 pub mod vault_import;
 
-pub use autofill::item::{CATEGORY_LOGIN, ItemAutofill, MatchKind, Website};
+pub use autofill::item::{CATEGORY_LOGIN, CATEGORY_SSH_KEY, ItemAutofill, MatchKind, Website};
 pub use autofill::{
     AutofillItem, LoginPlace, LoginSecrets, LoginSummary, LoginWrite, MatchRank, MatchedWebsite,
     OtherLogin, Site, write_login,

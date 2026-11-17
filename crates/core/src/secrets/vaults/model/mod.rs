@@ -2149,6 +2149,7 @@ impl Vault {
         let cred_overview = match self.get_item_credential(item_key, cred_key) {
             Ok(existing) => {
                 files::check_kind_change(&existing.key, &existing.kind, &cred_kind)?;
+                fields::check_ssh_key_kind_change(&existing.key, &existing.kind, &cred_kind)?;
                 VaultItemCredentialOverview {
                     title: cred_title.to_string(),
                     kind: cred_kind,
@@ -2234,6 +2235,7 @@ impl Vault {
 
         if let Some(kind) = &update.kind {
             files::check_kind_change(&cred.key, &cred.kind, kind)?;
+            fields::check_ssh_key_kind_change(&cred.key, &cred.kind, kind)?;
         }
         if let Some(title) = update.title {
             cred.title = title.trim().to_string();
