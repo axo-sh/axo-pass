@@ -6,6 +6,8 @@ use secrecy::SecretString;
 use ssh_key::PrivateKey;
 
 use super::*;
+use crate::secrets::vaults::CredentialUpdate;
+use crate::secrets::vaults::ssh_keys::ops;
 
 fn ed25519_key() -> PrivateKey {
     let data =
@@ -294,7 +296,151 @@ fn collect_lists_ssh_key_credentials_only() {
 
     let found = collect("personal", &vault);
 
-    assert_eq!(found, vec![entry(&ed25519_key(), "laptop", "key")]);
+    let credential_id = vault
+        .get_secret_overview("github", "key")
+        .unwrap()
+        .map(|credential| credential.id);
+    assert!(credential_id.is_some());
+    let expected = VaultKeyEntry {
+        credential_id,
+        ..entry(&ed25519_key(), "laptop", "key")
+    };
+    assert_eq!(found, vec![expected]);
+}
+
+#[test]
+fn credential_id_roundtrips_and_is_optional_in_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = cache_path(&dir);
+    let with_id = VaultKeyEntry {
+        credential_id: Some(Uuid::from_u128(7)),
+        ..entry(&ed25519_key(), "a", "ed")
+    };
+    let without_id = entry(&rsa_key(), "b", "rsa");
+
+    store(&path, &[with_id.clone(), without_id.clone()]).unwrap();
+
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("credential_id").count(), 1);
+    assert_eq!(load(&path), vec![with_id, without_id]);
+}
+
+fn added_key(vault: &mut VaultHandle, title: &str) -> ops::AddedKey {
+    ops::generate(vault, ops::KeyTarget::NewItem { title }, title).unwrap()
+}
+
+#[test]
+fn sync_vault_lists_new_key_and_keeps_other_vaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let ssh_dir = dir.path().join("ssh");
+    let path = cache_path(&dir);
+    let other = VaultKeyEntry {
+        vault_key: "work".to_string(),
+        ..entry(&rsa_key(), "", "rsa")
+    };
+    store(&path, std::slice::from_ref(&other)).unwrap();
+    let mut vault = VaultHandle::new_for_test("personal");
+    let added = added_key(&mut vault, "Deploy");
+
+    let mut written = sync_vault(&path, &ssh_dir, "personal", &vault).unwrap();
+
+    let listed = load(&path);
+    written.sort_by(|a, b| a.vault_key.cmp(&b.vault_key));
+    assert_eq!(listed, written);
+    assert_eq!(listed.len(), 2);
+    let mine = listed.iter().find(|e| e.vault_key == "personal").unwrap();
+    assert_eq!(mine.fingerprint, added.fingerprint);
+    assert_eq!(mine.credential_id, Some(added.credential_id));
+    assert!(listed.contains(&other));
+}
+
+#[test]
+fn sync_vault_drops_removed_key_and_deletes_its_public_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let ssh_dir = dir.path().join("ssh");
+    let path = cache_path(&dir);
+    let mut vault = VaultHandle::new_for_test("personal");
+    let kept = added_key(&mut vault, "Kept");
+    let removed = added_key(&mut vault, "Removed");
+    sync_vault(&path, &ssh_dir, "personal", &vault).unwrap();
+    for added in [&kept, &removed] {
+        vault_pubkeys::write(&ssh_dir, added.credential_id, &added.public_key).unwrap();
+    }
+
+    vault.delete_item(&removed.item_key).unwrap();
+    sync_vault(&path, &ssh_dir, "personal", &vault).unwrap();
+
+    let listed = load(&path);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].credential_id, Some(kept.credential_id));
+    assert!(vault_pubkeys::path_for(&ssh_dir, kept.credential_id).exists());
+    assert!(!vault_pubkeys::path_for(&ssh_dir, removed.credential_id).exists());
+}
+
+#[test]
+fn sync_vault_keeps_public_file_across_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let ssh_dir = dir.path().join("ssh");
+    let path = cache_path(&dir);
+    let mut vault = VaultHandle::new_for_test("personal");
+    let added = added_key(&mut vault, "Deploy");
+    sync_vault(&path, &ssh_dir, "personal", &vault).unwrap();
+    let file = vault_pubkeys::write(&ssh_dir, added.credential_id, &added.public_key).unwrap();
+
+    vault
+        .update_credential(
+            &added.item_key,
+            &added.credential_key,
+            CredentialUpdate {
+                key: Some("renamed".to_string()),
+                title: None,
+                kind: None,
+            },
+        )
+        .unwrap();
+    sync_vault(&path, &ssh_dir, "personal", &vault).unwrap();
+
+    let listed = load(&path);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].credential_key, "renamed");
+    assert_eq!(listed[0].credential_id, Some(added.credential_id));
+    assert!(file.exists());
+}
+
+#[test]
+fn refresh_returns_written_entries_and_sweep_keeps_locked_vault_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let ssh_dir = dir.path().join("ssh");
+    let path = cache_path(&dir);
+    let mut locked = VaultHandle::new_for_test("locked");
+    let mut open = VaultHandle::new_for_test("open");
+    let locked_key = added_key(&mut locked, "Locked");
+    let open_key = added_key(&mut open, "Open");
+    let known = ["locked".to_string(), "open".to_string()];
+    refresh(
+        &path,
+        &known,
+        vec![
+            ("locked".to_string(), collect("locked", &locked)),
+            ("open".to_string(), collect("open", &open)),
+        ],
+    )
+    .unwrap();
+    for added in [&locked_key, &open_key] {
+        vault_pubkeys::write(&ssh_dir, added.credential_id, &added.public_key).unwrap();
+    }
+
+    let written = refresh(
+        &path,
+        &known,
+        vec![("open".to_string(), collect("open", &open))],
+    )
+    .unwrap();
+    sweep_pubkey_files(&ssh_dir, &written).unwrap();
+
+    assert_eq!(written.len(), 2);
+    assert!(vault_pubkeys::path_for(&ssh_dir, locked_key.credential_id).exists());
+    assert!(vault_pubkeys::path_for(&ssh_dir, open_key.credential_id).exists());
 }
 
 #[test]

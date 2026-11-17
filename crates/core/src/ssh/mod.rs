@@ -9,3 +9,4 @@ pub mod related_hosts;
 pub mod rsa_signing;
 pub mod ssh_keys;
 pub mod utils;
+pub mod vault_pubkeys;

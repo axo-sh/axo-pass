@@ -7,6 +7,8 @@
 //!
 //! The broker signs with the key inside the app (`app_broker/ssh.rs`). The
 //! private key never leaves the app.
+//!
+//! [`ops`] generates, imports, and edits keys in an unlocked vault.
 
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,9 @@ use thiserror::Error;
 use zeroize::Zeroize;
 
 use crate::secrets::keychain::managed_key::KeyPolicy;
+use crate::secrets::vaults::Error as VaultError;
+
+pub mod ops;
 
 #[derive(Debug, Error)]
 pub enum SshKeyError {
@@ -35,6 +40,24 @@ pub enum SshKeyError {
 
     #[error("The stored key has fingerprint {actual}, not {requested}")]
     FingerprintMismatch { requested: String, actual: String },
+
+    #[error("The SSH private key is encrypted and needs a passphrase")]
+    PassphraseRequired,
+
+    #[error("The passphrase does not decrypt the SSH private key")]
+    WrongPassphrase,
+
+    #[error("Cannot derive a public key from the SSH private key: {0}")]
+    NoPublicKey(String),
+
+    #[error("This vault already holds the SSH key {fingerprint}")]
+    Duplicate { fingerprint: String },
+
+    #[error("The credential {0} is not an SSH key")]
+    NotSshKey(String),
+
+    #[error(transparent)]
+    Vault(#[from] VaultError),
 }
 
 /// The value of an SSH key credential.
@@ -96,6 +119,16 @@ impl SshKeyRecord {
             comment: comment.to_string(),
             policy: KeyPolicy::Default,
         })
+    }
+
+    /// Set the comment, in the record and in the public key line.
+    pub fn set_comment(&mut self, comment: &str) -> Result<(), SshKeyError> {
+        let public = self.parsed_public_key()?;
+        self.public_key = PublicKey::new(public.key_data().clone(), comment)
+            .to_openssh()
+            .map_err(|e| SshKeyError::InvalidPublicKey(e.to_string()))?;
+        self.comment = comment.to_string();
+        Ok(())
     }
 
     /// Parse a credential value.

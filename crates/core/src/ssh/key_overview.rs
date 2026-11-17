@@ -3,17 +3,25 @@ use std::fs;
 use std::path::Path;
 
 use ssh_agent_lib::proto::Identity;
+use ssh_key::PublicKey;
+use uuid::Uuid;
 
+use crate::core::app_broker::ssh::vault_keys::{self, VaultKeyEntry};
+use crate::core::app_broker::ssh::vault_keys_path;
 use crate::core::config::APP_CONFIG;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 use crate::ssh::agent_client::{list_axo_agent_identities, list_system_agent_identities};
 use crate::ssh::ssh_keys::{SshKeyType, SystemSshKey};
-use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint};
+use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, ssh_dir_path};
+use crate::ssh::vault_pubkeys;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SshKeyLocation {
-    Vault,
+    /// Secure Enclave key.
+    SecureEnclave,
+    /// SSH key credential in a vault.
+    VaultKey,
     Transient,
     SshDir,
 }
@@ -49,6 +57,18 @@ pub struct SshKeyOverview {
     pub agents: Vec<SshKeyAgentKind>,
     /// The Axo agent advertises this key and loads it on first use.
     pub autoload: bool,
+    /// Where the key is stored. Set for vault keys only.
+    pub vault_key: Option<VaultKeyLocation>,
+}
+
+/// Credential that holds a vault SSH key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultKeyLocation {
+    pub vault_key: String,
+    pub item_key: String,
+    pub credential_key: String,
+    /// Identifier of the credential, stable across renames.
+    pub credential_id: Option<Uuid>,
 }
 
 /// Read a `.pub` file's single line, ignoring an unreadable or empty file.
@@ -83,6 +103,7 @@ impl From<SystemSshKey> for SshKeyOverview {
             policy: None,
             agents: Vec::new(),
             autoload: false,
+            vault_key: None,
         }
     }
 }
@@ -92,7 +113,7 @@ impl From<ManagedSshKey> for SshKeyOverview {
         let pubkey_path = managed_key.pubkey_path().ok().filter(|p| p.exists());
         SshKeyOverview {
             name: managed_key.name(),
-            location: SshKeyLocation::Vault,
+            location: SshKeyLocation::SecureEnclave,
             path: None,
             key_type: SshKeyType::Ecdsa, // Managed keys are always ECDSA
             public_key: pubkey_path.as_ref().map(|p| format!("{}", p.display())),
@@ -108,6 +129,57 @@ impl From<ManagedSshKey> for SshKeyOverview {
             policy: Some(managed_key.policy()),
             agents: Vec::new(),
             autoload: false,
+            vault_key: None,
+        }
+    }
+}
+
+impl From<VaultKeyEntry> for SshKeyOverview {
+    fn from(entry: VaultKeyEntry) -> Self {
+        let pubkey_path = entry
+            .credential_id
+            .zip(ssh_dir_path().ok())
+            .map(|(id, dir)| vault_pubkeys::path_for(&dir, id))
+            .filter(|path| path.exists());
+        let public_key = PublicKey::from_openssh(&entry.public_key).ok();
+        let key_type = public_key
+            .as_ref()
+            .map_or(SshKeyType::Unknown, |key| key.algorithm().into());
+        let fingerprint_sha256 = entry
+            .fingerprint
+            .strip_prefix("SHA256:")
+            .unwrap_or(&entry.fingerprint)
+            .to_string();
+        let fingerprint_md5 = public_key
+            .as_ref()
+            .map(|key| compute_md5_fingerprint(key.key_data()))
+            .unwrap_or_default();
+        // Named like the public key file, as `~/.ssh` keys are named by their
+        // file. The comment is shown separately.
+        let name = entry
+            .credential_id
+            .map_or_else(|| entry.item_key.clone(), vault_pubkeys::key_name);
+        SshKeyOverview {
+            name,
+            location: SshKeyLocation::VaultKey,
+            path: None,
+            public_key: pubkey_path.map(|path| path.display().to_string()),
+            public_key_openssh: Some(entry.public_key),
+            comment: Some(entry.comment),
+            key_type,
+            fingerprint_sha256,
+            fingerprint_md5,
+            has_saved_password: false,
+            is_managed: false,
+            policy: None,
+            agents: Vec::new(),
+            autoload: false,
+            vault_key: Some(VaultKeyLocation {
+                vault_key: entry.vault_key,
+                item_key: entry.item_key,
+                credential_key: entry.credential_key,
+                credential_id: entry.credential_id,
+            }),
         }
     }
 }
@@ -137,6 +209,7 @@ impl From<Identity> for SshKeyOverview {
             policy: None,
             agents: Vec::new(),
             autoload: false,
+            vault_key: None,
         }
     }
 }
@@ -155,6 +228,11 @@ pub async fn list_all_ssh_keys() -> anyhow::Result<Vec<SshKeyOverview>> {
     let managed_ssh_keys = ManagedSshKey::list()?;
     for managed_key in managed_ssh_keys {
         let key_entry: SshKeyOverview = managed_key.into();
+        keys_map.insert(key_entry.fingerprint_sha256.clone(), key_entry);
+    }
+
+    for entry in vault_keys::load(&vault_keys_path()) {
+        let key_entry: SshKeyOverview = entry.into();
         keys_map.insert(key_entry.fingerprint_sha256.clone(), key_entry);
     }
 

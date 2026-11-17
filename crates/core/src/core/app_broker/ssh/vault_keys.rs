@@ -10,17 +10,20 @@
 //! broker. The broker does not trust an entry. It checks the key against the
 //! vault before it signs.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::{fs, io};
 
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use ssh_key::{HashAlg, PublicKey};
+use uuid::Uuid;
 
 use crate::core::files::write_atomic_private;
 use crate::secrets::keychain::managed_key::KeyPolicy;
 use crate::secrets::vaults::ssh_keys::SshKeyRecord;
 use crate::secrets::vaults::{FieldKind, VaultHandle};
+use crate::ssh::vault_pubkeys;
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -39,6 +42,11 @@ pub struct VaultKeyEntry {
     pub vault_key: String,
     pub item_key: String,
     pub credential_key: String,
+
+    /// Identifier of the credential, stable across renames. Absent in a
+    /// listing written before the app kept public key files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<Uuid>,
 
     pub policy: KeyPolicy,
 }
@@ -64,6 +72,7 @@ impl VaultKeyEntry {
             vault_key: vault_key.to_string(),
             item_key: item_key.to_string(),
             credential_key: credential_key.to_string(),
+            credential_id: None,
             policy: record.policy,
         })
     }
@@ -97,6 +106,10 @@ pub fn collect(vault_key: &str, vault: &VaultHandle) -> Vec<VaultKeyEntry> {
                 .and_then(|record| {
                     record.private_key().map_err(|e| e.to_string())?;
                     VaultKeyEntry::from_record(&record, vault_key, &item.key, &credential.key)
+                })
+                .map(|entry| VaultKeyEntry {
+                    credential_id: Some(credential.id),
+                    ..entry
                 });
             match entry {
                 Ok(entry) => entries.push(entry),
@@ -175,30 +188,68 @@ pub fn store(path: &Path, entries: &[VaultKeyEntry]) -> io::Result<()> {
 /// Rewrite the listing in `path` after the app read its vaults. `collected`
 /// holds the entries of each vault that was unlocked. `known` are the keys of
 /// all vaults. Entries of a vault that was not unlocked are kept, and entries
-/// of a vault that no longer exists are dropped.
+/// of a vault that no longer exists are dropped. Returns the entries written.
 pub fn refresh(
     path: &Path,
     known: &[String],
     collected: Vec<(String, Vec<VaultKeyEntry>)>,
-) -> io::Result<()> {
+) -> io::Result<Vec<VaultKeyEntry>> {
     let mut keys: Vec<VaultKeyEntry> = load(path)
         .into_iter()
         .filter(|entry| known.contains(&entry.vault_key))
         .filter(|entry| collected.iter().all(|(key, _)| *key != entry.vault_key))
         .collect();
     keys.extend(collected.into_iter().flat_map(|(_, entries)| entries));
-    store(path, &keys)
+    store(path, &keys)?;
+    Ok(keys)
 }
 
 /// Replace the entries of vault `vault_key` in `path` with `entries`. The
-/// entries of other vaults are kept.
-pub fn replace_vault(path: &Path, vault_key: &str, entries: Vec<VaultKeyEntry>) -> io::Result<()> {
+/// entries of other vaults are kept. Returns the entries written.
+pub fn replace_vault(
+    path: &Path,
+    vault_key: &str,
+    entries: Vec<VaultKeyEntry>,
+) -> io::Result<Vec<VaultKeyEntry>> {
     let mut keys: Vec<VaultKeyEntry> = load(path)
         .into_iter()
         .filter(|entry| entry.vault_key != vault_key)
         .collect();
     keys.extend(entries);
-    store(path, &keys)
+    store(path, &keys)?;
+    Ok(keys)
+}
+
+/// Rewrite the entries of vault `vault_key` in `path` from the unlocked vault
+/// `vh`, and delete the public key files in `ssh_dir` of keys that no entry
+/// lists. Returns the entries written. Fails and changes nothing if the vault
+/// is locked, since it would list no keys.
+pub fn sync_vault(
+    path: &Path,
+    ssh_dir: &Path,
+    vault_key: &str,
+    vh: &VaultHandle,
+) -> io::Result<Vec<VaultKeyEntry>> {
+    if let Err(e) = vh.list_items() {
+        return Err(io::Error::other(format!(
+            "Cannot read the vault {vault_key}: {e}"
+        )));
+    }
+    let entries = replace_vault(path, vault_key, collect(vault_key, vh))?;
+    sweep_pubkey_files(ssh_dir, &entries)?;
+    Ok(entries)
+}
+
+/// Delete the public key files in `ssh_dir` of keys that `entries` do not
+/// list. `entries` must be the entries of all vaults as just written, since a
+/// key that is missing from them is treated as removed.
+pub fn sweep_pubkey_files(ssh_dir: &Path, entries: &[VaultKeyEntry]) -> io::Result<()> {
+    let keep: HashSet<Uuid> = entries
+        .iter()
+        .filter_map(|entry| entry.credential_id)
+        .collect();
+    vault_pubkeys::sweep(ssh_dir, &keep)?;
+    Ok(())
 }
 
 #[cfg(test)]
