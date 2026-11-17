@@ -17,7 +17,7 @@ use crate::secrets::vaults::files::write_with_files;
 use crate::secrets::vaults::storage::txn::{Target, Unlock};
 use crate::secrets::vaults::vault_import::{
     FileFailure, ImportPlan, ImportSummary, MapOptions, StagedFiles, dropped_data,
-    existing_item_ids, map_items, parse_1pif, stage_plan_files, write_plan,
+    existing_item_ids, map_items, parse_export, stage_plan_files, write_plan,
 };
 use crate::secrets::vaults::{Error, ShortId, VaultCatalog, VaultHandle};
 
@@ -109,7 +109,7 @@ pub(super) fn import_items(
         return Err("Missing import payload".to_string());
     };
     let parsed =
-        parse_1pif(&import.import_path).map_err(|e| format!("Failed to read the export: {e}"))?;
+        parse_export(&import.import_path).map_err(|e| format!("Failed to read the export: {e}"))?;
     let options = MapOptions {
         include_trashed: import.include_trashed,
     };

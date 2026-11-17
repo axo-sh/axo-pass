@@ -13,13 +13,13 @@ use inquire::{MultiSelect, Select};
 use secrecy::ExposeSecret;
 use uuid::Uuid;
 
-use crate::cli::commands::vault::import_1password::{OnePasswordImport, is_1pif};
+use crate::cli::commands::vault::import_1password::{OnePasswordImport, is_item_export};
 use crate::cli::commands::vault::utils::{prompt_passphrase, read_age_identity_file};
 
 #[derive(Parser, Debug)]
 pub struct VaultImportCommand {
-    /// Path to the export file to import. A 1Password `.1pif` export is
-    /// detected and imported as items.
+    /// Path to the export file to import. A 1Password `.1pif` export or an
+    /// Apple Passwords `.csv` export is detected and imported as items.
     #[arg(value_hint = ValueHint::AnyPath)]
     import_path: PathBuf,
 
@@ -28,22 +28,33 @@ pub struct VaultImportCommand {
     #[arg(long = "vault")]
     select: Vec<String>,
 
-    /// 1Password export only: name of the new vault. Defaults to "1Password".
+    /// Item export only: name of the new vault. Defaults to "1Password" or
+    /// "Apple Passwords".
     #[arg(long, conflicts_with = "into")]
     name: Option<String>,
 
-    /// 1Password export only: key of an existing vault to import into. Creates
+    /// Item export only: key of an existing vault to import into. Creates
     /// no vault.
     #[arg(long)]
     into: Option<String>,
 
-    /// 1Password export only: import items that 1Password marked as trashed.
+    /// Item export only: import items that 1Password marked as trashed.
     #[arg(long)]
     include_trashed: bool,
 
-    /// 1Password export only: print the report and write nothing.
+    /// Item export only: show the summary and write nothing, as if the
+    /// confirmation were answered no.
     #[arg(long)]
     dry_run: bool,
+
+    /// Item export only: import without asking for confirmation.
+    #[arg(short, long)]
+    yes: bool,
+
+    /// Item export only: show the full report, with the data that is not
+    /// imported, instead of the summary.
+    #[arg(short, long)]
+    verbose: bool,
 
     /// Rename a vault on import: --key <old>=<new>, where <old> is a selector
     /// (key, name, or id). Repeatable.
@@ -67,11 +78,17 @@ impl VaultImportCommand {
     /// The 1Password import this command describes, or `None` if the path is
     /// a vault bundle. Options of the other kind of import are an error.
     pub(super) fn one_password(&self) -> Result<Option<OnePasswordImport>, String> {
-        if !is_1pif(&self.import_path) {
-            if self.name.is_some() || self.into.is_some() || self.include_trashed || self.dry_run {
+        if !is_item_export(&self.import_path) {
+            if self.name.is_some()
+                || self.into.is_some()
+                || self.include_trashed
+                || self.dry_run
+                || self.yes
+                || self.verbose
+            {
                 return Err(
-                    "--name, --into, --include-trashed, and --dry-run apply only to a 1Password \
-                     .1pif export"
+                    "--name, --into, --include-trashed, --dry-run, --yes, and --verbose apply \
+                     only to a 1Password .1pif export or an Apple Passwords .csv export"
                         .to_string(),
                 );
             }
@@ -85,7 +102,7 @@ impl VaultImportCommand {
         {
             return Err(
                 "--vault, --key, a vault key, --existing, and the decryption options do not \
-                 apply to a 1Password .1pif export. Use --into to import into an existing vault."
+                 apply to a 1Password .1pif or Apple Passwords .csv export. Use --into to import into an existing vault."
                     .to_string(),
             );
         }
@@ -95,6 +112,8 @@ impl VaultImportCommand {
             vault: self.into.clone(),
             include_trashed: self.include_trashed,
             dry_run: self.dry_run,
+            yes: self.yes,
+            verbose: self.verbose,
         }))
     }
 

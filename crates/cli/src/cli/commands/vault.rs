@@ -33,7 +33,7 @@ enum VaultSubcommand {
     Export(VaultExportCommand),
 
     /// Import vaults from an export bundle, or items from a 1Password .1pif
-    /// export
+    /// export or an Apple Passwords .csv export
     Import(VaultImportCommand),
 }
 
