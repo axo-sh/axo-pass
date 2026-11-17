@@ -218,7 +218,9 @@ async fn skips_mach_client_that_went_away_while_queued() {
         // Queues behind it, then gives up.
         let queued = mach::send_test_exchange(
             &name,
-            &TestRequest::new(br#"{"request":"sign","key_label":"key-1","data":"aGk="}"#),
+            &TestRequest::new(
+                br#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","data":"aGk="}"#,
+            ),
         )
         .unwrap();
         drop(queued);

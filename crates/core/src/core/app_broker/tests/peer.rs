@@ -22,7 +22,7 @@ async fn serves_request_from_accepted_peer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     let response = broker.request_parsed(
-        r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#,
+        r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#,
     );
 
     // The stub declines, so the request is answered rather than signed.
@@ -143,7 +143,9 @@ async fn skips_client_that_disconnected_while_queued() {
     // Queues behind it, then gives up.
     let queued = std::os::unix::net::UnixStream::connect(&broker.socket_path).unwrap();
     (&queued)
-        .write_all(b"{\"request\":\"sign\",\"key_label\":\"key-1\",\"data\":\"aGk=\"}\n")
+        .write_all(
+            b"{\"request\":\"sign_with_secure_enclave_key\",\"key_label\":\"key-1\",\"data\":\"aGk=\"}\n",
+        )
         .unwrap();
     drop(queued);
     drop(busy);
@@ -168,7 +170,7 @@ async fn skips_client_that_disconnected_while_queued() {
 async fn hands_verified_peer_to_authorizer() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    broker.request(r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#);
+    broker.request(r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","caller":"git (ssh)","data":"aGk="}"#);
 
     let peers = broker.authorizer.peers.lock().unwrap();
     assert_eq!(peers.len(), 1);
@@ -190,7 +192,8 @@ async fn hands_verified_peer_to_authorizer() {
 async fn names_peer_when_no_caller_delegated() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
+    broker
+        .request(r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","data":"aGk="}"#);
 
     let peers = broker.authorizer.peers.lock().unwrap();
     assert_eq!(peers.len(), 1);
@@ -204,7 +207,7 @@ async fn delegates_caller_chain_to_prompt() {
     let broker = TestBroker::start(accepting_policy()).await;
 
     broker.request(
-        r#"{"request":"sign","key_label":"key-1","caller":"git (ssh)","caller_chain":[{"command":"git","executable":"/usr/bin/git","pid":123,"bundle_id":null,"team_id":null},{"command":"zsh","executable":"/bin/zsh","pid":42,"bundle_id":null,"team_id":null}],"data":"aGk="}"#,
+        r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","caller":"git (ssh)","caller_chain":[{"command":"git","executable":"/usr/bin/git","pid":123,"bundle_id":null,"team_id":null},{"command":"zsh","executable":"/bin/zsh","pid":42,"bundle_id":null,"team_id":null}],"data":"aGk="}"#,
     );
 
     let prompts = broker.authorizer.prompts.lock().unwrap();
@@ -223,7 +226,8 @@ async fn delegates_caller_chain_to_prompt() {
 async fn falls_back_to_peer_chain_for_prompt() {
     let broker = TestBroker::start(accepting_policy()).await;
 
-    broker.request(r#"{"request":"sign","key_label":"key-1","data":"aGk="}"#);
+    broker
+        .request(r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","data":"aGk="}"#);
 
     let prompts = broker.authorizer.prompts.lock().unwrap();
     assert_eq!(prompts.len(), 1);
@@ -266,7 +270,7 @@ async fn hangs_up_on_rejected_peer() {
         ),
         (
             "signing",
-            r#"{"request":"sign","key_label":"key-1","caller":"evil","data":"aGk="}"#,
+            r#"{"request":"sign_with_secure_enclave_key","key_label":"key-1","caller":"evil","data":"aGk="}"#,
             |broker| assert!(broker.authorizer.prompts.lock().unwrap().is_empty()),
         ),
         (

@@ -148,6 +148,18 @@ pub(super) fn access_event(
             Action::PasskeyAsserted,
             Subject::new(SubjectKind::Credential, rp_id.clone()),
         ),
+        VaultAction::SignSshKey {
+            fingerprint,
+            comment,
+            ..
+        } => {
+            let mut subject = Subject::new(SubjectKind::SshKey, fingerprint.clone())
+                .fingerprint(fingerprint.clone());
+            if let Some(comment) = comment.as_deref().filter(|c| !c.is_empty()) {
+                subject = subject.label(comment);
+            }
+            (Action::SshSign, subject)
+        },
     };
 
     // A write that created the item records `item.created` instead. The

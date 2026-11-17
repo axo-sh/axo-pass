@@ -368,7 +368,7 @@ mod tests {
             r#"{"request":"resolve_secrets","refs":[],"purpose":"read"}"#,
             r#"{"request":"list_vault_items","vault_key":"v"}"#,
             r#"{"request":"list_identities"}"#,
-            r#"{"request":"sign","key_label":"k","data":"aGk="}"#,
+            r#"{"request":"sign_with_secure_enclave_key","key_label":"k","data":"aGk="}"#,
             r#"{"request":"list_keychain_passwords"}"#,
             r#"{"request":"confirm","description":"x"}"#,
             r#"{"url":"https://example.com","frame_url":"https://example.com"}"#,

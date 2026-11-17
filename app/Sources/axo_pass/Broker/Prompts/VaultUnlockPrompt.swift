@@ -307,7 +307,8 @@ final class VaultUnlockPromptModel {
     switch prompt.action {
     case .readSecret(let itemKey, let credentialKey),
       .readFile(let itemKey, let credentialKey, _),
-      .writeSecret(let itemKey, let credentialKey):
+      .writeSecret(let itemKey, let credentialKey),
+      .signSshKey(let itemKey, let credentialKey, _, _, _):
       return ["\(itemKey)/\(credentialKey)"]
     case .resolveSecrets(_, let refs):
       return refs.map { ref in
@@ -438,6 +439,8 @@ final class VaultUnlockPromptModel {
       what = "create a passkey for \(rpId)"
     case .assertPasskey(let rpId, let userName):
       what = userName.map { "sign in to \(rpId) as \($0)" } ?? "sign in to \(rpId) with a passkey"
+    case .signSshKey(_, _, let fingerprint, let comment, _):
+      what = "sign with SSH key \(sshKeyName(comment: comment, fingerprint: fingerprint))"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -451,7 +454,7 @@ final class VaultUnlockPromptModel {
     switch action {
     case .readSecret, .readFile, .resolveSecrets, .writeSecret, .exportVaults, .importVaults,
       .importItems, .addVault, .createPasskey, .assertPasskey, .fillLogin, .generateTotp,
-      .saveLogin, .updateLoginPassword:
+      .saveLogin, .updateLoginPassword, .signSshKey:
       return true
     case .listItems, .listLogins: return false
     }
@@ -476,6 +479,7 @@ final class VaultUnlockPromptModel {
     // takes the vault that signed.
     case .createPasskey, .assertPasskey: id = "passkey"
     case .saveLogin: id = "save-login"
+    case .signSshKey(_, _, let fingerprint, _, _): id = fingerprint
     default: id = prompt.vaultKey
     }
     let subject = GrantSubject(kind: .vault, id: id, label: nil)
@@ -502,6 +506,7 @@ final class VaultUnlockPromptModel {
     case .addVault: return "add"
     case .createPasskey: return "passkey-create"
     case .assertPasskey: return "passkey-assert"
+    case .signSshKey: return "ssh-sign"
     }
   }
 
@@ -544,7 +549,18 @@ final class VaultUnlockPromptModel {
     case .addVault: return [.plain("add a vault")]
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]
+    case .signSshKey(_, _, let fingerprint, let comment, _):
+      return [
+        .plain("sign with SSH key "),
+        .bold(sshKeyName(comment: comment, fingerprint: fingerprint)),
+      ]
     }
+  }
+
+  /// The comment of an SSH key, or its fingerprint if it has none.
+  private static func sshKeyName(comment: String?, fingerprint: String) -> String {
+    guard let comment, !comment.isEmpty else { return fingerprint }
+    return comment
   }
 
   /// Headline suffix naming the top-level site of a cross-site frame.

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker::IndexedPasskey;
+use axo_pass_core::core::app_broker::ssh::{vault_keys as ssh_vault_keys, vault_keys_path};
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::model::history::HistoryKind;
 use axo_pass_core::secrets::vaults::model::{ItemChange, ItemHistoryEvent, totp};
@@ -337,6 +338,7 @@ impl From<&FieldKind> for FieldKindInfo {
             FieldKind::Totp => ("totp", false, false),
             FieldKind::Passkey => ("passkey", true, false),
             FieldKind::File => ("file", true, false),
+            FieldKind::SshKey => ("ssh-key", true, false),
             FieldKind::Unknown(_) => ("unknown", false, false),
         };
         Self {
@@ -369,8 +371,8 @@ impl TryFrom<FieldKindInfo> for FieldKind {
             "totp" => FieldKind::Totp,
             // "passkey" is deliberately absent: a passkey's value is a
             // structured record the CTAP2 authenticator owns, so it is never
-            // written through the generic credential path. "file" is absent
-            // for the same reason.
+            // written through the generic credential path. "file" and
+            // "ssh-key" are absent for the same reason.
             other => {
                 return Err(FfiError::InvalidInput(format!(
                     "cannot set field kind {other:?}"
@@ -1003,10 +1005,15 @@ impl AxoPass {
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let mut found_items = Vec::new();
             let mut places = Vec::new();
+            let mut ssh_keys = Vec::new();
             for vault_key in vault_keys {
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
                 };
+                ssh_keys.push((
+                    vault_key.clone(),
+                    ssh_vault_keys::collect(&vault_key, vault),
+                ));
                 match autofill::collect_items(vault, None) {
                     Ok(found) => found_items.extend(found),
                     Err(e) => log::error!("Failed to collect autofill items in {vault_key}: {e}"),
@@ -1018,6 +1025,10 @@ impl AxoPass {
             }
             index.replace(found_items.clone());
             index.replace_places(places);
+            let known: Vec<String> = m.iter_vault_keys().collect();
+            if let Err(e) = ssh_vault_keys::refresh(&vault_keys_path(), &known, ssh_keys) {
+                log::error!("Failed to write the vault SSH key listing: {e}");
+            }
             Ok(found_items
                 .into_iter()
                 .map(AutofillItemInfo::from)

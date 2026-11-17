@@ -48,7 +48,7 @@ pub(super) struct VerifiedBrowser {
 #[serde(tag = "request", rename_all = "snake_case")]
 pub(super) enum WireRequest {
     ListIdentities,
-    Sign {
+    SignWithSecureEnclaveKey {
         key_label: String,
 
         /// Canonical `SHA256:...` fingerprint of the key, resolved by the agent
@@ -95,6 +95,40 @@ pub(super) enum WireRequest {
         flags: u32,
     },
 
+    /// A signature by an SSH key stored in a vault. The app unlocks the vault
+    /// behind a prompt and signs, so the private key never crosses the socket.
+    /// The request carries no key label. The broker finds the key from its
+    /// fingerprint in the listing cache.
+    SignWithVaultKey {
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+
+        /// The key's OpenSSH comment, when it has one.
+        #[serde(default)]
+        comment: Option<String>,
+
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller_chain.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
+
+        /// See [`WireRequest::SignWithSecureEnclaveKey`]'s purpose.
+        #[serde(default)]
+        purpose: Option<SignPurpose>,
+
+        /// Base64 of the bytes to sign.
+        data: String,
+
+        /// The agent sign request's flags. They select the hash of an RSA key.
+        #[serde(default)]
+        flags: u32,
+    },
+
     /// A GPG passphrase, either unlocked from the keychain behind a biometric
     /// prompt or typed by the user. See [`PassphrasePrompt`].
     GetPassphrase {
@@ -102,9 +136,11 @@ pub(super) enum WireRequest {
         description: Option<String>,
         prompt: Option<String>,
         error_message: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         caller: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller_chain.
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
     },
@@ -122,9 +158,11 @@ pub(super) enum WireRequest {
         /// Comment of the key, shown as its name in the prompt.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         caller: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller_chain.
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
     },
@@ -142,15 +180,17 @@ pub(super) enum WireRequest {
         #[serde(default)]
         comment: Option<String>,
 
-        /// Who asked, delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Who asked, delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
 
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller_chain.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller_chain.
         #[serde(default)]
         caller_chain: Vec<ProcessNode>,
 
-        /// See [`WireRequest::Sign`]'s purpose.
+        /// See [`WireRequest::SignWithSecureEnclaveKey`]'s purpose.
         #[serde(default)]
         purpose: Option<SignPurpose>,
 
@@ -165,7 +205,8 @@ pub(super) enum WireRequest {
     /// secret.
     ListVaultItems {
         vault_key: String,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -175,7 +216,8 @@ pub(super) enum WireRequest {
         vault_key: String,
         item_key: String,
         credential_key: String,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -187,7 +229,8 @@ pub(super) enum WireRequest {
         item_key: String,
         credential_key: String,
         dest_path: String,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -212,7 +255,8 @@ pub(super) enum WireRequest {
         /// is for a browser.
         #[serde(default)]
         requester: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -232,7 +276,8 @@ pub(super) enum WireRequest {
         /// See [`WireRequest::ListLogins`].
         #[serde(default)]
         requester: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -264,7 +309,8 @@ pub(super) enum WireRequest {
         /// See [`WireRequest::ListLogins`].
         #[serde(default)]
         requester: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -281,7 +327,8 @@ pub(super) enum WireRequest {
         /// See [`WireRequest::ListLogins`].
         #[serde(default)]
         requester: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -296,7 +343,8 @@ pub(super) enum WireRequest {
         /// The default policy when absent.
         #[serde(default)]
         policy: Option<PasswordPolicy>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -310,7 +358,8 @@ pub(super) enum WireRequest {
         #[serde(default)]
         username: Option<String>,
         password: String,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -330,7 +379,8 @@ pub(super) enum WireRequest {
         /// it. It is never used to decide anything.
         #[serde(default)]
         account: Option<String>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
         /// See [`BrowserClient`].
@@ -343,7 +393,8 @@ pub(super) enum WireRequest {
     ResolveSecrets {
         refs: Vec<vault::VaultRef>,
         purpose: vault::ResolvePurpose,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -360,7 +411,8 @@ pub(super) enum WireRequest {
         /// written as a login.
         #[serde(default)]
         login: Option<vault::WireLogin>,
-        /// Delegated the same way as [`WireRequest::Sign`]'s caller.
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
         #[serde(default)]
         caller: Option<String>,
     },
@@ -550,12 +602,14 @@ pub(super) enum WireRequest {
 }
 
 impl WireRequest {
-    /// Who the requesting process says asked it. See [`WireRequest::Sign`] for
-    /// why this is trusted by delegation. `None` for the requests that carry no
-    /// caller: they raise no prompt, or draw one with nothing to attribute.
+    /// Who the requesting process says asked it. See
+    /// [`WireRequest::SignWithSecureEnclaveKey`] for why this is trusted by
+    /// delegation. `None` for the requests that carry no caller: they raise
+    /// no prompt, or draw one with nothing to attribute.
     pub(super) fn caller(&self) -> Option<&str> {
         match self {
-            WireRequest::Sign { caller, .. }
+            WireRequest::SignWithSecureEnclaveKey { caller, .. }
+            | WireRequest::SignWithVaultKey { caller, .. }
             | WireRequest::AuthorizeKeyUse { caller, .. }
             | WireRequest::GetPassphrase { caller, .. }
             | WireRequest::GetSshPassphrase { caller, .. }
@@ -612,7 +666,8 @@ impl WireRequest {
     /// resolved from the peer instead.
     pub(super) fn caller_chain(&self) -> &[ProcessNode] {
         match self {
-            WireRequest::Sign { caller_chain, .. }
+            WireRequest::SignWithSecureEnclaveKey { caller_chain, .. }
+            | WireRequest::SignWithVaultKey { caller_chain, .. }
             | WireRequest::AuthorizeKeyUse { caller_chain, .. }
             | WireRequest::GetPassphrase { caller_chain, .. }
             | WireRequest::GetSshPassphrase { caller_chain, .. } => caller_chain,
@@ -1042,5 +1097,42 @@ mod tests {
             json,
             r#"{"status":"vaults_exported","count":1,"missing_blobs":3}"#
         );
+    }
+
+    #[test]
+    fn sign_request_tags() {
+        let enclave = r#"{"request":"sign_with_secure_enclave_key","key_label":"k","data":"aGk="}"#;
+        let vault =
+            r#"{"request":"sign_with_vault_key","fingerprint":"SHA256:x","data":"aGk=","flags":4}"#;
+
+        assert!(matches!(
+            serde_json::from_str::<WireRequest>(enclave).unwrap(),
+            WireRequest::SignWithSecureEnclaveKey { .. }
+        ));
+        let WireRequest::SignWithVaultKey {
+            fingerprint, flags, ..
+        } = serde_json::from_str(vault).unwrap()
+        else {
+            panic!("expected a vault signing request");
+        };
+        assert_eq!(fingerprint, "SHA256:x");
+        assert_eq!(flags, 4);
+    }
+
+    #[test]
+    fn old_sign_tag_refused() {
+        let json = r#"{"request":"sign","key_label":"k","data":"aGk="}"#;
+
+        assert!(serde_json::from_str::<WireRequest>(json).is_err());
+    }
+
+    #[test]
+    fn vault_sign_request_carries_caller() {
+        let json = r#"{"request":"sign_with_vault_key","fingerprint":"SHA256:x","caller":"git (ssh)","data":"aGk="}"#;
+
+        let request: WireRequest = serde_json::from_str(json).unwrap();
+
+        assert_eq!(request.caller(), Some("git (ssh)"));
+        assert!(request.caller_chain().is_empty());
     }
 }

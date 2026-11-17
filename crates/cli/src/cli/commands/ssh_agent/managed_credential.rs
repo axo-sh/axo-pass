@@ -1,6 +1,6 @@
 use std::os::fd::BorrowedFd;
 
-use axo_pass_core::core::app_broker::{self, BrokerError, ManagedIdentity, SignPurpose};
+use axo_pass_core::core::app_broker::{self, BrokerError, KeySource, ManagedIdentity, SignPurpose};
 use axo_pass_core::core::provenance::ProcessNode;
 use axo_pass_core::ssh::ssh_keys::SshKeyType;
 use ssh_agent_lib::proto;
@@ -9,18 +9,20 @@ use ssh_key::public::KeyData;
 
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
 
-/// A Secure Enclave key held by the app.
+/// A key held by the app: a Secure Enclave key or an SSH key stored in a vault.
 ///
-/// The agent cannot reach these keys itself: they live in the data protection
-/// keychain, which needs an entitlement AMFI only grants to code carrying a
-/// provisioning profile, and a plain executable has nowhere to hold one. So the
-/// agent knows a managed key by its public half alone and asks the app whenever
-/// the private half is needed.
+/// The agent cannot reach these keys itself. Secure Enclave keys live in the
+/// data protection keychain, which needs an entitlement AMFI only grants to
+/// code carrying a provisioning profile, and a plain executable has nowhere to
+/// hold one. Vault keys need the vault encryption key, which the app unlocks
+/// behind a prompt. So the agent knows a managed key by its public half alone
+/// and asks the app whenever the private half is needed.
 #[derive(Debug, Clone)]
 pub struct ManagedCredential {
     pub key_label: String,
     pub public_key: KeyData,
     pub comment: String,
+    pub source: KeySource,
 }
 
 impl TryFrom<ManagedIdentity> for ManagedCredential {
@@ -32,6 +34,7 @@ impl TryFrom<ManagedIdentity> for ManagedCredential {
             key_label: identity.key_label,
             comment: public_key.comment().to_string(),
             public_key: public_key.key_data().clone(),
+            source: identity.source,
         })
     }
 }
@@ -120,8 +123,8 @@ impl Credential for ManagedCredential {
             .fingerprint(ssh_key::HashAlg::Sha256)
             .to_string();
         let comment = (!self.comment.is_empty()).then_some(self.comment.as_str());
-        let result = call_broker(|| {
-            app_broker::request_signature(
+        let result = call_broker(|| match self.source {
+            KeySource::SecureEnclave => app_broker::request_signature(
                 &self.key_label,
                 Some(&fingerprint),
                 comment,
@@ -131,7 +134,17 @@ impl Credential for ManagedCredential {
                 caller_chain,
                 purpose,
                 requester,
-            )
+            ),
+            KeySource::Vault { .. } => app_broker::request_vault_signature(
+                &fingerprint,
+                comment,
+                &req.data,
+                req.flags,
+                caller,
+                caller_chain,
+                purpose,
+                requester,
+            ),
         });
 
         result.map_err(|e| {
@@ -146,5 +159,50 @@ impl Credential for ManagedCredential {
             }
             CredentialError::SigningFailed
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PUBLIC_KEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl laptop";
+
+    fn identity(source: KeySource) -> ManagedIdentity {
+        ManagedIdentity {
+            key_label: "label".to_string(),
+            public_key: PUBLIC_KEY.to_string(),
+            source,
+        }
+    }
+
+    #[test]
+    fn credential_keeps_secure_enclave_source() {
+        let credential = ManagedCredential::try_from(identity(KeySource::SecureEnclave)).unwrap();
+
+        assert_eq!(credential.source, KeySource::SecureEnclave);
+        assert_eq!(credential.comment, "laptop");
+    }
+
+    #[test]
+    fn credential_keeps_vault_source() {
+        let source = KeySource::Vault {
+            vault_key: "personal".to_string(),
+            item_key: "github".to_string(),
+            credential_key: "key".to_string(),
+        };
+
+        let credential = ManagedCredential::try_from(identity(source.clone())).unwrap();
+
+        assert_eq!(credential.source, source);
+    }
+
+    #[test]
+    fn credential_refused_for_invalid_public_key() {
+        let mut bad = identity(KeySource::SecureEnclave);
+        bad.public_key = "not a key".to_string();
+
+        assert!(ManagedCredential::try_from(bad).is_err());
     }
 }

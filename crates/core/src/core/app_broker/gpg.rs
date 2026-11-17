@@ -57,7 +57,8 @@ pub struct PassphrasePrompt {
     pub error_message: Option<String>,
 
     /// Who asked, as `ap pinentry` / `ap ssh-askpass` resolved it. Carries the
-    /// same delegated trust as [`WireRequest::Sign`]'s caller.
+    /// same delegated trust as [`WireRequest::SignWithSecureEnclaveKey`]'s
+    /// caller.
     pub caller: Option<String>,
 
     /// The full requesting process chain, resolved the same way as `caller`.

@@ -18,8 +18,11 @@ fn exit_on_broker_err(e: BrokerError) -> ! {
 }
 
 pub async fn cmd_list_managed_keys() {
-    let identities = match app_broker::list_identities(None) {
-        Ok(identities) => identities,
+    let identities: Vec<_> = match app_broker::list_identities(None) {
+        Ok(identities) => identities
+            .into_iter()
+            .filter(|identity| identity.source == app_broker::KeySource::SecureEnclave)
+            .collect(),
         Err(e) => exit_on_broker_err(e),
     };
 

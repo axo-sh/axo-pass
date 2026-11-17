@@ -56,7 +56,7 @@ pub(super) async fn serve_request(
                         |keys| WireResponse::Identities { keys },
                     )
             },
-            WireRequest::Sign {
+            WireRequest::SignWithSecureEnclaveKey {
                 key_label,
                 fingerprint,
                 comment,
@@ -82,6 +82,33 @@ pub(super) async fn serve_request(
                 };
                 log::debug!("App broker request: {prompt:?}");
                 ssh::sign_managed(&*authorizers.sign, prompt, actor, data, &in_flight).await
+            },
+            WireRequest::SignWithVaultKey {
+                fingerprint,
+                comment,
+                caller,
+                caller_chain: _,
+                purpose,
+                data,
+                flags,
+            } => {
+                let request = ssh::VaultSignRequest {
+                    fingerprint,
+                    comment,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    purpose,
+                    data: decode_b64(&data)?,
+                    flags,
+                };
+                ssh::sign_vault(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    request,
+                    actor,
+                    &in_flight,
+                )
+                .await
             },
             WireRequest::AuthorizeKeyUse {
                 fingerprint,

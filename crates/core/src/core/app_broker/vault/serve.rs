@@ -12,6 +12,7 @@ use super::passkeys::{
 use super::secrets::{
     list_items, read_secret, read_vault_file, resolve_secrets, write_vault_secret,
 };
+use super::ssh_keys::sign_ssh_key;
 use super::{
     ClientIdentity, VaultAccessPrompt, VaultAction, VaultAuthorization, VaultAuthorizer,
     VaultPayload,
@@ -402,6 +403,20 @@ pub(super) fn serve_on_context(
             create_passkey(vaults, &vault_key, payload, context, &rt)
         },
         VaultAction::AssertPasskey { .. } => assert_passkey(vaults, payload, context, &rt, signed),
+        VaultAction::SignSshKey {
+            item_key,
+            credential_key,
+            fingerprint,
+            ..
+        } => sign_ssh_key(
+            vaults,
+            &vault_key,
+            &item_key,
+            &credential_key,
+            &fingerprint,
+            payload,
+            context,
+        ),
         VaultAction::ExportVaults { vault_keys } => {
             export_vaults(vaults, &vault_keys, payload, context)
         },

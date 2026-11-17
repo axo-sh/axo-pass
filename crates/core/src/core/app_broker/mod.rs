@@ -66,8 +66,9 @@ pub use placement::{
 pub use server::serve;
 pub use settings::request_protected_settings;
 pub use ssh::{
-    ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
-    request_authorize_key_use, request_signature, request_ssh_passphrase,
+    KeySource, ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,
+    request_authorize_key_use, request_signature, request_ssh_passphrase, request_vault_signature,
+    vault_keys_path,
 };
 pub use vault::{
     BrokerCredential, BrokerVaultItem, ClientIdentity, ExportSummary, FileReadSummary,

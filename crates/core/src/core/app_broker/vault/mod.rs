@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use super::PromptOutcome;
 use super::placement::{PasskeyChoices, PasskeyPlacement, VaultChoices};
+use super::ssh::SignPurpose;
 #[cfg(doc)]
 use super::wire::WireRequest;
 use super::wire::{WireImportIdentity, WireImportSelection, WireImportTarget};
@@ -39,6 +40,7 @@ mod passkeys;
 mod requests;
 mod secrets;
 mod serve;
+mod ssh_keys;
 #[cfg(test)]
 mod tests;
 
@@ -211,6 +213,21 @@ pub enum VaultAction {
         /// indexed passkeys or none.
         user_name: Option<String>,
     },
+
+    /// The SSH agent asks for a signature by an SSH key stored in the vault.
+    /// The prompt's vault key is the vault the listing cache names. The data to
+    /// sign travels in [`SignSshKeyPayload`].
+    SignSshKey {
+        item_key: String,
+        credential_key: String,
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+        /// The key's OpenSSH comment, shown in the prompt.
+        comment: Option<String>,
+        /// What the signature is for, as the agent read it. Shown in the
+        /// prompt only.
+        purpose: Option<SignPurpose>,
+    },
 }
 
 /// A login as the access prompt describes it.
@@ -382,6 +399,18 @@ pub struct AssertPasskeyPayload {
     pub vault_key: Option<String>,
 }
 
+/// The data an [`VaultAction::SignSshKey`] signs, kept out of
+/// [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct SignSshKeyPayload {
+    pub data: Vec<u8>,
+    /// The agent sign request's flags. They select the hash of an RSA key.
+    pub flags: u32,
+    /// The listing cache to rewrite if the credential does not hold the key
+    /// the cache names.
+    pub cache_path: PathBuf,
+}
+
 /// One passkey offered in the prompt when the user picks the account to sign
 /// in with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,6 +444,7 @@ pub(super) enum VaultPayload {
     ImportItems(ImportItemsPayload),
     CreatePasskey(CreatePasskeyPayload),
     AssertPasskey(AssertPasskeyPayload),
+    SignSshKey(SignSshKeyPayload),
 }
 
 /// What the app needs to describe the prompt for a vault access.
@@ -426,7 +456,7 @@ pub struct VaultAccessPrompt {
     pub vault_key: String,
 
     /// Who asked, as `ap` resolved it. Carries the same delegated trust as
-    /// [`WireRequest::Sign`]'s caller.
+    /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
     pub caller: Option<String>,
 
     /// The full requesting process chain. For a vault access `ap` is the

@@ -109,7 +109,7 @@ fn browser_host_scope_extends_requests() {
         r#"{"request":"add_external_vault","path":"/tmp/v.json"}"#,
         r#"{"request":"get_age_identity","key_id":"k"}"#,
         r#"{"request":"list_keychain_passwords"}"#,
-        r#"{"request":"sign","key_label":"k","data":"aGk="}"#,
+        r#"{"request":"sign_with_secure_enclave_key","key_label":"k","data":"aGk="}"#,
         r#"{"request":"get_passphrase","key_id":"k"}"#,
         r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
         r#"{"request":"list_passkeys","rp_id":"example.com"}"#,

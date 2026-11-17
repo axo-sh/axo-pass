@@ -104,6 +104,16 @@ pub enum VaultAction {
         rp_id: String,
         user_name: Option<String>,
     },
+    /// The SSH agent is signing with an SSH key stored in the vault the prompt
+    /// names. The data to sign is not carried to the app.
+    SignSshKey {
+        item_key: String,
+        credential_key: String,
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+        comment: Option<String>,
+        purpose: Option<SshSignPurpose>,
+    },
 }
 
 /// The vaults and logins a new passkey may be stored in. Mirrors
@@ -389,6 +399,19 @@ impl From<app_broker::VaultAction> for VaultAction {
             },
             app_broker::VaultAction::AssertPasskey { rp_id, user_name } => {
                 Self::AssertPasskey { rp_id, user_name }
+            },
+            app_broker::VaultAction::SignSshKey {
+                item_key,
+                credential_key,
+                fingerprint,
+                comment,
+                purpose,
+            } => Self::SignSshKey {
+                item_key,
+                credential_key,
+                fingerprint,
+                comment,
+                purpose: purpose.map(SshSignPurpose::from),
             },
         }
     }

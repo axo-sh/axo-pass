@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -6,8 +7,18 @@ use std::{fs, io};
 /// synced before the temp file is renamed over `path`, so `path` holds either
 /// the old or the new contents after a crash.
 pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_atomic_with_mode(path, data, None)
+}
+
+/// Like [`write_atomic`], with the file readable and writable by the owner
+/// only (mode `0600`).
+pub fn write_atomic_private(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_atomic_with_mode(path, data, Some(0o600))
+}
+
+fn write_atomic_with_mode(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
     let (dir, tmp_path) = tmp_path(path, "tmp")?;
-    let result = write_synced(&tmp_path, data).and_then(|()| fs::rename(&tmp_path, path));
+    let result = write_synced(&tmp_path, data, mode).and_then(|()| fs::rename(&tmp_path, path));
     if result.is_err() {
         let _ = fs::remove_file(&tmp_path);
         return result;
@@ -22,7 +33,7 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 /// so an existing file is never replaced and `path` never holds partial data.
 pub fn write_atomic_new(path: &Path, data: &[u8]) -> io::Result<()> {
     let (dir, tmp_path) = tmp_path(path, "new.tmp")?;
-    let result = write_synced(&tmp_path, data).and_then(|()| fs::hard_link(&tmp_path, path));
+    let result = write_synced(&tmp_path, data, None).and_then(|()| fs::hard_link(&tmp_path, path));
     let _ = fs::remove_file(&tmp_path);
     result?;
     fs::File::open(dir)?.sync_all()
@@ -51,8 +62,13 @@ pub fn write_new_synced(path: &Path, data: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn write_synced(path: &Path, data: &[u8]) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
+fn write_synced(path: &Path, data: &[u8], mode: Option<u32>) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    if let Some(mode) = mode {
+        options.mode(mode);
+    }
+    let mut file = options.open(path)?;
     file.write_all(data)?;
     file.sync_all()
 }
@@ -77,6 +93,22 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![OsString::from("vault.json")]);
+    }
+
+    #[test]
+    fn write_atomic_private_sets_owner_only_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.json");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_atomic_private(&path, b"new").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

@@ -322,7 +322,7 @@ pub(super) async fn browser_host_broker() -> TestBroker {
 }
 
 /// A vault store with no vaults, so no test reads the developer's own vaults.
-pub(super) fn empty_vaults() -> crate::secrets::vaults::VaultCatalog {
+pub(in crate::core::app_broker) fn empty_vaults() -> crate::secrets::vaults::VaultCatalog {
     crate::secrets::vaults::VaultCatalog::with_unlocker(
         PathBuf::from("/nonexistent/vaults"),
         crate::secrets::vaults::storage::txn::VaultWriter::isolated("/nonexistent/data"),

@@ -1,9 +1,13 @@
 //! The SSH agent's side of the broker: signing with managed Secure Enclave
-//! keys, and listing the identities they advertise. Also `ap ssh-askpass`'s
-//! side: SSH key passphrases, either unlocked from the keychain behind a
-//! biometric prompt or typed by the user.
+//! keys and vault SSH keys, and listing the identities they advertise. Also
+//! `ap ssh-askpass`'s side: SSH key passphrases, either unlocked from the
+//! keychain behind a biometric prompt or typed by the user.
 
+pub mod vault_keys;
+
+use std::collections::HashSet;
 use std::os::fd::BorrowedFd;
+use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -11,8 +15,13 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use ssh_key::{Algorithm, Signature};
 
+use self::vault_keys::VaultKeyEntry;
 use super::client::send_request_for;
 use super::in_flight::InFlightRequest;
+use super::vault::{
+    ClientIdentity, SignSshKeyPayload, VaultAccessPrompt, VaultAction, VaultAuthorizer,
+    VaultPayload, authorize_and_serve,
+};
 use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome};
 use crate::audit;
@@ -20,10 +29,12 @@ use crate::core::auth::{
     AuthContext, AuthMethod, ForeignContext, run_on_auth_thread, sign_with_managed_key_on,
     sign_with_managed_key_preapproved,
 };
+use crate::core::dirs::app_data_dir;
 use crate::core::provenance::ProcessNode;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
+use crate::secrets::vaults::VaultCatalog;
 use crate::ssh::app_grants::{self, GrantApp};
 
 /// What the app needs to describe the prompt.
@@ -39,8 +50,9 @@ pub struct SignPrompt {
     /// The key's OpenSSH comment, when it has one.
     pub comment: Option<String>,
 
-    /// Who asked, as the agent resolved it. See [`WireRequest::Sign`] for why
-    /// this can be shown to the user.
+    /// Who asked, as the agent resolved it. See
+    /// [`WireRequest::SignWithSecureEnclaveKey`] for why this can be shown
+    /// to the user.
     pub caller: Option<String>,
 
     /// The full requesting process chain, resolved the same way as `caller`.
@@ -121,13 +133,57 @@ pub trait SignAuthorizer: Send + Sync + 'static {
     async fn notify_preapproved(&self, prompt: SignPrompt, app: GrantApp);
 }
 
+/// Where a managed key is held.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum KeySource {
+    /// A Secure Enclave key in the keychain, signed with by its label.
+    #[default]
+    SecureEnclave,
+
+    /// An SSH key credential in a vault, signed with by its fingerprint.
+    Vault {
+        vault_key: String,
+        item_key: String,
+        credential_key: String,
+    },
+}
+
 /// A managed key as the agent sees it: enough to advertise the identity and to
 /// ask for a signature later, with no keychain access of its own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedIdentity {
+    /// The keychain label of a Secure Enclave key. The location of a vault key
+    /// as `vault/item/credential`.
     pub key_label: String,
     /// One OpenSSH public key line: algorithm, base64 key, comment.
     pub public_key: String,
+    #[serde(default)]
+    pub source: KeySource,
+}
+
+impl From<VaultKeyEntry> for ManagedIdentity {
+    fn from(entry: VaultKeyEntry) -> Self {
+        Self {
+            key_label: format!(
+                "{}/{}/{}",
+                entry.vault_key, entry.item_key, entry.credential_key
+            ),
+            public_key: entry.public_key,
+            source: KeySource::Vault {
+                vault_key: entry.vault_key,
+                item_key: entry.item_key,
+                credential_key: entry.credential_key,
+            },
+        }
+    }
+}
+
+/// Listing cache of the vault SSH keys, written by the app at unlock and after
+/// an edit of a key. See [`vault_keys`].
+pub fn vault_keys_path() -> PathBuf {
+    // typically: ~/Library/Application Support/Axo Pass/ssh-vault-keys.json
+    app_data_dir().join("ssh-vault-keys.json")
 }
 
 /// List the managed keys the app can sign with. Blocking, and starts the app if
@@ -162,7 +218,7 @@ pub fn request_signature(
     purpose: Option<&SignPurpose>,
     requester: Option<BorrowedFd<'_>>,
 ) -> Result<Signature, BrokerError> {
-    let request = WireRequest::Sign {
+    let request = WireRequest::SignWithSecureEnclaveKey {
         key_label: key_label.to_string(),
         fingerprint: fingerprint.map(String::from),
         comment: comment.map(String::from),
@@ -172,7 +228,38 @@ pub fn request_signature(
         data: b64_encode(data),
         flags,
     };
-    match send_request_for(&request, requester)? {
+    signature_from(send_request_for(&request, requester)?)
+}
+
+/// Ask the app to authorize and produce a signature with a vault SSH key,
+/// named by its fingerprint. Blocking, for the same reason as
+/// [`request_signature`]. `flags` select the hash of an RSA key.
+#[allow(clippy::too_many_arguments)]
+pub fn request_vault_signature(
+    fingerprint: &str,
+    comment: Option<&str>,
+    data: &[u8],
+    flags: u32,
+    caller: Option<&str>,
+    caller_chain: &[ProcessNode],
+    purpose: Option<&SignPurpose>,
+    requester: Option<BorrowedFd<'_>>,
+) -> Result<Signature, BrokerError> {
+    let request = WireRequest::SignWithVaultKey {
+        fingerprint: fingerprint.to_string(),
+        comment: comment.map(String::from),
+        caller: caller.map(String::from),
+        caller_chain: caller_chain.to_vec(),
+        purpose: purpose.cloned(),
+        data: b64_encode(data),
+        flags,
+    };
+    signature_from(send_request_for(&request, requester)?)
+}
+
+/// The signature in the response to a signing request.
+fn signature_from(response: WireResponse) -> Result<Signature, BrokerError> {
+    match response {
         WireResponse::Signed {
             algorithm,
             signature,
@@ -230,8 +317,10 @@ pub fn request_authorize_key_use(
     }
 }
 
-/// Read the managed keys out of the keychain. Listing needs no authentication,
-/// so this raises no prompt and works with the vault still locked.
+/// Read the managed keys out of the keychain, then the vault keys out of the
+/// listing cache. Listing needs no authentication, so this raises no prompt and
+/// works with the vault still locked. A missing or unreadable cache lists no
+/// vault keys.
 pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> {
     let keys = ManagedSshKey::list().map_err(|e| format!("Failed to list managed keys: {e}"))?;
     let mut identities = Vec::with_capacity(keys.len());
@@ -243,9 +332,21 @@ pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> 
         identities.push(ManagedIdentity {
             key_label: key.label(),
             public_key,
+            source: KeySource::SecureEnclave,
         });
     }
+    identities.extend(vault_identities(&vault_keys_path()));
     Ok(identities)
+}
+
+/// The vault keys in the listing cache, one for each fingerprint.
+fn vault_identities(cache_path: &Path) -> Vec<ManagedIdentity> {
+    let mut seen = HashSet::new();
+    vault_keys::load(cache_path)
+        .into_iter()
+        .filter(|entry| seen.insert(entry.fingerprint.clone()))
+        .map(ManagedIdentity::from)
+        .collect()
 }
 
 /// A managed key's policy and canonical `SHA256:...` fingerprint, read from the
@@ -555,6 +656,87 @@ pub(super) async fn authorize_key_use(
     response
 }
 
+/// What a vault key signature request carries.
+pub(super) struct VaultSignRequest {
+    /// Canonical `SHA256:...` fingerprint of the key.
+    pub fingerprint: String,
+    pub comment: Option<String>,
+    pub caller: Option<String>,
+    pub caller_chain: Vec<ProcessNode>,
+    pub purpose: Option<SignPurpose>,
+    pub data: Vec<u8>,
+    /// The agent sign request's flags. They select the hash of an RSA key.
+    pub flags: u32,
+}
+
+/// Serve a vault key signature. The broker finds the key in the listing cache
+/// and prompts through the vault authorizer. It unlocks only the vault the
+/// cache entry names, checks that the credential holds a key with the
+/// requested fingerprint, and signs.
+pub(super) async fn sign_vault(
+    authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
+    request: VaultSignRequest,
+    peer: audit::Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    sign_vault_with(
+        &vault_keys_path(),
+        authorizer,
+        vaults,
+        request,
+        peer,
+        in_flight,
+    )
+    .await
+}
+
+async fn sign_vault_with(
+    cache_path: &Path,
+    authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
+    request: VaultSignRequest,
+    peer: audit::Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    let path = cache_path.to_path_buf();
+    let entries = tokio::task::spawn_blocking(move || vault_keys::load(&path))
+        .await
+        .unwrap_or_default();
+    let Some(entry) = entries
+        .into_iter()
+        .find(|entry| entry.fingerprint == request.fingerprint)
+    else {
+        return WireResponse::Failed {
+            message: "No vault SSH key has this fingerprint".to_string(),
+        };
+    };
+
+    let comment = Some(entry.comment)
+        .filter(|comment| !comment.is_empty())
+        .or(request.comment);
+    let prompt = VaultAccessPrompt {
+        vault_key: entry.vault_key,
+        caller: request.caller,
+        caller_chain: request.caller_chain,
+        client: ClientIdentity::Process,
+        action: VaultAction::SignSshKey {
+            item_key: entry.item_key,
+            credential_key: entry.credential_key,
+            fingerprint: request.fingerprint,
+            comment,
+            purpose: request.purpose,
+        },
+    };
+    log::debug!("App broker request: {prompt:?}");
+    let payload = VaultPayload::SignSshKey(SignSshKeyPayload {
+        data: request.data,
+        flags: request.flags,
+        cache_path: cache_path.to_path_buf(),
+    });
+    authorize_and_serve(authorizer, vaults, prompt, peer, Some(payload), in_flight).await
+}
+
 /// Ask the app for an SSH key passphrase, on behalf of `ap ssh-askpass` or the
 /// agent loading an auto-load key. Blocking, for the same reason as
 /// [`request_signature`]: it waits for the user.
@@ -774,7 +956,195 @@ fn passphrase_response(passphrase: &SecretString) -> WireResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD_NO_PAD as b64;
+    use ssh_key::{HashAlg, PrivateKey};
+
+    use super::vault_keys::VaultKeyEntry;
     use super::*;
+    use crate::core::app_broker::tests::support::empty_vaults;
+    use crate::core::app_broker::vault::VaultAuthorization;
+    use crate::secrets::vaults::ssh_keys::SshKeyRecord;
+
+    /// Declines every prompt and keeps what it was asked.
+    #[derive(Default)]
+    struct DecliningAuthorizer {
+        prompts: Mutex<Vec<VaultAccessPrompt>>,
+    }
+
+    #[async_trait]
+    impl VaultAuthorizer for DecliningAuthorizer {
+        async fn begin(
+            &self,
+            prompt: VaultAccessPrompt,
+            _peer: audit::Actor,
+        ) -> Result<VaultAuthorization, String> {
+            self.prompts.lock().unwrap().push(prompt);
+            Err("declined".to_string())
+        }
+
+        async fn abandon(&self) {}
+
+        async fn end(&self, _prompt: VaultAccessPrompt, _outcome: PromptOutcome) {}
+    }
+
+    fn ed25519_key() -> PrivateKey {
+        let data = include_str!("../../../../cli/src/cli/commands/ssh_agent/fixtures/b64_ed25519");
+        PrivateKey::from_bytes(&b64.decode(data.trim()).unwrap()).unwrap()
+    }
+
+    fn cache_entry(vault_key: &str, credential_key: &str) -> VaultKeyEntry {
+        let record = SshKeyRecord::new(&ed25519_key(), "laptop").unwrap();
+        VaultKeyEntry::from_record(&record, vault_key, "github", credential_key).unwrap()
+    }
+
+    fn sign_request(fingerprint: &str) -> VaultSignRequest {
+        VaultSignRequest {
+            fingerprint: fingerprint.to_string(),
+            comment: None,
+            caller: Some("git (ssh)".to_string()),
+            caller_chain: Vec::new(),
+            purpose: None,
+            data: b"data".to_vec(),
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn vault_identities_from_cache_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let entry = cache_entry("personal", "key");
+        vault_keys::store(&path, std::slice::from_ref(&entry)).unwrap();
+
+        let identities = vault_identities(&path);
+
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].public_key, entry.public_key);
+        assert_eq!(identities[0].key_label, "personal/github/key");
+        assert_eq!(
+            identities[0].source,
+            KeySource::Vault {
+                vault_key: "personal".to_string(),
+                item_key: "github".to_string(),
+                credential_key: "key".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn vault_identities_list_one_key_for_each_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let entries = [cache_entry("personal", "a"), cache_entry("work", "b")];
+        vault_keys::store(&path, &entries).unwrap();
+
+        assert_eq!(vault_identities(&path).len(), 1);
+    }
+
+    #[test]
+    fn vault_identities_empty_for_missing_or_corrupt_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        assert!(vault_identities(&path).is_empty());
+
+        std::fs::write(&path, "not json").unwrap();
+        assert!(vault_identities(&path).is_empty());
+    }
+
+    #[test]
+    fn identity_without_source_is_secure_enclave() {
+        let json = r#"{"key_label":"k","public_key":"ssh-ed25519 AAAA"}"#;
+
+        let identity: ManagedIdentity = serde_json::from_str(json).unwrap();
+
+        assert_eq!(identity.source, KeySource::SecureEnclave);
+    }
+
+    #[test]
+    fn vault_source_roundtrips_as_tagged_object() {
+        let source = KeySource::Vault {
+            vault_key: "v".to_string(),
+            item_key: "i".to_string(),
+            credential_key: "c".to_string(),
+        };
+
+        let json = serde_json::to_string(&source).unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"kind":"vault","vault_key":"v","item_key":"i","credential_key":"c"}"#
+        );
+        assert_eq!(serde_json::from_str::<KeySource>(&json).unwrap(), source);
+    }
+
+    #[tokio::test]
+    async fn vault_signature_refused_without_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let authorizer = DecliningAuthorizer::default();
+
+        let response = sign_vault_with(
+            &path,
+            &authorizer,
+            &empty_vaults(),
+            sign_request("SHA256:unknown"),
+            audit::Actor::default(),
+            &InFlightRequest::default(),
+        )
+        .await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        assert!(authorizer.prompts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn vault_signature_prompts_for_vault_of_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let entry = cache_entry("work", "key");
+        vault_keys::store(&path, std::slice::from_ref(&entry)).unwrap();
+        let authorizer = DecliningAuthorizer::default();
+
+        let response = sign_vault_with(
+            &path,
+            &authorizer,
+            &empty_vaults(),
+            sign_request(&entry.fingerprint),
+            audit::Actor::default(),
+            &InFlightRequest::default(),
+        )
+        .await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        let prompts = authorizer.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].vault_key, "work");
+        assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
+        let VaultAction::SignSshKey {
+            item_key,
+            credential_key,
+            fingerprint,
+            comment,
+            ..
+        } = &prompts[0].action
+        else {
+            panic!("expected an SSH signing prompt");
+        };
+        assert_eq!(item_key, "github");
+        assert_eq!(credential_key, "key");
+        assert_eq!(*fingerprint, entry.fingerprint);
+        assert_eq!(comment.as_deref(), Some("laptop"));
+        assert_eq!(
+            *fingerprint,
+            ed25519_key()
+                .public_key()
+                .fingerprint(HashAlg::Sha256)
+                .to_string()
+        );
+    }
 
     #[test]
     fn sshsig_namespace() {
