@@ -27,6 +27,33 @@ enum IssueSource {
   case gpg
 }
 
+/// Feature that the "Get started" checklist sets up. Cases are in checklist
+/// order.
+enum SetupFeature: CaseIterable {
+  case shell
+  case autofill
+  case ssh
+  case gpg
+
+  var title: String {
+    switch self {
+    case .ssh: return "Use Axo Pass for SSH"
+    case .shell: return "Set up ap in zsh"
+    case .gpg: return "Use Axo Pass for GPG"
+    case .autofill: return "Turn on AutoFill"
+    }
+  }
+
+  var benefit: String {
+    switch self {
+    case .ssh: return "Use Touch ID for ssh and git signing."
+    case .shell: return "Use `ap` in zsh to read secrets."
+    case .gpg: return "Unlock GPG keys with Touch ID."
+    case .autofill: return "Fill passwords and passkeys in Safari and apps."
+    }
+  }
+}
+
 /// GPG key named by an issue.
 struct GpgKeyRef: Hashable {
   let fingerprint: String
@@ -138,8 +165,58 @@ enum Issue: Hashable, Identifiable {
     }
   }
 
-  /// Whether the user can dismiss or snooze the issue. Advice issues only.
-  var isDismissible: Bool { severity == .advice }
+  /// Whether the user can dismiss or snooze the issue. Advice issues can be
+  /// dismissed or snoozed. Setup issues can be skipped.
+  var isDismissible: Bool { severity == .advice || severity == .setup }
+
+  /// Whether the issue can be snoozed. Advice issues only. A setup issue is
+  /// skipped without an end.
+  var isSnoozable: Bool { severity == .advice }
+
+  /// Feature a setup issue belongs to in the "Get started" checklist. Nil for
+  /// other issues and for browser connections.
+  var setupFeature: SetupFeature? {
+    switch self {
+    case .identityAgentMissing: return .ssh
+    case .shellIntegrationMissing: return .shell
+    case .pinentryMissing: return .gpg
+    case .autofillOff: return .autofill
+    default: return nil
+    }
+  }
+
+  /// Position of a setup issue in the checklist. Browser connections share the
+  /// position of AutoFill.
+  var checklistRank: Int {
+    SetupFeature.allCases.firstIndex(of: setupFeature ?? .autofill) ?? 0
+  }
+
+  /// Row title in the "Get started" checklist. Nil if the issue is not a
+  /// setup issue.
+  var checklistTitle: String? {
+    if let setupFeature { return setupFeature.title }
+    if case .browserManifestMissing(_, let name) = self { return "Connect \(name)" }
+    return nil
+  }
+
+  /// What the user gets from the setup step. Nil if the issue is not a setup
+  /// issue.
+  var benefit: String? {
+    if let setupFeature { return setupFeature.benefit }
+    if case .browserManifestMissing(_, let name) = self { return "Fill passwords in \(name)." }
+    return nil
+  }
+
+  /// File that the setup step changes. Shown as help text on the checklist
+  /// row.
+  var setupPath: String? {
+    switch self {
+    case .identityAgentMissing(let configPath): return configPath
+    case .shellIntegrationMissing(let zshrcPath): return zshrcPath
+    case .pinentryMissing(let confPath): return confPath
+    default: return nil
+    }
+  }
 
   /// Sidebar source of the issue. Nil for vault, sync, and AutoFill issues.
   var source: IssueSource? {

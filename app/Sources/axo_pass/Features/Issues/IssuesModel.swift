@@ -3,6 +3,17 @@ import AxoPassFFI
 import Foundation
 import Observation
 
+/// Steps of the "Get started" checklist.
+struct SetupChecklist {
+  /// Features that are set up.
+  let done: [SetupFeature]
+  /// Setup issues that are neither fixed nor skipped.
+  let open: [Issue]
+
+  /// Steps that count toward "N of M done". Skipped steps are not counted.
+  var total: Int { done.count + open.count }
+}
+
 /// Issues of the app, most severe first. One instance for the app.
 ///
 /// Vault and sync issues are read live from `VaultsModel` and `SyncModel`.
@@ -33,6 +44,14 @@ final class IssuesModel {
   /// GPG keys from the last listing. Nil if the listing failed or has not run.
   private(set) var gpgKeys: [GpgKeyEntry]? = nil
   private(set) var passwords: [PasswordEntryInfo] = []
+  /// Whether `gpg-agent.conf` exists. Read with the other file checks.
+  private(set) var gpgConfExists = false
+
+  /// Whether GPG is in use on this Mac: the keyring has a key, or
+  /// `gpg-agent.conf` exists. The GPG setup step is left out otherwise.
+  var usesGpg: Bool {
+    gpgKeys?.isEmpty == false || gpgConfExists
+  }
 
   /// Dismissed issues, as `Issue.id` to the end of the snooze. Nil for a
   /// dismissal without an end.
@@ -66,6 +85,7 @@ final class IssuesModel {
   func refreshChecks() {
     now = Date()
     setup.refresh()
+    gpgConfExists = gpgConf.map { FileManager.default.fileExists(atPath: $0.confPath) } ?? false
     browsers = browserManifestStatuses()
   }
 
@@ -109,6 +129,34 @@ final class IssuesModel {
     countedIssues.first?.severity
   }
 
+  // MARK: - Checklist
+
+  /// Optional setup steps, for the "Get started" card. Open steps are the
+  /// setup issues that are not skipped. Done steps are the features that are
+  /// set up. A skipped step is in neither list. GPG is left out if
+  /// `usesGpg` is false.
+  var setupChecklist: SetupChecklist {
+    let configured: [SetupFeature: Bool] = [
+      .shell: shell?.configured == true,
+      .autofill: autofillEnabled == true,
+      .ssh: sshConf?.state == .configured,
+      .gpg: usesGpg && gpgConf?.state == .configured,
+    ]
+    let done = SetupFeature.allCases.filter { configured[$0] == true }
+    let open = issues.filter { $0.severity == .setup }
+      .sorted { ($0.checklistRank, $0.id) < ($1.checklistRank, $1.id) }
+    return SetupChecklist(done: done, open: open)
+  }
+
+  /// Whether the "Get started" card is shown. It is shown while a step is
+  /// open. A debug build can show it with every step done.
+  var showsChecklist: Bool {
+    #if DEBUG
+      if DevOverrides.shared.showChecklist { return true }
+    #endif
+    return !setupChecklist.open.isEmpty
+  }
+
   // MARK: - Dismissal
 
   /// Whether `issue` is dismissed, or snoozed until after the last check.
@@ -137,6 +185,27 @@ final class IssuesModel {
     dismissals[issue.id] = nil
     saveDismissals()
   }
+
+  #if DEBUG
+    /// Show every dismissed, snoozed, and skipped issue again.
+    func restoreAll() {
+      dismissals = [:]
+      saveDismissals()
+    }
+
+    /// Show the skipped setup steps of the checklist again. Advice dismissals
+    /// stay.
+    func restoreSetupSteps() {
+      let setupIds = [
+        "identity-agent-missing", "shell-integration-missing", "pinentry-missing",
+        "autofill-off",
+      ]
+      dismissals = dismissals.filter { id, _ in
+        !setupIds.contains(id) && !id.hasPrefix("browser-manifest-missing-")
+      }
+      saveDismissals()
+    }
+  #endif
 
   /// Dismissals from `UserDefaults`. Snoozes that have ended are dropped.
   private static func loadDismissals() -> [String: Date?] {
@@ -234,7 +303,8 @@ final class IssuesModel {
     var list: [Issue] = []
     if let gpgConf {
       switch gpgConf.state {
-      case .notConfigured: list.append(.pinentryMissing(confPath: gpgConf.confPath))
+      case .notConfigured:
+        if usesGpg { list.append(.pinentryMissing(confPath: gpgConf.confPath)) }
       case .otherProgram:
         list.append(.pinentryOther(confPath: gpgConf.confPath, program: gpgConf.currentProgram))
       case .configured: break

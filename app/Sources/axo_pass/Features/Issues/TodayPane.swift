@@ -5,9 +5,11 @@ import SwiftUI
 
 /// Home page of the app. Lists the issues with one fix button for each, then
 /// the keys and credentials used today. The "Status" section lists chips of
-/// the status checks, then the counted issues. Setup issues are listed under
-/// "Not set up". Info issues are left out. Advice issues can be snoozed or
-/// dismissed, and are then listed under "Dismissed".
+/// the status checks, then the counted issues. Setup issues are listed in the
+/// "Get started" checklist, with a count of the steps done. The checklist stays
+/// until every step is done or skipped. Info issues are left out. Advice
+/// issues can be snoozed or dismissed, and setup issues skipped. Both are then
+/// listed under "Dismissed".
 struct TodayPane: View {
   let sshModel: SshModel
   let gpgModel: GpgModel
@@ -22,7 +24,7 @@ struct TodayPane: View {
 
   var body: some View {
     let counted = issues.countedIssues
-    let setup = issues.issues.filter { $0.severity == .setup }
+    let checklist = issues.setupChecklist
     let dismissed = issues.dismissedIssues
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
@@ -38,9 +40,10 @@ struct TodayPane: View {
             issueCard(counted)
           }
         }
-        if !setup.isEmpty {
-          TodaySectionHeader("Not set up")
-          issueCard(setup)
+        if issues.showsChecklist {
+          TodaySectionHeader(
+            "Get started", detail: "\(checklist.done.count) of \(checklist.total) done")
+          checklistCard(checklist)
         }
         if !dismissed.isEmpty {
           TodaySectionHeader("Dismissed")
@@ -101,7 +104,7 @@ struct TodayPane: View {
     }
   }
 
-  /// Status checks, in sidebar order. Checks that pass are listed. The SSH
+  /// Status checks, in checklist order after Sync. Checks that pass are listed. The SSH
   /// agent check is also listed if it fails. A check that has not run is left
   /// out. Labels are short. Help text gives the full check.
   private var statusChecks: [StatusCheck] {
@@ -111,6 +114,8 @@ struct TodayPane: View {
       list.append(
         StatusCheck("Sync", synced == 1 ? "1 vault synced" : "\(synced) vaults synced"))
     }
+    if issues.shell?.configured == true { list.append(StatusCheck("Shell", "ap set up in zsh")) }
+    if issues.autofillEnabled == true { list.append(StatusCheck("AutoFill", "AutoFill on")) }
     switch issues.agentStatus {
     case .running: list.append(StatusCheck("SSH agent", "SSH agent running"))
     case .notRunning, .staleSocket:
@@ -118,9 +123,7 @@ struct TodayPane: View {
     case nil: break
     }
     if issues.sshConf?.state == .configured { list.append(StatusCheck("SSH", "ssh uses Axo Pass")) }
-    if issues.shell?.configured == true { list.append(StatusCheck("Shell", "ap set up in zsh")) }
     if issues.gpgConf?.state == .configured { list.append(StatusCheck("GPG", "gpg uses Axo Pass")) }
-    if issues.autofillEnabled == true { list.append(StatusCheck("AutoFill", "AutoFill on")) }
     return list
   }
 
@@ -131,7 +134,9 @@ struct TodayPane: View {
     if let error = usedToday.loadError {
       TodayCard { TodayNoteRow(error, color: .red) }
     } else if usedToday.entries.isEmpty {
-      TodayCard { TodayNoteRow("No keys or credentials used yet today.") }
+      TodayCard {
+        TodayNoteRow("Lists the SSH keys, GPG keys, and logins that apps and tools use today.")
+      }
     } else {
       TodayCard {
         ForEach(Array(usedToday.entries.enumerated()), id: \.element.id) { index, entry in
@@ -211,11 +216,93 @@ struct TodayPane: View {
     }
   }
 
+  /// Card of the "Get started" checklist. Open steps come first, each with a
+  /// benefit line and a Skip button. Done steps follow with a checkmark.
+  private func checklistCard(_ checklist: SetupChecklist) -> some View {
+    TodayCard {
+      ForEach(Array(checklist.open.enumerated()), id: \.element.id) { index, issue in
+        if index > 0 {
+          Divider()
+        }
+        checklistRow(issue)
+      }
+      ForEach(Array(checklist.done.enumerated()), id: \.element) { index, feature in
+        if index > 0 || !checklist.open.isEmpty {
+          Divider()
+        }
+        doneRow(feature)
+      }
+    }
+  }
+
+  /// Open step. The file that the step changes is in the help text.
+  private func checklistRow(_ issue: Issue) -> some View {
+    HStack(spacing: 12) {
+      IssueSeverityIcon(severity: issue.severity)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(issue.checklistTitle ?? issue.title)
+          .fontWeight(.medium)
+          .fixedSize(horizontal: false, vertical: true)
+        if let benefit = issue.benefit {
+          Text(benefit)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      Spacer(minLength: 12)
+      if let label = fixLabel(issue) {
+        Button(label) { fix(issue) }
+      }
+      Button("Skip") { issues.dismiss(issue) }
+        .help("Move to Dismissed")
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .help(issue.setupPath ?? "")
+  }
+
+  private func doneRow(_ feature: SetupFeature) -> some View {
+    HStack(spacing: 12) {
+      TodayIcon(symbol: "checkmark", color: .green)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(feature.title)
+          .fontWeight(.medium)
+        Text(feature.benefit)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      .opacity(0.6)
+      Spacer(minLength: 12)
+      Button("View") { view(feature) }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+  }
+
+  /// Open the setup sheet of a completed step, which shows its current state.
+  /// AutoFill has no sheet, so it opens System Settings.
+  private func view(_ feature: SetupFeature) {
+    switch feature {
+    case .ssh:
+      sshModel.refreshConfStatus()
+      sheet = .sshSetup
+    case .shell:
+      shellModel.refreshStatus()
+      sheet = .shellSetup
+    case .gpg:
+      gpgModel.refreshConfStatus()
+      sheet = .gpgSetup
+    case .autofill:
+      ASSettingsHelper.openCredentialProviderAppSettings { _ in }
+    }
+  }
+
   private func row(_ issue: Issue, dismissed: Bool) -> some View {
     HStack(spacing: 12) {
       IssueSeverityIcon(severity: issue.severity)
       VStack(alignment: .leading, spacing: 2) {
-        Text(issue.title)
+        Text(issue.checklistTitle ?? issue.title)
           .fontWeight(.medium)
           .fixedSize(horizontal: false, vertical: true)
         if let detail = dismissed ? Optional(snoozeDetail(issue)) : detail(issue) {
@@ -234,7 +321,7 @@ struct TodayPane: View {
           Button(label) { fix(issue) }
             .disabled(isFixing(issue))
         }
-        if issue.isDismissible {
+        if issue.isSnoozable {
           dismissMenu(issue)
         }
       }
@@ -510,22 +597,31 @@ struct SubjectOpener {
   }
 }
 
-/// Section title of the Today page, with an optional count badge.
+/// Section title of the Today page, with an optional count badge and an
+/// optional line of detail after the title.
 struct TodaySectionHeader: View {
   let title: String
   let count: Int?
   let tint: Color
+  let detail: String?
 
-  init(_ title: String, count: Int? = nil, tint: Color = .secondary) {
+  init(_ title: String, count: Int? = nil, tint: Color = .secondary, detail: String? = nil) {
     self.title = title
     self.count = count
     self.tint = tint
+    self.detail = detail
   }
 
   var body: some View {
     HStack(spacing: 8) {
       Text(title)
         .foregroundStyle(.secondary)
+      if let detail {
+        Text(detail)
+          .font(.subheadline.weight(.regular))
+          .monospacedDigit()
+          .foregroundStyle(.tertiary)
+      }
       if let count {
         Text("\(count)")
           .monospacedDigit()
