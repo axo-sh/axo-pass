@@ -140,6 +140,14 @@ final class AppLocationMonitor {
 
   private func handleDeleted() {
     stopWork()
+    // The agent runs from the deleted bundle, so stop it before the alert.
+    Task {
+      try? await AgentService.shared.stop()
+      showDeletedAlert()
+    }
+  }
+
+  private func showDeletedAlert() {
     let alert = NSAlert()
     alert.alertStyle = .critical
     alert.icon = icon

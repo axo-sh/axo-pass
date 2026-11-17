@@ -641,10 +641,7 @@ impl AxoPass {
 
     /// Stop the Axo Pass SSH agent. Mirrors `ap ssh-agent stop`.
     pub async fn stop_ssh_agent(&self) -> Result<(), FfiError> {
-        tokio::task::spawn_blocking(agent_client::stop_agent)
-            .await
-            .map_err(|e| FfiError::Internal(e.to_string()))?
-            .map_err(FfiError::Internal)
+        agent_client::stop_agent().await.map_err(FfiError::Internal)
     }
 
     /// Ask the running Axo Pass agent for its version and launcher. `None` if

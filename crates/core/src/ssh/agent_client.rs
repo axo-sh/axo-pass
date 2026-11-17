@@ -73,18 +73,15 @@ pub fn start_agent() -> Result<(), String> {
     Err("SSH agent did not come up in time".to_string())
 }
 
-/// Stops the Axo Pass SSH agent by running `ap ssh-agent stop`. The stop
-/// request is delivered before the CLI exits, but the agent's own socket
-/// cleanup runs after that, so this polls briefly for the socket to go away.
-pub fn stop_agent() -> Result<(), String> {
+/// Stops the Axo Pass SSH agent. The request goes over the agent socket, so
+/// the `ap` binary is not needed. The agent's own socket cleanup runs after
+/// the request is delivered, so this polls briefly for the socket to go away.
+pub async fn stop_agent() -> Result<(), String> {
     let socket_path = default_socket_path();
-    let ap = ap_bin_path().ok_or("Could not determine ap binary path")?;
-    let status = Command::new(&ap)
-        .args(["ssh-agent", "stop"])
-        .status()
-        .map_err(|e| format!("Failed to run ap ssh-agent stop: {e}"))?;
-    if !status.success() {
-        return Err(format!("ap ssh-agent stop exited with {status}"));
+    match request_agent_shutdown().await {
+        Ok(()) => {},
+        Err(SshAgentClientError::NoSocketFound) => return Ok(()),
+        Err(e) => return Err(format!("Failed to stop SSH agent: {e}")),
     }
 
     const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -93,7 +90,7 @@ pub fn stop_agent() -> Result<(), String> {
         if get_agent_status_for_socket(&socket_path) != AgentStatus::Running {
             return Ok(());
         }
-        std::thread::sleep(POLL_INTERVAL);
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
     Err("SSH agent did not shut down in time".to_string())
 }
