@@ -40,7 +40,10 @@ struct PaletteView: View {
         footer
       }
     }
-    .background(PaletteBackground())
+    .background {
+      // The tint follows the appearance and keeps text legible over a busy wallpaper.
+      PaletteBackground().overlay(Color(nsColor: .windowBackgroundColor).opacity(0.5))
+    }
     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -397,7 +400,7 @@ private struct PaletteBackground: NSViewRepresentable {
 
   func makeNSView(context _: Context) -> NSVisualEffectView {
     let view = NSVisualEffectView()
-    view.material = .hudWindow
+    view.material = .popover
     view.blendingMode = .behindWindow
     view.state = .active
     view.maskImage = Self.makeMask()
