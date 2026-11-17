@@ -33,6 +33,6 @@ APPLE_TEAM_ID = "75J48AQ5LF"
 APPLE_SIGNING_IDENTITY = "Developer ID Application: Breakfast Labs, LLC (75J48AQ5LF)"
 
 # for notarytool
-APPLE_API_ISSUER = "axo://frittata/apple/apple_api_issuer"
-APPLE_API_KEY = "axo://frittata/apple/apple_api_key"
+APPLE_API_ISSUER = "axo://apple/app-store-connect/api-issuer-id"
+APPLE_API_KEY = "axo://apple/app-store-connect/api-key-id"
 APPLE_API_KEY_PATH = "~/.appstoreconnect/private_keys/AuthKey_4WU23BTSL5.p8"
