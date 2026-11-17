@@ -23,3 +23,7 @@ tokio = {version = "1.53.3", features = ["full"]}
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+lto = "thin"
+strip = true

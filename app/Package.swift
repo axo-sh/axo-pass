@@ -45,6 +45,8 @@ let package = Package(
         .linkedFramework("Security"),
         .linkedFramework("LocalAuthentication"),
         .linkedFramework("LocalAuthenticationEmbeddedUI"),
+        // Drop local symbols and the debug map from release binaries.
+        .unsafeFlags(["-Xlinker", "-x", "-Xlinker", "-S"], .when(configuration: .release)),
       ]
     ),
     // The AutoFill credential provider extension. strudel stages it as
