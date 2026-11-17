@@ -33,6 +33,9 @@ enum Preferences {
     /// Dismissed advice issues, as `Issue.id` to the end of the snooze in
     /// seconds since 1970. A dismissal without an end is stored as 0.
     static let dismissedIssues = "issues.dismissed"
+    /// Whether a choice in the welcome window finished, or a vault existed at
+    /// launch. Unset on a new Mac.
+    static let hasCompletedFirstRun = "firstRun.completed"
   }
 
   static let defaultAutoLockMinutes = 5
@@ -62,6 +65,11 @@ enum Preferences {
 
   static var reuseApprovals: Bool {
     UserDefaults.standard.bool(forKey: Key.reuseApprovals)
+  }
+
+  static var hasCompletedFirstRun: Bool {
+    get { UserDefaults.standard.bool(forKey: Key.hasCompletedFirstRun) }
+    set { UserDefaults.standard.set(newValue, forKey: Key.hasCompletedFirstRun) }
   }
 
   static var paletteHotKey: HotKey? {

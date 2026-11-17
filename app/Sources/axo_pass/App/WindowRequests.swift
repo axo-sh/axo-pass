@@ -18,6 +18,13 @@ final class WindowRequests {
   /// `StatusItemController`.
   var togglePalette: (NSRect, NSScreen?) -> Void = { _, _ in }
 
+  /// Whether the welcome window stands in for the main window. True until a
+  /// choice in the welcome window finishes, if no vault exists. Set by
+  /// `AppDelegate`.
+  var isFirstRunPending: () -> Bool = { false }
+
+  /// Ask for the main window. The scene in `App.swift` opens the welcome window
+  /// instead while `isFirstRunPending`.
   func requestMain() {
     PanelAppVisibility.shared.windowRequested()
     mainOpens += 1

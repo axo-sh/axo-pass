@@ -160,6 +160,17 @@ final class SyncModel {
     folder = .folder(path: url.path)
   }
 
+  /// Show the pairing sheet that adds synced vaults from another Mac. The
+  /// sidebar and the welcome window both start it here.
+  func showPairing() {
+    sheet = .pair(root: folder, join: nil)
+  }
+
+  /// Show the kit import sheet that adds a synced vault with a recovery kit.
+  func showKitImport() {
+    sheet = .kitImport(root: folder, join: nil)
+  }
+
   /// Register the sync events delegate of the process. Call once at launch.
   /// The core replays the pairing counts held since its start.
   func register() {

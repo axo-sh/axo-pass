@@ -34,11 +34,14 @@ struct AxoPassApp: App {
       guard count > 0 else { return }
       NSApp.setActivationPolicy(.regular)
       NSApp.activate(ignoringOtherApps: true)
-      openWindow(id: Self.mainWindowID)
+      // The welcome window stands in for the main window until first run
+      // finishes.
+      let pending = appDelegate.windows.isFirstRunPending()
+      openWindow(id: pending ? Self.welcomeWindowID : Self.mainWindowID)
     }
     // Requests from the status item. Each window is only available while
     // unlocked; a locked app shows the main window, and its lock screen,
-    // instead.
+    // instead. While first run is pending, that is the welcome window.
     .onChange(of: appDelegate.windows.auditOpens) { _, _ in
       openUnlocked { openWindow(id: Self.auditWindowID) }
     }
@@ -48,6 +51,22 @@ struct AxoPassApp: App {
     .onChange(of: appDelegate.windows.settingsOpens) { _, _ in
       openUnlocked { openSettings() }
     }
+
+    // Shown in place of the main window if no vault exists and first run is
+    // not complete. Never open together with the main window. It carries the
+    // sync sheets for that reason, see `syncSheets()`.
+    Window("Welcome to Axo Pass", id: Self.welcomeWindowID) {
+      WelcomeView()
+        .environment(appDelegate.model)
+        .environment(appDelegate.sync)
+        .environment(appDelegate.issues)
+        .environment(appDelegate.windows)
+        .background(WindowAccessor { appDelegate.adoptWelcomeWindow($0) })
+    }
+    .windowStyle(.hiddenTitleBar)
+    .windowBackgroundDragBehavior(.enabled)
+    .windowResizability(.contentSize)
+    .defaultLaunchBehavior(.suppressed)
 
     Window("Audit Log", id: Self.auditWindowID) {
       AuditLogWindow()
@@ -94,6 +113,11 @@ struct AxoPassApp: App {
         KeychainMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
       }
+      #if DEBUG
+        CommandMenu("Developer") {
+          DeveloperMenu(windows: appDelegate.windows, issues: appDelegate.issues)
+        }
+      #endif
       // Declared rather than left to the default menu: the passphrase panel
       // is shown from a launch that opens no window, and pasting a
       // passphrase out of a password manager needs these key equivalents.
@@ -102,7 +126,7 @@ struct AxoPassApp: App {
   }
 
   private func openUnlocked(_ open: () -> Void) {
-    guard appDelegate.model.isAppUnlocked else {
+    guard appDelegate.model.isAppUnlocked, !appDelegate.windows.isFirstRunPending() else {
       appDelegate.windows.requestMain()
       return
     }
@@ -112,9 +136,36 @@ struct AxoPassApp: App {
   }
 
   static let mainWindowID = "main"
+  static let welcomeWindowID = "welcome"
   static let auditWindowID = "audit"
   static let keychainWindowID = "keychain"
 }
+
+#if DEBUG
+  /// Developer menu of debug builds. Previews and resets the first-run screens.
+  private struct DeveloperMenu: View {
+    let windows: WindowRequests
+    let issues: IssuesModel
+    @Bindable private var overrides = DevOverrides.shared
+
+    var body: some View {
+      Toggle(
+        "Show Welcome Window",
+        isOn: Binding(
+          get: { overrides.forceWelcome },
+          set: { on in
+            overrides.forceWelcome = on
+            // Open it now when turned on.
+            if on { windows.requestMain() }
+          }))
+      Toggle("Show Setup Checklist", isOn: $overrides.showChecklist)
+      Divider()
+      Button("Reset First Run") { Preferences.hasCompletedFirstRun = false }
+      Button("Reset Setup Checklist") { issues.restoreSetupSteps() }
+      Button("Reset All Dismissed Issues") { issues.restoreAll() }
+    }
+  }
+#endif
 
 /// Axo Pass ▸ Lock, bound to Command-L. Disabled while already locked.
 private struct LockMenuItem: View {
@@ -136,7 +187,7 @@ private struct AuditLogMenuItem: View {
 
   var body: some View {
     Button("Audit Log") {
-      guard model.isAppUnlocked else {
+      guard model.isAppUnlocked, !windows.isFirstRunPending() else {
         windows.requestMain()
         return
       }
@@ -157,7 +208,7 @@ private struct KeychainMenuItem: View {
 
   var body: some View {
     Button("Keychain") {
-      guard model.isAppUnlocked else {
+      guard model.isAppUnlocked, !windows.isFirstRunPending() else {
         windows.requestMain()
         return
       }

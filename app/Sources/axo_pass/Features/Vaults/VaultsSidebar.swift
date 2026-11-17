@@ -117,8 +117,8 @@ struct VaultsSidebar: View {
         }
         // Add synced vaults to this Mac from the synced folder of the app.
         Menu {
-          Button("Pair with Another Mac…") { sync.sheet = .pair(root: sync.folder, join: nil) }
-          Button("Use a Recovery Kit…") { sync.sheet = .kitImport(root: sync.folder, join: nil) }
+          Button("Pair with Another Mac…") { sync.showPairing() }
+          Button("Use a Recovery Kit…") { sync.showKitImport() }
         } label: {
           Label("Add Synced Vaults", systemImage: "arrow.triangle.2.circlepath")
         }

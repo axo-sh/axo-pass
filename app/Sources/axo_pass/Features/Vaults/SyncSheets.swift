@@ -6,9 +6,31 @@ import UniformTypeIdentifiers
 extension View {
   /// Present the sync sheets that `SyncModel` requests: the enable sheet, the
   /// pairing sheets, the kit import, the status sheets, the key state sheet,
-  /// and the turn-off confirmation. Attach once, in the main window.
+  /// and the turn-off confirmation. Attach in the main window and in the
+  /// welcome window. Only one of the two is open at a time, so a shared
+  /// `sync.sheet` never presents twice. Do not attach it to a third window.
   func syncSheets() -> some View {
     modifier(SyncSheetsModifier())
+  }
+}
+
+extension SyncModel {
+  /// Ask for the synced folder of the app if none is chosen. Returns whether a
+  /// folder is set. The pairing and kit sheets refuse to start without one,
+  /// and a new Mac has not been to Settings.
+  @MainActor
+  func ensureFolder() -> Bool {
+    if folder != nil { return true }
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Choose"
+    panel.message = "Choose the synced folder for your vaults."
+    guard panel.runModal() == .OK, let url = panel.url else { return false }
+    setFolder(url)
+    return true
   }
 }
 

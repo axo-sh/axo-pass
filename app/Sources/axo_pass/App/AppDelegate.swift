@@ -54,6 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// built it. Held weakly: the scene owns its lifetime.
   private weak var mainWindow: NSWindow?
 
+  /// The welcome scene's window. Held weakly like `mainWindow`.
+  private weak var welcomeWindow: NSWindow?
+
   /// The menu bar icon, its palette and its menu. Present for every launch,
   /// including a broker launch, so an app without a window can still be
   /// reached and quit.
@@ -77,6 +80,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func finishLaunching() {
     Preferences.registerDefaults()
+    // List the vaults before any window is requested, since first run is
+    // pending only if none exists. A Mac that already has a vault never shows
+    // the welcome window, even if every vault is deleted later.
+    model.reload()
+    if !model.vaults.isEmpty { Preferences.hasCompletedFirstRun = true }
+    windows.isFirstRunPending = { [weak model] in
+      guard let model else { return false }
+      #if DEBUG
+        if DevOverrides.shared.forceWelcome { return true }
+      #endif
+      return !Preferences.hasCompletedFirstRun && model.vaults.isEmpty && model.loadError == nil
+    }
     locationMonitor.start()
     // The sync manager started with the core of `model`. Events sent before
     // this are only logged, except the pairing counts, which are replayed.
@@ -149,6 +164,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     false
   }
 
+  /// Called from the welcome scene's content once its window exists.
+  func adoptWelcomeWindow(_ window: NSWindow) {
+    welcomeWindow = window
+    // A relaunch shows the welcome window again through `WindowRequests` if
+    // first run is still pending, so restoration is not needed.
+    window.isRestorable = false
+  }
+
   /// Called from the main scene's content once its window exists.
   func adoptMainWindow(_ window: NSWindow) {
     mainWindow = window
@@ -160,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   /// Closing the main window leaves the broker serving with nothing to show, so
   /// step back out of the Dock rather than keeping an icon that opens nothing.
+  /// The welcome window does the same, unless first run finished. Then the
+  /// main window opens next and restores the Dock icon.
   ///
   /// This observes the notification rather than becoming the window's delegate:
   /// the window belongs to a SwiftUI scene, which installs a delegate of its
@@ -172,8 +197,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) { [weak self] notification in
       let closing = notification.object as? NSWindow
       MainActor.assumeIsolated {
-        guard let self, let closing, closing === self.mainWindow else { return }
-        NSApp.setActivationPolicy(.accessory)
+        guard let self, let closing else { return }
+        if closing === self.mainWindow {
+          NSApp.setActivationPolicy(.accessory)
+        } else if closing === self.welcomeWindow, !Preferences.hasCompletedFirstRun {
+          NSApp.setActivationPolicy(.accessory)
+        }
       }
     }
   }

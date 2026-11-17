@@ -379,6 +379,16 @@ final class VaultsModel {
     }
   }
 
+  /// Unlock and wait for the attempt to finish. Returns whether the app is
+  /// unlocked. The welcome window uses this, since it has no lock screen.
+  func unlockAndWait() async -> Bool {
+    if isAppUnlocked { return true }
+    guard !isBrokerPromptVisible else { return false }
+    unlock()
+    await unlockTask?.value
+    return isAppUnlocked
+  }
+
   /// Unlock through the system dialog, which offers the login password. It runs
   /// on a separate context because `LAAuthenticationView` suppresses that dialog
   /// for the context it is attached to.
@@ -827,6 +837,13 @@ final class VaultsModel {
       actionError = String(describing: error)
       return false
     }
+  }
+
+  /// Create the default vault, named "Personal" with key `personal`. The
+  /// welcome window offers it as "Start fresh".
+  @discardableResult
+  func addPersonalVault() async -> Bool {
+    await addVault(name: "Personal", key: "personal")
   }
 
   @discardableResult
