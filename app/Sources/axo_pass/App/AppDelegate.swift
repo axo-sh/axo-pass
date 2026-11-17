@@ -63,6 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let locationMonitor = AppLocationMonitor()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // A launch from a disk image offers to move the app before any setup runs.
+    // A broker launch shows no prompt.
+    if !model.isBrokerLaunch(), let source = MoveToApplications.diskImageBundle() {
+      Task {
+        await MoveToApplications.offer(source: source)
+        finishLaunching()
+      }
+      return
+    }
+    finishLaunching()
+  }
+
+  private func finishLaunching() {
     Preferences.registerDefaults()
     locationMonitor.start()
     // The sync manager started with the core of `model`. Events sent before

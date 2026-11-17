@@ -66,7 +66,7 @@ final class AppLocationMonitor {
     return .watched(bundleURL)
   }
 
-  private static func isOnReadOnlyVolume(_ url: URL) -> Bool {
+  static func isOnReadOnlyVolume(_ url: URL) -> Bool {
     let values = try? url.resourceValues(forKeys: [.volumeIsReadOnlyKey])
     return values?.volumeIsReadOnly ?? false
   }
@@ -161,13 +161,15 @@ final class AppLocationMonitor {
 /// App Translocation lookups. The functions are in Security.framework but not
 /// in its public headers, so they are loaded by name. Both return a negative
 /// result if the symbols are missing.
-private enum Translocation {
-  private typealias IsTranslocated = @convention(c) (
-    CFURL, UnsafeMutablePointer<DarwinBoolean>, UnsafeMutablePointer<Unmanaged<CFError>?>?
-  ) -> Bool
-  private typealias CreateOriginal = @convention(c) (
-    CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?
-  ) -> Unmanaged<CFURL>?
+enum Translocation {
+  private typealias IsTranslocated =
+    @convention(c) (
+      CFURL, UnsafeMutablePointer<DarwinBoolean>, UnsafeMutablePointer<Unmanaged<CFError>?>?
+    ) -> Bool
+  private typealias CreateOriginal =
+    @convention(c) (
+      CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?
+    ) -> Unmanaged<CFURL>?
 
   private static func symbol<T>(_ name: String, as type: T.Type) -> T? {
     guard let handle = dlopen(nil, RTLD_NOW), let pointer = dlsym(handle, name) else { return nil }
