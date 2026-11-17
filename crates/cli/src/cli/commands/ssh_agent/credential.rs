@@ -8,6 +8,8 @@ use ssh_key::Signature;
 use ssh_key::public::KeyData;
 use thiserror::Error;
 
+use crate::cli::commands::ssh_agent::audit::SignKeySource;
+
 #[derive(Error, Debug)]
 pub enum CredentialError {
     #[error("Credential has expired")]
@@ -28,10 +30,15 @@ pub trait Credential {
         None
     }
 
-    /// The app-side label for a managed Secure Enclave key. `None` for a key
-    /// the agent holds directly.
+    /// The app-side label for a managed key. `None` for a key the agent holds
+    /// directly.
     fn key_label(&self) -> Option<String> {
         None
+    }
+
+    /// Where the key is held, for the audit record.
+    fn key_source(&self) -> SignKeySource {
+        SignKeySource::Agent
     }
 
     // caller, if provided, is displayed in the auth prompt. caller_chain is the

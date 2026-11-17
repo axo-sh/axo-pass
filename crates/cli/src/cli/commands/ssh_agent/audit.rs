@@ -34,19 +34,51 @@ pub fn sign_outcome(result: &Result<Signature, AgentError>) -> (Outcome, Option<
     }
 }
 
+/// Where the key that signs is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignKeySource {
+    /// A key added with `ssh-add`, held by the agent.
+    Agent,
+    /// A key configured for auto-load, read from `~/.ssh` and held by the
+    /// agent.
+    AutoLoad,
+    /// A Secure Enclave key held by the app.
+    SecureEnclave,
+    /// An SSH key stored in a vault, signed with by the app.
+    Vault,
+}
+
+impl SignKeySource {
+    /// Value of the `key_source` detail.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SignKeySource::Agent => "agent",
+            SignKeySource::AutoLoad => "auto_load",
+            SignKeySource::SecureEnclave => "secure_enclave",
+            SignKeySource::Vault => "vault",
+        }
+    }
+}
+
 /// Record one `ssh.sign` event for a completed request.
+///
+/// A vault key signature is recorded by the app instead, which knows the ids of
+/// the vault, item, and credential. Nothing is recorded here for it.
 #[allow(clippy::too_many_arguments)]
 pub fn record_sign(
     actor: Option<&Actor>,
     caller: Option<&str>,
     pubkey: &KeyData,
     request_data: &[u8],
-    managed: bool,
+    source: SignKeySource,
     comment: Option<&str>,
     key_label: Option<&str>,
     sessions: &[SessionBinding],
     result: &Result<Signature, AgentError>,
 ) {
+    if source == SignKeySource::Vault {
+        return;
+    }
     let fingerprint = pubkey.fingerprint(HashAlg::Sha256).to_string();
     let (outcome, message) = sign_outcome(result);
 
@@ -59,7 +91,7 @@ pub fn record_sign(
     let mut event = AuditEvent::new(Source::Agent, Action::SshSign, outcome)
         .subject(subject)
         .detail("algorithm", pubkey.algorithm().to_string())
-        .detail("managed", managed.to_string());
+        .detail("key_source", source.as_str());
     if let Some(key_label) = key_label {
         event = event.detail("key_label", key_label.to_string());
     }
@@ -145,5 +177,25 @@ fn attach_actor(event: AuditEvent, actor: Option<&Actor>, caller: Option<&str>) 
             caller: Some(c.to_string()),
             ..Default::default()
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_source_names() {
+        let names: Vec<_> = [
+            SignKeySource::Agent,
+            SignKeySource::AutoLoad,
+            SignKeySource::SecureEnclave,
+            SignKeySource::Vault,
+        ]
+        .into_iter()
+        .map(SignKeySource::as_str)
+        .collect();
+
+        assert_eq!(names, ["agent", "auto_load", "secure_enclave", "vault"]);
     }
 }

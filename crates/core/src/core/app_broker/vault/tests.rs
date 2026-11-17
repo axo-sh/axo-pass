@@ -39,6 +39,7 @@ mod files;
 mod import_items;
 mod recorded_ids;
 mod save;
+mod ssh_sign;
 
 /// Vault `personal` in the vaults directory and external vault `shared` in
 /// another directory, served through a [`VaultCatalog`] that unlocks with the

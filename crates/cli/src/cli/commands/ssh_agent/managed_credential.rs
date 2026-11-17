@@ -7,6 +7,7 @@ use ssh_agent_lib::proto;
 use ssh_key::PublicKey;
 use ssh_key::public::KeyData;
 
+use crate::cli::commands::ssh_agent::audit::SignKeySource;
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
 
 /// A key held by the app: a Secure Enclave key or an SSH key stored in a vault.
@@ -100,6 +101,13 @@ impl Credential for ManagedCredential {
 
     fn key_label(&self) -> Option<String> {
         Some(self.key_label.clone())
+    }
+
+    fn key_source(&self) -> SignKeySource {
+        match self.source {
+            KeySource::SecureEnclave => SignKeySource::SecureEnclave,
+            KeySource::Vault { .. } => SignKeySource::Vault,
+        }
     }
 
     fn key_type(&self) -> SshKeyType {
@@ -196,6 +204,20 @@ mod tests {
         let credential = ManagedCredential::try_from(identity(source.clone())).unwrap();
 
         assert_eq!(credential.source, source);
+    }
+
+    #[test]
+    fn credential_reports_audit_key_source() {
+        let enclave = ManagedCredential::try_from(identity(KeySource::SecureEnclave)).unwrap();
+        let vault = ManagedCredential::try_from(identity(KeySource::Vault {
+            vault_key: "personal".to_string(),
+            item_key: "github".to_string(),
+            credential_key: "key".to_string(),
+        }))
+        .unwrap();
+
+        assert_eq!(enclave.key_source(), SignKeySource::SecureEnclave);
+        assert_eq!(vault.key_source(), SignKeySource::Vault);
     }
 
     #[test]

@@ -16,7 +16,7 @@ use ssh_key::public::KeyData;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::agent::current_agent_info;
-use crate::cli::commands::ssh_agent::audit;
+use crate::cli::commands::ssh_agent::audit::{self, SignKeySource};
 use crate::cli::commands::ssh_agent::autoload_credential::{
     self, LoadError, find_autoload_key, is_autoload_key, list_autoload_keys,
 };
@@ -429,11 +429,14 @@ impl Session for SshAgentSession {
         // Looked up here for the audit record. `signature_for` does its own
         // lookup, with the checks that gate the signature. The credential is not
         // held across an await: it is not `Send`.
-        let (key_label, comment, managed) = {
+        let (key_label, comment, source) = {
             let cred = self.find_credential(&pubkey_data).await;
             let key_label = cred.as_ref().and_then(|c| c.key_label());
             let comment = cred.as_ref().and_then(|c| c.comment());
-            (key_label.clone(), comment, key_label.is_some())
+            let source = cred
+                .as_ref()
+                .map_or(SignKeySource::Agent, |c| c.key_source());
+            (key_label, comment, source)
         };
 
         // One `ssh.sign` event is recorded for the request, whatever the outcome.
@@ -447,7 +450,7 @@ impl Session for SshAgentSession {
             self.caller.as_deref(),
             &pubkey_data,
             &request_data,
-            managed,
+            source,
             comment.as_deref(),
             key_label.as_deref(),
             &self.sessions,
@@ -596,10 +599,11 @@ mod tests {
             ..Default::default()
         });
         assert!(
-            page.events
-                .iter()
-                .any(|e| e.outcome == axo_pass_core::audit::Outcome::Succeeded),
-            "expected a successful ssh.sign audit event"
+            page.events.iter().any(|e| {
+                e.outcome == axo_pass_core::audit::Outcome::Succeeded
+                    && e.detail.get("key_source").map(String::as_str) == Some("agent")
+            }),
+            "expected a successful ssh.sign audit event from an agent key"
         );
 
         let _ = std::fs::remove_dir_all(&audit_dir);

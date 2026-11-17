@@ -1,3 +1,4 @@
+use super::super::ssh::SignPurpose;
 use super::super::wire::WireResponse;
 use super::serve::AccessIds;
 use super::{ClientIdentity, LoginPage, ResolvePurpose, VaultAccessPrompt, VaultAction};
@@ -209,10 +210,27 @@ pub(super) fn access_event(
             event = event.detail("login_request", "update");
             event = login_page_details(event, page);
         },
+        VaultAction::SignSshKey { purpose, .. } => {
+            event = event.detail("key_source", "vault");
+            match purpose {
+                Some(SignPurpose::Login { user, host }) => {
+                    event = event
+                        .maybe_detail("user", user.clone())
+                        .maybe_detail("host", host.clone());
+                },
+                Some(SignPurpose::Sshsig { namespace }) => {
+                    event = event.detail("namespace", namespace.clone());
+                },
+                None => {},
+            }
+        },
         _ => {},
     }
     event = client_details(event, &prompt.client);
     match response {
+        Some(WireResponse::Signed { algorithm, .. }) => {
+            event = event.detail("algorithm", algorithm.clone());
+        },
         Some(WireResponse::VaultItems { items }) => {
             event = event.detail("item_count", items.len().to_string());
         },

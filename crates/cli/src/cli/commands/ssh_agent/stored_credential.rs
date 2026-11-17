@@ -11,6 +11,7 @@ use ssh_key::HashAlg;
 use ssh_key::public::KeyData;
 use time::{Duration, UtcDateTime};
 
+use crate::cli::commands::ssh_agent::audit::SignKeySource;
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
 use crate::cli::commands::ssh_agent::managed_credential::call_broker;
 
@@ -148,6 +149,14 @@ impl StoredCredential {
 }
 
 impl Credential for StoredCredential {
+    fn key_source(&self) -> SignKeySource {
+        if self.autoload {
+            SignKeySource::AutoLoad
+        } else {
+            SignKeySource::Agent
+        }
+    }
+
     fn comment(&self) -> Option<String> {
         let comment = match &self.credential {
             proto::PrivateCredential::Key { comment, .. }
