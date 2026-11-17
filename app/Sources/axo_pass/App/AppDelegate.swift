@@ -59,8 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// reached and quit.
   private var statusItem: StatusItemController?
 
+  /// Alerts if the app bundle is moved or deleted while running.
+  private let locationMonitor = AppLocationMonitor()
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     Preferences.registerDefaults()
+    locationMonitor.start()
     // The sync manager started with the core of `model`. Events sent before
     // this are only logged, except the pairing counts, which are replayed.
     sync.register()
