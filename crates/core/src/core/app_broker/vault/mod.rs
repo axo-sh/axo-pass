@@ -79,6 +79,8 @@ pub enum ResolvePurpose {
     Exec,
     /// `ap inject`.
     Inject,
+    /// `ap env`.
+    Env,
     /// `ap read` with more than one reference. One prompt covers the batch.
     Read,
 }

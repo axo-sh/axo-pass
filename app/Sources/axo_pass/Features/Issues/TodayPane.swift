@@ -731,6 +731,7 @@ enum UsedTodayStyle {
     case "credential.file_read": return "Saved to disk"
     case "credential.exec": return "Used by ap exec"
     case "credential.inject": return "Injected"
+    case "credential.env": return "Used by ap env"
     case "passkey.asserted": return "Signed in with a passkey"
     case "login.fill": return "Filled"
     case "login.totp": return "One-time code filled"

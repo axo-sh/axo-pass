@@ -1,5 +1,5 @@
-//! Resolves `axo://` references for `ap exec` and `ap inject` through the app
-//! broker.
+//! Resolves `axo://` references for `ap exec`, `ap env`, and `ap inject`
+//! through the app broker.
 //!
 //! `ap` holds no keychain entitlements, so it cannot unlock a vault itself. One
 //! invocation may pull many secrets across several vaults, so the references

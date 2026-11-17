@@ -403,6 +403,7 @@ private enum ActivityStyle {
     case "credential.file_read": return ("saved to disk", "by", false)
     case "credential.exec": return ("passed", "to", false)
     case "credential.inject": return ("injected", "by", false)
+    case "credential.env": return ("exported", "by", false)
     default: return ("used", "by", false)
     }
   }

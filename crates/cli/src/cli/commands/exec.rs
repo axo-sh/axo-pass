@@ -22,6 +22,34 @@ pub struct ExecCommand {
     pub command: Vec<String>,
 }
 
+/// Variables from dotenv files matching `patterns`, in load order.
+/// Glob matches are sorted. Later entries override earlier ones.
+pub(super) fn load_env_files(patterns: &[String]) -> Result<Vec<(String, String)>, anyhow::Error> {
+    let mut env_vars = Vec::new();
+    for pattern in patterns {
+        let paths = glob(pattern).map_err(|e| anyhow!("Invalid pattern '{pattern}': {e}"))?;
+        // partition so we can check for all GlobErrors upfront and then sort the paths
+        // before reading the files so the read order is deterministic.
+        let (mut paths, errors): (Vec<_>, Vec<_>) = paths.partition_result();
+        if !errors.is_empty() {
+            let err_list = errors.into_iter().map(|e| e.to_string()).join("\n");
+            bail!("Failed to execute pattern '{pattern}', got {err_list}");
+        }
+
+        paths.sort();
+        for path in &paths {
+            let display_path = path.display();
+            let env_iter = dotenvy::from_path_iter(path)
+                .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
+            let vars = env_iter
+                .collect::<Result<Vec<(String, String)>, _>>()
+                .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
+            env_vars.extend(vars);
+        }
+    }
+    Ok(env_vars)
+}
+
 impl ExecCommand {
     // ways to test this:
     // FOO='axo://...' ap exec -- printenv FOO
@@ -51,27 +79,7 @@ impl ExecCommand {
 
     pub async fn try_prepare_env(&self) -> Result<HashMap<String, String>, anyhow::Error> {
         let mut env_vars: HashMap<String, String> = std::env::vars().collect();
-        for pattern in &self.env_files {
-            let paths = glob(pattern).map_err(|e| anyhow!("Invalid pattern '{pattern}': {e}"))?;
-            // partition so we can check for all GlobErrors upfront and then sort the paths
-            // before reading the files so the read order is deterministic.
-            let (mut paths, errors): (Vec<_>, Vec<_>) = paths.partition_result();
-            if !errors.is_empty() {
-                let err_list = errors.into_iter().map(|e| e.to_string()).join("\n");
-                bail!("Failed to execute pattern '{pattern}', got {err_list}");
-            }
-
-            paths.sort();
-            for path in &paths {
-                let display_path = path.display();
-                let env_iter = dotenvy::from_path_iter(path)
-                    .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
-                let vars = env_iter
-                    .collect::<Result<Vec<(String, String)>, _>>()
-                    .map_err(|e| anyhow!("Failed to read env file {display_path}: {e}"))?;
-                env_vars.extend(vars);
-            }
-        }
+        env_vars.extend(load_env_files(&self.env_files)?);
 
         // Resolve every axo:// reference across all values in one broker
         // request, then substitute offline so a multi-secret invocation raises

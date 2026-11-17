@@ -464,6 +464,8 @@ pub enum Action {
     CredentialExec,
     #[serde(rename = "credential.inject")]
     CredentialInject,
+    #[serde(rename = "credential.env")]
+    CredentialEnv,
     #[serde(rename = "credential.created")]
     CredentialCreated,
     #[serde(rename = "credential.updated")]
@@ -561,6 +563,7 @@ impl Action {
             Action::CredentialFileRead => "credential.file_read",
             Action::CredentialExec => "credential.exec",
             Action::CredentialInject => "credential.inject",
+            Action::CredentialEnv => "credential.env",
             Action::CredentialCreated => "credential.created",
             Action::CredentialUpdated => "credential.updated",
             Action::CredentialDeleted => "credential.deleted",
@@ -585,7 +588,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 69] = [
+    pub const ALL: [Action; 70] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -636,6 +639,7 @@ impl Action {
         Action::CredentialFileRead,
         Action::CredentialExec,
         Action::CredentialInject,
+        Action::CredentialEnv,
         Action::CredentialCreated,
         Action::CredentialUpdated,
         Action::CredentialDeleted,
@@ -737,6 +741,7 @@ impl Action {
             Action::CredentialInject => {
                 "Read credential values for a template filled with ap inject."
             },
+            Action::CredentialEnv => "Read credential values for shell variables set with ap env.",
             Action::CredentialCreated => "Created a credential.",
             Action::CredentialUpdated => "Changed the value, title, key, or kind of a credential.",
             Action::CredentialDeleted => "Moved a credential to the deleted credentials.",
@@ -822,6 +827,7 @@ impl Action {
             | Action::CredentialFileRead
             | Action::CredentialExec
             | Action::CredentialInject
+            | Action::CredentialEnv
             | Action::CredentialCreated
             | Action::CredentialUpdated
             | Action::CredentialDeleted
@@ -860,6 +866,7 @@ impl Action {
             | Action::CredentialFileRead
             | Action::CredentialExec
             | Action::CredentialInject
+            | Action::CredentialEnv
             | Action::PasskeyAsserted => ActionKind::Access,
             Action::SshKeyAdd
             | Action::SshKeyRemove

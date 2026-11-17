@@ -16,6 +16,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 use crate::cli::commands::age::AgeCommand;
 use crate::cli::commands::agent::AgentCommand;
 use crate::cli::commands::browser::BrowserCommand;
+use crate::cli::commands::env::EnvCommand;
 use crate::cli::commands::exec::ExecCommand;
 use crate::cli::commands::inject::InjectCommand;
 use crate::cli::commands::item::{ItemCommand, ItemReference};
@@ -85,6 +86,9 @@ pub enum AxoPassCommand {
 
     /// Run a command with secrets interpolated into the environment
     Exec(ExecCommand),
+
+    /// Print shell exports for env files with secrets interpolated
+    Env(EnvCommand),
 
     /// Inject secrets into a file
     Inject(InjectCommand),
@@ -197,6 +201,7 @@ impl AxoPassCommand {
                 }
             },
             AxoPassCommand::Exec(exec) => exec.execute().await,
+            AxoPassCommand::Env(env) => env.execute().await,
             AxoPassCommand::Inject(inject) => inject.execute().await,
             AxoPassCommand::Age(age) => age.execute().await,
             AxoPassCommand::Browser(browser) => browser.execute().await,

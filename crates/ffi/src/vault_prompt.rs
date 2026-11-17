@@ -266,6 +266,7 @@ impl From<app_broker::LoginDetails> for LoginDetails {
 pub enum ResolvePurpose {
     Exec,
     Inject,
+    Env,
     Read,
 }
 
@@ -274,6 +275,7 @@ impl From<app_broker::ResolvePurpose> for ResolvePurpose {
         match purpose {
             app_broker::ResolvePurpose::Exec => Self::Exec,
             app_broker::ResolvePurpose::Inject => Self::Inject,
+            app_broker::ResolvePurpose::Env => Self::Env,
             app_broker::ResolvePurpose::Read => Self::Read,
         }
     }

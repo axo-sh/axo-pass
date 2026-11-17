@@ -109,6 +109,7 @@ pub(super) fn access_event(
             let action = match purpose {
                 ResolvePurpose::Exec => Action::CredentialExec,
                 ResolvePurpose::Inject => Action::CredentialInject,
+                ResolvePurpose::Env => Action::CredentialEnv,
                 ResolvePurpose::Read => Action::CredentialRead,
             };
             (action, Subject::new(SubjectKind::Vault, vault_key.clone()))
