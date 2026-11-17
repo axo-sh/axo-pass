@@ -13,8 +13,6 @@ struct SshPane: View {
         Label(err, systemImage: "exclamationmark.triangle")
           .font(.caption)
           .foregroundStyle(.red)
-      } else if model.keys.isEmpty {
-        Text("No SSH keys found").foregroundStyle(.secondary)
       } else {
         ForEach(model.keys, id: \.fingerprintSha256) { key in
           SshKeyRow(key: key)
@@ -26,6 +24,11 @@ struct SshPane: View {
               }
             }
         }
+      }
+    }
+    .overlay {
+      if model.loadError == nil && model.keys.isEmpty && !model.isLoading {
+        emptyState
       }
     }
     .safeAreaInset(edge: .bottom) { agentSummaryBar }
@@ -68,6 +71,22 @@ struct SshPane: View {
     { _ in
       model.refreshConfStatus()
       model.refreshAgentStatus()
+    }
+  }
+
+  /// Shown with no keys. "Generate Key" opens the sheet of the toolbar button.
+  /// Keys in `~/.ssh` are listed without an import, so the import button stays
+  /// disabled until the core has one.
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("No SSH Keys", systemImage: "key.horizontal")
+    } description: {
+      Text("Generate a key that stays in the Secure Enclave, or add keys to ~/.ssh.")
+    } actions: {
+      Button("Generate Key") { showingAddKeyConfirmation = true }
+      Button("Import from ~/.ssh") {}
+        .disabled(true)
+        .help("Keys in ~/.ssh are listed here without an import. None were found.")
     }
   }
 

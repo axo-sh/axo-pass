@@ -5,6 +5,7 @@ import SwiftUI
 struct GpgPane: View {
   @Bindable var model: GpgModel
   @Environment(\.openSettings) private var openSettings
+  @State private var showingSetup = false
 
   var body: some View {
     List(selection: $model.selectedFingerprint) {
@@ -12,8 +13,6 @@ struct GpgPane: View {
         Label(err, systemImage: "exclamationmark.triangle")
           .font(.caption)
           .foregroundStyle(.red)
-      } else if model.keys.isEmpty {
-        Text("No GPG keys found").foregroundStyle(.secondary)
       } else {
         // Secret keys lead the list without a header of their own: they are
         // the usual case, and the "Public Only" header below says what the
@@ -50,6 +49,13 @@ struct GpgPane: View {
         }
       }
     }
+    .overlay {
+      if model.loadError == nil && model.keys.isEmpty && model.orphanedPasswords.isEmpty
+        && !model.isLoading
+      {
+        emptyState
+      }
+    }
     .safeAreaInset(edge: .bottom) { agentSummaryBar }
     .paneBackground()
     .navigationTitle("GPG")
@@ -63,11 +69,29 @@ struct GpgPane: View {
         }
       }
     }
+    .sheet(isPresented: $showingSetup) {
+      GpgSetupSheet(model: model)
+    }
     .task { await model.reload() }
     // The file may be edited outside the app, so re-read it on reactivation.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
     { _ in
       model.refreshConfStatus()
+    }
+  }
+
+  /// Shown with no keys. "Set Up" opens the sheet that points gpg at the Axo
+  /// Pass pinentry.
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("No GPG Keys", systemImage: "signature")
+    } description: {
+      Text("Set up gpg to ask Axo Pass for key passphrases. Keys in your keyring are listed here.")
+    } actions: {
+      Button("Set Up") {
+        model.refreshConfStatus()
+        showingSetup = true
+      }
     }
   }
 

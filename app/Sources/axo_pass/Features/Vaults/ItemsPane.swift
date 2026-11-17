@@ -29,6 +29,7 @@ struct ItemsPane: View {
   @Environment(\.undoManager) private var undoManager
   @State private var showingNewItemSheet = false
   @State private var showingNewLoginSheet = false
+  @State private var showingImport = false
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var renamingItem: DisplayItem? = nil
   @State private var historyTarget: ItemHistoryTarget? = nil
@@ -95,6 +96,8 @@ struct ItemsPane: View {
             unfiledRows
           }
         }
+      } else if let vault = model.selectedVault, model.itemLoadFailures[vault.key] == nil {
+        emptyState
       }
     }
     .safeAreaInset(edge: .top, spacing: 0) {
@@ -120,6 +123,9 @@ struct ItemsPane: View {
         }
         .disabled(model.selectedVault == nil)
       }
+    }
+    .sheet(isPresented: $showingImport) {
+      VaultImportSheet(model: model)
     }
     .sheet(isPresented: $showingNewItemSheet) {
       NewItemSheet { key, title in
@@ -183,6 +189,26 @@ struct ItemsPane: View {
         .keyboardShortcut(.defaultAction)
     } message: { _ in
       Text("You can restore the item from Recently Deleted.")
+    }
+  }
+
+  /// Shown for a vault with no items. "New Login" opens the sheet of the
+  /// toolbar menu. "Import" offers a backup, and 1Password once the app has
+  /// that import.
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("No Items", systemImage: "tray")
+    } description: {
+      Text("Add a login, or import items from a backup or another password manager.")
+    } actions: {
+      Button("New Login") { showingNewLoginSheet = true }
+      Menu("Import") {
+        Button("Import from 1Password…") {}
+          .disabled(!OnePasswordImport.isAvailable)
+        Button("Import Backup…") { showingImport = true }
+      }
+      .menuStyle(.button)
+      .fixedSize()
     }
   }
 

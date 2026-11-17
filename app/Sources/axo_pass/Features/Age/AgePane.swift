@@ -13,8 +13,6 @@ struct AgePane: View {
         Label(err, systemImage: "exclamationmark.triangle")
           .font(.caption)
           .foregroundStyle(.red)
-      } else if model.keys.isEmpty {
-        Text("No age keys found").foregroundStyle(.secondary)
       } else {
         ForEach(model.keys) { key in
           AgeKeyRow(key: key)
@@ -25,6 +23,11 @@ struct AgePane: View {
               }
             }
         }
+      }
+    }
+    .overlay {
+      if model.loadError == nil && model.keys.isEmpty && !model.isLoading {
+        emptyState
       }
     }
     .paneBackground()
@@ -62,6 +65,18 @@ struct AgePane: View {
       AgeHelpSheet(keyName: model.selectedKey?.name)
     }
     .task { await model.reload() }
+  }
+
+  /// Shown with no keys. "Generate Identity" opens the sheet of the toolbar
+  /// button.
+  private var emptyState: some View {
+    ContentUnavailableView {
+      Label("No Age Identities", systemImage: "lock.rectangle.stack")
+    } description: {
+      Text("Generate an identity to encrypt and decrypt files with age.")
+    } actions: {
+      Button("Generate Identity") { showingGenerateSheet = true }
+    }
   }
 }
 
