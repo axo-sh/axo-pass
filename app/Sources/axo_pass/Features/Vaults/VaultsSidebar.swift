@@ -21,6 +21,7 @@ struct VaultsSidebar: View {
   @Environment(IssuesModel.self) private var issues
   @Environment(WindowRequests.self) private var windows
   @State private var showingNewVaultSheet = false
+  @State private var showingImportSheet = false
   @State private var deletingVault: SyncVaultRef? = nil
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
@@ -142,6 +143,9 @@ struct VaultsSidebar: View {
       VaultFormSheet(mode: .create) { name, key in
         await model.addVault(name: name, key: key)
       }
+    }
+    .sheet(isPresented: $showingImportSheet) {
+      VaultImportSheet(model: model)
     }
     .sheet(item: $renamingVaultKey) { vaultKey in
       let existing = model.vaults.first { $0.key == vaultKey }
@@ -332,7 +336,7 @@ struct VaultsSidebar: View {
         Button {
           withAnimation(.snappy(duration: 0.2)) { showAllVaults.toggle() }
         } label: {
-          Label(showAllVaults ? "Show fewer" : "Show more", systemImage: "ellipsis")
+          Label(showAllVaults ? "Show Fewer" : "Show More", systemImage: "ellipsis")
             .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
@@ -346,16 +350,44 @@ struct VaultsSidebar: View {
       }
       .tint(.secondary)
       .tag(SidebarDestination.recentlyDeleted)
-
-      Button {
-        showingNewVaultSheet = true
-      } label: {
-        Label("New Vault", systemImage: "plus")
-          .foregroundStyle(.secondary)
-      }
-      .buttonStyle(.plain)
-      .listRowSeparator(.hidden)
     }
+    addVaultMenu
+  }
+
+  /// Row that adds a vault. Listed with no vaults too, so a Mac without a vault
+  /// has a way to make or bring in the first one.
+  ///
+  /// The row is a plain label, like Recently Deleted, so it gets the same
+  /// icon column and color. A borderless menu draws its own label with
+  /// different insets. An invisible menu over the label takes the click.
+  private var addVaultMenu: some View {
+    Label {
+      Text("Add Vault")
+        .foregroundStyle(.secondary)
+    } icon: {
+      Image(systemName: "plus")
+    }
+    .tint(.secondary)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .overlay {
+      Menu {
+        Button("New Vault…") { showingNewVaultSheet = true }
+        Divider()
+        Button("Import from 1Password…") {}
+          .disabled(!OnePasswordImport.isAvailable)
+        Button("Import Backup…") { showingImportSheet = true }
+        Divider()
+        Button("Add from Another Mac…") { sync.showPairing() }
+        Button("Use a Recovery Kit…") { sync.showKitImport() }
+      } label: {
+        Color.clear
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .contentShape(.rect)
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+    }
+    .listRowSeparator(.hidden)
   }
 
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
