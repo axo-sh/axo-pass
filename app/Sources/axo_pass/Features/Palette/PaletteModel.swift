@@ -568,14 +568,15 @@ final class PaletteModel {
     let vaultName = vaultNames[ref.vaultKey] ?? ref.vaultKey
     let id = "cred:\(ref.vaultKey)/\(ref.itemKey)/\(cred.key)"
     let reference = "axo://\(ref.vaultKey)/\(ref.itemKey)/\(cred.key)"
-    // A file has no text value to copy, so it offers its reference only.
-    if cred.kind.kind == "file" {
+    // A file or SSH key has no text value to copy, so it offers its reference
+    // only.
+    if ["file", "ssh-key"].contains(cred.kind.kind) {
       return PaletteResult(
         id: id,
         kind: .credential,
         title: cred.title,
         subtitle: cred.file?.name,
-        systemImage: "doc",
+        systemImage: cred.kind.kind == "ssh-key" ? "key.horizontal" : "doc",
         keywords: [
           "\(display.item.title) \(cred.title)",
           "\(vaultName) \(display.item.title) \(cred.title)",

@@ -27,6 +27,8 @@ struct CredentialList: View {
   }
 
   @Environment(VaultsModel.self) var model
+  /// Nil in windows without the SSH pane.
+  @Environment(SshModel.self) var ssh: SshModel?
   @Environment(\.undoManager) var undoManager
   let item: ItemInfo
   let vaultKey: String
@@ -513,6 +515,14 @@ struct CredentialList: View {
         items.append(
           .action("History…") {
             previousValuesTarget = PreviousValuesTarget(key: key, title: cred.title)
+          })
+      }
+      if cred.kind.kind == "ssh-key", let ssh,
+        let entry = ssh.vaultKeyEntry(vaultKey: vaultKey, itemKey: item.key, credentialKey: key)
+      {
+        items.append(
+          .action("Show in SSH") {
+            ssh.show(fingerprintSha256: entry.fingerprintSha256, vaults: model)
           })
       }
       let roles = roleMenuItems(for: cred)

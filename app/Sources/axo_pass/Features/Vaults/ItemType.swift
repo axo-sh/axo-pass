@@ -5,6 +5,7 @@ import AxoPassFFI
 enum ItemType: String, CaseIterable, Hashable {
   case logins
   case passkeys
+  case sshKeys
   case oneTimeCodes
   case files
   case other
@@ -13,6 +14,7 @@ enum ItemType: String, CaseIterable, Hashable {
     switch self {
     case .logins: return "Logins"
     case .passkeys: return "Passkeys"
+    case .sshKeys: return "SSH Keys"
     case .oneTimeCodes: return "One-Time Codes"
     case .files: return "Files"
     case .other: return "Other Items"
@@ -23,6 +25,7 @@ enum ItemType: String, CaseIterable, Hashable {
     switch self {
     case .logins: return "key"
     case .passkeys: return "person.badge.key"
+    case .sshKeys: return "terminal"
     case .oneTimeCodes: return "clock.badge.checkmark"
     case .files: return "doc"
     case .other: return "doc.text"
@@ -33,10 +36,12 @@ enum ItemType: String, CaseIterable, Hashable {
     switch self {
     case .logins: return item.isLogin
     case .passkeys: return !item.passkeyCredentials.isEmpty
+    case .sshKeys: return item.isSshKey
     case .oneTimeCodes: return item.totpCredential != nil
     case .files: return !item.fileCredentials.isEmpty
     case .other:
-      return !item.isLogin && item.totpCredential == nil && item.fileCredentials.isEmpty
+      return !item.isLogin && !item.isSshKey && item.totpCredential == nil
+        && item.fileCredentials.isEmpty
     }
   }
 }

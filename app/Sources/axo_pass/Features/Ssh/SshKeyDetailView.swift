@@ -21,6 +21,9 @@ private struct SshKeyDetail: View {
   @Bindable var model: SshModel
   let key: SshKeyEntry
 
+  @Environment(VaultsModel.self) private var vaults
+  @State private var commentDraft = ""
+  @State private var commentError: String? = nil
   @State private var recentEvents: [AuditLogRow] = []
   @State private var appGrants: [SshAppGrant] = []
   @State private var relatedHosts: [SshRelatedHost] = []
@@ -28,6 +31,7 @@ private struct SshKeyDetail: View {
   @State private var showingDeleteConfirmation = false
   @State private var showingDeletePassphraseConfirmation = false
   @State private var copiedPublicKey = false
+  @State private var exportTarget: SshKeyExportTarget? = nil
 
   private static let recentEventCount: UInt32 = 5
 
@@ -48,7 +52,9 @@ private struct SshKeyDetail: View {
           }
         }
         // Everything the pills already say is left to them.
-        if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase || showsAutoload {
+        if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase || showsAutoload
+          || key.vaultKey != nil
+        {
           sectionTitle("Details")
           InsetGroupedSection {
             VStack(spacing: 8) {
@@ -81,6 +87,15 @@ private struct SshKeyDetail: View {
                 }
                 autoloadRow
               }
+              // Editable, so it follows the read-only rows.
+              if key.vaultKey != nil {
+                if !detailItems.isEmpty || showsMissingPublicKey || showsPassphrase
+                  || showsAutoload
+                {
+                  Divider()
+                }
+                commentRow
+              }
             }
           }
         }
@@ -108,6 +123,10 @@ private struct SshKeyDetail: View {
       .padding()
     }
     .labeledContentStyle(.inspectorField)
+    .contextMenu { VaultKeyMenuItems(key: key) { exportTarget = $0 } }
+    .sheet(item: $exportTarget) { target in
+      ExportSshKeySheet(target: target)
+    }
     .navigationTitle(key.name)
     .task(id: key.fingerprintSha256) {
       recentEvents = await model.recentEvents(
@@ -118,6 +137,8 @@ private struct SshKeyDetail: View {
         ? await model.appGrants(fingerprintSha256: key.fingerprintSha256) : []
     }
     .onChange(of: key.fingerprintSha256) { copiedPublicKey = false }
+    .onChange(of: key.fingerprintSha256, initial: true) { commentDraft = key.comment ?? "" }
+    .onChange(of: key.comment) { commentDraft = key.comment ?? "" }
     .sheet(isPresented: $showingSavePasswordSheet) {
       SavePasswordSheet(keyName: key.name) { password in
         await model.savePassword(fingerprint: key.fingerprintSha256, password: password)
@@ -159,8 +180,8 @@ private struct SshKeyDetail: View {
   }
 
   /// Every key can hold app grants except a Secure Enclave key that always
-  /// requires authentication.
-  private var grantsApply: Bool { key.policy != .alwaysRequireAuth }
+  /// requires authentication. Vault keys have no grants yet.
+  private var grantsApply: Bool { key.policy != .alwaysRequireAuth && key.vaultKey == nil }
 
   /// When a key the agent holds uses its grants. Nil for Secure Enclave keys,
   /// where grants always apply.
@@ -438,9 +459,9 @@ private struct SshKeyDetail: View {
     }
   }
 
-  /// A managed key signs without its public key file, so a missing one is an
-  /// inconvenience rather than a broken key: it can be written again from the
-  /// key in the Secure Enclave.
+  /// A managed key or vault key signs without its public key file, so a
+  /// missing one is an inconvenience rather than a broken key: it can be
+  /// written again from the key in the Secure Enclave or the vault.
   private var missingPublicKeyRow: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text("Public Key")
@@ -449,9 +470,58 @@ private struct SshKeyDetail: View {
       Text("File is missing")
       Spacer()
       Button("Recreate") {
-        Task { await model.writeManagedKeyPubkey(fingerprintSha256: key.fingerprintSha256) }
+        Task {
+          if let location = key.vaultKey {
+            do {
+              _ = try await vaults.writeSshKeyPubkey(location: location)
+              commentError = nil
+              await model.reload()
+            } catch {
+              commentError = String(describing: error)
+            }
+          } else {
+            await model.writeManagedKeyPubkey(fingerprintSha256: key.fingerprintSha256)
+          }
+        }
       }
       .controlSize(.small)
+    }
+  }
+
+  /// The comment of a vault key, saved to the vault on return or with Save.
+  private var commentRow: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text("Comment")
+          .foregroundStyle(.secondary)
+          .frame(width: 100, alignment: .leading)
+        TextField("Comment", text: $commentDraft)
+          .textFieldStyle(.plain)
+          .onSubmit { saveComment() }
+        if commentDraft != (key.comment ?? "") {
+          Button("Save") { saveComment() }
+            .controlSize(.small)
+        }
+      }
+      if let commentError {
+        Text(commentError)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+    }
+  }
+
+  private func saveComment() {
+    guard let location = key.vaultKey else { return }
+    let comment = commentDraft
+    Task {
+      do {
+        try await vaults.setSshKeyComment(location: location, comment: comment)
+        commentError = nil
+        await model.reload()
+      } catch {
+        commentError = String(describing: error)
+      }
     }
   }
 
@@ -491,6 +561,11 @@ private struct SshKeyDetail: View {
     if key.isManaged {
       items.append((label: "Key ID", value: key.name))
     }
+    if let location = key.vaultKey {
+      let place = vaults.sshKeyPlace(location)
+      items.append((label: "Vault", value: place.vault))
+      items.append((label: "Item", value: place.item))
+    }
     if let path = key.path, key.location == .sshDir {
       items.append((label: "Path", value: path))
     }
@@ -500,10 +575,12 @@ private struct SshKeyDetail: View {
     return items
   }
 
-  private var showsMissingPublicKey: Bool { key.publicKey == nil && key.isManaged }
+  private var showsMissingPublicKey: Bool {
+    key.publicKey == nil && (key.isManaged || key.vaultKey != nil)
+  }
 
   private var subtitle: String? {
-    guard let comment = key.comment, !comment.isEmpty else { return nil }
+    guard let comment = key.comment, !comment.isEmpty, comment != key.name else { return nil }
     return comment
   }
 
@@ -519,7 +596,8 @@ private struct SshKeyDetail: View {
 
   private var locationLabel: String {
     switch key.location {
-    case .vault: return "Secure Enclave"
+    case .secureEnclave: return "Secure Enclave"
+    case .vaultKey: return "Vault"
     case .sshDir: return "~/.ssh"
     case .transient: return "Agent only"
     }

@@ -4,8 +4,12 @@ import SwiftUI
 
 struct SshPane: View {
   @Bindable var model: SshModel
+  @Environment(VaultsModel.self) private var vaults
   @State private var showingAgents = false
   @State private var showingAddKeyConfirmation = false
+  @State private var showingGenerateVaultKey = false
+  @State private var showingImportVaultKey = false
+  @State private var exportTarget: SshKeyExportTarget? = nil
 
   var body: some View {
     List(selection: $model.selectedFingerprint) {
@@ -15,13 +19,14 @@ struct SshPane: View {
           .foregroundStyle(.red)
       } else {
         ForEach(model.keys, id: \.fingerprintSha256) { key in
-          SshKeyRow(key: key)
+          SshKeyRow(key: key, place: place(of: key))
             .contextMenu {
               if key.isManaged {
                 Button("Delete", role: .destructive) {
                   Task { await model.deleteManagedKey(fingerprintSha256: key.fingerprintSha256) }
                 }
               }
+              VaultKeyMenuItems(key: key) { exportTarget = $0 }
             }
         }
       }
@@ -37,10 +42,13 @@ struct SshPane: View {
     .navigationSplitViewColumnWidth(min: 200, ideal: 260)
     .toolbar {
       ToolbarItem {
-        Button {
-          showingAddKeyConfirmation = true
+        Menu {
+          Button("Generate Vault Key…") { showingGenerateVaultKey = true }
+          Button("Import Key from File…") { showingImportVaultKey = true }
+          Divider()
+          Button("New Secure Enclave Key…") { showingAddKeyConfirmation = true }
         } label: {
-          Label("New Managed Key", systemImage: "plus")
+          Label("Add Key", systemImage: "plus")
         }
       }
       ToolbarItem {
@@ -57,7 +65,20 @@ struct SshPane: View {
     .sheet(isPresented: $showingAddKeyConfirmation) {
       AddManagedKeySheet(model: model)
     }
+    .sheet(isPresented: $showingGenerateVaultKey) {
+      AddVaultKeySheet(mode: .generate, ssh: model)
+    }
+    .sheet(isPresented: $showingImportVaultKey) {
+      AddVaultKeySheet(mode: .importFile, ssh: model)
+    }
+    .sheet(item: $exportTarget) { target in
+      ExportSshKeySheet(target: target)
+    }
     .task { await model.reload() }
+    // Item titles of the vault keys come from the vaults' items.
+    .task(id: model.keys.compactMap { $0.vaultKey?.vaultKey }) {
+      await vaults.loadItemsForSshKeys(model.keys)
+    }
     // The CLI can start or stop the agent while the window is visible, so poll while the pane
     // is on screen.
     .task {
@@ -74,19 +95,27 @@ struct SshPane: View {
     }
   }
 
-  /// Shown with no keys. "Generate Key" opens the sheet of the toolbar button.
-  /// Keys in `~/.ssh` are listed without an import, so the import button stays
-  /// disabled until the core has one.
+  /// Vault and item of a vault key, for the row subtitle. Nil for other keys.
+  private func place(of key: SshKeyEntry) -> String? {
+    guard let location = key.vaultKey else { return nil }
+    let place = vaults.sshKeyPlace(location)
+    return "\(place.vault) · \(place.item)"
+  }
+
+  /// Shown with no keys. The buttons open the sheets of the toolbar menu. Keys
+  /// in `~/.ssh` are listed without an import, so a key file is imported only
+  /// to store it in a vault.
   private var emptyState: some View {
     ContentUnavailableView {
       Label("No SSH Keys", systemImage: "key.horizontal")
     } description: {
-      Text("Generate a key that stays in the Secure Enclave, or add keys to ~/.ssh.")
+      Text(
+        "Generate a key in a vault, import a key file, or create a key that stays in the "
+          + "Secure Enclave. Keys in ~/.ssh are listed without an import.")
     } actions: {
-      Button("Generate Key") { showingAddKeyConfirmation = true }
-      Button("Import from ~/.ssh") {}
-        .disabled(true)
-        .help("Keys in ~/.ssh are listed here without an import. None were found.")
+      Button("Generate Vault Key") { showingGenerateVaultKey = true }
+      Button("Import Key from File") { showingImportVaultKey = true }
+      Button("New Secure Enclave Key") { showingAddKeyConfirmation = true }
     }
   }
 
@@ -110,6 +139,8 @@ extension SshKeyEntry: Identifiable {
 
 private struct SshKeyRow: View {
   let key: SshKeyEntry
+  /// Vault and item of a vault key.
+  let place: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
@@ -132,24 +163,16 @@ private struct SshKeyRow: View {
   }
 
   private var subtitle: String {
-    var parts: [String] = [keyTypeLabel, locationLabel]
-    if let comment = key.comment, !comment.isEmpty { parts.append(comment) }
+    var parts: [String] = [sshKeyTypeLabel(key.keyType), locationLabel]
+    if let place { parts.append(place) }
+    if let comment = key.comment, !comment.isEmpty, comment != key.name { parts.append(comment) }
     return parts.joined(separator: " · ")
-  }
-
-  private var keyTypeLabel: String {
-    switch key.keyType {
-    case .rsa: return "rsa"
-    case .ed25519: return "ed25519"
-    case .ecdsa: return "ecdsa"
-    case .dsa: return "dsa"
-    case .unknown: return "unknown"
-    }
   }
 
   private var locationLabel: String {
     switch key.location {
-    case .vault: return "secure enclave"
+    case .secureEnclave: return "secure enclave"
+    case .vaultKey: return "vault"
     case .sshDir: return "~/.ssh"
     case .transient: return "agent only"
     }

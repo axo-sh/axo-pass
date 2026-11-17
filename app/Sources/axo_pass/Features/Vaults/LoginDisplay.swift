@@ -96,6 +96,12 @@ extension ItemInfo {
   /// The item's passkeys.
   var passkeyCredentials: [CredentialInfo] { credentials.filter { $0.kind.kind == "passkey" } }
 
+  /// The item's SSH keys.
+  var sshKeyCredentials: [CredentialInfo] { credentials.filter { $0.kind.kind == "ssh-key" } }
+
+  /// An item with an SSH key credential, or the category of one.
+  var isSshKey: Bool { !sshKeyCredentials.isEmpty || category == "ssh-key" }
+
   /// The item's file credentials.
   var fileCredentials: [CredentialInfo] { credentials.filter { $0.kind.kind == "file" } }
 
@@ -124,9 +130,10 @@ extension ItemInfo {
 }
 
 extension CredentialInfo {
-  /// Whether the value is a record the app never shows as text: a passkey or
-  /// a file. Rows show the listing's `passkey` or `file` fields instead.
-  var hasRecordValue: Bool { kind.kind == "passkey" || kind.kind == "file" }
+  /// Whether the value is a record the app never shows as text: a passkey, a
+  /// file, or an SSH private key. Rows show the listing's `passkey` or `file`
+  /// fields, or the SSH key listing, instead.
+  var hasRecordValue: Bool { ["passkey", "file", "ssh-key"].contains(kind.kind) }
 }
 
 /// The host of a stored website, which is a URL or a bare domain, without a

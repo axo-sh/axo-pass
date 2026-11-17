@@ -35,6 +35,8 @@ private struct MainView: View {
       detailPane
         .splitColumnCollapsed(model.isPageSelected, index: 1)
     }
+    // Vault SSH key credentials read their key entry from this model.
+    .environment(sshModel)
   }
 
   @ViewBuilder

@@ -88,6 +88,10 @@ struct CredentialRow: View {
   /// record with the file key, so the row never reveals or copies it.
   private var isFile: Bool { cred.kind.kind == "file" }
 
+  /// An SSH key credential shows the key from the SSH key listing. The row
+  /// never reveals the private key.
+  private var isSshKey: Bool { cred.kind.kind == "ssh-key" }
+
   /// Copied by the Copy button or a copy shortcut.
   private var copied: Bool { justCopied || showsCopied }
 
@@ -231,6 +235,8 @@ struct CredentialRow: View {
           file: cred.file, title: cred.title, failure: fileFailure, isBusy: isFileBusy,
           onPreview: onPreviewFile, onSave: onSaveFile, onReplace: onReplaceFile,
           onReplaceWith: onReplaceFileWith, onDelete: onDelete)
+      } else if isSshKey {
+        SshKeyBox(vaultKey: vaultKey, itemKey: itemKey, credKey: cred.key, onDelete: onDelete)
       } else if quickEditing {
         quickEditor
       } else {

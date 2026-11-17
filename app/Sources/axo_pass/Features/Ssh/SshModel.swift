@@ -35,6 +35,22 @@ final class SshModel {
     return keys.first { $0.fingerprintSha256 == selectedFingerprint }
   }
 
+  /// Key entry of the vault SSH key credential `credentialKey`. Nil if the
+  /// listing does not hold it.
+  func vaultKeyEntry(vaultKey: String, itemKey: String, credentialKey: String) -> SshKeyEntry? {
+    keys.first { key in
+      guard let location = key.vaultKey else { return false }
+      return location.vaultKey == vaultKey && location.itemKey == itemKey
+        && location.credentialKey == credentialKey
+    }
+  }
+
+  /// Select the key with SHA256 fingerprint `fingerprintSha256` in the SSH pane.
+  func show(fingerprintSha256: String, vaults: VaultsModel) {
+    selectedFingerprint = fingerprintSha256
+    vaults.selectSidebarDestination(.ssh)
+  }
+
   func reload() async {
     isLoading = true
     loadError = nil

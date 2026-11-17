@@ -1261,6 +1261,128 @@ final class VaultsModel {
     }
   }
 
+  // MARK: - SSH keys
+
+  /// Generate an Ed25519 key. A nil `itemKey` stores it in a new item titled
+  /// `itemTitle`. The core writes the public key file and the listing the
+  /// broker reads. Throws the core error.
+  func generateSshKey(
+    vaultKey: String, itemKey: String?, itemTitle: String, comment: String
+  ) async throws -> VaultSshKeyInfo {
+    try await mutateSshKey(vaultKey) {
+      try await core.generateVaultSshKey(
+        vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle, comment: comment)
+    }
+  }
+
+  /// Import the private key file at `url`. Throws `SshKeyPassphraseRequired` or
+  /// `SshKeyWrongPassphrase` for an encrypted key, and `SshKeyDuplicate` for a
+  /// key the vault already holds.
+  func importSshKey(
+    vaultKey: String, itemKey: String?, itemTitle: String, url: URL, passphrase: String?,
+    comment: String?
+  ) async throws -> VaultSshKeyInfo {
+    try await mutateSshKey(vaultKey) {
+      try await core.importVaultSshKey(
+        vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle, path: url.path,
+        passphrase: passphrase, comment: comment)
+    }
+  }
+
+  /// Public key line of a vault key, for copying.
+  func sshKeyPublicKey(location: SshVaultKeyLocation) async throws -> String {
+    try await core.vaultSshKeyPublicKey(
+      vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: location.credentialKey)
+  }
+
+  /// Change the comment of a vault key. Returns the new public key line.
+  @discardableResult
+  func setSshKeyComment(location: SshVaultKeyLocation, comment: String) async throws -> String {
+    try await mutateSshKey(location.vaultKey) {
+      try await core.setVaultSshKeyComment(
+        vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: location.credentialKey,
+        comment: comment)
+    }
+  }
+
+  /// Write the public key file of a vault key again. Returns its path.
+  func writeSshKeyPubkey(location: SshVaultKeyLocation) async throws -> String {
+    try await core.writeVaultSshKeyPubkey(
+      vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: location.credentialKey)
+  }
+
+  /// Write the private key of a vault key to `url` with mode `0600`. A
+  /// non-empty `passphrase` encrypts the file.
+  func exportSshKey(location: SshVaultKeyLocation, to url: URL, passphrase: String?) async throws {
+    do {
+      try await core.exportVaultSshKey(
+        vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: location.credentialKey,
+        destPath: url.path, passphrase: passphrase)
+    } catch FfiError.AuthExpired, FfiError.AuthCancelled {
+      lock()
+      throw FfiError.AuthExpired
+    }
+  }
+
+  /// Add `passphrase` to the item of a vault key as a concealed credential
+  /// titled "SSH key passphrase". The credential key is the key credential key
+  /// with `-passphrase`, and a numeric suffix if the item has it. Returns an
+  /// error message on failure, nil on success.
+  func saveSshKeyPassphrase(location: SshVaultKeyLocation, passphrase: String) async -> String? {
+    if itemCache[location.vaultKey] == nil { await loadItems(for: location.vaultKey) }
+    let taken = Set(
+      item(vaultKey: location.vaultKey, itemKey: location.itemKey)?.credentials.map(\.key) ?? [])
+    let base = "\(location.credentialKey)-passphrase"
+    var credKey = base
+    var n = 2
+    while taken.contains(credKey) {
+      credKey = "\(base)-\(n)"
+      n += 1
+    }
+    let saved = await addCredential(
+      vaultKey: location.vaultKey, itemKey: location.itemKey, credKey: credKey,
+      title: "SSH key passphrase", value: passphrase,
+      kind: FieldKindInfo(kind: "text", concealed: true, multiline: false))
+    return saved ? nil : (actionError ?? "The passphrase could not be saved.")
+  }
+
+  /// Select the item that holds a vault key. Loads the vault first if it is
+  /// not cached.
+  func showSshKeyItem(_ location: SshVaultKeyLocation) async {
+    if itemCache[location.vaultKey] == nil { await loadItems(for: location.vaultKey) }
+    showItem(ItemRef(vaultKey: location.vaultKey, itemKey: location.itemKey))
+  }
+
+  /// Vault name and item title of a vault key, for display. The item title is
+  /// the item key until the vault's items are loaded.
+  func sshKeyPlace(_ location: SshVaultKeyLocation) -> (vault: String, item: String) {
+    let vault = vaults.first { $0.key == location.vaultKey }
+    let item = item(vaultKey: location.vaultKey, itemKey: location.itemKey)
+    return (vault?.name ?? location.vaultKey, item?.title ?? location.itemKey)
+  }
+
+  /// Load the items of the vaults that hold SSH keys, so `sshKeyPlace` can name
+  /// the items.
+  func loadItemsForSshKeys(_ keys: [SshKeyEntry]) async {
+    let vaultKeys = Set(keys.compactMap { $0.vaultKey?.vaultKey })
+    for vaultKey in vaultKeys where itemCache[vaultKey] == nil {
+      await loadItems(for: vaultKey)
+    }
+  }
+
+  /// A key change reloads the vault items. An expired authentication locks the
+  /// app and still throws.
+  private func mutateSshKey<T>(_ vaultKey: String, _ action: () async throws -> T) async throws
+    -> T
+  {
+    do {
+      return try await mutate(vaultKey, action)
+    } catch FfiError.AuthExpired, FfiError.AuthCancelled {
+      lock()
+      throw FfiError.AuthExpired
+    }
+  }
+
   // MARK: - Files
 
   /// Why the contents of file credentials could not be read, by
