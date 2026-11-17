@@ -376,7 +376,7 @@ mod tests {
     const LOGIN_UUID: &str = "5930154CFAB244FB920D5189DA0FAB9C";
 
     const LOGIN: &str = indoc! {r#"
-        {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","createdAt":1400000000,"folderUuid":"F1","secureContents":{"URLs":[{"label":"website","url":"https://github.com"}],"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"hunter2","type":"P"}],"sections":[{"title":"Security","fields":[{"k":"concealed","t":"otp","v":"otpauth://totp/x?secret=abc"}]}],"notesPlain":"hello"}}
+        {"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","location":"https://github.com","createdAt":1400000000,"folderUuid":"F1","secureContents":{"URLs":[{"label":"website","url":"https://github.com"}],"fields":[{"name":"login","designation":"username","value":"me","type":"T"},{"name":"pass","designation":"password","value":"hunter2","type":"P"}],"sections":[{"title":"Security","fields":[{"k":"concealed","t":"otp","v":"otpauth://totp/x?secret=abc"}]}],"notesPlain":"hello"}}
         {"uuid":"F1","typeName":"system.folder.Regular","title":"Work","secureContents":{}}
     "#};
 

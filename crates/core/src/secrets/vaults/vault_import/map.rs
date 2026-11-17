@@ -305,6 +305,8 @@ fn map_item(
         })
         .collect();
 
+    credentials.extend(url_credentials(&mut keys, item));
+
     if let Some(notes) = &item.notes {
         credentials.push(PlannedCredential {
             key: NOTES_KEY.to_string(),
@@ -382,18 +384,38 @@ pub(super) fn is_web_url(text: &str) -> bool {
     text.starts_with("http://") || text.starts_with("https://")
 }
 
-/// Websites from `URLs`, then `location` if it is an http or https URL.
+/// Autofill websites. Only `location` is used, and only if it is an http or
+/// https URL.
 fn websites(item: &ParsedItem) -> Vec<Website> {
-    let mut urls: Vec<&str> = item.urls.iter().map(|u| u.url.as_str()).collect();
-    if let Some(location) = item.location.as_deref()
-        && is_web_url(location)
-    {
-        urls.push(location);
-    }
-    let mut seen = HashSet::new();
-    urls.into_iter()
-        .filter(|url| seen.insert(*url))
-        .map(|url| Website::new(url, MatchKind::Domain))
+    item.location
+        .as_deref()
+        .filter(|location| is_web_url(location))
+        .map(|location| Website::new(location, MatchKind::Domain))
+        .into_iter()
+        .collect()
+}
+
+/// URL credentials from `URLs`. Entries equal to `location` or to an earlier
+/// entry are left out. A blank label gives the title "URL".
+fn url_credentials(keys: &mut KeyAllocator, item: &ParsedItem) -> Vec<PlannedCredential> {
+    let mut seen: HashSet<&str> = item.location.as_deref().into_iter().collect();
+    item.urls
+        .iter()
+        .filter(|u| seen.insert(u.url.as_str()))
+        .map(|u| {
+            let title = if u.label.trim().is_empty() {
+                "URL"
+            } else {
+                u.label.as_str()
+            };
+            PlannedCredential {
+                key: keys.allocate(title),
+                title: title.to_string(),
+                kind: FieldKind::Url,
+                value: u.url.clone(),
+                history: Vec::new(),
+            }
+        })
         .collect()
 }
 
@@ -633,26 +655,69 @@ mod tests {
         assert_eq!(username.kind, FieldKind::Text(TextField::default()));
     }
 
-    #[test]
-    fn urls_and_location_become_websites() {
-        let plan = plan(LOGIN);
-
-        let urls: Vec<&str> = plan.items[0]
-            .autofill
+    fn website_urls(item: &PlannedItem) -> Vec<&str> {
+        item.autofill
             .websites
             .iter()
             .map(|w| w.url.as_str())
-            .collect();
-        assert_eq!(urls, ["https://github.com/login", "https://github.com"]);
+            .collect()
     }
 
     #[test]
-    fn duplicate_location_not_repeated() {
+    fn only_location_is_website() {
+        let plan = plan(LOGIN);
+
+        assert_eq!(website_urls(&plan.items[0]), ["https://github.com"]);
+    }
+
+    #[test]
+    fn other_urls_become_url_credentials() {
+        let plan = plan(LOGIN);
+
+        let url = credential(&plan.items[0].credentials, "website");
+        assert_eq!(url.kind, FieldKind::Url);
+        assert_eq!(url.value, "https://github.com/login");
+    }
+
+    #[test]
+    fn url_equal_to_location_left_out() {
         let plan = plan(indoc! {r#"
-            {"uuid":"L2","typeName":"webforms.WebForm","title":"Site","location":"https://a.example","secureContents":{"URLs":[{"label":"website","url":"https://a.example"}]}}
+            {"uuid":"L2","typeName":"webforms.WebForm","title":"Site","location":"https://a.example","secureContents":{"URLs":[{"label":"","url":"https://a.example"},{"label":"dev","url":"https://b.example"},{"label":"again","url":"https://b.example"}]}}
+        "#});
+        let item = &plan.items[0];
+
+        assert_eq!(website_urls(item), ["https://a.example"]);
+        let urls: Vec<&str> = item
+            .credentials
+            .iter()
+            .filter(|c| c.kind == FieldKind::Url)
+            .map(|c| c.value.as_str())
+            .collect();
+        assert_eq!(urls, ["https://b.example"]);
+    }
+
+    #[test]
+    fn blank_url_label_titled_url() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"L4","typeName":"webforms.WebForm","title":"Site","secureContents":{"URLs":[{"label":"","url":"https://a.example"},{"label":" ","url":"https://b.example"}]}}
+        "#});
+        let credentials = &plan.items[0].credentials;
+
+        assert_eq!(credential(credentials, "url").title, "URL");
+        assert_eq!(credential(credentials, "url-2").value, "https://b.example");
+    }
+
+    #[test]
+    fn urls_not_websites_without_location() {
+        let plan = plan(indoc! {r#"
+            {"uuid":"L5","typeName":"webforms.WebForm","title":"Site","secureContents":{"URLs":[{"label":"website","url":"https://a.example"}]}}
         "#});
 
-        assert_eq!(plan.items[0].autofill.websites.len(), 1);
+        assert!(plan.items[0].autofill.websites.is_empty());
+        assert_eq!(
+            credential(&plan.items[0].credentials, "website").value,
+            "https://a.example"
+        );
     }
 
     #[test]
