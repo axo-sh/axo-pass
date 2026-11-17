@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::core::files::write_atomic_private;
 use crate::secrets::keychain::managed_key::KeyPolicy;
-use crate::secrets::vaults::ssh_keys::SshKeyRecord;
+use crate::secrets::vaults::ssh_keys::{SshKeyRecord, default_true, is_true};
 use crate::secrets::vaults::{FieldKind, VaultHandle};
 use crate::ssh::vault_pubkeys;
 
@@ -49,6 +49,14 @@ pub struct VaultKeyEntry {
     pub credential_id: Option<Uuid>,
 
     pub policy: KeyPolicy,
+
+    /// The agent advertises the key to SSH clients.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub auto_load: bool,
+
+    /// The agent signs with the key.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub ssh_use: bool,
 }
 
 impl VaultKeyEntry {
@@ -74,6 +82,8 @@ impl VaultKeyEntry {
             credential_key: credential_key.to_string(),
             credential_id: None,
             policy: record.policy,
+            auto_load: record.auto_load && record.ssh_use,
+            ssh_use: record.ssh_use,
         })
     }
 }

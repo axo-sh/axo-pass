@@ -79,6 +79,9 @@ pub(super) fn sign_with_stored_key(
         .map_err(|e| format!("Failed to read the key: {e}"))?
         .ok_or("The credential has no value")?;
     let record = SshKeyRecord::from_value(value.expose_secret()).map_err(|e| e.to_string())?;
+    if !record.ssh_use {
+        return Err("SSH use is not allowed for this key".to_string());
+    }
     let key = record
         .private_key_for(fingerprint)
         .map_err(|e| e.to_string())?;

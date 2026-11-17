@@ -372,6 +372,7 @@ impl Session for SshAgentSession {
         identities.extend(
             list_managed_credentials(self.requester())
                 .iter()
+                .filter(|credential| credential.auto_load)
                 .map(Into::into),
         );
         Ok(identities)

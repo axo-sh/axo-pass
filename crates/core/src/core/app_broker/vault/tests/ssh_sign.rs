@@ -156,3 +156,39 @@ fn stale_cache_entry_refused_and_vault_entries_rewritten() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].fingerprint, fingerprint_of(&stored));
 }
+
+#[test]
+fn key_with_ssh_use_off_refused_and_listing_rewritten() {
+    let _audit = test_dir();
+    let fx = Fixture::new();
+    let key = ed25519_key();
+    let mut record = SshKeyRecord::new(&key, "laptop").unwrap();
+    // The cache still says SSH use is allowed.
+    let stale = vault_keys::VaultKeyEntry::from_record(&record, "personal", "item", "key").unwrap();
+    record.set_access(true, false);
+    fx.app_write("personal", |vw| {
+        vw.add_item("item", "Item")?;
+        vw.add_secret(
+            "item",
+            "key",
+            "Key",
+            FieldKind::SshKey,
+            record.to_value().unwrap(),
+        )
+    });
+    let cache = fx._dir.path().join("ssh-vault-keys.json");
+    vault_keys::store(&cache, std::slice::from_ref(&stale)).unwrap();
+
+    let event = fx.serve_recorded(
+        true,
+        "personal",
+        sign_action(&stale.fingerprint, None),
+        Some(sign_payload(&cache)),
+    );
+
+    assert_eq!(event.outcome, Outcome::Failed);
+    let listed = vault_keys::load(&cache);
+    assert_eq!(listed.len(), 1);
+    assert!(!listed[0].ssh_use);
+    assert!(!listed[0].auto_load);
+}

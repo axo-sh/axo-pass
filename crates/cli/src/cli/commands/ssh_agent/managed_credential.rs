@@ -24,6 +24,9 @@ pub struct ManagedCredential {
     pub public_key: KeyData,
     pub comment: String,
     pub source: KeySource,
+    /// The agent lists the key in `request_identities`. The agent signs with a
+    /// key that is not listed if a client names it.
+    pub auto_load: bool,
 }
 
 impl TryFrom<ManagedIdentity> for ManagedCredential {
@@ -36,6 +39,7 @@ impl TryFrom<ManagedIdentity> for ManagedCredential {
             comment: public_key.comment().to_string(),
             public_key: public_key.key_data().clone(),
             source: identity.source,
+            auto_load: identity.auto_load,
         })
     }
 }
@@ -182,6 +186,7 @@ mod tests {
             key_label: "label".to_string(),
             public_key: PUBLIC_KEY.to_string(),
             source,
+            auto_load: true,
         }
     }
 

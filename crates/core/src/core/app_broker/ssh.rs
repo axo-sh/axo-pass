@@ -35,6 +35,7 @@ use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
 use crate::secrets::vaults::VaultCatalog;
+use crate::secrets::vaults::ssh_keys::default_true;
 use crate::ssh::app_grants::{self, GrantApp};
 
 /// What the app needs to describe the prompt.
@@ -160,6 +161,10 @@ pub struct ManagedIdentity {
     pub public_key: String,
     #[serde(default)]
     pub source: KeySource,
+    /// The agent advertises the key to SSH clients. A key that is not
+    /// advertised is still listed here, so the agent can sign with it.
+    #[serde(default = "default_true")]
+    pub auto_load: bool,
 }
 
 impl From<VaultKeyEntry> for ManagedIdentity {
@@ -175,6 +180,7 @@ impl From<VaultKeyEntry> for ManagedIdentity {
                 item_key: entry.item_key,
                 credential_key: entry.credential_key,
             },
+            auto_load: entry.auto_load,
         }
     }
 }
@@ -333,17 +339,20 @@ pub(super) fn list_identities_locally() -> Result<Vec<ManagedIdentity>, String> 
             key_label: key.label(),
             public_key,
             source: KeySource::SecureEnclave,
+            auto_load: true,
         });
     }
     identities.extend(vault_identities(&vault_keys_path()));
     Ok(identities)
 }
 
-/// The vault keys in the listing cache, one for each fingerprint.
+/// The vault keys in the listing cache that may sign, one for each
+/// fingerprint.
 fn vault_identities(cache_path: &Path) -> Vec<ManagedIdentity> {
     let mut seen = HashSet::new();
     vault_keys::load(cache_path)
         .into_iter()
+        .filter(|entry| entry.ssh_use)
         .filter(|entry| seen.insert(entry.fingerprint.clone()))
         .map(ManagedIdentity::from)
         .collect()
@@ -705,10 +714,10 @@ async fn sign_vault_with(
         .unwrap_or_default();
     let Some(entry) = entries
         .into_iter()
-        .find(|entry| entry.fingerprint == request.fingerprint)
+        .find(|entry| entry.fingerprint == request.fingerprint && entry.ssh_use)
     else {
         return WireResponse::Failed {
-            message: "No vault SSH key has this fingerprint".to_string(),
+            message: "No vault SSH key with SSH use allowed has this fingerprint".to_string(),
         };
     };
 
@@ -1042,6 +1051,33 @@ mod tests {
         vault_keys::store(&path, &entries).unwrap();
 
         assert_eq!(vault_identities(&path).len(), 1);
+    }
+
+    #[test]
+    fn vault_identities_omit_keys_with_ssh_use_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let mut record = SshKeyRecord::new(&ed25519_key(), "laptop").unwrap();
+        record.set_access(true, false);
+        let entry = VaultKeyEntry::from_record(&record, "personal", "github", "key").unwrap();
+        vault_keys::store(&path, &[entry]).unwrap();
+
+        assert!(vault_identities(&path).is_empty());
+    }
+
+    #[test]
+    fn vault_identities_keep_unadvertised_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let mut record = SshKeyRecord::new(&ed25519_key(), "laptop").unwrap();
+        record.set_access(false, true);
+        let entry = VaultKeyEntry::from_record(&record, "personal", "github", "key").unwrap();
+        vault_keys::store(&path, &[entry]).unwrap();
+
+        let identities = vault_identities(&path);
+
+        assert_eq!(identities.len(), 1);
+        assert!(!identities[0].auto_load);
     }
 
     #[test]
