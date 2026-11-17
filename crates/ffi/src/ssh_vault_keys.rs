@@ -405,6 +405,40 @@ impl AxoPass {
         Ok(line)
     }
 
+    /// Set whether the agent advertises (`auto_load`) and signs with
+    /// (`ssh_use`) a vault SSH key. Turning off `ssh_use` also turns off
+    /// `auto_load`. Updates the listing.
+    pub async fn set_vault_ssh_key_access(
+        &self,
+        vault_key: String,
+        item_key: String,
+        cred_key: String,
+        auto_load: bool,
+        ssh_use: bool,
+    ) -> Result<(), FfiError> {
+        let subject = credential_subject(&vault_key, &item_key, &cred_key);
+        let manager = Arc::clone(&self.manager);
+        let key = vault_key.clone();
+        let ids = tokio::task::spawn_blocking(move || {
+            let ids = VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                ops::set_ssh_access(vw, &item_key, &cred_key, auto_load, ssh_use)?;
+                Ok::<_, FfiError>(vw.credential_ids(&item_key, &cred_key)?)
+            })?;
+            sync_listing(&manager, &vault_key);
+            Ok::<_, FfiError>(ids)
+        })
+        .await
+        .map_err(|e| FfiError::Internal(e.to_string()))??;
+        change_event(audit::Action::CredentialUpdated, &key, subject, ids)
+            .detail("changed", "ssh_access")
+            .detail("kind", "ssh-key")
+            .detail("auto_load", (auto_load && ssh_use).to_string())
+            .detail("ssh_use", ssh_use.to_string())
+            .record_async()
+            .await;
+        Ok(())
+    }
+
     /// Write the private key of a vault SSH key to `dest_path` as an OpenSSH
     /// key file with mode `0600`. `dest_path` is replaced if it exists. A
     /// non-empty `passphrase` encrypts the file. Records a `credential.read`

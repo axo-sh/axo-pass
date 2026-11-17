@@ -108,8 +108,12 @@ pub struct SshKeyEntry {
     /// Set for managed keys only.
     pub policy: Option<SshKeyPolicy>,
     pub agents: Vec<SshKeyAgent>,
-    /// The Axo agent advertises this `~/.ssh` key and loads it on first use.
+    /// The Axo agent advertises this key. For a `~/.ssh` key, it also loads the
+    /// key on first use.
     pub autoload: bool,
+    /// The Axo agent signs with this key. False only for a vault key whose SSH
+    /// use is turned off.
+    pub ssh_use: bool,
     /// Where the key is stored. Set for vault keys only.
     pub vault_key: Option<SshVaultKeyLocation>,
 }
@@ -172,6 +176,7 @@ impl From<SshKeyOverview> for SshKeyEntry {
             policy: overview.policy.map(SshKeyPolicy::from),
             agents: overview.agents.into_iter().map(SshKeyAgent::from).collect(),
             autoload: overview.autoload,
+            ssh_use: overview.ssh_use,
             vault_key: overview.vault_key.map(SshVaultKeyLocation::from),
         }
     }
