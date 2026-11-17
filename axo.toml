@@ -7,13 +7,20 @@ release = "axo.release.toml"
 [tasks]
 build = [":app:ffi", ":app:cli", "strudel build"]
 run = [":app:ffi", ":app:cli", "strudel run"]
+debug = [":app:ffi", ":app:cli", "strudel run --debug"]
+
 reload = [
   "ap ssh-agent stop || true",
   "pkill -f \"app/.build/dist/Axo Pass.app\" || true",
   ":run",
   "ap ssh-agent start",
 ]
-# Rebuild and relaunch the Swift app only. Run `reload` after Rust changes.
+"reload:debug" = [
+  "ap ssh-agent stop || true",
+  "pkill -f \"app/.build/dist/Axo Pass.app\" || true",
+  ":debug",
+  "ap ssh-agent start",
+]
 "reload:app" = [
   "pkill -f \"app/.build/dist/Axo Pass.app\" || true",
   "strudel run",
@@ -26,13 +33,10 @@ fmt = [
   "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
   "cargo +nightly fmt --all",
 ]
-
 "fmt:all" = { command = [":fmt", ":app:fmt"], parallel = true }
+
 check = "cargo check --workspace --all-targets"
 test = "cargo test --workspace"
-"test:ecies" = "cargo test -p axo-pass-core --lib crypto::ecies"
-# Rewrites crates/core/src/crypto/ecies/vectors.json from Security.framework. macOS only.
-"ecies:vectors" = "cargo test -p axo-pass-core --lib crypto::ecies::apple_tests::write_vectors -- --ignored"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
@@ -47,6 +51,9 @@ test = "cargo test --workspace"
 "app:cli:release" = "PROFILE=release ./scripts/build-cli.sh"
 
 "app:fmt" = "swift format -i --recursive ."
+
+# Rewrites crates/core/src/crypto/ecies/vectors.json (macOS)
+"codegen:ecies-vectors" = "cargo test -p axo-pass-core --lib crypto::ecies::apple_tests::write_vectors -- --ignored"
 
 [env]
 FRITTATA_DEBUG = "1"
