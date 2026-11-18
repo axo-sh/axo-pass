@@ -252,10 +252,10 @@ struct CredentialList: View {
           .padding(4)
       }
 
-      if item.listCredentials.isEmpty, item.sections.isEmpty {
+      if item.credentials.isEmpty, item.sections.isEmpty {
         // Aligned with a credential row's text, which sits at the row inset
         // plus CredentialRow's own horizontal padding.
-        Text(item.credentials.isEmpty ? "No credentials" : "No other credentials")
+        Text("No credentials")
           .foregroundStyle(.secondary)
           .padding(
             EdgeInsets(
