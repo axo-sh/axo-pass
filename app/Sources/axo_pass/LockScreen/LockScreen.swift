@@ -5,25 +5,37 @@ struct LockScreen: View {
   @Environment(VaultsModel.self) private var model
   @Environment(\.colorScheme) private var colorScheme
 
+  private var logoOpacity: Double {
+    switch (model.isPrompting, colorScheme) {
+    case (true, .light): 0.12
+    case (true, _): 0.07
+    case (false, .light): 0.25
+    case (false, _): 0.15
+    }
+  }
+
   var body: some View {
     VStack(spacing: 12) {
       // The icon is bound to the context it was built with, so a replacement
       // context needs a new view.
-      if model.isPrompting {
-        AuthenticationIcon(context: model.authContext)
-          .id(ObjectIdentifier(model.authContext))
-          .frame(width: 320, height: 320)
-          .overlay(alignment: .center) {
-            AxoLogo()
-              .frame(width: 450, height: 450)
-              .opacity(colorScheme == .light ? 0.08 : 0.04)
-              .allowsHitTesting(false)
-              .offset(y: -30)
-          }
-      } else {
-        AxoLogo()
-          .frame(width: 360, height: 360)
-          .opacity(colorScheme == .light ? 0.25 : 0.15)
+      //
+      // One logo view serves both states so the change between them animates.
+      // The idle logo is scaled to 80% of the prompting size.
+      ZStack {
+        if model.isPrompting {
+          AuthenticationIcon(context: model.authContext)
+            .id(ObjectIdentifier(model.authContext))
+            .frame(width: 320, height: 320)
+            .transition(.opacity)
+        }
+      }
+      .frame(width: 320, height: model.isPrompting ? 320 : 360)
+      .overlay(alignment: .center) {
+        AxoLogo(spins: model.isPrompting)
+          .frame(width: 450, height: 450)
+          .scaleEffect(model.isPrompting ? 1 : 0.8)
+          .opacity(logoOpacity)
+          .offset(y: model.isPrompting ? -30 : 0)
           .allowsHitTesting(false)
       }
 

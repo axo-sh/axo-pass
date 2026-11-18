@@ -551,8 +551,8 @@ final class VaultsModel {
   }
 
   /// `automatic` marks a lock the user did not ask for: idle timeout, sleep, or
-  /// screen lock. Recorded for the audit log; both automatic and manual locks
-  /// raise Touch ID again on return.
+  /// screen lock. Recorded for the audit log. An automatic lock raises Touch ID
+  /// on return. A manual lock shows the idle lock screen.
   func lock(automatic trigger: AutoLockTrigger? = nil) {
     autoLock.stop()
     // A failure here means the core's state is poisoned, not that the vaults
@@ -591,7 +591,8 @@ final class VaultsModel {
     FilePreviews.removeAll()
     selectedItemRef = nil
     unlockError = nil
-    autoPromptPending = true
+    // A manual lock waits for a deliberate Unlock.
+    autoPromptPending = trigger != nil
     unlockEngaged = false
   }
 
