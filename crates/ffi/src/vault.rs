@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use axo_pass_core::audit;
 use axo_pass_core::core::app_broker::IndexedPasskey;
 use axo_pass_core::core::app_broker::ssh::{vault_keys as ssh_vault_keys, vault_keys_path};
+use axo_pass_core::core::config::{APP_CONFIG, autofill_excluded_vaults};
 use axo_pass_core::secrets::password::PasswordPolicy;
 use axo_pass_core::secrets::vaults::model::history::HistoryKind;
 use axo_pass_core::secrets::vaults::model::{ItemChange, ItemHistoryEvent, totp};
@@ -827,6 +828,28 @@ impl AxoPass {
         Ok(vaults)
     }
 
+    /// Keys of the vaults left out of AutoFill suggestions on this device.
+    /// Their logins are still listed for manual selection. Does not require
+    /// authentication.
+    pub fn list_autofill_excluded_vaults(&self) -> Vec<String> {
+        autofill_excluded_vaults().into_iter().collect()
+    }
+
+    /// Leave the vault `vault_key` out of AutoFill suggestions on this device,
+    /// or include it again. The system AutoFill index changes on the next
+    /// `list_autofill_items` and `list_passkey_identities`.
+    pub fn set_vault_autofill_excluded(
+        &self,
+        vault_key: String,
+        excluded: bool,
+    ) -> Result<(), FfiError> {
+        APP_CONFIG
+            .lock()
+            .map_err(|_| FfiError::Poisoned)?
+            .set_autofill_excluded(&vault_key, excluded)
+            .map_err(|e| FfiError::Internal(e.to_string()))
+    }
+
     /// List vault ids held by more than one file. None of these files is in
     /// `list_vaults`. Does not require authentication.
     pub fn list_duplicate_vaults(&self) -> Result<Vec<DuplicateVaultInfo>, FfiError> {
@@ -1026,6 +1049,8 @@ impl AxoPass {
             }
             index.replace(found_items.clone());
             index.replace_places(places);
+            let excluded = autofill_excluded_vaults();
+            found_items.retain(|item| !excluded.contains(&item.vault_key));
             let known: Vec<String> = m.iter_vault_keys().collect();
             match ssh_vault_keys::refresh(&vault_keys_path(), &known, ssh_keys) {
                 Ok(entries) => sweep_ssh_pubkey_files(&entries),
@@ -1057,7 +1082,11 @@ impl AxoPass {
             let vault_keys = unlock_every_vault(&manager, "passkeys")?;
             let mut m = manager.lock().map_err(|_| FfiError::Poisoned)?;
             let mut identities = Vec::new();
+            let excluded = autofill_excluded_vaults();
             for vault_key in vault_keys {
+                if excluded.contains(&vault_key) {
+                    continue;
+                }
                 let Some(vault) = m.get_vault_mut(&vault_key) else {
                     continue;
                 };

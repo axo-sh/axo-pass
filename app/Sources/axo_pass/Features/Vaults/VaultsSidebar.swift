@@ -329,6 +329,11 @@ struct VaultsSidebar: View {
           Button("Rename…") { renamingVaultKey = vault.key }
           Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("History…") { versionsVaultKey = vault.key }
+          Toggle(
+            "Suggest in AutoFill",
+            isOn: Binding(
+              get: { !model.autofillExcludedVaults.contains(vault.key) },
+              set: { model.setAutofillExcluded(vaultKey: vault.key, excluded: !$0) }))
           syncMenuItem(vault)
           Button("Delete…", role: .destructive) { deletingVault = syncRef(vault) }
         }

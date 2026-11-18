@@ -132,6 +132,8 @@ final class VaultsModel {
 
   // Vault list
   var vaults: [VaultInfo] = []
+  /// Keys of the vaults left out of AutoFill suggestions on this Mac.
+  private(set) var autofillExcludedVaults: Set<String> = []
   var loadError: String? = nil
   // Vault ids held by more than one file. None of these files is in `vaults`.
   var duplicateVaults: [DuplicateVaultInfo] = []
@@ -226,6 +228,7 @@ final class VaultsModel {
       }
       duplicateVaults = try core.listDuplicateVaults()
       duplicateVaultKeys = try core.listDuplicateVaultKeys()
+      autofillExcludedVaults = Set(core.listAutofillExcludedVaults())
       loadError = nil
       let keys = Set(vaults.map(\.key))
       itemCache = itemCache.filter { keys.contains($0.key) }
@@ -862,6 +865,23 @@ final class VaultsModel {
     do {
       try await core.updateVault(vaultKey: vaultKey, newVaultKey: nil, newName: newName)
       reload()
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  /// Leave a vault out of AutoFill suggestions on this Mac, or include it again.
+  /// Its logins stay available for manual selection. The system index is
+  /// rebuilt shortly after.
+  @discardableResult
+  func setAutofillExcluded(vaultKey: String, excluded: Bool) -> Bool {
+    actionError = nil
+    do {
+      try core.setVaultAutofillExcluded(vaultKey: vaultKey, excluded: excluded)
+      autofillExcludedVaults = Set(core.listAutofillExcludedVaults())
+      if isAppUnlocked { scheduleAutofillRefresh() }
       return true
     } catch {
       actionError = String(describing: error)

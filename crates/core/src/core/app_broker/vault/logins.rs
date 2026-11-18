@@ -11,6 +11,7 @@ use super::{
 };
 use crate::audit::{Actor, SubjectIds};
 use crate::core::auth::{AuthContext, ForeignContext};
+use crate::core::config::autofill_excluded_vaults;
 use crate::secrets::vaults::{DEFAULT_VAULT, VaultCatalog, VaultHandle, autofill};
 
 /// Result of a login request. Includes a question for the user if the response
@@ -107,11 +108,13 @@ struct Listing {
 
 /// List the logins for `page` from every vault that unlocks on `auth`, and with
 /// `all`, the logins that do not match. Vaults that fail to load or unlock are
-/// skipped.
+/// skipped. Matches of a vault excluded from AutoFill are listed with `all`
+/// only, and then with the other matches.
 fn list_logins(vaults: &VaultCatalog, page: &LoginPage, all: bool, auth: &AuthContext) -> Listing {
     let mut logins = Vec::new();
     let mut everything = Vec::new();
     let mut unlocked_vaults = 0;
+    let excluded = autofill_excluded_vaults();
 
     for (vault_key, mut vh) in vaults.list() {
         if let Err(e) = vaults.unlock(&mut vh, auth.clone()) {
@@ -120,9 +123,11 @@ fn list_logins(vaults: &VaultCatalog, page: &LoginPage, all: bool, auth: &AuthCo
         }
         unlocked_vaults += 1;
         let vh = &mut vh;
-        match autofill::collect_items(vh, Some(&page.frame_url)) {
-            Ok(found) => logins.extend(found),
-            Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+        if all || !excluded.contains(&vault_key) {
+            match autofill::collect_items(vh, Some(&page.frame_url)) {
+                Ok(found) => logins.extend(found),
+                Err(e) => log::error!("Failed to collect logins in {vault_key}: {e}"),
+            }
         }
         if all {
             match autofill::collect_items(vh, None) {

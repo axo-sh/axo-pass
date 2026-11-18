@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::{fs, io};
@@ -16,6 +16,15 @@ const CONFIG_FILENAME: &str = "config.toml";
 pub static APP_CONFIG: LazyLock<Mutex<AppConfig>> =
     LazyLock::new(|| Mutex::new(AppConfig::load_or_create().unwrap()));
 
+/// Keys of the vaults left out of AutoFill suggestions, as of the app's config.
+pub fn autofill_excluded_vaults() -> BTreeSet<String> {
+    APP_CONFIG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .autofill_excluded_vaults
+        .clone()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     #[serde(default = "uuid::Uuid::new_v4")]
@@ -32,6 +41,10 @@ pub struct AppConfig {
     /// app grant applies.
     #[serde(default)]
     pub ssh_autoload: BTreeMap<String, AutoloadEntry>,
+    /// Keys of vaults left out of AutoFill suggestions on this device. Their
+    /// logins are still listed for manual selection.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub autofill_excluded_vaults: BTreeSet<String>,
 }
 
 impl Default for AppConfig {
@@ -42,6 +55,7 @@ impl Default for AppConfig {
             updates: None,
             external_vaults: Vec::new(),
             ssh_autoload: BTreeMap::new(),
+            autofill_excluded_vaults: BTreeSet::new(),
         }
     }
 }
@@ -134,6 +148,29 @@ impl AppConfig {
         }
         self.save()
     }
+
+    /// Whether the vault `vault_key` is left out of AutoFill suggestions.
+    pub fn is_autofill_excluded(&self, vault_key: &str) -> bool {
+        self.autofill_excluded_vaults.contains(vault_key)
+    }
+
+    /// Leave the vault `vault_key` out of AutoFill suggestions, or include it
+    /// again, and save the config.
+    pub fn set_autofill_excluded(
+        &mut self,
+        vault_key: &str,
+        excluded: bool,
+    ) -> Result<(), io::Error> {
+        let changed = if excluded {
+            self.autofill_excluded_vaults.insert(vault_key.to_string())
+        } else {
+            self.autofill_excluded_vaults.remove(vault_key)
+        };
+        if changed {
+            self.save()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -189,6 +226,24 @@ mod tests {
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
         assert_eq!(parsed.ssh_autoload, config.ssh_autoload);
+    }
+
+    #[test]
+    fn autofill_excluded_vaults_round_trip() {
+        let mut config = AppConfig::default();
+        config.autofill_excluded_vaults.insert("work".to_string());
+        let text = toml::to_string_pretty(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(parsed.is_autofill_excluded("work"));
+        assert!(!parsed.is_autofill_excluded("personal"));
+    }
+
+    #[test]
+    fn autofill_excluded_vaults_omitted_if_empty() {
+        let text = toml::to_string_pretty(&AppConfig::default()).unwrap();
+        assert!(!text.contains("autofill_excluded_vaults"), "{text}");
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(parsed.autofill_excluded_vaults.is_empty());
     }
 
     #[test]

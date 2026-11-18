@@ -11,6 +11,7 @@
 use std::sync::Mutex;
 
 use super::vault::LoginDetails;
+use crate::core::config::autofill_excluded_vaults;
 use crate::secrets::vaults::autofill::{self, AutofillItem, LoginPlace, LoginSummary};
 
 #[derive(Default)]
@@ -64,13 +65,16 @@ impl LoginIndex {
         })
     }
 
-    /// The indexed logins that match `frame_url`, best match first. `None` when
-    /// nothing has been indexed yet.
+    /// The indexed logins that match `frame_url`, best match first. Logins of a
+    /// vault excluded from AutoFill are left out. `None` when nothing has been
+    /// indexed yet.
     pub fn lookup(&self, frame_url: &str) -> Option<Vec<LoginSummary>> {
+        let excluded = autofill_excluded_vaults();
         let guard = self.lock();
         let items = guard.as_ref()?;
         let mut found: Vec<AutofillItem> = items
             .iter()
+            .filter(|item| !excluded.contains(&item.vault_key))
             .filter_map(|item| {
                 let matched = autofill::match_service(&item.websites, frame_url)?;
                 Some(AutofillItem {
