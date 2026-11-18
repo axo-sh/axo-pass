@@ -430,6 +430,15 @@ final class VaultsModel {
     return task
   }
 
+  /// Dismiss the lock screen's prompt. The lock screen returns to its idle
+  /// state and does not prompt again until the user unlocks deliberately.
+  func cancelUnlock() {
+    guard isUnlocking else { return }
+    unlockEngaged = false
+    unlockTask?.cancel()
+    cancelEvaluation()
+  }
+
   /// Fail the evaluation running on `context`, if it is still in flight.
   func cancelUnlock(on context: LAContext) {
     guard evaluatingContext === context else { return }

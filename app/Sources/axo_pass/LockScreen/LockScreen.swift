@@ -21,13 +21,10 @@ struct LockScreen: View {
               .offset(y: -30)
           }
       } else {
-        Image(systemName: "lock.fill")
-          .font(.system(size: 40))
-          .foregroundStyle(.secondary)
-          .frame(width: 64, height: 64)
-        Text("Axo Pass")
-          .font(.title)
-          .fontWeight(.semibold)
+        AxoLogo()
+          .frame(width: 360, height: 360)
+          .opacity(colorScheme == .light ? 0.25 : 0.15)
+          .allowsHitTesting(false)
       }
 
       // Idle, the glyph and the button say everything; instructions only matter
@@ -51,7 +48,7 @@ struct LockScreen: View {
       }
 
       if !model.isPrompting {
-        Button("Unlock", action: model.unlock)
+        Button("Unlock Axo Pass", action: model.unlock)
           .buttonStyle(.borderedProminent)
           .controlSize(.large)
           .keyboardShortcut(.defaultAction)
@@ -72,6 +69,14 @@ struct LockScreen: View {
     .toolbar { Spacer() }
     .navigationTitle("")
     .onAppear { model.unlockIfActive() }
+    // A shortcut button receives Escape without the view holding focus.
+    .background {
+      Button("Cancel", action: model.cancelUnlock)
+        .keyboardShortcut(.cancelAction)
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
     // A lock from the screen locking or the machine sleeping leaves the prompt
     // for whenever the user comes back to the app.
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
