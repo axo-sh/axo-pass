@@ -314,14 +314,16 @@ struct ItemsPane: View {
       Button("History…") {
         historyTarget = ItemHistoryTarget(display.item, vaultKey: display.vaultKey)
       }
-      let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
-      if !otherVaults.isEmpty {
-        Menu("Move to Vault") {
-          ForEach(otherVaults, id: \.key) { vault in
-            Button(vault.name ?? vault.key) { moveToVault(display, destVaultKey: vault.key) }
-          }
+    }
+    let otherVaults = model.vaults.filter { $0.key != display.vaultKey }
+    if !otherVaults.isEmpty {
+      Menu("Move to Vault") {
+        ForEach(otherVaults, id: \.key) { vault in
+          Button(vault.name ?? vault.key) { moveToVault(targets, destVaultKey: vault.key) }
         }
       }
+    }
+    if targets.count == 1 {
       Button("Delete…", role: .destructive) { deletingItem = display }
     }
   }
@@ -344,31 +346,47 @@ struct ItemsPane: View {
     }
   }
 
-  /// Move an item to another vault. If the destination has an item with the
-  /// key, ask for a new key first.
-  private func moveToVault(_ display: DisplayItem, destVaultKey: String) {
+  /// Move items to another vault. Items whose key is free in the destination
+  /// move immediately. For each item whose key is taken, ask for a new key in
+  /// turn.
+  private func moveToVault(_ displays: [DisplayItem], destVaultKey: String) {
     Task {
-      let taken = await model.destinationItems(in: destVaultKey).contains {
-        $0.key == display.item.key
-      }
-      if taken {
-        titleSheet = TitleSheetRequest(
-          heading: "Key Already Used", actionLabel: "Move", initialTitle: display.item.key,
-          fieldLabel: "Key"
-        ) { key in
-          await failureMessage {
-            try await model.moveItemToVault(
-              vaultKey: display.vaultKey, itemKey: display.item.key, destVaultKey: destVaultKey,
-              destItemKey: key)
-          }
+      let destKeys = Set(await model.destinationItems(in: destVaultKey).map(\.key))
+      var conflicts: [DisplayItem] = []
+      for display in displays {
+        if destKeys.contains(display.item.key) {
+          conflicts.append(display)
+        } else if let error = await failureMessage({
+          try await model.moveItemToVault(
+            vaultKey: display.vaultKey, itemKey: display.item.key, destVaultKey: destVaultKey,
+            destItemKey: nil)
+        }) {
+          moveError = error
+          return
         }
-      } else if let error = await failureMessage({
+      }
+      promptForKey(conflicts[...], destVaultKey: destVaultKey)
+    }
+  }
+
+  /// Ask for a new key for the first item, move it, then continue with the rest.
+  private func promptForKey(_ pending: ArraySlice<DisplayItem>, destVaultKey: String) {
+    guard let display = pending.first else { return }
+    titleSheet = TitleSheetRequest(
+      heading: "Key Already Used", actionLabel: "Move", initialTitle: display.item.key,
+      fieldLabel: "Key"
+    ) { key in
+      let error = await failureMessage {
         try await model.moveItemToVault(
           vaultKey: display.vaultKey, itemKey: display.item.key, destVaultKey: destVaultKey,
-          destItemKey: nil)
-      }) {
-        moveError = error
+          destItemKey: key)
       }
+      if error == nil {
+        Task { @MainActor in
+          promptForKey(pending.dropFirst(), destVaultKey: destVaultKey)
+        }
+      }
+      return error
     }
   }
 
