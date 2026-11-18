@@ -4,6 +4,7 @@ use thiserror::Error;
 
 pub mod apple_csv;
 pub mod map;
+pub mod naming;
 pub mod onepif;
 pub mod report;
 pub mod write;

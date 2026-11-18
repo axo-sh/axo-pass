@@ -8,13 +8,17 @@ use crate::audit::SubjectIds;
 use crate::core::auth::AuthContext;
 use crate::secrets::vaults::bundle::{ImportSelection, ImportableBundle};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::files::{self, FileInput, FileSummary};
+use crate::secrets::vaults::files::{self, FileInput, FileSummary, write_with_files};
 use crate::secrets::vaults::storage::catalog::{
     DuplicateVaultKeys, DuplicateVaults, MissingVault, VaultCatalog, VaultScanResult,
 };
 use crate::secrets::vaults::storage::device_keys::KeyState;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Disabled, Target, Unlock};
+use crate::secrets::vaults::vault_import::{
+    FileFailure, ImportPlan, ImportSummary, StagedFiles, existing_item_ids, stage_plan_files,
+    write_plan,
+};
 
 /// The app's copies of its vaults, by key. A copy stays unlocked between
 /// edits, so reading items does not decrypt the file again. Every change to a
@@ -236,6 +240,47 @@ impl VaultsManager {
         let (store, target) = Self::locate(manager, vault_key)?;
         let committed = store.files().write(&target, Unlock::App, f)?;
         Ok(VaultsManager::lock(manager).install(committed))
+    }
+
+    /// Write `plan` to the unlocked vault `vault_key` of a shared manager, and
+    /// keep the saved copy. Staged files are committed in the same transaction,
+    /// so an error saves nothing. A file that cannot be read is returned as a
+    /// failure and the import continues. Returns the summary, the failures,
+    /// and the vault id.
+    pub fn import_plan(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        plan: &ImportPlan,
+    ) -> Result<(ImportSummary, Vec<FileFailure>, Uuid), Error> {
+        Self::import_plan_with(manager, vault_key, Unlock::App, plan)
+    }
+
+    /// [`Self::import_plan`] with the vault key unlocked by `unlock`.
+    fn import_plan_with(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        unlock: Unlock<'_>,
+        plan: &ImportPlan,
+    ) -> Result<(ImportSummary, Vec<FileFailure>, Uuid), Error> {
+        let (store, target, skip) = {
+            let mut m = VaultsManager::lock(manager);
+            let vault = m.get_or_create_vault_mut(vault_key)?;
+            let target = Target::of(vault);
+            let skip = existing_item_ids(vault)?;
+            (m.store.clone(), target, skip)
+        };
+        let writer = store.files();
+        let StagedFiles {
+            files,
+            values,
+            failures,
+        } = stage_plan_files(writer, &target, plan, &skip);
+        let committed = write_with_files(writer, &target, unlock, files, |fresh| {
+            write_plan(fresh, plan, &values)
+        })?;
+        let vault_id = committed.vault_id;
+        let summary = VaultsManager::lock(manager).install(committed);
+        Ok((summary, failures, vault_id))
     }
 
     /// Add a file credential to a vault of a shared manager, as
@@ -727,6 +772,40 @@ mod tests {
 
         let m = VaultsManager::lock(&manager);
         let vw = m.get_vault("personal").unwrap();
+        assert!(vw.get_item_overview("alpha").unwrap().is_some());
+    }
+
+    #[test]
+    fn import_plan_keeps_saved_copy_unlocked() {
+        use crate::secrets::vaults::vault_import::{MapOptions, map_items, parse_1pif};
+
+        let mut fx = Fixture::new();
+        let target = fx.target();
+        let committed = fx.add_item(&target, "alpha");
+        fx.manager.install(committed);
+        let export = tempfile::tempdir().unwrap();
+        fs::write(
+            export.path().join("data.1pif"),
+            r#"{"uuid":"5930154CFAB244FB920D5189DA0FAB9C","typeName":"webforms.WebForm","title":"GitHub","secureContents":{"fields":[{"name":"pass","designation":"password","value":"hunter2","type":"P"}]}}"#,
+        )
+        .unwrap();
+        let plan = map_items(&parse_1pif(export.path()).unwrap(), MapOptions::default());
+        let original = &fx.original;
+        let manager = Mutex::new(fx.manager);
+
+        let (summary, failures, _) = VaultsManager::import_plan_with(
+            &manager,
+            "personal",
+            Unlock::Unlocked(original),
+            &plan,
+        )
+        .unwrap();
+
+        assert_eq!(summary.added, 1);
+        assert!(failures.is_empty());
+        let m = VaultsManager::lock(&manager);
+        let vw = m.get_vault("personal").unwrap();
+        assert!(vw.get_item_overview("github").unwrap().is_some());
         assert!(vw.get_item_overview("alpha").unwrap().is_some());
     }
 
