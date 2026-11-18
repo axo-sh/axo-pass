@@ -266,9 +266,12 @@ private struct TitleBarStyle: ViewModifier {
 
   /// Note: we don't use `.fullSizeContentView`. Setting causes the split view's toolbar items to
   /// get out of place.
+  ///
+  /// `titleVisibility` is left visible. Hiding it shrinks the unified toolbar
+  /// from 52 to 38 points, and SwiftUI restores it shortly after, so the
+  /// window buttons move on launch. The hidden views set an empty title.
   private func apply(to window: NSWindow?) {
     guard let window else { return }
-    window.titleVisibility = hidden ? .hidden : .visible
     window.titlebarAppearsTransparent = hidden
   }
 }
