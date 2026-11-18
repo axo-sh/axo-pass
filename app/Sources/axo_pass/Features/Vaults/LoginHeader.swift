@@ -32,15 +32,6 @@ extension CredentialList {
       loginCard(isEmphasized: isEmphasized)
         .listRowSeparator(.hidden)
         .listRowInsets(loginRowInsets)
-      if !item.listCredentials.isEmpty {
-        Text("Other credentials")
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 6)
-          .padding(.top, 8)
-          .listRowSeparator(.hidden)
-          .listRowInsets(loginRowInsets)
-      }
     }
   }
 
