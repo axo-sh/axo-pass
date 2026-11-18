@@ -22,6 +22,7 @@ struct VaultsSidebar: View {
   @Environment(WindowRequests.self) private var windows
   @State private var showingNewVaultSheet = false
   @State private var showingImportSheet = false
+  @State private var showingItemImportSheet = false
   @State private var deletingVault: SyncVaultRef? = nil
   @State private var renamingVaultKey: String? = nil
   @State private var exportingVaultKey: String? = nil
@@ -146,6 +147,9 @@ struct VaultsSidebar: View {
     }
     .sheet(isPresented: $showingImportSheet) {
       VaultImportSheet(model: model)
+    }
+    .sheet(isPresented: $showingItemImportSheet) {
+      ItemImportSheet(model: model)
     }
     .sheet(item: $renamingVaultKey) { vaultKey in
       let existing = model.vaults.first { $0.key == vaultKey }
@@ -373,8 +377,7 @@ struct VaultsSidebar: View {
       Menu {
         Button("New Vault…") { showingNewVaultSheet = true }
         Divider()
-        Button("Import from 1Password…") {}
-          .disabled(!OnePasswordImport.isAvailable)
+        Button("Import Passwords…") { showingItemImportSheet = true }
         Button("Import Backup…") { showingImportSheet = true }
         Divider()
         Button("Add from Another Mac…") { sync.showPairing() }

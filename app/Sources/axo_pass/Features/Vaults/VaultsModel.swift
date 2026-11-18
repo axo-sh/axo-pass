@@ -1004,6 +1004,36 @@ final class VaultsModel {
     }
   }
 
+  /// Read a password manager export and report what an import would add.
+  /// Writes nothing.
+  func previewItemImport(
+    source: URL, includeTrashed: Bool
+  ) async -> (preview: ItemImportPreview?, message: String?) {
+    do {
+      let preview = try await core.previewItemImport(
+        path: source.path, includeTrashed: includeTrashed)
+      return (preview, nil)
+    } catch {
+      return (nil, String(describing: error))
+    }
+  }
+
+  /// Import a password manager export into a new vault named `name`, then
+  /// select the vault.
+  func importItems(
+    source: URL, name: String, includeTrashed: Bool
+  ) async -> (result: ItemImportResult?, message: String?) {
+    do {
+      let result = try await core.importItemsIntoNewVault(
+        path: source.path, name: name, includeTrashed: includeTrashed)
+      reload()
+      selectSidebarDestination(.vault(result.vaultKey))
+      return (result, nil)
+    } catch {
+      return (nil, String(describing: error))
+    }
+  }
+
   // MARK: - Item CRUD
 
   @discardableResult

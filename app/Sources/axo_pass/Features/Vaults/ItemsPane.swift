@@ -30,6 +30,7 @@ struct ItemsPane: View {
   @State private var showingNewItemSheet = false
   @State private var showingNewLoginSheet = false
   @State private var showingImport = false
+  @State private var showingItemImport = false
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var renamingItem: DisplayItem? = nil
   @State private var historyTarget: ItemHistoryTarget? = nil
@@ -127,6 +128,9 @@ struct ItemsPane: View {
     .sheet(isPresented: $showingImport) {
       VaultImportSheet(model: model)
     }
+    .sheet(isPresented: $showingItemImport) {
+      ItemImportSheet(model: model)
+    }
     .sheet(isPresented: $showingNewItemSheet) {
       NewItemSheet { key, title in
         guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
@@ -193,8 +197,7 @@ struct ItemsPane: View {
   }
 
   /// Shown for a vault with no items. "New Login" opens the sheet of the
-  /// toolbar menu. "Import" offers a backup, and 1Password once the app has
-  /// that import.
+  /// toolbar menu. "Import" offers a password manager export or a backup.
   private var emptyState: some View {
     ContentUnavailableView {
       Label("No Items", systemImage: "tray")
@@ -203,8 +206,7 @@ struct ItemsPane: View {
     } actions: {
       Button("New Login") { showingNewLoginSheet = true }
       Menu("Import") {
-        Button("Import from 1Password…") {}
-          .disabled(!OnePasswordImport.isAvailable)
+        Button("Import Passwords…") { showingItemImport = true }
         Button("Import Backup…") { showingImport = true }
       }
       .menuStyle(.button)

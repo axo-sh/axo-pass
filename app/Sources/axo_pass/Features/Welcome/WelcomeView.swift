@@ -19,6 +19,7 @@ struct WelcomeView: View {
 
   private enum Choice {
     case startFresh
+    case importItems
     case pair
     case kitImport
   }
@@ -30,6 +31,8 @@ struct WelcomeView: View {
   /// Whether a sync sheet opened by a choice is showing. Closing it ends the
   /// choice.
   @State private var syncChoiceOpen = false
+  /// Whether the import sheet is showing. Finishing it ends the choice.
+  @State private var showingItemImport = false
 
   /// Reason shown with the unlock prompt. Without Touch ID the prompt asks for
   /// the login password.
@@ -69,14 +72,14 @@ struct WelcomeView: View {
         .buttonStyle(.plain)
 
         Button {
+          choose(.importItems)
         } label: {
           ChoiceLabel(
-            title: "Import from 1Password", detail: "Bring in logins from a 1Password export.",
+            title: "Import passwords",
+            detail: "Bring in logins from a 1Password or Apple Passwords export.",
             symbol: "square.and.arrow.down.fill")
         }
         .buttonStyle(.plain)
-        .disabled(!OnePasswordImport.isAvailable)
-        .help(OnePasswordImport.unavailableHelp)
 
         Button {
           showingSyncChoices = true
@@ -123,6 +126,9 @@ struct WelcomeView: View {
     .padding(32)
     .frame(width: 460)
     .syncSheets()
+    .sheet(isPresented: $showingItemImport) {
+      ItemImportSheet(model: model) { _ in finish() }
+    }
     .onChange(of: sync.sheet?.id) { old, new in
       guard old != nil, new == nil, syncChoiceOpen else { return }
       syncChoiceOpen = false
@@ -146,6 +152,8 @@ struct WelcomeView: View {
         } else {
           error = model.actionError ?? "Could not create the vault."
         }
+      case .importItems:
+        showingItemImport = true
       case .pair:
         guard sync.ensureFolder() else { return }
         syncChoiceOpen = true
