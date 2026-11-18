@@ -57,27 +57,15 @@ struct RecentlyDeletedPane: View {
   }
 
   private func row(_ entry: DeletedEntry) -> some View {
-    HStack(alignment: .top, spacing: 8) {
-      Image(systemName: icon(entry))
+    VStack(alignment: .leading, spacing: 2) {
+      Text(entry.title).lineLimit(1)
+      Text(location(entry))
+        .font(.subheadline)
         .foregroundStyle(.secondary)
-        .frame(width: 18)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(entry.title).lineLimit(1)
-        Text(location(entry))
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Text(entry.deletedAt, style: .relative)
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-      }
-    }
-  }
-
-  private func icon(_ entry: DeletedEntry) -> String {
-    switch entry {
-    case .item: "list.bullet.rectangle"
-    case .credential: "key"
+        .lineLimit(1)
+      Text(entry.deletedAt, style: .relative)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
     }
   }
 
