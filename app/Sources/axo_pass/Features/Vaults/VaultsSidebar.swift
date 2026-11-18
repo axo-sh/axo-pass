@@ -101,6 +101,15 @@ struct VaultsSidebar: View {
       ToolbarItemGroup(placement: .primaryAction) {
         // Push the search button to the trailing edge of the sidebar toolbar.
         Spacer()
+        // Add synced vaults to this Mac from the synced folder of the app.
+        Menu {
+          Button("Pair with Another Mac…") { sync.showPairing() }
+          Button("Use a Recovery Kit…") { sync.showKitImport() }
+        } label: {
+          Label("Add Synced Vaults", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .menuIndicator(.hidden)
+        .help("Add synced vaults from another Mac or with a recovery kit")
         Button {
           showPalette()
         } label: {
@@ -117,17 +126,6 @@ struct VaultsSidebar: View {
         } label: {
           Label("Reload", systemImage: "arrow.clockwise")
         }
-        // Add synced vaults to this Mac from the synced folder of the app.
-        Menu {
-          Button("Pair with Another Mac…") { sync.showPairing() }
-          Button("Use a Recovery Kit…") { sync.showKitImport() }
-        } label: {
-          Label("Add Synced Vaults", systemImage: "arrow.triangle.2.circlepath")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Add synced vaults from another Mac or with a recovery kit")
         Spacer()
         Button {
           model.lock()
