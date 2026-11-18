@@ -363,34 +363,46 @@ final class VaultUnlockPromptModel {
   /// request from a browser host that could not verify its browser carries a
   /// warning. The page facts apply to a fill or a save, and a listing has none,
   /// since it returns no secret.
-  private static func notes(for prompt: VaultAccessPrompt) -> [String] {
-    var notes: [String] = []
+  private static func notes(for prompt: VaultAccessPrompt) -> [AttributedString] {
+    var notes: [AttributedString] = []
+    func bold(_ text: String) -> AttributedString {
+      var result = AttributedString(text)
+      result.inlinePresentationIntent = .stronglyEmphasized
+      return result
+    }
     if case .unverifiedBrowser = prompt.client {
       notes.append(
-        "Axo Pass could not verify the browser that sent this request. Any app on this Mac "
-          + "could have sent it.")
+        AttributedString(
+          "Axo Pass could not verify the browser that sent this request."))
     }
     if case .fillLogin(let page, _, _, true, let details) = prompt.action {
       if let hosts = details?.hosts, !hosts.isEmpty {
         notes.append(
-          "This login is saved for \(hosts.joined(separator: ", ")), not for \(page.host).")
+          AttributedString("This login is saved for ") + bold(hosts.joined(separator: ", "))
+            + AttributedString(", not for \(page.host)."))
       } else {
-        notes.append("This login is not saved for \(page.host).")
+        notes.append(
+          AttributedString("This login is not saved for ") + bold(page.host)
+            + AttributedString("."))
       }
     }
     switch prompt.action {
     case .fillLogin(let page, _, _, _, _), .generateTotp(let page, _), .saveLogin(let page, _, _),
       .updateLoginPassword(let page, _, _):
       if !page.secure {
-        notes.append("This page is not secure (http). Anyone on the network can read the password.")
+        notes.append(
+          AttributedString(
+            "This page is not secure (http). Anyone on the network can read the password."))
       }
       if let top = page.topHost {
-        notes.append("The form is in a frame on \(page.host), inside a page on \(top).")
+        notes.append(
+          AttributedString("The form is in a frame on \(page.host), inside a page on \(top)."))
       }
     case .importItems(let newVault):
       // A new vault has nothing to skip, so the notice applies to an existing vault only.
       if !newVault {
-        notes.append("A re-import only adds new items and does not update old ones.")
+        notes.append(
+          AttributedString("A re-import only adds new items and does not update old ones."))
       }
     default:
       break
@@ -850,7 +862,7 @@ private struct VaultUnlockView: View {
   /// Facts about the login, shown when its card is expanded.
   let loginRows: [PromptDetailRow]
   let secrets: [String]
-  let notes: [String]
+  let notes: [AttributedString]
   /// Set for a fill from a verified browser, which may be reused.
   let fillGrant: FillGrantOffer?
   /// Set for a listing from a verified browser, which may be allowed for good.
