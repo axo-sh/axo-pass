@@ -290,7 +290,7 @@ mod tests {
     use super::*;
     use crate::secrets::vaults::files::{read_file, write_with_files};
     use crate::secrets::vaults::storage::txn::{Committed, Unlock};
-    use crate::secrets::vaults::vault_import::map::{IMPORT_SECTION, MapOptions, map_items};
+    use crate::secrets::vaults::vault_import::map::{MapOptions, map_items};
     use crate::secrets::vaults::vault_import::parse_1pif;
     use crate::secrets::vaults::{CATEGORY_LOGIN, FieldKind};
 
@@ -403,10 +403,6 @@ mod tests {
         );
         assert_eq!(secret(&vault, "github", "password"), "hunter2");
         assert_eq!(secret(&vault, "github", "notes"), "hello");
-        assert_eq!(
-            secret(&vault, "github", "onepassword-type"),
-            "webforms.WebForm"
-        );
     }
 
     #[test]
@@ -463,10 +459,6 @@ mod tests {
                 .map(|id| item.sections[&id].title.clone())
         };
         assert_eq!(section_of("otp").as_deref(), Some("Security"));
-        assert_eq!(
-            section_of("onepassword-type").as_deref(),
-            Some(IMPORT_SECTION)
-        );
         assert_eq!(section_of("password"), None);
         let otp = item.credentials.values().find(|c| c.key == "otp").unwrap();
         assert_eq!(otp.kind, FieldKind::Totp);

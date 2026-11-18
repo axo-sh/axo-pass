@@ -7,11 +7,6 @@ use uuid::Uuid;
 use super::onepif::{ParsedItem, is_blank, json_value_to_string};
 use crate::secrets::vaults::{CATEGORY_LOGIN, FieldKind, MatchKind, TextField, Website};
 
-/// Title of the section that holds the import bookkeeping credentials.
-pub const IMPORT_SECTION: &str = "Imported from 1Password";
-/// Key of the credential that holds the original `typeName`.
-pub const TYPE_KEY: &str = "onepassword-type";
-
 /// Title of a section that has none in the export.
 const UNTITLED_SECTION: &str = "Section";
 const NOTES_KEY: &str = "notes";
@@ -186,9 +181,7 @@ fn map_item(
     folder_uuid: Option<String>,
 ) -> PlannedItem {
     let mut keys = KeyAllocator::default();
-    for reserved in [NOTES_KEY, TYPE_KEY] {
-        keys.used.insert(reserved.to_string());
-    }
+    keys.used.insert(NOTES_KEY.to_string());
     let mut autofill = PlannedAutofill::default();
     let mut credentials = Vec::new();
 
@@ -320,19 +313,6 @@ fn map_item(
     }
 
     autofill.websites = websites(item);
-
-    if !item.type_name.is_empty() {
-        sections.push(PlannedSection {
-            title: IMPORT_SECTION.to_string(),
-            credentials: vec![PlannedCredential {
-                key: TYPE_KEY.to_string(),
-                title: "1Password type".to_string(),
-                kind: FieldKind::Text(TextField::default()),
-                value: item.type_name.clone(),
-                history: Vec::new(),
-            }],
-        });
-    }
 
     let category =
         (autofill.username.is_some() || autofill.password.is_some()).then_some(CATEGORY_LOGIN);
@@ -939,12 +919,16 @@ mod tests {
     }
 
     #[test]
-    fn import_section_holds_type_only() {
+    fn type_name_not_imported() {
         let plan = plan(LOGIN);
-        let creds = &section(&plan.items[0], IMPORT_SECTION).credentials;
+        let item = &plan.items[0];
 
-        assert_eq!(creds.len(), 1);
-        assert_eq!(credential(creds, TYPE_KEY).value, "webforms.WebForm");
+        assert!(
+            item.sections
+                .iter()
+                .all(|s| s.title != "Imported from 1Password")
+        );
+        assert!(item.credentials.iter().all(|c| c.key != "onepassword-type"));
     }
 
     #[test]
