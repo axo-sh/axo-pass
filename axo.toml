@@ -33,7 +33,8 @@ fmt = [
   "cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged",
   "cargo +nightly fmt --all",
 ]
-"fmt:all" = { command = [":fmt", ":app:fmt"], parallel = true }
+"fmt:app" = "swift format -i --recursive ."
+"fmt:all" = { command = [":fmt", ":fmt:app"], parallel = true }
 
 check = "cargo check --workspace --all-targets"
 test = "cargo test --workspace"
@@ -50,7 +51,6 @@ test = "cargo test --workspace"
 "app:cli" = "./scripts/build-cli.sh"
 "app:cli:release" = "PROFILE=release ./scripts/build-cli.sh"
 
-"app:fmt" = "swift format -i --recursive ."
 
 # Rewrites crates/core/src/crypto/ecies/vectors.json (macOS)
 "codegen:ecies-vectors" = "cargo test -p axo-pass-core --lib crypto::ecies::apple_tests::write_vectors -- --ignored"
