@@ -27,10 +27,16 @@ let package = Package(
       // Swift 5 mode rather than patching it after every codegen run.
       swiftSettings: [.swiftLanguageMode(.v5)]
     ),
+    // The Axo Pass mark, shared by the app and the AutoFill extension.
+    .target(
+      name: "AxoArtwork",
+      path: "Sources/AxoArtwork"
+    ),
     .executableTarget(
       name: "axo_pass",
       dependencies: [
         "AxoPassFFI",
+        "AxoArtwork",
         .product(name: "Sunshine", package: "sunshine"),
       ],
       path: "Sources/axo_pass",
@@ -56,6 +62,7 @@ let package = Package(
     // under the App Group instead.
     .executableTarget(
       name: "AxoPassAutoFill",
+      dependencies: ["AxoArtwork"],
       path: "Sources/AxoPassAutoFill",
       linkerSettings: [
         .linkedFramework("AppKit"),

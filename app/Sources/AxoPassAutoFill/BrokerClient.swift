@@ -24,6 +24,8 @@ struct Login: Decodable, Identifiable, Hashable {
   let recordID: String
   let title: String
   let username: String?
+  /// Name of the vault holding the login. `nil` if the user has one vault.
+  let vaultName: String?
   /// The stored website that made the login match. `nil` for a login that does
   /// not match the page. The app asks the user to confirm before filling one.
   let matched: Matched?
@@ -43,12 +45,13 @@ struct Login: Decodable, Identifiable, Hashable {
   }
 
   init(
-    recordID: String, title: String, username: String?, matched: Matched?,
-    hasTotp: Bool = false
+    recordID: String, title: String, username: String?, vaultName: String? = nil,
+    matched: Matched?, hasTotp: Bool = false
   ) {
     self.recordID = recordID
     self.title = title
     self.username = username
+    self.vaultName = vaultName
     self.matched = matched
     self.hasTotp = hasTotp
   }
@@ -58,6 +61,7 @@ struct Login: Decodable, Identifiable, Hashable {
     recordID = try values.decode(String.self, forKey: .recordID)
     title = try values.decode(String.self, forKey: .title)
     username = try values.decodeIfPresent(String.self, forKey: .username)
+    vaultName = try values.decodeIfPresent(String.self, forKey: .vaultName)
     matched = try values.decodeIfPresent(Matched.self, forKey: .matched)
     hasTotp = try values.decodeIfPresent(Bool.self, forKey: .hasTotp) ?? false
   }
@@ -85,6 +89,7 @@ struct Login: Decodable, Identifiable, Hashable {
     case recordID = "record_id"
     case title
     case username
+    case vaultName = "vault_name"
     case matched
     case hasTotp = "has_totp"
   }

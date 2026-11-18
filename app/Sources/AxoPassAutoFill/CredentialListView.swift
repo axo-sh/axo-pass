@@ -1,10 +1,17 @@
 import AuthenticationServices
+import AxoArtwork
 import SwiftUI
 
 /// What the extension shows inside the AutoFill popover.
 struct CredentialListView: View {
   @Bindable var model: CredentialListModel
   @State private var filter = ""
+  @State private var showAll = false
+
+  /// Other logins are listed after the user asks, or while filtering.
+  private var showsOthers: Bool {
+    showAll || !filter.trimmingCharacters(in: .whitespaces).isEmpty
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -18,8 +25,8 @@ struct CredentialListView: View {
 
   private var header: some View {
     HStack(spacing: 8) {
-      Image(systemName: "lock.shield")
-        .foregroundStyle(.tint)
+      AxoStaticLogo()
+        .frame(width: 28, height: 28)
       VStack(alignment: .leading, spacing: 1) {
         Text("Axo Pass")
           .font(.headline)
@@ -101,18 +108,25 @@ struct CredentialListView: View {
                 .listRowSeparator(.hidden)
             }
             ForEach(matches) { item in loginButton(item) }
-          } header: {
-            Text("Matches for \(site)")
           }
           if !logins.others.isEmpty {
-            Section {
-              ForEach(others) { item in loginButton(item) }
-            } header: {
-              Text("All logins")
+            if showsOthers {
+              Section {
+                Divider()
+                  .listRowSeparator(.hidden)
+                ForEach(others) { item in loginButton(item) }
+              }
+            } else {
+              Section {
+                Button("Show all logins") { showAll = true }
+                  .buttonStyle(.link)
+                  .frame(maxWidth: .infinity)
+                  .listRowSeparator(.hidden)
+              }
             }
           }
         }
-        .listStyle(.inset)
+        .listStyle(.plain)
         .searchable(text: $filter, prompt: "Filter")
       }
     }
@@ -166,22 +180,40 @@ struct CredentialListView: View {
       row(item)
     }
     .buttonStyle(.plain)
+    .listRowSeparator(.hidden)
   }
 
   private func row(_ item: Login) -> some View {
-    VStack(alignment: .leading, spacing: 2) {
-      Text(item.title)
-        .fontWeight(.medium)
-      Text(item.accountName)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-      Text(item.reason)
-        .font(.caption2)
-        .foregroundStyle(.tertiary)
+    HStack(spacing: 10) {
+      avatar(item)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(item.title)
+          .fontWeight(.medium)
+          .lineLimit(1)
+        Text([item.accountName, item.vaultName].compactMap { $0 }.joined(separator: " · "))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.vertical, 3)
     .contentShape(Rectangle())
+    .help(item.reason)
+  }
+
+  /// Rounded square with the first letter of the title. Color is derived from the title.
+  private func avatar(_ item: Login) -> some View {
+    let seed = item.title.lowercased().unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }
+    let hue = Double(abs(seed) % 360) / 360
+    let letter = item.title.first.map { String($0).uppercased() } ?? "?"
+    return Text(letter)
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(.white)
+      .frame(width: 28, height: 28)
+      .background(
+        Color(hue: hue, saturation: 0.6, brightness: 0.7),
+        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
   }
 
   private func filtered(_ items: [Login]) -> [Login] {

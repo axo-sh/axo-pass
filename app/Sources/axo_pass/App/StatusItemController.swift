@@ -1,4 +1,5 @@
 import AppKit
+import AxoArtwork
 import SwiftUI
 
 /// The menu bar icon. A click opens the command palette under it; an Option
