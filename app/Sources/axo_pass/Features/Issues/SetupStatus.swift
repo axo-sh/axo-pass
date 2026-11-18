@@ -26,11 +26,26 @@ final class SetupStatus {
   private init() {}
 
   /// Re-read all state. Cheap enough for a timer.
-  func refresh() {
-    refreshAgents()
-    refreshSshConf()
-    refreshShell()
-    refreshGpgConf()
+  ///
+  /// Socket probes and config file reads run off the main thread. They block,
+  /// and at launch they would delay the first window layout.
+  func refresh() async {
+    let core = core
+    let (axo, system, ssh, shell, gpg) = await Task.detached {
+      (
+        core.getSshAgentStatus(agentType: .axo),
+        core.getSshAgentStatus(agentType: .system),
+        core.checkSshAgentConf(),
+        core.checkShellIntegration(),
+        core.checkGpgAgentConf()
+      )
+    }.value
+    axoAgent = axo
+    systemAgent = system
+    sshConf = ssh
+    self.shell = shell
+    gpgConf = gpg
+    await AgentService.shared.refreshStatusInBackground()
   }
 
   /// Re-read agent state, which the CLI can change (`ap ssh-agent stop`)

@@ -75,25 +75,32 @@ final class IssuesModel {
       await self?.refreshAll()
       while !Task.isCancelled {
         try? await Task.sleep(for: Self.pollInterval)
-        self?.refreshChecks()
+        await self?.refreshChecks()
       }
     }
   }
 
   /// Re-read the agent status and the config files. Cheap enough for the
-  /// timer.
-  func refreshChecks() {
+  /// timer. File reads run off the main thread.
+  func refreshChecks() async {
     now = Date()
-    setup.refresh()
-    gpgConfExists = gpgConf.map { FileManager.default.fileExists(atPath: $0.confPath) } ?? false
-    browsers = browserManifestStatuses()
+    await setup.refresh()
+    let confPath = gpgConf?.confPath
+    let (exists, browsers) = await Task.detached {
+      (
+        confPath.map { FileManager.default.fileExists(atPath: $0) } ?? false,
+        browserManifestStatuses()
+      )
+    }.value
+    gpgConfExists = exists
+    self.browsers = browsers
   }
 
   /// Re-read everything, including the gpg key listing and the AutoFill state.
   /// Saved passphrases are listed only while the app is unlocked. The listing
   /// authenticates on the shared auth thread, which the unlock also needs.
   func refreshAll() async {
-    refreshChecks()
+    await refreshChecks()
     gpgKeys = try? await core.listGpgKeys()
     if vaults.isAppUnlocked {
       passwords = (try? await core.listPasswords()) ?? []

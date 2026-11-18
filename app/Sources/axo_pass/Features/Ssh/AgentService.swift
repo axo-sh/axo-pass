@@ -45,6 +45,15 @@ final class AgentService {
     status = service.status
   }
 
+  /// Read the service status off the main thread. The read is a round trip to
+  /// launchd.
+  func refreshStatusInBackground() async {
+    let plistName = Self.plistName
+    status = await Task.detached {
+      SMAppService.agent(plistName: plistName).status
+    }.value
+  }
+
   /// Start the agent. Under launchd if the service is registered and allowed,
   /// otherwise detached.
   func start() async throws {
