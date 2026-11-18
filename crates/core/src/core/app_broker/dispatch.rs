@@ -252,7 +252,18 @@ pub(super) async fn serve_request(
                             action: vault::VaultAction::ListLogins { page, all: false },
                         };
                         log::debug!("App broker request: locked listing {prompt:?}");
-                        vault::list_logins_locked(&prompt, &actor, &authorizers.logins)
+                        let response =
+                            vault::list_logins_locked(&prompt, &actor, &authorizers.logins);
+                        // Nothing is indexed until the first AutoFill sync. A
+                        // browser with a persistent grant lists from the
+                        // unlocked vaults instead of asking the user to unlock.
+                        if matches!(response, WireResponse::LockedLogins { indexed: false, .. }) {
+                            vault::serve_granted_listing(&authorizers.vaults, &prompt, &actor)
+                                .await
+                                .unwrap_or(response)
+                        } else {
+                            response
+                        }
                     },
                     Err(message) => WireResponse::Failed { message },
                 }
