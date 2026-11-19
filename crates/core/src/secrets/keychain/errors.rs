@@ -1,18 +1,23 @@
+#[cfg(target_os = "macos")]
 use std::ptr::{self, NonNull};
 
+#[cfg(target_os = "macos")]
 use objc2_core_foundation::{CFError, CFRetained};
 use thiserror::Error;
 
 /// Receives the `CFError` a Security call reports through its out-parameter,
 /// and releases it on drop.
+#[cfg(target_os = "macos")]
 pub struct CFErrorOut(*mut CFError);
 
+#[cfg(target_os = "macos")]
 impl Default for CFErrorOut {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(target_os = "macos")]
 impl CFErrorOut {
     pub fn new() -> Self {
         Self(ptr::null_mut())
@@ -29,6 +34,7 @@ impl CFErrorOut {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for CFErrorOut {
     fn drop(&mut self) {
         if let Some(error) = NonNull::new(self.0) {
@@ -73,4 +79,9 @@ pub enum KeychainError {
 
     #[error("Signing failed: {0}")]
     SigningFailed(String),
+
+    /// The operation needs the macOS keychain. Linux builds have no
+    /// implementation of it yet.
+    #[error("Not supported on this platform")]
+    Unsupported,
 }

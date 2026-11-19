@@ -16,12 +16,10 @@ anyhow.workspace = true
 async-trait = "0.1"
 base32 = "0.5.1"
 base64 = "0.23.1"
-block2 = "0.6.2"
 ciborium = "0.2.2"
 clml = {version = "0.2.0", features = ["anstream"]}
 coset = "0.4"
 dirs = "7.0.0"
-dispatch2 = "0.3.1"
 flate2 = "1.1"
 glob = "0.3"
 hkdf = "0.12.4"
@@ -30,16 +28,8 @@ indoc = "2.0.8"
 itertools = "0.15.0"
 jiff = "0.2.38"
 libc = "0.2"
-libproc = "0.14.11"
 log.workspace = true
 md5 = "0.8"
-objc2 = "0.6.5"
-objc2-app-kit = "0.3.2"
-objc2-core-foundation = "0.3.2"
-objc2-core-services = {version = "0.3.2", default-features = false, features = ["std", "dispatch2", "objc2", "FSEvents"]}
-objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSOperation", "NSPathUtilities", "NSString", "NSURL"]}
-objc2-local-authentication = "0.3.2"
-objc2-security = "0.3.2"
 p256 = {version = "0.13", features = ["ecdh"]}
 passkey-authenticator = "0.5.0"
 passkey-types = "0.5.0"
@@ -68,6 +58,18 @@ tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 url = "2.5.8"
 uuid = {version = "1.28.0", features = ["serde", "v4", "v7"]}
 zeroize = {version = "1.9.1", features = ["derive"]}
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+libproc = "0.14.11"
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-services = {version = "0.3.2", default-features = false, features = ["std", "dispatch2", "objc2", "FSEvents"]}
+objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSOperation", "NSPathUtilities", "NSString", "NSURL"]}
+objc2-local-authentication = "0.3.2"
+objc2-security = "0.3.2"
 
 [dev-dependencies]
 proptest = "1.12.0"

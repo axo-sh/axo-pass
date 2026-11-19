@@ -6,6 +6,7 @@ pub mod dirs;
 pub mod files;
 pub mod find_bin_folder;
 pub mod interpolate;
+#[cfg(target_os = "macos")]
 mod objc_helpers;
 pub mod protected_settings;
 pub mod provenance;

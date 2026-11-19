@@ -41,6 +41,10 @@ fmt = [
 "fmt:all" = { command = [":fmt", ":fmt:app"], parallel = true }
 
 check = "cargo check --workspace --all-targets"
+# Cross-check core and the CLI for Linux from macOS. The ffi crate is macOS only.
+"setup:linux" = "rustup target add aarch64-unknown-linux-gnu"
+"check:linux" = "cargo check --target aarch64-unknown-linux-gnu -p axo-pass-core -p axo-pass-cli"
+"check:linux:tests" = "cargo check --target aarch64-unknown-linux-gnu -p axo-pass-core -p axo-pass-cli --tests"
 test = "cargo test --workspace"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"

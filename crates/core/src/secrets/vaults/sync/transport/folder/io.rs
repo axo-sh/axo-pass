@@ -6,6 +6,10 @@
 //! synced folder, sync it, and move it into place, so the provider never
 //! uploads a partial file.
 
+// The Linux stub of `CoordinatedIo` uses none of the shared helpers.
+#![cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+
+#[cfg(target_os = "macos")]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -13,18 +17,25 @@ use std::ffi::CString;
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::Mutex;
 
+#[cfg(target_os = "macos")]
 use block2::{RcBlock, StackBlock};
+#[cfg(target_os = "macos")]
 use objc2::AllocAnyThread;
+#[cfg(target_os = "macos")]
 use objc2::rc::{Retained, autoreleasepool};
+#[cfg(target_os = "macos")]
 use objc2::runtime::AnyObject;
+#[cfg(target_os = "macos")]
 use objc2_foundation::{
     NSArray, NSError, NSFileAccessIntent, NSFileCoordinator, NSFileCoordinatorReadingOptions,
     NSFileCoordinatorWritingOptions, NSFileManager, NSOperationQueue, NSSearchPathDirectory,
@@ -36,6 +47,7 @@ use uuid::Uuid;
 
 /// `st_flags` bit of a dataless file, whose contents are not local. The
 /// value of `SF_DATALESS` in `sys/stat.h`.
+#[cfg(target_os = "macos")]
 const SF_DATALESS: u32 = 0x4000_0000;
 
 /// Local state of a file in the synced folder.
@@ -87,11 +99,22 @@ fn metadata_status(path: &Path) -> io::Result<FileStatus> {
 fn status_of(meta: &Metadata) -> FileStatus {
     if !meta.is_file() {
         FileStatus::Missing
-    } else if meta.st_flags() & SF_DATALESS != 0 {
+    } else if is_dataless(meta) {
         FileStatus::Remote
     } else {
         FileStatus::Local
     }
+}
+
+#[cfg(target_os = "macos")]
+fn is_dataless(meta: &Metadata) -> bool {
+    meta.st_flags() & SF_DATALESS != 0
+}
+
+/// Linux files are always local.
+#[cfg(not(target_os = "macos"))]
+fn is_dataless(_meta: &Metadata) -> bool {
+    false
 }
 
 /// Bytes of the file at `path`, at most `limit`. A symlink is not followed.
@@ -134,12 +157,30 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let from_c = CString::new(from.as_os_str().as_bytes())?;
     let to_c = CString::new(to.as_os_str().as_bytes())?;
     // SAFETY: both paths are NUL-terminated strings that outlive the call.
+    #[cfg(target_os = "macos")]
     let result = unsafe { libc::renamex_np(from_c.as_ptr(), to_c.as_ptr(), libc::RENAME_EXCL) };
+    // SAFETY: both paths are NUL-terminated strings that outlive the call.
+    #[cfg(not(target_os = "macos"))]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
     if result == 0 {
         return Ok(());
     }
     let e = io::Error::last_os_error();
-    if e.raw_os_error() != Some(libc::ENOTSUP) {
+    // Linux reports a filesystem without the flag as EINVAL, and a kernel
+    // without `renameat2` as ENOSYS.
+    #[cfg(target_os = "macos")]
+    let unsupported = [libc::ENOTSUP];
+    #[cfg(not(target_os = "macos"))]
+    let unsupported = [libc::ENOTSUP, libc::EINVAL, libc::ENOSYS];
+    if !e.raw_os_error().is_some_and(|code| unsupported.contains(&code)) {
         return Err(e);
     }
     if fs::symlink_metadata(to).is_ok() {
@@ -165,9 +206,11 @@ fn delete_path(path: &Path) -> io::Result<()> {
 /// File access through `NSFileCoordinator` and `NSFileManager`. A file whose
 /// ubiquitous download status is not current is `Remote`, as is a dataless
 /// file.
+#[cfg(target_os = "macos")]
 #[derive(Debug, Default)]
 pub struct CoordinatedIo;
 
+#[cfg(target_os = "macos")]
 impl CoordinatedIo {
     fn url(path: &Path) -> Retained<NSURL> {
         NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
@@ -296,6 +339,7 @@ impl CoordinatedIo {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl FolderIo for CoordinatedIo {
     fn status(&self, path: &Path) -> io::Result<FileStatus> {
         let status = metadata_status(path)?;
@@ -368,6 +412,45 @@ impl FolderIo for CoordinatedIo {
             }
         });
     }
+}
+
+/// Stub of the file access of the folder transport on Linux. Every operation
+/// except `download` fails with `Unsupported`. The Linux implementation needs a
+/// temp directory outside the synced folder and on its volume, which is not
+/// decided yet.
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, Default)]
+pub struct CoordinatedIo;
+
+#[cfg(not(target_os = "macos"))]
+impl CoordinatedIo {
+    fn unsupported<T>() -> io::Result<T> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the folder transport is not supported on this platform",
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl FolderIo for CoordinatedIo {
+    fn status(&self, _path: &Path) -> io::Result<FileStatus> {
+        Self::unsupported()
+    }
+
+    fn read(&self, _path: &Path, _limit: u64) -> io::Result<Vec<u8>> {
+        Self::unsupported()
+    }
+
+    fn write(&self, _path: &Path, _data: &[u8], _mode: WriteMode) -> io::Result<()> {
+        Self::unsupported()
+    }
+
+    fn delete(&self, _path: &Path) -> io::Result<()> {
+        Self::unsupported()
+    }
+
+    fn download(&self, _paths: Vec<PathBuf>) {}
 }
 
 /// File access through `std::fs`, for tests. Temp files are written in a
