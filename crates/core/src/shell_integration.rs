@@ -212,12 +212,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.zsh");
         std::fs::write(&path, &script).unwrap();
-        let out = std::process::Command::new("zsh")
+        let out = match std::process::Command::new("zsh")
             .arg("-f")
             .arg(&path)
             .env("HOME", "/home/tester")
             .output()
-            .unwrap();
+        {
+            Ok(out) => out,
+            // macOS ships zsh. Linux machines may not have it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("skipped: zsh is not installed");
+                return;
+            },
+            Err(e) => panic!("Failed to run zsh: {e}"),
+        };
         assert!(
             out.status.success(),
             "{}",

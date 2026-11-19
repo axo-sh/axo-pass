@@ -1,3 +1,7 @@
+// Tests through a live broker run on macOS only: the Linux peer check is a
+// stub that refuses every client until M2.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 use super::support::{CHROME, browser_host_broker};
 use crate::core::app_broker::vault;
 use crate::core::app_broker::wire::WireResponse;
@@ -40,6 +44,7 @@ fn shared_hosting_domains_are_cross_site() {
 
 /// A fill in a cross-site frame reaches the prompt, except a pick from "All
 /// logins", which is refused before any prompt with both hosts named.
+#[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread")]
 async fn cross_site_unmatched_fill_refused_before_prompt() {
     let page = r#""url":"https://icloud.com","frame_url":"https://idmsa.apple.com/signin""#;

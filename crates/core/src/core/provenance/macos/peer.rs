@@ -17,11 +17,11 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::core::provenance::Provenance;
-use crate::core::provenance::helpers::{
+use crate::core::provenance::macos::helpers::{
     check_requirement, get_sec_code_for_audit_token, get_sec_code_for_self,
     get_static_code_for_sec_code,
 };
-use crate::core::provenance::signing_info::SigningInfo;
+use crate::core::provenance::macos::signing_info::SigningInfo;
 
 // Socket option level and name for the peer's audit token. From `sys/un.h`,
 // which libc does not expose.

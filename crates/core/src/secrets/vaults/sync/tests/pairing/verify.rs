@@ -1,3 +1,6 @@
+// Tests that need a software `ManagedKey` run on macOS only.
+#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
@@ -339,6 +342,7 @@ fn invalid_key_files_and_wrappings_of_other_kinds_skipped() {
     assert_eq!(paired[0].peer, peer(3));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn key_wrapped_to_software_key_of_new_mac_unwraps_through_poll() {
     let software = ManagedKey::create_software_for_test().unwrap();

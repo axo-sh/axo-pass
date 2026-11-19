@@ -1,3 +1,7 @@
+// The broker helpers serve tests that run on macOS only until the Linux peer
+// check exists.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -65,6 +69,7 @@ impl StubAuthorizer {
     /// Block until a `"hang"` prompt has started. Verifying a peer can take
     /// hundreds of milliseconds, so a fixed sleep may end before the
     /// request reaches its prompt.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(super) fn wait_for_hung_prompt(&self) {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while self.prompts_hung.load(Ordering::SeqCst) == 0 {
@@ -301,6 +306,7 @@ pub(super) fn accepting_policy() -> PeerPolicy {
 }
 
 /// A policy no test process satisfies.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(super) fn rejecting_policy() -> PeerPolicy {
     PeerPolicy {
         executable: Some(PathBuf::from("/usr/bin/true")),

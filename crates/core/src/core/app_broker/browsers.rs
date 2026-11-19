@@ -64,6 +64,7 @@ impl Browser {
     /// Support directories the browser creates for the user, relative to the
     /// home directory. The browser counts as installed if any of them exists.
     /// The first entry holds the manifest directory.
+    #[cfg(target_os = "macos")]
     fn support_dirs(self) -> &'static [&'static str] {
         match self {
             Browser::Chrome => &["Library/Application Support/Google/Chrome"],
@@ -72,6 +73,13 @@ impl Browser {
                 "Library/Application Support/Firefox",
             ],
         }
+    }
+
+    /// Linux stub with no directories, so no browser counts as installed and
+    /// no manifest is written. The Linux paths are not decided yet.
+    #[cfg(not(target_os = "macos"))]
+    fn support_dirs(self) -> &'static [&'static str] {
+        &[]
     }
 
     /// Whether the browser has a support directory under `home`.
@@ -84,8 +92,8 @@ impl Browser {
     /// Directory the browser reads native messaging manifests from, under
     /// `home`.
     pub fn manifest_dir_in(self, home: &Path) -> PathBuf {
-        home.join(self.support_dirs()[0])
-            .join("NativeMessagingHosts")
+        let support_dir = self.support_dirs().first().copied().unwrap_or_default();
+        home.join(support_dir).join("NativeMessagingHosts")
     }
 
     /// Path of the host manifest the app installs for this browser, under
@@ -151,6 +159,8 @@ mod tests {
         );
     }
 
+    // The Linux browser paths come in 0.8.
+    #[cfg(target_os = "macos")]
     #[test]
     fn manifest_paths_are_per_browser() {
         let chrome = Browser::Chrome.manifest_path().unwrap();

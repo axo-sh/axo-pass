@@ -66,6 +66,10 @@ fn app_transports_resolve_folder_root_once_and_refuse_missing_folder_and_icloud(
     ));
 }
 
+// The transactions below resolve the folder with `AppTransports`, which uses
+// `CoordinatedIo`. They run on macOS only until the Linux `CoordinatedIo`
+// exists.
+
 /// Synced vault with a valid sync state, whose sidecar holds the root of a
 /// folder in a temp directory. The writer of the fixture resolves the root
 /// with `AppTransports`, so the transport is a `FolderTransport` with
@@ -104,6 +108,7 @@ fn staged_bytes(fx: &Fixture) -> Vec<u8> {
     fs::read(LocalSyncState::staged_path(&fx.root, fx.id())).unwrap()
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn transaction_through_folder_transport_copies_staged_file_and_next_moves_staged_context() {
     let (fx, _dir, root) = synced_in_folder();
@@ -132,6 +137,7 @@ fn transaction_through_folder_transport_copies_staged_file_and_next_moves_staged
     assert_eq!(published(&root, &fx), vec![hash]);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn root_removed_while_app_runs_pauses_sync_with_unreachable_and_next_transaction_publishes() {
     let (fx, dir, root) = synced_in_folder();
@@ -165,6 +171,7 @@ fn root_removed_while_app_runs_pauses_sync_with_unreachable_and_next_transaction
     assert!(published(&root, &fx).contains(&staged));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn sidecar_that_fails_to_parse_and_holds_valid_root_keeps_root_and_next_transaction_syncs_through_it()
  {

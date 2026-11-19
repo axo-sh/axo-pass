@@ -1,3 +1,6 @@
+// Tests that need a software `ManagedKey` run on macOS only.
+#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+
 use indoc::indoc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -53,6 +56,7 @@ fn device_wrapping(key: &SyncKey) -> DeviceWrapping {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn software_key() -> ManagedKey {
     ManagedKey::create_software_for_test().unwrap()
 }
@@ -263,6 +267,7 @@ fn wrapping_with_no_kind_or_missing_field_fails_that_wrapping() {
     assert_eq!(file.invalid.len(), 5, "{:?}", file.invalid);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn software_key_unwraps_with_private_key() {
     let key = SyncKey::generate();
@@ -284,6 +289,7 @@ fn software_key_unwraps_with_private_key() {
     assert_ne!(wrap_to(&key, &to).wrapped, wrapping.wrapped);
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn software_key_fails_with_wrong_private_key() {
     let key = SyncKey::generate();

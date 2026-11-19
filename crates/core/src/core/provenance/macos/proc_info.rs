@@ -3,11 +3,11 @@ use std::fmt::{self, Display};
 use libproc::proc_pid::pidpath;
 use objc2_security::SecCode;
 
-use crate::core::provenance::helpers::{
+use crate::core::provenance::macos::helpers::{
     check_requirement, check_valid, get_effective_uid, get_host_for_sec_code, get_parent_pid,
     get_sec_code_for_pid, get_static_code_for_sec_code,
 };
-use crate::core::provenance::signing_info::SigningInfo;
+use crate::core::provenance::macos::signing_info::SigningInfo;
 
 const APPLE_LOGIN_REQUIREMENT: &str = r#"anchor apple and identifier "com.apple.login""#;
 

@@ -10,10 +10,14 @@ use std::sync::RwLock;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 
+#[cfg(target_os = "macos")]
 use crate::core::auth::run_local_onetime;
 use crate::secrets::keychain::errors::KeychainError;
+#[cfg(target_os = "macos")]
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
+#[cfg(target_os = "macos")]
+use crate::secrets::keychain::managed_key::{KeyClass, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 
 /// Keychain label of the per-Mac signing key.
@@ -83,6 +87,35 @@ pub fn verify(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Result<()
 #[derive(Debug, Default)]
 pub struct KeychainSigner;
 
+/// Linux stub. Every operation fails with `Unsupported`. The TPM and software
+/// signers replace it.
+#[cfg(not(target_os = "macos"))]
+impl KeychainSigner {
+    pub(crate) fn probe_key() -> Result<Option<ManagedKey>, KeychainError> {
+        Err(KeychainError::Unsupported)
+    }
+
+    pub(crate) fn create_key() -> Result<(), Error> {
+        DEVICE_VERIFYING_KEY.clear();
+        Err(Error::KeyCreationFailed(KeychainError::Unsupported))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl VaultSigner for KeychainSigner {
+    fn sign(&self, _message: &[u8]) -> Result<Vec<u8>, Error> {
+        Err(Error::VaultSigningFailed(
+            KeychainError::Unsupported.to_string(),
+        ))
+    }
+
+    fn verifying_key(&self) -> Result<VerifyingKey, Error> {
+        DEVICE_VERIFYING_KEY
+            .get_or_load(|| Err(Error::KeyRetrievalFailed(KeychainError::Unsupported)))
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl KeychainSigner {
     /// Look for `device-signing-key` with interaction not allowed. A key gated
     /// by authentication fails with `ItemNotAccessible`.
@@ -127,6 +160,7 @@ impl KeychainSigner {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl VaultSigner for KeychainSigner {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         let key = Self::find_key()?.ok_or(Error::SigningKeyNotFound)?;
@@ -282,6 +316,7 @@ mod tests {
     }
 
     /// Needs a binary signed with the app's keychain access group.
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "creates a Secure Enclave key in the keychain"]
     fn secure_enclave_signature_verifies() {

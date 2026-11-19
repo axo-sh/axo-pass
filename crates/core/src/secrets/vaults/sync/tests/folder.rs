@@ -1,6 +1,9 @@
 //! Local folder transport with `PlainIo` and `CoordinatedIo`, against a temp
 //! directory, and the transaction through it.
 
+// The FSEvents watch tests run on macOS only.
+#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+
 use std::fs::{self, File};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
@@ -38,6 +41,7 @@ use crate::secrets::vaults::sync::transport::{
 
 mod io;
 mod transactions;
+#[cfg(target_os = "macos")]
 mod watch;
 
 /// File access of a test folder.
@@ -72,9 +76,14 @@ impl Folder {
         Self::build(tempfile::tempdir().unwrap(), Io::Coordinated)
     }
 
-    /// One folder of each file access.
-    fn each() -> [Self; 2] {
-        [Self::plain(), Self::coordinated()]
+    /// One folder of each file access. `CoordinatedIo` is a stub on Linux, so
+    /// only `PlainIo` is tested there.
+    fn each() -> Vec<Self> {
+        if cfg!(target_os = "macos") {
+            vec![Self::plain(), Self::coordinated()]
+        } else {
+            vec![Self::plain()]
+        }
     }
 
     fn build(dir: TempDir, io: Io) -> Self {

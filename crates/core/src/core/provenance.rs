@@ -1,27 +1,42 @@
-mod helpers;
-mod kinfo;
-mod peer;
-mod proc_info;
-mod signing_info;
+#[cfg(not(target_os = "macos"))]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::collections::HashSet;
 use std::fmt;
 
+#[cfg(target_os = "macos")]
 use objc2_security::SecCode;
 use serde::{Deserialize, Serialize};
 
 use crate::audit::Actor;
-pub(crate) use crate::core::provenance::helpers::{get_audit_token_for_pid, get_parent_pid};
-use crate::core::provenance::peer::own_signing_info;
-pub use crate::core::provenance::peer::{PeerError, PeerIdentity, PeerPolicy};
-use crate::core::provenance::proc_info::ProcInfo;
+#[cfg(not(target_os = "macos"))]
+pub(crate) use crate::core::provenance::linux::{get_audit_token_for_pid, get_parent_pid};
+#[cfg(not(target_os = "macos"))]
+pub use crate::core::provenance::linux::{PeerError, PeerIdentity, PeerPolicy};
+#[cfg(not(target_os = "macos"))]
+use crate::core::provenance::linux::ProcInfo;
+#[cfg(target_os = "macos")]
+pub(crate) use crate::core::provenance::macos::{get_audit_token_for_pid, get_parent_pid};
+#[cfg(target_os = "macos")]
+use crate::core::provenance::macos::{ProcInfo, own_signing_info};
+#[cfg(target_os = "macos")]
+pub use crate::core::provenance::macos::{PeerError, PeerIdentity, PeerPolicy};
 
 /// Our own team identifier, from our code signature. `None` for an unsigned or
 /// ad-hoc signed local build.
+#[cfg(target_os = "macos")]
 pub fn team_identifier() -> Option<String> {
     own_signing_info()
         .map(|info| info.team_identifier)
         .filter(|team| !team.is_empty())
+}
+
+/// Our own team identifier. Linux builds have no code signature.
+#[cfg(not(target_os = "macos"))]
+pub fn team_identifier() -> Option<String> {
+    None
 }
 
 pub struct Provenance {
@@ -87,6 +102,7 @@ impl Provenance {
     /// Resolve the chain from a process whose SecCode is already in hand. The
     /// head of the chain is then the process that was identified, not whatever
     /// holds `pid` by the time the chain is walked.
+    #[cfg(target_os = "macos")]
     pub(crate) fn resolve_from_sec_code(pid: u32, code: &SecCode) -> Self {
         let Some(head) = ProcInfo::from_sec_code(pid, code) else {
             return Self::resolve(pid);
@@ -298,6 +314,7 @@ mod tests {
 
     /// The test binary is at least linker-signed, so it passes the validity
     /// check and gets a cdhash identity.
+    #[cfg(target_os = "macos")]
     #[test]
     fn current_process_has_verified_code_id() {
         let info = ProcInfo::lookup(std::process::id()).unwrap();
@@ -309,6 +326,7 @@ mod tests {
 
     /// Xcode's git claims a team identifier but is signed by Apple's own
     /// certificate, which has no matching subject OU.
+    #[cfg(target_os = "macos")]
     #[test]
     fn apple_signed_xcode_git_verified() {
         use std::process::{Command, Stdio};

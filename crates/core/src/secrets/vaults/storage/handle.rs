@@ -10,10 +10,15 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::audit::{self, Action, AuditEvent, Outcome, Subject, SubjectIds, SubjectKind};
-use crate::core::auth::{AuthContext, probe_shared_context};
+use crate::core::auth::AuthContext;
+#[cfg(target_os = "macos")]
+use crate::core::auth::probe_shared_context;
 use crate::secrets::keychain::errors::KeychainError;
+#[cfg(target_os = "macos")]
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey, ManagedKeyQuery};
+#[cfg(target_os = "macos")]
+use crate::secrets::keychain::managed_key::{KeyClass, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::autofill::item::ItemAutofill;
 use crate::secrets::vaults::bundle::exported_bundle::{BUNDLE_VERSION, ExportedBundle};
 use crate::secrets::vaults::bundle::{ExportMode, ExportReport, export_blobs};
@@ -49,6 +54,7 @@ pub enum ExportProgress {
     Writing,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(super) const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
 enum VaultState {
@@ -940,6 +946,7 @@ pub fn normalized_key(key: &str) -> Option<String> {
 /// Query the vault encryption key on the shared context with interaction not
 /// allowed. A key gated by authentication fails the inner result with
 /// `ItemNotAccessible`.
+#[cfg(target_os = "macos")]
 pub(super) fn probe_vault_encryption_key()
 -> Result<Result<Option<ManagedKey>, KeychainError>, KeychainError> {
     probe_shared_context(|la_context| {
@@ -948,6 +955,13 @@ pub(super) fn probe_vault_encryption_key()
             .with_key_class(KeyClass::Private)
             .one_with_retry(la_context, false)
     })
+}
+
+/// Linux stub. Fails with `Unsupported`.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn probe_vault_encryption_key()
+-> Result<Result<Option<ManagedKey>, KeychainError>, KeychainError> {
+    Err(KeychainError::Unsupported)
 }
 
 /// Check whether the shared authentication still covers the vault encryption

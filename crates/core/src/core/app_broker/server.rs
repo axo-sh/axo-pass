@@ -10,15 +10,43 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+#[cfg(target_os = "macos")]
+use super::access::extension_policy;
 use super::access::{
-    Client, RequestScope, agent_policy, browser_host_policy, extension_policy,
-    record_rejected_peer, verify_client,
+    Client, RequestScope, agent_policy, browser_host_policy, record_rejected_peer, verify_client,
 };
 use super::dispatch::serve_request;
 use super::in_flight::client_disconnected;
 use super::wire::{WireRequest, WireResponse};
-use super::{Authorizers, autofill_service_name, broker_socket_path, mach};
+#[cfg(target_os = "macos")]
+use super::{autofill_service_name, mach};
+use super::{Authorizers, broker_socket_path};
 use crate::core::provenance::PeerIdentity;
+
+/// Serve requests on the socket until `shutdown` resolves, then remove the
+/// socket. There is no Mach service on Linux.
+#[cfg(not(target_os = "macos"))]
+pub async fn serve(
+    authorizers: Authorizers,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> std::io::Result<()> {
+    serve_on(
+        broker_socket_path(),
+        vec![
+            Client {
+                policy: agent_policy(),
+                scope: RequestScope::Agent,
+            },
+            Client {
+                policy: browser_host_policy(),
+                scope: RequestScope::BrowserHost,
+            },
+        ],
+        authorizers,
+        shutdown,
+    )
+    .await
+}
 
 /// Serve requests until `shutdown` resolves, then remove the socket and the
 /// Mach service.
@@ -28,6 +56,7 @@ use crate::core::provenance::PeerIdentity;
 /// named under the App Group (see [`mach`]). The extension is sandboxed, and a
 /// Mach service lookup is the one path to the app it has that touches no
 /// files.
+#[cfg(target_os = "macos")]
 pub async fn serve(
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -128,6 +157,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: 
             Ok((stream, _)) => {
                 // Writes to a closed peer must fail with EPIPE, not raise
                 // SIGPIPE, which would terminate the host process.
+                #[cfg(target_os = "macos")]
                 if let Err(e) = socket2::SockRef::from(&stream).set_nosigpipe(true) {
                     log::debug!("App broker could not set SO_NOSIGPIPE: {e}");
                 }

@@ -4,20 +4,30 @@ use std::{fs, io};
 use anyhow::anyhow;
 use jiff::Zoned;
 
-use crate::core::auth::{AuthContext, AuthMethod, run_on_auth_thread};
+use crate::core::auth::AuthContext;
+#[cfg(target_os = "macos")]
+use crate::core::auth::{AuthMethod, run_on_auth_thread};
+#[cfg(target_os = "macos")]
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
+#[cfg(target_os = "macos")]
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, ManagedKeyQuery};
+#[cfg(target_os = "macos")]
+use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKeyQuery};
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
-use crate::secrets::vaults::storage::handle::{
-    VAULT_ENCRYPTION_KEY_LABEL, probe_vault_encryption_key,
-};
+use crate::secrets::vaults::format::signing::KeychainSigner;
+#[cfg(target_os = "macos")]
+use crate::secrets::vaults::format::signing::VaultSigner;
+#[cfg(target_os = "macos")]
+use crate::secrets::vaults::storage::handle::VAULT_ENCRYPTION_KEY_LABEL;
+use crate::secrets::vaults::storage::handle::probe_vault_encryption_key;
 use crate::secrets::vaults::storage::txn::VERSIONS_DIR;
 use crate::secrets::vaults::storage::unreadable::Unreadable;
 use crate::secrets::vaults::sync::local_state::SYNC_DIR;
-use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
+#[cfg(target_os = "macos")]
+use crate::secrets::vaults::sync::model::PublicKey;
+use crate::secrets::vaults::sync::model::ReplicaKeys;
 use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
 
 /// Name of the vaults directory under the app data directory.
@@ -47,6 +57,7 @@ impl KeyProbe {
     }
 
     /// Whether the key is missing. A probe error fails.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(super) fn is_missing(&self) -> Result<bool, Error> {
         match self {
             Self::Present => Ok(false),
@@ -92,6 +103,39 @@ pub(crate) trait DeviceKeys: Send + Sync {
 /// The keys in the keychain.
 pub(super) struct KeychainKeys;
 
+/// Linux stub. Probes report an error and every operation fails with
+/// `Unsupported`.
+#[cfg(not(target_os = "macos"))]
+impl DeviceKeys for KeychainKeys {
+    fn probe_encryption_key(&self) -> KeyProbe {
+        match probe_vault_encryption_key() {
+            Ok(result) => KeyProbe::of(result),
+            Err(e) => KeyProbe::Error(e.to_string()),
+        }
+    }
+
+    fn probe_signing_key(&self) -> KeyProbe {
+        KeyProbe::of(KeychainSigner::probe_key())
+    }
+
+    fn read_encryption_key(&self, _context: AuthContext) -> Result<Option<ManagedKey>, Error> {
+        Err(Error::KeyRetrievalFailed(KeychainError::Unsupported))
+    }
+
+    fn create_keys(&self, _context: AuthContext) -> Result<(), Error> {
+        Err(Error::KeyCreationFailed(KeychainError::Unsupported))
+    }
+
+    fn create_signing_key(&self) -> Result<(), Error> {
+        KeychainSigner::create_key()
+    }
+
+    fn public_keys(&self, _context: AuthContext) -> Result<ReplicaKeys, Error> {
+        Err(Error::KeyRetrievalFailed(KeychainError::Unsupported))
+    }
+}
+
+#[cfg(target_os = "macos")]
 impl DeviceKeys for KeychainKeys {
     /// Same probe as `check_vault_auth_still_valid`.
     fn probe_encryption_key(&self) -> KeyProbe {

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::core::dirs::{app_data_dir, app_group_identifier};
+use crate::core::dirs::{app_group_identifier, socket_dir};
 use crate::secrets::vaults::VaultCatalog;
 
 mod access;
@@ -36,6 +36,7 @@ pub mod gpg;
 mod in_flight;
 pub mod keychain;
 mod login_index;
+#[cfg(target_os = "macos")]
 mod mach;
 mod placement;
 mod server;
@@ -94,8 +95,9 @@ pub const AGENT_EXECUTABLE_NAME: &str = "ap";
 pub const BROWSER_HOST_EXECUTABLE_NAME: &str = "AxoPassBrowserHost";
 
 pub fn broker_socket_path() -> PathBuf {
-    // typically: ~/Library/Application Support/Axo Pass/app-broker.sock
-    app_data_dir().join("app-broker.sock")
+    // macOS: ~/Library/Application Support/Axo Pass/app-broker.sock
+    // Linux: $XDG_RUNTIME_DIR/axo-pass/app-broker.sock
+    socket_dir().join("app-broker.sock")
 }
 
 /// The Mach service the AutoFill extension reaches the broker on. A sandboxed
