@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::vectors::{Vector, VectorFile};
 use super::{OsRng, decrypt_with_secret_key, encrypt};
-use crate::secrets::keychain::errors::CFErrorOut;
+use crate::secrets::keychain::CFErrorOut;
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKey};
 
 const KEY_COUNT: usize = 6;

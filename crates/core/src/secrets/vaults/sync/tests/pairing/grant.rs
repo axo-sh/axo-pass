@@ -76,7 +76,7 @@ fn put_root(app_root: &Path, vault_id: Uuid, root: &TransportRoot) {
 
 /// Software encryption key of a new Mac and its public keys.
 #[cfg(macos)]
-fn new_mac_keys()-> (ManagedKey, ReplicaKeys) {
+fn new_mac_keys() -> (ManagedKey, ReplicaKeys) {
     let software = ManagedKey::create_software_for_test().unwrap();
     let keys = ReplicaKeys {
         encryption: PublicKey(software.public_key_sec1().unwrap()),

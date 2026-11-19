@@ -39,6 +39,7 @@ mod login_index;
 #[cfg(macos)]
 mod mach;
 mod placement;
+mod platform;
 mod server;
 mod settings;
 pub mod ssh;
@@ -51,7 +52,6 @@ pub use age::{
     BrokerAgeKey, request_age_identity, request_age_keys, request_create_age_key,
     request_delete_age_key,
 };
-pub(crate) use client::app_bundle_path;
 pub use gpg::{
     CollectedPassphrase, ConfirmPrompt, PassphraseAuthorizer, PassphraseKind, PassphrasePrompt,
     request_confirm, request_message, request_passphrase,
@@ -64,7 +64,8 @@ pub use login_index::{IndexedPasskey, LoginIndex};
 pub use placement::{
     PasskeyChoices, PasskeyPlacement, PlacementLogin, PlacementVault, VaultChoices,
 };
-pub use server::serve;
+pub(crate) use platform::app_bundle_path;
+pub use platform::serve;
 pub use settings::request_protected_settings;
 pub use ssh::{
     KeySource, ManagedIdentity, SignAuthorizer, SignPrompt, SignPurpose, list_identities,

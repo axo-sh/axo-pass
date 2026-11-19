@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::auth::{AuthContext, AuthMethod, run_local_onetime, run_on_auth_thread};
 use crate::core::provenance::Provenance;
-use crate::secrets::keychain::macos::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
+use crate::secrets::keychain::macos::AccessControl;
 
 static SERVICE_NAME: &str = "com.breakfastlabs.frittata";
 

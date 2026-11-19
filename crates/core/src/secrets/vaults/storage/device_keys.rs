@@ -1,32 +1,26 @@
+#[cfg(linux)]
+mod linux;
+#[cfg(macos)]
+mod macos;
+
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use anyhow::anyhow;
 use jiff::Zoned;
+#[cfg(linux)]
+use linux as platform;
+#[cfg(macos)]
+use macos as platform;
+pub(super) use platform::probe_vault_encryption_key;
 
 use crate::core::auth::AuthContext;
-#[cfg(macos)]
-use crate::core::auth::{AuthMethod, run_on_auth_thread};
-#[cfg(macos)]
-use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
-#[cfg(macos)]
-use crate::secrets::keychain::keychain_query::KeychainQuery;
-#[cfg(macos)]
-use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKeyQuery};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::signing::KeychainSigner;
-#[cfg(macos)]
-use crate::secrets::vaults::format::signing::VaultSigner;
-#[cfg(macos)]
-use crate::secrets::vaults::storage::handle::VAULT_ENCRYPTION_KEY_LABEL;
-use crate::secrets::vaults::storage::handle::probe_vault_encryption_key;
 use crate::secrets::vaults::storage::txn::VERSIONS_DIR;
 use crate::secrets::vaults::storage::unreadable::Unreadable;
 use crate::secrets::vaults::sync::local_state::SYNC_DIR;
-#[cfg(macos)]
-use crate::secrets::vaults::sync::model::PublicKey;
 use crate::secrets::vaults::sync::model::ReplicaKeys;
 use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
 
@@ -56,8 +50,9 @@ impl KeyProbe {
         }
     }
 
-    /// Whether the key is missing. A probe error fails.
-    #[cfg_attr(linux, allow(dead_code))]
+    /// Whether the key is missing. A probe error fails. The Linux stub does
+    /// not create keys, so only the macOS key store and the test keys call it.
+    #[allow(dead_code)]
     pub(super) fn is_missing(&self) -> Result<bool, Error> {
         match self {
             Self::Present => Ok(false),
@@ -102,119 +97,6 @@ pub(crate) trait DeviceKeys: Send + Sync {
 
 /// The keys in the keychain.
 pub(super) struct KeychainKeys;
-
-/// Linux stub. Probes report an error and every operation fails with
-/// `Unsupported`.
-#[cfg(linux)]
-impl DeviceKeys for KeychainKeys {
-    fn probe_encryption_key(&self) -> KeyProbe {
-        match probe_vault_encryption_key() {
-            Ok(result) => KeyProbe::of(result),
-            Err(e) => KeyProbe::Error(e.to_string()),
-        }
-    }
-
-    fn probe_signing_key(&self) -> KeyProbe {
-        KeyProbe::of(KeychainSigner::probe_key())
-    }
-
-    fn read_encryption_key(&self, _context: AuthContext) -> Result<Option<ManagedKey>, Error> {
-        Err(Error::KeyRetrievalFailed(KeychainError::Unsupported))
-    }
-
-    fn create_keys(&self, _context: AuthContext) -> Result<(), Error> {
-        Err(Error::KeyCreationFailed(KeychainError::Unsupported))
-    }
-
-    fn create_signing_key(&self) -> Result<(), Error> {
-        KeychainSigner::create_key()
-    }
-
-    fn public_keys(&self, _context: AuthContext) -> Result<ReplicaKeys, Error> {
-        Err(Error::KeyRetrievalFailed(KeychainError::Unsupported))
-    }
-}
-
-#[cfg(macos)]
-impl DeviceKeys for KeychainKeys {
-    /// Same probe as `check_vault_auth_still_valid`.
-    fn probe_encryption_key(&self) -> KeyProbe {
-        match probe_vault_encryption_key() {
-            Ok(result) => KeyProbe::of(result),
-            Err(e) => KeyProbe::Error(e.to_string()),
-        }
-    }
-
-    fn probe_signing_key(&self) -> KeyProbe {
-        KeyProbe::of(KeychainSigner::probe_key())
-    }
-
-    /// Read the key, drawing the prompt wherever `context` draws it.
-    ///
-    /// A foreign context arrives already authenticated by the process that
-    /// owns it, so nothing is evaluated here. A second evaluation of the same
-    /// context would put a second prompt in front of the user for one request.
-    fn read_encryption_key(&self, context: AuthContext) -> Result<Option<ManagedKey>, Error> {
-        let reason = match Provenance::resolve_current_parent()
-            .inspect(|provenance| log::debug!("read_encryption_key: {provenance:#?}"))
-            .and_then(|p| p.caller())
-        {
-            Some(parent) => format!("unlock the vault for {parent}"),
-            None => "unlock the vault".to_string(),
-        };
-        let auth_method = match context {
-            AuthContext::Foreign(_) => AuthMethod::None,
-            _ => AuthMethod::Policy { reason },
-        };
-        run_on_auth_thread(context, auth_method, move |la_context| {
-            ManagedKeyQuery::build()
-                .with_label(VAULT_ENCRYPTION_KEY_LABEL)
-                .with_key_class(KeyClass::Private)
-                .one(la_context)
-        })
-        .map_err(Error::KeyRetrievalFailed)?
-        .map_err(Error::KeyRetrievalFailed)
-    }
-
-    /// Create both keys without a prompt. `vault-encryption-key` is created on
-    /// `context` with no evaluation. The read of the key that follows draws the
-    /// only prompt.
-    fn create_keys(&self, context: AuthContext) -> Result<(), Error> {
-        if self.probe_encryption_key().is_missing()? {
-            log::debug!("Vault encryption key not found, creating it");
-            run_on_auth_thread(context, AuthMethod::None, move |la_context| {
-                ManagedKey::create_with_context(
-                    VAULT_ENCRYPTION_KEY_LABEL,
-                    KeyPolicy::AlwaysRequireAuth,
-                    Some(la_context),
-                )
-            })
-            .map_err(Error::KeyCreationFailed)?
-            .map_err(Error::KeyCreationFailed)?;
-        }
-        if self.probe_signing_key().is_missing()? {
-            KeychainSigner::create_key()?;
-        }
-        Ok(())
-    }
-
-    fn create_signing_key(&self) -> Result<(), Error> {
-        KeychainSigner::create_key()
-    }
-
-    fn public_keys(&self, context: AuthContext) -> Result<ReplicaKeys, Error> {
-        let encryption = self
-            .read_encryption_key(context)?
-            .ok_or(Error::VaultEncryptionKeyMissing)?
-            .public_key_sec1()
-            .map_err(Error::KeyRetrievalFailed)?;
-        let signing = KeychainSigner.verifying_key()?.to_encoded_point(false);
-        Ok(ReplicaKeys {
-            encryption: PublicKey(encryption),
-            signing: PublicKey(signing.as_bytes().to_vec()),
-        })
-    }
-}
 
 /// Where vault files of this Mac are found.
 #[derive(Clone, Debug)]

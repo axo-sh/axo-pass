@@ -10,103 +10,18 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-#[cfg(macos)]
-use super::access::extension_policy;
-use super::access::{
-    Client, RequestScope, agent_policy, browser_host_policy, record_rejected_peer, verify_client,
-};
+use super::Authorizers;
+use super::access::{Client, RequestScope, record_rejected_peer, verify_client};
 use super::dispatch::serve_request;
 use super::in_flight::client_disconnected;
+use super::platform::disable_sigpipe;
 use super::wire::{WireRequest, WireResponse};
-#[cfg(macos)]
-use super::{autofill_service_name, mach};
-use super::{Authorizers, broker_socket_path};
 use crate::core::provenance::PeerIdentity;
 
-/// Serve requests on the socket until `shutdown` resolves, then remove the
-/// socket. There is no Mach service on Linux.
-#[cfg(linux)]
-pub async fn serve(
-    authorizers: Authorizers,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
-) -> std::io::Result<()> {
-    serve_on(
-        broker_socket_path(),
-        vec![
-            Client {
-                policy: agent_policy(),
-                scope: RequestScope::Agent,
-            },
-            Client {
-                policy: browser_host_policy(),
-                scope: RequestScope::BrowserHost,
-            },
-        ],
-        authorizers,
-        shutdown,
-    )
-    .await
-}
-
-/// Serve requests until `shutdown` resolves, then remove the socket and the
-/// Mach service.
-///
-/// `ap` connects to the socket in the app data directory. When this build is
-/// signed, the AutoFill extension reaches the broker through a Mach service
-/// named under the App Group (see [`mach`]). The extension is sandboxed, and a
-/// Mach service lookup is the one path to the app it has that touches no
-/// files.
-#[cfg(macos)]
-pub async fn serve(
-    authorizers: Authorizers,
-    shutdown: tokio::sync::oneshot::Receiver<()>,
-) -> std::io::Result<()> {
-    let autofill = match autofill_service_name() {
-        Some(name) => match mach::MachService::start(
-            &name,
-            extension_policy(),
-            RequestScope::AutofillExtension,
-            authorizers.clone(),
-        ) {
-            Ok(service) => Some(service),
-            Err(e) => {
-                log::warn!("AutoFill broker failed to start on {name}: {e}");
-                None
-            },
-        },
-        None => {
-            log::debug!("No team identifier: not serving the AutoFill broker");
-            None
-        },
-    };
-
-    let result = serve_on(
-        broker_socket_path(),
-        vec![
-            Client {
-                policy: agent_policy(),
-                scope: RequestScope::Agent,
-            },
-            Client {
-                policy: browser_host_policy(),
-                scope: RequestScope::BrowserHost,
-            },
-        ],
-        authorizers,
-        shutdown,
-    )
-    .await;
-
-    if let Some(autofill) = autofill {
-        autofill.stop();
-    }
-    result
-}
-
-/// The body of [`serve`], with the socket path and the clients supplied rather
-/// than derived, so tests can bind a scratch socket and choose who it accepts
-/// and what they may ask for. A peer is matched against each client's policy in
-/// order, and the first it satisfies gives the scope.
+/// The body of `serve` in the platform module, with the socket path and the
+/// clients supplied rather than derived, so tests can bind a scratch socket and
+/// choose who it accepts and what they may ask for. A peer is matched against
+/// each client's policy in order, and the first it satisfies gives the scope.
 ///
 /// Binding replaces a socket left behind by a crashed app: only one app runs at
 /// a time, and a stale file would otherwise keep the broker offline
@@ -155,12 +70,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                // Writes to a closed peer must fail with EPIPE, not raise
-                // SIGPIPE, which would terminate the host process.
-                #[cfg(macos)]
-                if let Err(e) = socket2::SockRef::from(&stream).set_nosigpipe(true) {
-                    log::debug!("App broker could not set SO_NOSIGPIPE: {e}");
-                }
+                disable_sigpipe(&stream);
                 let (peer, scope) = match verify_client(stream.as_raw_fd(), &clients) {
                     Ok(verified) => verified,
                     // A client that gave up while its connection waited to be

@@ -11,6 +11,11 @@ use thiserror::Error;
 
 use crate::core::provenance::Provenance;
 
+/// Our own team identifier. Linux builds have no code signature.
+pub fn team_identifier() -> Option<String> {
+    None
+}
+
 /// Requirements a peer must satisfy.
 #[derive(Debug, Clone, Default)]
 pub struct PeerPolicy {

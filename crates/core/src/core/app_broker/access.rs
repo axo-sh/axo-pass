@@ -4,8 +4,6 @@
 
 use super::vault::ClientIdentity;
 use super::wire::{BrowserClient, WireRequest};
-#[cfg(macos)]
-use super::AUTOFILL_EXTENSION_NAME;
 use super::{AGENT_EXECUTABLE_NAME, BROWSER_HOST_EXECUTABLE_NAME};
 use crate::audit;
 use crate::core::provenance::{PeerError, PeerIdentity, PeerPolicy, ProcessNode};
@@ -111,20 +109,6 @@ pub(super) fn agent_policy() -> PeerPolicy {
             "App broker cannot check its peer's code signature: this build carries no team \
              identifier. Accepting {accepts}"
         );
-    }
-    policy
-}
-
-/// Who the AutoFill broker takes requests from: only the credential provider
-/// extension staged in our own bundle, signed by the same team.
-#[cfg(macos)]
-pub(super) fn extension_policy() -> PeerPolicy {
-    let policy = PeerPolicy::bundled_executable(&format!(
-        "PlugIns/{AUTOFILL_EXTENSION_NAME}.appex/Contents/MacOS/{AUTOFILL_EXTENSION_NAME}"
-    ));
-    match policy.executable.as_ref() {
-        Some(path) => log::debug!("AutoFill broker accepts {}", path.display()),
-        None => log::warn!("AutoFill broker could not resolve the extension's executable"),
     }
     policy
 }

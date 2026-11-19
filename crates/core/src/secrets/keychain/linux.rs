@@ -15,8 +15,6 @@ pub mod managed_key {
 
     use crate::secrets::keychain::errors::KeychainError;
 
-    pub use crate::secrets::keychain::sec1_utils as utils;
-
     /// How a managed key's use is authorized. Fixed when the key is created.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
     #[serde(rename_all = "snake_case")]
@@ -40,7 +38,10 @@ pub mod managed_key {
             Err(KeychainError::Unsupported)
         }
 
-        pub fn encrypt_to(_public_sec1: &[u8], _plaintext: &[u8]) -> Result<Vec<u8>, KeychainError> {
+        pub fn encrypt_to(
+            _public_sec1: &[u8],
+            _plaintext: &[u8],
+        ) -> Result<Vec<u8>, KeychainError> {
             Err(KeychainError::Unsupported)
         }
 

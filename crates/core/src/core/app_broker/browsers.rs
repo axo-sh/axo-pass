@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::platform;
+
 /// Native messaging host name. Names the manifest file, and the extension
 /// passes it to `runtime.connectNative`.
 pub const NATIVE_HOST_NAME: &str = "com.breakfastlabs.axo_pass";
@@ -64,22 +66,8 @@ impl Browser {
     /// Support directories the browser creates for the user, relative to the
     /// home directory. The browser counts as installed if any of them exists.
     /// The first entry holds the manifest directory.
-    #[cfg(macos)]
     fn support_dirs(self) -> &'static [&'static str] {
-        match self {
-            Browser::Chrome => &["Library/Application Support/Google/Chrome"],
-            Browser::Firefox => &[
-                "Library/Application Support/Mozilla",
-                "Library/Application Support/Firefox",
-            ],
-        }
-    }
-
-    /// Linux stub with no directories, so no browser counts as installed and
-    /// no manifest is written. The Linux paths are not decided yet.
-    #[cfg(linux)]
-    fn support_dirs(self) -> &'static [&'static str] {
-        &[]
+        platform::support_dirs(self)
     }
 
     /// Whether the browser has a support directory under `home`.
@@ -157,18 +145,6 @@ mod tests {
             "anchor apple generic and (certificate leaf[subject.OU] = \"EQHXZ8M8AV\" or \
              certificate leaf[subject.OU] = \"43AQ936H96\")"
         );
-    }
-
-    // The Linux browser paths come in 0.8.
-    #[cfg(macos)]
-    #[test]
-    fn manifest_paths_are_per_browser() {
-        let chrome = Browser::Chrome.manifest_path().unwrap();
-        let firefox = Browser::Firefox.manifest_path().unwrap();
-        assert!(
-            chrome.ends_with("Google/Chrome/NativeMessagingHosts/com.breakfastlabs.axo_pass.json")
-        );
-        assert!(firefox.ends_with("Mozilla/NativeMessagingHosts/com.breakfastlabs.axo_pass.json"));
     }
 
     #[test]

@@ -1,28 +1,13 @@
 //! The client side of the broker, used by `ap`: connect to the app's socket,
 //! starting the app when nothing is listening, and exchange one request.
 
-#[cfg(macos)]
-use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
-#[cfg(macos)]
-use std::path::Path;
-use std::path::PathBuf;
 use std::time::Duration;
 
-#[cfg(macos)]
-use objc2::rc::Retained;
-#[cfg(macos)]
-use objc2_app_kit::NSRunningApplication;
-#[cfg(macos)]
-use objc2_foundation::{NSBundle, NSString, NSURL};
-
+use super::platform::launch_app;
 use super::wire::{WireRequest, WireResponse};
-#[cfg(macos)]
-use super::LAUNCH_FLAG;
 use super::{BrokerError, broker_socket_path};
-#[cfg(macos)]
-use crate::core::dirs::app_data_dir;
 
 /// How long a client waits for the user to answer the app's prompt before
 /// giving up. Disconnecting ends the prompt, see `InFlightRequest`.
@@ -196,128 +181,7 @@ fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
     std::os::unix::net::UnixStream::connect(broker_socket_path())
 }
 
-/// The bundle holding this executable, i.e. `.../Axo Pass.app` for the `ap`
-/// staged at `Contents/MacOS/ap`.
-///
-/// Walks up from the executable looking for a `.app` component rather than
-/// assuming a fixed depth: `current_exe` is not always canonical (a wrapper
-/// that execs `.../Contents/Resources/../MacOS/ap` leaves the `..` in place),
-/// so a fixed number of `parent()` calls can land in the wrong directory.
-#[cfg(macos)]
-pub(crate) fn app_bundle_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    log::debug!("Resolving the app bundle from {}", exe.display());
-    exe.ancestors()
-        .find(|path| path.extension().is_some_and(|ext| ext == "app"))
-        .map(Path::to_path_buf)
-}
-
-/// Whether the app is already running.
-///
-/// Asks LaunchServices, which is the same authority `open` consults: if it
-/// reports an instance, `open` will reopen that one rather than launch a new
-/// one. `ap` itself is not a registered application, so it never counts.
-#[cfg(macos)]
-fn app_is_running(bundle: &Path) -> bool {
-    let Some(id) = bundle_identifier(bundle) else {
-        log::debug!("No bundle identifier for {}", bundle.display());
-        return false;
-    };
-    !NSRunningApplication::runningApplicationsWithBundleIdentifier(&id).is_empty()
-}
-
-/// The `CFBundleIdentifier` of the bundle at `path`.
-#[cfg(macos)]
-fn bundle_identifier(path: &Path) -> Option<Retained<NSString>> {
-    let url = NSURL::fileURLWithPath(&NSString::from_str(path.to_str()?));
-    NSBundle::bundleWithURL(&url)?.bundleIdentifier()
-}
-
-/// Serializes `launch_app` across processes, so two requests arriving together
-/// issue one `open` between them.
-#[cfg(macos)]
-fn launch_lock_path() -> PathBuf {
-    app_data_dir().join("app-broker.launch.lock")
-}
-
-/// Take the launch lock, waiting for whoever holds it.
-///
-/// Waits rather than giving up, so the second caller runs its checks only after
-/// the first has finished starting the app and LaunchServices knows about it.
-///
-/// The lock is an `flock` the kernel releases when the file closes or the
-/// process dies, so it cannot go stale and needs no timeout. Nothing reads the
-/// file's contents.
-#[cfg(macos)]
-fn lock_launch() -> Option<fs::File> {
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(launch_lock_path())
-        .map_err(|e| log::debug!("Could not open the launch lock: {e}"))
-        .ok()?;
-    file.lock()
-        .map_err(|e| log::debug!("Could not take the launch lock: {e}"))
-        .ok()?;
-    Some(file)
-}
-
-/// Start the app in the background, so a signature request does not pull focus
-/// away from whatever asked for it.
-#[cfg(macos)]
-fn launch_app() -> Result<(), BrokerError> {
-    let Some(bundle) = app_bundle_path() else {
-        log::debug!("Not running from an app bundle; cannot start the broker");
-        return Err(BrokerError::Unavailable);
-    };
-
-    // Held until this function returns, so two requests arriving together issue
-    // one `open` between them: the second waits here, then finds the app
-    // running below. A second `open` would reach the app as a reopen, which
-    // puts a window on screen.
-    let _lock = lock_launch();
-
-    // `open` on a running app only delivers a reopen event, which puts a window
-    // on screen and takes focus, and drops `--args` on the way. So do not issue
-    // one: the app is up and binding the socket, and the caller waits for it.
-    if app_is_running(&bundle) {
-        log::info!("The app is already running; waiting for it to serve");
-        return Ok(());
-    }
-
-    log::info!("Starting {} for the app broker", bundle.display());
-    let status = std::process::Command::new("/usr/bin/open")
-        .arg("-g")
-        .arg(&bundle)
-        .arg("--args")
-        .arg(LAUNCH_FLAG)
-        .status()
-        .map_err(|e| BrokerError::Failed(format!("Failed to start the app: {e}")))?;
-    if !status.success() {
-        return Err(BrokerError::Failed(format!(
-            "Failed to start {}: open exited with {status}",
-            bundle.display()
-        )));
-    }
-    Ok(())
-}
-
-/// There is no app bundle on Linux.
-#[cfg(linux)]
-pub(crate) fn app_bundle_path() -> Option<PathBuf> {
-    None
-}
-
-/// Nothing starts the daemon from the client on Linux. Socket activation
-/// starts it when the client connects.
-#[cfg(linux)]
-fn launch_app() -> Result<(), BrokerError> {
-    Err(BrokerError::Unavailable)
-}
-
-fn wait_for_broker() ->Result<std::os::unix::net::UnixStream, BrokerError> {
+fn wait_for_broker() -> Result<std::os::unix::net::UnixStream, BrokerError> {
     let deadline = std::time::Instant::now() + LAUNCH_TIMEOUT;
     loop {
         if let Ok(stream) = connect() {

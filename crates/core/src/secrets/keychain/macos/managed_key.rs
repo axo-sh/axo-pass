@@ -1,7 +1,6 @@
 mod managed_ssh_key;
 mod query;
 mod shared;
-mod utils;
 
 use std::fmt::Debug;
 
@@ -26,10 +25,10 @@ pub use shared::KeyClass;
 use ssh_key::public::KeyData;
 use zeroize::Zeroizing;
 
-use crate::secrets::keychain::macos::AccessControl;
-use crate::secrets::keychain::errors::{CFErrorOut, KeychainError};
+use crate::secrets::keychain::errors::KeychainError;
+use crate::secrets::keychain::macos::{AccessControl, CFErrorOut};
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
-use crate::secrets::keychain::managed_key::utils::sec1_to_ssh_ecdsa;
+use crate::secrets::keychain::sec1_utils::sec1_to_ssh_ecdsa;
 
 /// `kSecAttrApplicationTag` written on keys created with
 /// [`KeyPolicy::Default`]. Keys without it were created before the policy
