@@ -8,7 +8,7 @@ let credentialRowInset: CGFloat = 8
 
 /// Horizontal inset of rows inside a section. Leaves room for the section
 /// outline.
-private let sectionContentInset: CGFloat = 14
+private let sectionContentInset: CGFloat = 20
 
 /// Placeholder title for new sections. The title field opens immediately for
 /// renaming.
@@ -648,18 +648,6 @@ private struct SectionHeader: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
-        Button(action: onToggleCollapsed) {
-          Image(systemName: "chevron.right")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-            .animation(.snappy(duration: 0.2), value: isCollapsed)
-            .frame(width: 12, height: 12)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .help(isCollapsed ? "Expand" : "Collapse")
-
         Group {
           if isRenaming {
             InlineRenameField(
@@ -678,6 +666,18 @@ private struct SectionHeader: View {
             .foregroundStyle(.secondary)
         }
         Spacer(minLength: 0)
+
+        Button(action: onToggleCollapsed) {
+          Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+            .animation(.snappy(duration: 0.2), value: isCollapsed)
+            .frame(width: 12, height: 12)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(isCollapsed ? "Expand" : "Collapse")
       }
       if let error {
         Text(error).font(.caption).foregroundStyle(.red)

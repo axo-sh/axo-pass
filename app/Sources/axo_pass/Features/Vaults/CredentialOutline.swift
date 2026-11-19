@@ -7,6 +7,10 @@ private let cellMargin: CGFloat = 10
 /// Horizontal margin between the outline edge and row chrome.
 private let chromeMargin: CGFloat = 12
 
+/// Horizontal margin between the outline edge and a section outline. Aligns
+/// with the edge of the login card.
+private let sectionChromeMargin: CGFloat = cellMargin + credentialRowInset
+
 /// Pasteboard type of a row drag. Drags are local to the outline, so the
 /// pasteboard carries no data that is read back.
 private let entryPasteboardType = NSPasteboard.PasteboardType("axo-pass.credential-entry")
@@ -777,7 +781,8 @@ struct CredentialOutline: NSViewRepresentable {
         guard outline.isItemExpanded(node(for: .section(section))), let last = children.last
         else { return nil }
         // Inset to the section highlight area.
-        let inner = chrome.insetBy(dx: EntryRowView.sectionPadding, dy: 0)
+        let inner = outline.bounds.insetBy(
+          dx: sectionChromeMargin + EntryRowView.sectionPadding, dy: 0)
         let y: CGFloat?
         if location.index < children.count {
           y = rect(children[location.index])?.minY
@@ -796,7 +801,9 @@ struct CredentialOutline: NSViewRepresentable {
         let last = outline.numberOfRows - 1
         y = last >= 0 ? outline.rect(ofRow: last).maxY + SectionOutline.gap / 2 : nil
       }
-      return y.map { DropIndicatorView.Line(y: $0, minX: chrome.minX, maxX: chrome.maxX) }
+      let isSection = location.index < tree.root.count && tree.root[location.index].isSection
+      let line = isSection ? outline.bounds.insetBy(dx: sectionChromeMargin, dy: 0) : chrome
+      return y.map { DropIndicatorView.Line(y: $0, minX: line.minX, maxX: line.maxX) }
     }
 
     /// Valid drop location for the dragged rows near a proposed one. Sections
@@ -1123,6 +1130,10 @@ final class EntryRowView: NSTableRowView {
     bounds.insetBy(dx: chromeMargin, dy: 0)
   }
 
+  private var sectionChromeRect: CGRect {
+    bounds.insetBy(dx: sectionChromeMargin, dy: 0)
+  }
+
   /// Rectangle shared by the highlight and menu outline.
   private var highlightRect: CGRect {
     let startsSection = outline == .top || outline == .single
@@ -1130,7 +1141,7 @@ final class EntryRowView: NSTableRowView {
     let inner = outline == nil ? 0 : Self.sectionPadding
     let top = startsSection ? SectionOutline.gap + inner : 0
     let bottom = endsSection ? 0.5 + inner : 0
-    var rect = chromeRect.insetBy(dx: inner, dy: 0)
+    var rect = (outline == nil ? chromeRect : sectionChromeRect).insetBy(dx: inner, dy: 0)
     rect.origin.y += top
     rect.size.height -= top + bottom
     return rect
@@ -1155,7 +1166,8 @@ final class EntryRowView: NSTableRowView {
   override func draw(_ dirtyRect: NSRect) {
     if isDropTarget, let outline {
       NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
-      NSBezierPath(cgPath: SectionOutline(position: outline).fillPath(in: chromeRect).cgPath).fill()
+      NSBezierPath(cgPath: SectionOutline(position: outline).fillPath(in: sectionChromeRect).cgPath)
+        .fill()
     }
 
     super.draw(dirtyRect)
@@ -1171,7 +1183,7 @@ final class EntryRowView: NSTableRowView {
 
     if let outline {
       stroke(
-        SectionOutline(position: outline).path(in: chromeRect),
+        SectionOutline(position: outline).path(in: sectionChromeRect),
         color: isDropTarget ? .controlAccentColor : .separatorColor, width: 1)
     }
   }
