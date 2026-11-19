@@ -2223,7 +2223,8 @@ final class VaultsModel {
   }
 
   /// The items to show for the current selection, each tagged with its vault.
-  /// "All Secrets" and the item types merge every vault and sort by title.
+  /// Items sort by title, ignoring case. "All Secrets" and the item types
+  /// merge every vault.
   var displayItems: [DisplayItem] {
     guard itemListSelection != nil else { return [] }
     if isAllVaults {
@@ -2240,7 +2241,11 @@ final class VaultsModel {
         }
     }
     guard let key = selectedVaultKey else { return [] }
-    return (itemCache[key] ?? []).map { DisplayItem(vaultKey: key, item: $0) }
+    return (itemCache[key] ?? [])
+      .map { DisplayItem(vaultKey: key, item: $0) }
+      .sorted {
+        $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending
+      }
   }
 
   var selectedItem: DisplayItem? {
