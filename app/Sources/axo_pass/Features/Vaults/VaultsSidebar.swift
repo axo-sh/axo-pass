@@ -24,7 +24,7 @@ struct VaultsSidebar: View {
   @State private var showingImportSheet = false
   @State private var showingItemImportSheet = false
   @State private var deletingVault: SyncVaultRef? = nil
-  @State private var renamingVaultKey: String? = nil
+  @State private var titleSheet: TitleSheetRequest? = nil
   @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
   @AppStorage("sidebarLibraryExpanded") private var libraryExpanded = true
@@ -139,7 +139,7 @@ struct VaultsSidebar: View {
       .padding(.vertical, 8)
     }
     .sheet(isPresented: $showingNewVaultSheet) {
-      VaultFormSheet(mode: .create) { name, key in
+      VaultFormSheet { name, key in
         await model.addVault(name: name, key: key)
       }
     }
@@ -149,11 +149,8 @@ struct VaultsSidebar: View {
     .sheet(isPresented: $showingItemImportSheet) {
       ItemImportSheet(model: model)
     }
-    .sheet(item: $renamingVaultKey) { vaultKey in
-      let existing = model.vaults.first { $0.key == vaultKey }
-      VaultFormSheet(mode: .rename(currentName: existing?.name ?? vaultKey)) { name, _ in
-        await model.renameVault(vaultKey: vaultKey, newName: name)
-      }
+    .sheet(item: $titleSheet) { request in
+      TitleSheet(request: request)
     }
     .sheet(item: $exportingVaultKey) { vaultKey in
       VaultExportSheet(model: model, only: vaultKey)
@@ -326,7 +323,8 @@ struct VaultsSidebar: View {
         }
         .tag(SidebarDestination.vault(vault.key))
         .contextMenu {
-          Button("Rename…") { renamingVaultKey = vault.key }
+          Button("Rename…") { showRenameSheet(vault) }
+          Button("Change Key…") { showChangeKeySheet(vault) }
           Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("History…") { versionsVaultKey = vault.key }
           Toggle(
@@ -394,6 +392,26 @@ struct VaultsSidebar: View {
       .menuIndicator(.hidden)
     }
     .listRowSeparator(.hidden)
+  }
+
+  private func showRenameSheet(_ vault: VaultInfo) {
+    titleSheet = TitleSheetRequest(
+      heading: "Rename Vault", actionLabel: "Rename", initialTitle: vault.name ?? vault.key,
+      fieldLabel: "Name"
+    ) { name in
+      await model.renameVault(vaultKey: vault.key, newName: name)
+        ? nil : (model.actionError ?? "Failed to rename vault.")
+    }
+  }
+
+  private func showChangeKeySheet(_ vault: VaultInfo) {
+    titleSheet = TitleSheetRequest(
+      heading: "Change Vault Key", actionLabel: "Change", initialTitle: vault.key,
+      fieldLabel: "Key", footnote: "a-z, 0-9, -, _. \(keyChangeWarning)"
+    ) { key in
+      await model.changeVaultKey(vaultKey: vault.key, newKey: key)
+        ? nil : (model.actionError ?? "Failed to change vault key.")
+    }
   }
 
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
@@ -604,12 +622,6 @@ extension String: @retroactive Identifiable {
 }
 
 private struct VaultFormSheet: View {
-  enum Mode {
-    case create
-    case rename(currentName: String)
-  }
-
-  let mode: Mode
   let onSubmit: (_ name: String?, _ key: String) async -> Bool
 
   @Environment(\.dismiss) private var dismiss
@@ -618,26 +630,19 @@ private struct VaultFormSheet: View {
   @State private var isSubmitting = false
   @State private var error: String? = nil
 
-  private var isCreating: Bool {
-    if case .create = mode { return true }
-    return false
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text(isCreating ? "New Vault" : "Rename Vault")
+      Text("New Vault")
         .font(.headline)
 
       Form {
         TextField("Name", text: $name)
-        if isCreating {
-          TextField("Key", text: $key)
-          LabeledContent("") {
-            Text("a-z, 0-9, -, _")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
+        TextField("Key", text: $key)
+        LabeledContent("") {
+          Text("a-z, 0-9, -, _")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
 
@@ -648,18 +653,15 @@ private struct VaultFormSheet: View {
       HStack {
         Spacer()
         Button("Cancel") { dismiss() }
-        Button(isCreating ? "Create" : "Rename") {
+        Button("Create") {
           Task { await submit() }
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(isSubmitting || (isCreating && key.isEmpty))
+        .disabled(isSubmitting || key.isEmpty)
       }
     }
     .padding(20)
     .frame(width: 320)
-    .onAppear {
-      if case .rename(let currentName) = mode { name = currentName }
-    }
   }
 
   private func submit() async {

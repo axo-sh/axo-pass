@@ -1362,15 +1362,15 @@ impl AxoPass {
     /// Rename a vault and/or change its key, in one transaction that saves
     /// once. Mirrors `update_vault` in the Tauri app. The new key is
     /// normalized, and refused if another vault file claims it. The file name
-    /// is unchanged.
+    /// is unchanged. Returns the key the vault has afterward.
     pub async fn update_vault(
         &self,
         vault_key: String,
         new_vault_key: Option<String>,
         new_name: Option<String>,
-    ) -> Result<(), FfiError> {
+    ) -> Result<String, FfiError> {
         let store = self.store()?;
-        let (renamed, rekeyed, ids) = self
+        let (renamed, rekeyed, final_key, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
                 let mut renamed = None;
                 if new_name.as_deref() != vw.vault_name()
@@ -1389,7 +1389,12 @@ impl AxoPass {
                     }
                 }
 
-                Ok((renamed, rekeyed, audit::SubjectIds::vault(vw.vault_id()?)))
+                Ok((
+                    renamed,
+                    rekeyed,
+                    vw.key.clone(),
+                    audit::SubjectIds::vault(vw.vault_id()?),
+                ))
             })
             .await?;
 
@@ -1405,7 +1410,7 @@ impl AxoPass {
             .record_async()
             .await;
         }
-        Ok(())
+        Ok(final_key)
     }
 
     /// Retained versions of a vault, newest first.
@@ -1633,13 +1638,14 @@ impl AxoPass {
         removed
     }
 
-    /// Change the key of an item. Fails if another item has the key.
+    /// Change the key of an item and return the normalized key. Fails if
+    /// another item has the key.
     pub async fn change_item_key(
         &self,
         vault_key: String,
         item_key: String,
         new_key: String,
-    ) -> Result<(), FfiError> {
+    ) -> Result<String, FfiError> {
         let key = vault_key.clone();
         let (title, new_key, ids) = self
             .edit_vault(vault_key, move |vw| {
@@ -1657,7 +1663,7 @@ impl AxoPass {
         .detail("changed", "key")
         .record_async()
         .await;
-        Ok(())
+        Ok(new_key)
     }
 
     /// List a vault's deleted items, most recently deleted first.

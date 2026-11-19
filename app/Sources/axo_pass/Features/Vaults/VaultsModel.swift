@@ -867,8 +867,27 @@ final class VaultsModel {
   func renameVault(vaultKey: String, newName: String?) async -> Bool {
     actionError = nil
     do {
-      try await core.updateVault(vaultKey: vaultKey, newVaultKey: nil, newName: newName)
+      _ = try await core.updateVault(vaultKey: vaultKey, newVaultKey: nil, newName: newName)
       reload()
+      return true
+    } catch {
+      actionError = String(describing: error)
+      return false
+    }
+  }
+
+  /// Change the key of a vault. The vault stays selected under its new key.
+  @discardableResult
+  func changeVaultKey(vaultKey: String, newKey: String) async -> Bool {
+    actionError = nil
+    do {
+      let finalKey = try await core.updateVault(
+        vaultKey: vaultKey, newVaultKey: newKey, newName: nil)
+      reload()
+      if finalKey != vaultKey, selectedVaultKey == vaultKey {
+        itemCache[vaultKey] = nil
+        selectSidebarDestination(.vault(finalKey))
+      }
       return true
     } catch {
       actionError = String(describing: error)
@@ -1084,25 +1103,35 @@ final class VaultsModel {
     }
   }
 
-  /// Change the title and key of an item. Unchanged values are skipped. Throws
-  /// if another item has the new key. The item stays selected under its new key.
-  func renameItem(vaultKey: String, itemKey: String, title: String, newKey: String) async throws {
-    let wasSelected = selectedItemRef == ItemRef(vaultKey: vaultKey, itemKey: itemKey)
-    var currentKey = itemKey
+  /// Change the title of an item. An unchanged title is skipped.
+  func renameItem(vaultKey: String, itemKey: String, title: String) async throws {
     do {
       if let item = item(vaultKey: vaultKey, itemKey: itemKey), item.title != title {
         try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: title)
-      }
-      if newKey != itemKey {
-        try await core.changeItemKey(vaultKey: vaultKey, itemKey: itemKey, newKey: newKey)
-        currentKey = newKey
       }
     } catch {
       await loadItems(for: vaultKey)
       throw error
     }
     await loadItems(for: vaultKey)
-    if wasSelected { selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: currentKey) }
+  }
+
+  /// Change the key of an item. An unchanged key is skipped. Throws if another
+  /// item has the new key. The item stays selected under its new key.
+  func changeItemKey(vaultKey: String, itemKey: String, newKey: String) async throws {
+    let wasSelected = selectedItemRef == ItemRef(vaultKey: vaultKey, itemKey: itemKey)
+    var finalKey = itemKey
+    do {
+      if newKey != itemKey {
+        finalKey = try await core.changeItemKey(
+          vaultKey: vaultKey, itemKey: itemKey, newKey: newKey)
+      }
+    } catch {
+      await loadItems(for: vaultKey)
+      throw error
+    }
+    await loadItems(for: vaultKey)
+    if wasSelected { selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: finalKey) }
   }
 
   /// Move an item to another vault with its credentials and previous values.

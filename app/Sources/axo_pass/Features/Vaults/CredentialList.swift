@@ -53,7 +53,7 @@ struct CredentialList: View {
   // Keys of file credentials being read or replaced.
   @State var fileBusy: Set<String> = []
   @State private var showingNewCredentialSheet = false
-  @State private var showingRenameItemSheet = false
+  @State private var titleSheet: TitleSheetRequest? = nil
   // Credential whose previous values are shown.
   @State private var previousValuesTarget: PreviousValuesTarget? = nil
   // Item whose history is shown.
@@ -178,13 +178,8 @@ struct CredentialList: View {
         vaultKey: vaultKey, itemKey: item.key, credKey: target.key, title: target.title,
         onValueChanged: { refreshCachedSecret(for: target.key) })
     }
-    .sheet(isPresented: $showingRenameItemSheet) {
-      RenameItemSheet(title: item.title, key: item.key) { title, newKey in
-        await failureMessage {
-          try await model.renameItem(
-            vaultKey: vaultKey, itemKey: item.key, title: title, newKey: newKey)
-        }
-      }
+    .sheet(item: $titleSheet) { request in
+      TitleSheet(request: request)
     }
     .sheet(isPresented: $showingNewCredentialSheet) {
       NewCredentialSheet { key, title, value, kind in
@@ -285,7 +280,8 @@ struct CredentialList: View {
     }
     .help("Item key: \(item.key)")
     .contextMenu {
-      Button("Rename Item…") { showingRenameItemSheet = true }
+      Button("Rename Item…", action: showRenameItemSheet)
+      Button("Change Item Key…", action: showChangeItemKeySheet)
       Button("Copy Item Key", action: copyItemKey)
       Button("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) }
       Divider()
@@ -338,6 +334,27 @@ struct CredentialList: View {
     addActionGroups.enumerated().flatMap { index, group in
       (index > 0 ? [OutlineMenuItem.divider] : [])
         + group.map { entry in OutlineMenuItem.action(entry.title, entry.action) }
+    }
+  }
+
+  private func showRenameItemSheet() {
+    titleSheet = TitleSheetRequest(
+      heading: "Rename Item", actionLabel: "Rename", initialTitle: item.title
+    ) { [itemKey = item.key] title in
+      await failureMessage {
+        try await model.renameItem(vaultKey: vaultKey, itemKey: itemKey, title: title)
+      }
+    }
+  }
+
+  private func showChangeItemKeySheet() {
+    titleSheet = TitleSheetRequest(
+      heading: "Change Item Key", actionLabel: "Change", initialTitle: item.key,
+      fieldLabel: "Key", footnote: keyChangeWarning
+    ) { [itemKey = item.key] key in
+      await failureMessage {
+        try await model.changeItemKey(vaultKey: vaultKey, itemKey: itemKey, newKey: key)
+      }
     }
   }
 
@@ -458,7 +475,8 @@ struct CredentialList: View {
   private func menuItems(for selected: Set<CredentialEntry>) -> [OutlineMenuItem] {
     guard !selected.isEmpty else {
       return [
-        .action("Rename Item…") { showingRenameItemSheet = true },
+        .action("Rename Item…") { showRenameItemSheet() },
+        .action("Change Item Key…") { showChangeItemKeySheet() },
         .action("Copy Item Key") { copyItemKey() },
         .action("History…") { historyTarget = ItemHistoryTarget(item, vaultKey: vaultKey) },
         .divider,
