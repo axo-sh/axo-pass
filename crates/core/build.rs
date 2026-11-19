@@ -2,8 +2,8 @@
 //! file differs from the commit, or `{version}+unknown` outside a git tree.
 //! Sync compares it with `stopped_build` and `override_build`.
 //!
-//! Also defines the platform cfg aliases `macos`, `linux`, `apple`, and
-//! `desktop`.
+//! Also defines the platform cfg aliases `macos`, `ios`, `linux`, `apple`,
+//! `sim_keys`, and `secure_enclave`.
 
 use std::path::Path;
 use std::process::Command;
@@ -13,9 +13,13 @@ use cfg_aliases::cfg_aliases;
 fn main() {
     cfg_aliases! {
         macos: { target_os = "macos" },
+        ios: { target_os = "ios" },
         linux: { target_os = "linux" },
         apple: { target_vendor = "apple" },
-        desktop: { any(macos, linux) },
+        // Simulator builds that keep device keys in software, since the
+        // simulator has no Secure Enclave. Release builds never have them.
+        sim_keys: { all(ios, target_abi = "sim", debug_assertions) },
+        secure_enclave: { all(apple, not(sim_keys)) },
     }
 
     let version = std::env::var("CARGO_PKG_VERSION").unwrap();
