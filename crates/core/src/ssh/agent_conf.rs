@@ -10,7 +10,7 @@ use std::process::Command;
 
 use indoc::formatdoc;
 
-use super::agent_client::default_socket_path;
+use super::agent_client::{AgentStatus, default_socket_path, get_agent_status_for_socket};
 use super::utils::get_ssh_dir;
 
 const OPTION: &str = "IdentityAgent";
@@ -115,6 +115,37 @@ pub fn check_status() -> Status {
         current_agent: match state {
             State::Configured => None,
             _ => current,
+        },
+    }
+}
+
+/// Checks that ssh reaches this app's agent. `IdentityAgent` must resolve to
+/// the app socket, and the socket must accept connections.
+pub fn test_integration() -> Result<(), String> {
+    let agent = get_agent_status_for_socket(default_socket_path());
+    check_reachable(&check_status(), agent)
+}
+
+fn check_reachable(status: &Status, agent: AgentStatus) -> Result<(), String> {
+    match (&status.state, &status.current_agent) {
+        (State::Configured, _) => {},
+        (State::OtherAgent, Some(current)) => {
+            return Err(format!(
+                "ssh uses the agent at {current} instead of the Axo Pass agent."
+            ));
+        },
+        _ => {
+            return Err(format!(
+                "ssh has no IdentityAgent. Expected {}.",
+                status.expected_agent
+            ));
+        },
+    }
+    match agent {
+        AgentStatus::Running => Ok(()),
+        AgentStatus::NotRunning => Err("The Axo Pass agent is not running.".to_string()),
+        AgentStatus::StaleSocket => {
+            Err("The Axo Pass agent socket does not accept connections.".to_string())
         },
     }
 }
@@ -240,6 +271,42 @@ mod tests {
         )));
         assert!(out.contains("IdentityAgent \"/tmp/axo/agent.sock\""));
         assert_eq!(out.matches("\nIdentityAgent ").count(), 0);
+    }
+
+    fn status(state: State, current_agent: Option<&str>) -> Status {
+        Status {
+            state,
+            config_path: PathBuf::from("/home/me/.ssh/config"),
+            expected_agent: "/tmp/axo/agent.sock".to_string(),
+            current_agent: current_agent.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn reachable_if_configured_and_running() {
+        let status = status(State::Configured, None);
+        assert_eq!(check_reachable(&status, AgentStatus::Running), Ok(()));
+    }
+
+    #[test]
+    fn unreachable_if_other_agent_configured() {
+        let status = status(State::OtherAgent, Some("/other/agent.sock"));
+        let err = check_reachable(&status, AgentStatus::Running).unwrap_err();
+        assert!(err.contains("/other/agent.sock"));
+    }
+
+    #[test]
+    fn unreachable_if_no_identity_agent() {
+        let status = status(State::NotConfigured, None);
+        let err = check_reachable(&status, AgentStatus::Running).unwrap_err();
+        assert!(err.contains("/tmp/axo/agent.sock"));
+    }
+
+    #[test]
+    fn unreachable_if_agent_down() {
+        let status = status(State::Configured, None);
+        assert!(check_reachable(&status, AgentStatus::NotRunning).is_err());
+        assert!(check_reachable(&status, AgentStatus::StaleSocket).is_err());
     }
 
     #[test]

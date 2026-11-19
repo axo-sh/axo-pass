@@ -615,7 +615,7 @@ private struct SshSettingsRows: View {
             label(state), symbol: icon(state), color: color(state),
             path: model.confStatus?.configPath)
         }
-        if model.isConfiguring {
+        if model.isConfiguring || model.isTesting {
           ProgressView().controlSize(.small)
         }
       }
@@ -629,11 +629,30 @@ private struct SshSettingsRows: View {
           .disabled(model.isConfiguring)
         }
         Button("Setup…", action: showSetup)
+        if state == .configured {
+          Button("Test Connection") {
+            Task { await model.testIntegration() }
+          }
+          .disabled(model.isTesting)
+        }
       }
       if let error = model.configureError {
         Text(error)
           .foregroundStyle(.red)
           .captionStyle()
+      }
+      if let result = model.testResult {
+        switch result {
+        case .success:
+          Text("SSH connected to Axo Pass SSH agent")
+            .foregroundStyle(.green)
+            .captionStyle()
+        case .failure(let message):
+          Text(message)
+            .foregroundStyle(.red)
+            .lineLimit(2)
+            .captionStyle()
+        }
       }
     }
   }

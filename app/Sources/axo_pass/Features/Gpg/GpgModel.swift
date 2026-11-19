@@ -1,6 +1,7 @@
 import AxoPassFFI
 import Foundation
 import Observation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -23,6 +24,16 @@ final class GpgModel {
   var isLoading = false
   var isTesting = false
   var testResult: TestResult? = nil
+  private var fadeTask: Task<Void, Never>?
+
+  /// Clear a success result after 3 seconds. A failure stays.
+  private func fadeOutSuccess() {
+    fadeTask = Task {
+      try? await Task.sleep(for: .seconds(3))
+      guard !Task.isCancelled else { return }
+      withAnimation(.easeOut(duration: 0.4)) { testResult = nil }
+    }
+  }
 
   /// State of the `pinentry-program` line in `gpg-agent.conf`.
   var confStatus: GpgAgentConfStatus? { status.gpgConf }
@@ -79,11 +90,13 @@ final class GpgModel {
   }
 
   func testIntegration() async {
+    fadeTask?.cancel()
     isTesting = true
     testResult = nil
     do {
       try await core.gpgTestIntegration()
       testResult = .success
+      fadeOutSuccess()
     } catch {
       testResult = .failure(String(describing: error))
     }

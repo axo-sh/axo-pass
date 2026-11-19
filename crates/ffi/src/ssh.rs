@@ -717,6 +717,15 @@ impl AxoPass {
             .map(SshAgentConfStatus::from)
             .map_err(FfiError::Internal)
     }
+
+    /// Check that ssh resolves to this app's agent and that the agent socket
+    /// accepts connections.
+    pub async fn ssh_test_integration(&self) -> Result<(), FfiError> {
+        tokio::task::spawn_blocking(ssh_agent_conf::test_integration)
+            .await
+            .map_err(|e| FfiError::Internal(e.to_string()))?
+            .map_err(FfiError::Internal)
+    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 import AxoPassFFI
 import Foundation
 import Observation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -26,6 +27,24 @@ final class SshModel {
   var confStatus: SshAgentConfStatus? { status.sshConf }
   var isConfiguring = false
   var configureError: String? = nil
+
+  enum TestResult {
+    case success
+    case failure(String)
+  }
+
+  var isTesting = false
+  var testResult: TestResult? = nil
+  private var fadeTask: Task<Void, Never>?
+
+  /// Clear a success result after 3 seconds. A failure stays.
+  private func fadeOutSuccess() {
+    fadeTask = Task {
+      try? await Task.sleep(for: .seconds(3))
+      guard !Task.isCancelled else { return }
+      withAnimation(.easeOut(duration: 0.4)) { testResult = nil }
+    }
+  }
 
   var isTogglingAgent = false
   var agentError: String? = nil
@@ -84,12 +103,27 @@ final class SshModel {
   func configureAgentConf() async {
     isConfiguring = true
     configureError = nil
+    testResult = nil
     do {
       try await status.configureSshConf()
     } catch {
       configureError = String(describing: error)
     }
     isConfiguring = false
+  }
+
+  func testIntegration() async {
+    fadeTask?.cancel()
+    isTesting = true
+    testResult = nil
+    do {
+      try await core.sshTestIntegration()
+      testResult = .success
+      fadeOutSuccess()
+    } catch {
+      testResult = .failure(String(describing: error))
+    }
+    isTesting = false
   }
 
   func startAgent() async {
