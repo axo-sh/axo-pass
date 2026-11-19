@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use super::support::{STUB_PASSPHRASE, TestBroker, accepting_policy};
+use super::broker::{TestBroker, accepting_policy};
+use super::support::STUB_PASSPHRASE;
 use crate::core::app_broker::PassphraseKind;
 use crate::core::app_broker::access::RequestScope;
 use crate::core::app_broker::wire::{WireResponse, b64_decode_raw};

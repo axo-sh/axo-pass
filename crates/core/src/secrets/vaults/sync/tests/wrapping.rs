@@ -1,11 +1,11 @@
-// Tests that need a software `ManagedKey` run on macOS only.
-#![cfg_attr(linux, allow(unused_imports, dead_code))]
-
+use aes_gcm::aead::OsRng;
 use indoc::indoc;
+use p256::SecretKey;
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::secrets::keychain::managed_key::ManagedKey;
+use crate::crypto::ecies;
 use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
@@ -56,14 +56,34 @@ fn device_wrapping(key: &SyncKey) -> DeviceWrapping {
     }
 }
 
-#[cfg(macos)]
-fn software_key() -> ManagedKey {
-    ManagedKey::create_software_for_test().unwrap()
+/// Encryption key of a new Mac, held in software. It unwraps with
+/// `crypto::ecies`, which is byte compatible with the Secure Enclave key.
+pub(super) struct SoftwareKey(SecretKey);
+
+impl SoftwareKey {
+    pub(super) fn generate() -> Self {
+        Self(SecretKey::random(&mut OsRng))
+    }
+
+    /// Public key as an uncompressed SEC1 point.
+    pub(super) fn public_sec1(&self) -> Vec<u8> {
+        self.0
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec()
+    }
+}
+
+impl DeviceUnwrap for SoftwareKey {
+    fn unwrap_sync_key(&self, wrapped: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+        ecies::decrypt_with_secret_key(&self.0, wrapped).ok()
+    }
 }
 
 /// `Device` wrapping of `key` to the public key of `to`.
-fn wrap_to(key: &SyncKey, to: &ManagedKey) -> DeviceWrapping {
-    let to_encryption = PublicKey(to.public_key_sec1().unwrap());
+fn wrap_to(key: &SyncKey, to: &SoftwareKey) -> DeviceWrapping {
+    let to_encryption = PublicKey(to.public_sec1());
     DeviceWrapping::wrap(KeyId(1), key, TO_REPLICA, &to_encryption, &from_keys()).unwrap()
 }
 
@@ -267,11 +287,10 @@ fn wrapping_with_no_kind_or_missing_field_fails_that_wrapping() {
     assert_eq!(file.invalid.len(), 5, "{:?}", file.invalid);
 }
 
-#[cfg(macos)]
 #[test]
 fn software_key_unwraps_with_private_key() {
     let key = SyncKey::generate();
-    let to = software_key();
+    let to = SoftwareKey::generate();
     let wrapping = wrap_to(&key, &to);
 
     assert_eq!(wrapping.key_id, KeyId(1));
@@ -289,14 +308,13 @@ fn software_key_unwraps_with_private_key() {
     assert_ne!(wrap_to(&key, &to).wrapped, wrapping.wrapped);
 }
 
-#[cfg(macos)]
 #[test]
 fn software_key_fails_with_wrong_private_key() {
     let key = SyncKey::generate();
-    let wrapping = wrap_to(&key, &software_key());
+    let wrapping = wrap_to(&key, &SoftwareKey::generate());
 
     assert!(matches!(
-        wrapping.unwrap(&software_key()),
+        wrapping.unwrap(&SoftwareKey::generate()),
         Err(Error::SyncKeyDecryptionError(1))
     ));
 }

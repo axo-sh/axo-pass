@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use super::support::{StubAuthorizer, accepting_policy, empty_vaults, rejecting_policy};
+use super::broker::{accepting_policy, rejecting_policy};
+use super::support::{StubAuthorizer, empty_vaults};
 use crate::audit::test_support::test_dir;
 use crate::core::app_broker::access::RequestScope;
 use crate::core::app_broker::mach::{self, TestRequest};

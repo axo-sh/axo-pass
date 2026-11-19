@@ -181,37 +181,6 @@ impl ManagedKey {
         }
     }
 
-    /// In-memory software P-256 key with no keychain item, for tests.
-    #[cfg(test)]
-    pub(crate) fn create_software_for_test() -> Result<ManagedKey, KeychainError> {
-        use objc2_core_foundation::CFNumber;
-        use objc2_security::kSecAttrKeySizeInBits;
-
-        unsafe {
-            let private_attrs = CFMutableDictionary::<CFString, CFType>::empty();
-            private_attrs.add(kSecAttrIsPermanent, CFBoolean::new(false));
-
-            // A key with no token needs its size. The Secure Enclave token
-            // sets it for the keys of `create_secure_enclave`.
-            let query = CFMutableDictionary::<CFString, CFType>::empty();
-            query.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
-            query.add(kSecAttrKeySizeInBits, &CFNumber::new_i32(256));
-            query.add(kSecPrivateKeyAttrs, &private_attrs);
-
-            let mut cf_error = CFErrorOut::new();
-            let sec_key = SecKey::new_random_key(query.as_opaque(), cf_error.out());
-            if let Some(cf_error) = cf_error.get() {
-                return Err(KeychainError::Generic(anyhow::anyhow!(
-                    cf_error.to_string()
-                )));
-            }
-            let Some(sec_key) = sec_key else {
-                return Err(KeychainError::KeyCreationFailed);
-            };
-            Ok(ManagedKey::new(None, None, sec_key.into()))
-        }
-    }
-
     pub fn is_private(&self) -> bool {
         unsafe {
             self.sec_key

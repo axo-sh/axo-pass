@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use super::support::{
-    StubAuthorizer, TestBroker, accepting_policy, empty_vaults, rejecting_policy, wait_for_socket,
-};
+use super::broker::{TestBroker, accepting_policy, rejecting_policy, wait_for_socket};
+use super::support::{StubAuthorizer, empty_vaults};
 use crate::audit;
 use crate::core::app_broker::access::{Client, RequestScope, agent_policy};
 use crate::core::app_broker::client::wait_for_response;

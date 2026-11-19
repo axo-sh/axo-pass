@@ -1,6 +1,3 @@
-// Tests that need a software `ManagedKey` run on macOS only.
-#![cfg_attr(linux, allow(unused_imports, dead_code))]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +7,6 @@ use super::super::state_file::key;
 use super::super::transport::FakeTransport;
 use super::super::txn::synced;
 use super::{ages, confirm, key_file, kit_of, recovered, replica};
-use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::storage::txn::{Target, Unlock};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
@@ -21,6 +17,7 @@ use crate::secrets::vaults::sync::pairing::request::PairingRequest;
 use crate::secrets::vaults::sync::recovery::import::RecoveryImport;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
+use crate::secrets::vaults::sync::tests::wrapping::SoftwareKey;
 use crate::secrets::vaults::sync::transport::{RequestId, TransportRoot};
 use crate::secrets::vaults::sync::wrapping::{DeviceWrapping, Wrapping};
 
@@ -62,7 +59,6 @@ fn deleted_own_key_json_written_again_with_device_wrappings_lost_and_age_wrappin
     assert_eq!(opened.as_bytes(), key().as_bytes());
 }
 
-#[cfg(macos)]
 #[test]
 fn pairing_grant_and_age_wrappings_written_in_one_key_json_write() {
     let transport = Arc::new(FakeTransport::default());
@@ -79,9 +75,9 @@ fn pairing_grant_and_age_wrappings_written_in_one_key_json_write() {
     confirm(&fx, &kit).unwrap();
     transport.remove(fx.id(), REPLICA, "key.json");
 
-    let software = ManagedKey::create_software_for_test().unwrap();
+    let software = SoftwareKey::generate();
     let keys = ReplicaKeys {
-        encryption: PublicKey(software.public_key_sec1().unwrap()),
+        encryption: PublicKey(software.public_sec1()),
         signing: PublicKey(vec![0x51; 65]),
     };
     let code = PairingCode::generate();

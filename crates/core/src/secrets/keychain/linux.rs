@@ -1,8 +1,9 @@
 //! Linux stubs for the keychain types.
 //!
 //! The module paths and signatures match the macOS modules. Every operation
-//! fails with [`KeychainError::Unsupported`]. The managed key types cannot be
-//! constructed. The TPM and software key stores replace them.
+//! fails with [`KeychainError::Unsupported`], except `ManagedKey::encrypt_to`,
+//! which uses software ECIES. The managed key types cannot be constructed. The
+//! TPM and software key stores replace them.
 
 pub mod managed_key {
     use std::convert::Infallible;
@@ -13,6 +14,7 @@ pub mod managed_key {
     use ssh_key::public::KeyData;
     use zeroize::Zeroizing;
 
+    use crate::crypto::ecies;
     use crate::secrets::keychain::errors::KeychainError;
 
     /// How a managed key's use is authorized. Fixed when the key is created.
@@ -38,11 +40,11 @@ pub mod managed_key {
             Err(KeychainError::Unsupported)
         }
 
-        pub fn encrypt_to(
-            _public_sec1: &[u8],
-            _plaintext: &[u8],
-        ) -> Result<Vec<u8>, KeychainError> {
-            Err(KeychainError::Unsupported)
+        /// ECIES ciphertext of `plaintext` to the uncompressed SEC1 point
+        /// `public_sec1`. Needs no key, so it does not use a key store.
+        pub fn encrypt_to(public_sec1: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, KeychainError> {
+            ecies::encrypt_to_sec1(public_sec1, plaintext)
+                .map_err(|e| KeychainError::Generic(e.into()))
         }
 
         pub fn app_label(&self) -> Option<String> {

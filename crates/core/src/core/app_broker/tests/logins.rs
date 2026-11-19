@@ -3,7 +3,8 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use super::support::{CHROME, HANGING, PAGE, TestBroker, accepting_policy, browser_host_broker};
+use super::broker::{CHROME, HANGING, TestBroker, accepting_policy, browser_host_broker};
+use super::support::PAGE;
 use crate::core::app_broker::VaultAction;
 use crate::core::app_broker::access::RequestScope;
 use crate::core::app_broker::wire::WireResponse;

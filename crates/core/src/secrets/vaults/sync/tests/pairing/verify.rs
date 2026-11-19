@@ -1,6 +1,3 @@
-// Tests that need a software `ManagedKey` run on macOS only.
-#![cfg_attr(linux, allow(unused_imports, dead_code))]
-
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
@@ -11,13 +8,13 @@ use super::{
     NAME, NewMac, folder, granted, key_file, peer, put_key_file, sender_keys, typed_key, vault,
     vector_code, wrapping,
 };
-use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::keys::SyncKey;
 use crate::secrets::vaults::sync::local_state::{PinSource, PinnedKeys};
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys};
 use crate::secrets::vaults::sync::pairing::PairingCode;
 use crate::secrets::vaults::sync::pairing::request::PairingRequest;
+use crate::secrets::vaults::sync::tests::wrapping::SoftwareKey;
 use crate::secrets::vaults::sync::transport::RequestId;
 use crate::secrets::vaults::sync::wrapping::{DeviceUnwrap, DeviceWrapping, PairingMac};
 
@@ -342,12 +339,11 @@ fn invalid_key_files_and_wrappings_of_other_kinds_skipped() {
     assert_eq!(paired[0].peer, peer(3));
 }
 
-#[cfg(macos)]
 #[test]
 fn key_wrapped_to_software_key_of_new_mac_unwraps_through_poll() {
-    let software = ManagedKey::create_software_for_test().unwrap();
+    let software = SoftwareKey::generate();
     let mac = NewMac::with_public_keys(ReplicaKeys {
-        encryption: PublicKey(software.public_key_sec1().unwrap()),
+        encryption: PublicKey(software.public_sec1()),
         signing: PublicKey(vec![0x51; 65]),
     });
     let transport = folder(&[vault(1)]);

@@ -1,30 +1,6 @@
-// Tests through a live broker run on macOS only: the Linux peer check is a
-// stub that refuses every client until M2.
-#![cfg_attr(linux, allow(dead_code, unused_imports))]
-
-use super::support::{CHROME, PAGE, TestBroker, accepting_policy, browser_host_broker};
-use crate::core::app_broker::access::{
-    AUTOFILL_CALLER, RequestScope, UNKNOWN_CLIENT, requester_for,
-};
-use crate::core::app_broker::wire::{WireRequest, WireResponse};
-use crate::core::app_broker::{ClientIdentity, VaultAction};
-
-/// The AutoFill scope refuses a request outside it. The stub lister
-/// answers a keychain listing on any other socket, so `Failed` means the
-/// request never reached it.
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn autofill_scope_refuses_other_requests() {
-    let broker =
-        TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
-
-    let response = broker.request_parsed(r#"{"request":"list_keychain_passwords","caller":"x"}"#);
-
-    assert!(
-        matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
-        "the autofill scope served a keychain listing",
-    );
-}
+use super::support::PAGE;
+use crate::core::app_broker::access::{RequestScope, requester_for};
+use crate::core::app_broker::wire::WireRequest;
 
 #[test]
 fn autofill_scope_allows_only_autofill_requests() {
@@ -61,30 +37,6 @@ fn autofill_scope_allows_only_autofill_requests() {
         let request: WireRequest = serde_json::from_str(line).unwrap();
         assert!(!RequestScope::AutofillExtension.allows(&request), "{line}");
         assert!(RequestScope::Agent.allows(&request), "{line}");
-    }
-}
-
-/// The AutoFill scope names the caller itself, so a request cannot pick
-/// the name its prompt, grant, and audit event carry.
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn autofill_scope_names_its_own_caller() {
-    for line in [
-        r#"{"request":"list_logins","url":"https://example.com","frame_url":"https://example.com/login","caller":"Chrome"}"#,
-        r#"{"request":"fill_login","url":"https://example.com","frame_url":"https://example.com/login","record_id":"r","caller":"Chrome"}"#,
-        r#"{"request":"generate_totp","url":"https://example.com","frame_url":"https://example.com/login","record_id":"r","caller":"Chrome"}"#,
-        r#"{"request":"assert_passkey","rp_id":"example.com","client_data_hash":"","caller":"Chrome"}"#,
-    ] {
-        let broker =
-            TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
-        let response: WireResponse = broker.request_parsed(line);
-        assert!(
-            matches!(&response, WireResponse::Failed { message } if message == "stub authorizer"),
-            "unexpected response to {line}"
-        );
-        let peers = broker.authorizer.peers.lock().unwrap();
-        assert_eq!(peers.len(), 1, "{line}");
-        assert_eq!(peers[0].caller.as_deref(), Some(AUTOFILL_CALLER), "{line}");
     }
 }
 
@@ -146,78 +98,6 @@ fn browser_host_scope_extends_requests() {
     }
 }
 
-/// The browser host names the caller from the browser it verified, and
-/// the request's own `caller` and `requester` cannot change that.
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn browser_host_scope_names_verified_browser() {
-    let broker = browser_host_broker().await;
-    let line = format!(
-        r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"Safari","requester":"Notes",{CHROME}}}"#
-    );
-    broker.request(&line);
-
-    let peers = broker.authorizer.peers.lock().unwrap();
-    assert_eq!(peers[0].caller.as_deref(), Some("Google Chrome"));
-    let prompts = broker.authorizer.vault_prompts.lock().unwrap();
-    assert_eq!(prompts[0].caller.as_deref(), Some("Google Chrome"));
-    assert_eq!(
-        prompts[0].client,
-        ClientIdentity::Browser {
-            name: "Google Chrome".to_string(),
-            team_id: "EQHXZ8M8AV".to_string(),
-            extension: Some("chrome-extension://abc/".to_string()),
-        }
-    );
-    let VaultAction::FillLogin { page, .. } = &prompts[0].action else {
-        panic!("not a fill: {:?}", prompts[0].action);
-    };
-    assert_eq!(page.requester, None);
-}
-
-/// A host with no verified browser is "Unknown process" and is never
-/// identified, so no approval is reused for it.
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn unverified_browser_host_is_unknown_and_never_identified() {
-    for client in [
-        r#""client":{"extension":"chrome-extension://abc/"}"#,
-        r#""client":{}"#,
-    ] {
-        let broker = browser_host_broker().await;
-        broker.request(&format!(
-            r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"Chrome",{client}}}"#
-        ));
-        // No client report at all.
-        broker.request(&format!(
-            r#"{{"request":"list_logins",{PAGE},"caller":"Chrome"}}"#
-        ));
-
-        let prompts = broker.authorizer.vault_prompts.lock().unwrap();
-        assert_eq!(prompts.len(), 2);
-        for prompt in prompts.iter() {
-            assert_eq!(prompt.caller.as_deref(), Some(UNKNOWN_CLIENT));
-            assert!(matches!(prompt.client, ClientIdentity::Unverified { .. }));
-        }
-    }
-}
-
-/// Only a verified browser host may report a browser. The same report
-/// from `ap` or the AutoFill extension is ignored.
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn other_scopes_ignore_browser_report() {
-    for scope in [RequestScope::Agent, RequestScope::AutofillExtension] {
-        let broker = TestBroker::start_with_scope(accepting_policy(), scope).await;
-        broker.request(&format!(
-            r#"{{"request":"fill_login",{PAGE},"record_id":"r","caller":"git",{CHROME}}}"#
-        ));
-        let prompts = broker.authorizer.vault_prompts.lock().unwrap();
-        assert_eq!(prompts[0].client, ClientIdentity::Process, "{scope:?}");
-        assert_ne!(prompts[0].caller.as_deref(), Some("Google Chrome"));
-    }
-}
-
 /// Only the AutoFill extension names the app a request is for. A browser
 /// host and `ap` are always a browser.
 #[test]
@@ -226,23 +106,4 @@ fn only_autofill_extension_names_requesting_app() {
     assert_eq!(requester_for(RequestScope::AutofillExtension, app()), app());
     assert_eq!(requester_for(RequestScope::BrowserHost, app()), None);
     assert_eq!(requester_for(RequestScope::Agent, app()), None);
-}
-
-#[cfg(macos)]
-#[tokio::test(flavor = "multi_thread")]
-async fn autofill_scope_cannot_generate_or_save() {
-    let broker =
-        TestBroker::start_with_scope(accepting_policy(), RequestScope::AutofillExtension).await;
-    for line in [
-        r#"{"request":"generate_password"}"#.to_string(),
-        format!(r#"{{"request":"save_login",{PAGE},"password":"pw"}}"#),
-        format!(r#"{{"request":"update_login_password",{PAGE},"record_id":"r","password":"pw"}}"#),
-    ] {
-        let response: WireResponse = broker.request_parsed(&line);
-        assert!(
-            matches!(&response, WireResponse::Failed { message } if message.contains("may not")),
-            "{line}"
-        );
-    }
-    assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
 }
