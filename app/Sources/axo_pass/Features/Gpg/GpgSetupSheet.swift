@@ -1,145 +1,117 @@
-import AppKit
 import AxoPassFFI
 import SwiftUI
 
 /// Setup assistant for the `pinentry-program` line in `gpg-agent.conf`, which
-/// is what routes gpg-agent's passphrase prompts into this app. Walks through
-/// writing the line and then verifying it with a test signature.
+/// is what routes gpg-agent's passphrase prompts into this app. Steps: read
+/// what changes, write the line, and verify it with a test signature.
 struct GpgSetupSheet: View {
   let model: GpgModel
 
   @Environment(\.dismiss) private var dismiss
 
+  private enum Step {
+    case overview
+    case configure
+    case done
+  }
+
+  @State private var navigator: SetupNavigator<Step>
+  /// Pinentry configured before setup. Captured before the write, since the
+  /// status no longer reports it afterward.
+  @State private var replacedProgram: String?
+
+  init(model: GpgModel) {
+    self.model = model
+    _navigator = State(
+      initialValue: SetupNavigator(
+        start: model.confStatus?.state == .configured ? .done : .overview))
+  }
+
   private var status: GpgAgentConfStatus? { model.confStatus }
   private var isConfigured: Bool { status?.state == .configured }
+  private var confPath: String { status?.confPath ?? "~/.gnupg/gpg-agent.conf" }
 
   var body: some View {
+    SetupAssistantFrame(navigator: navigator, error: error) { step in
+      switch step {
+      case .overview: overviewStep
+      case .configure: configureStep
+      case .done: doneStep
+      }
+    }
+    .onChange(of: isConfigured) { _, configured in
+      if configured && navigator.step == .configure { navigator.go(to: .done) }
+    }
+  }
+
+  /// Error of the write on the configure step, or of the test on the last step.
+  private var error: String? {
+    switch navigator.step {
+    case .overview: nil
+    case .configure: model.configureError
+    case .done:
+      if case .failure(let message) = model.testResult { message } else { nil }
+    }
+  }
+
+  private var overviewStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      header
-      Divider()
-      explanation
-      if let line = status?.expectedLine {
-        configLine(line)
-      } else {
-        unavailableNotice
-      }
-      manualInstructions
-      Divider()
-      footer
-    }
-    .padding(20)
-    .frame(width: 460)
-  }
-
-  private var header: some View {
-    HStack(spacing: 10) {
-      Image(systemName: "lock.doc")
-        .font(.title2)
-        .foregroundStyle(.tint)
-      VStack(alignment: .leading, spacing: 2) {
-        Text("GPG Setup").font(.headline)
-        Text(status?.confPath ?? "~/.gnupg/gpg-agent.conf")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .textSelection(.enabled)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private var explanation: some View {
-    Text(
-      "gpg-agent runs the program named by `pinentry-program` whenever it needs a passphrase. "
-        + "Pointing it at Axo Pass shows those prompts in this app."
-    )
-    .fixedSize(horizontal: false, vertical: true)
-
-    if let current = status?.currentProgram {
-      Label {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Another pinentry is configured. It will be commented out.")
-          Text(current)
-            .font(.caption.monospaced())
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-        }
-      } icon: {
-        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-      }
-      .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  private func configLine(_ line: String) -> some View {
-    HStack(alignment: .top, spacing: 8) {
-      Text(line)
-        .font(.caption.monospaced())
+      SetupHeader(
+        title: "GPG Setup",
+        detail:
+          "gpg-agent runs the program named by `pinentry-program` whenever it needs a passphrase. Pointing it at Axo Pass shows those prompts in this app."
+      )
+      Text("The setup edits \(confPath).")
+        .font(.callout)
         .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      Button {
-        copy(line)
-      } label: {
-        Image(systemName: "document.on.document")
+      if let current = status?.currentProgram {
+        SetupReplaceWarning(
+          message: "Another pinentry is configured. It will be commented out.", current: current)
       }
-      .buttonStyle(.borderless)
-      .help("Copy to clipboard")
-    }
-    .padding(10)
-    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-  }
-
-  private var unavailableNotice: some View {
-    Label(
-      "Could not find the bundled ap-pinentry helper. Automatic setup is only available when "
-        + "running the installed app.",
-      systemImage: "exclamationmark.triangle.fill"
-    )
-    .foregroundStyle(.orange)
-    .fixedSize(horizontal: false, vertical: true)
-  }
-
-  private var manualInstructions: some View {
-    DisclosureGroup("Configure manually") {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Add the line above to \(status?.confPath ?? "~/.gnupg/gpg-agent.conf"), then run:")
-        commandRow("gpgconf --reload gpg-agent")
-      }
-      .font(.callout)
-      .padding(.top, 6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-  }
-
-  private func commandRow(_ command: String) -> some View {
-    HStack(spacing: 8) {
-      Text(command)
-        .font(.caption.monospaced())
-        .textSelection(.enabled)
-      Button {
-        copy(command)
-      } label: {
-        Image(systemName: "document.on.document")
-      }
-      .buttonStyle(.borderless)
-      .help("Copy to clipboard")
-    }
-  }
-
-  @ViewBuilder
-  private var footer: some View {
-    HStack {
-      resultLabel
-      Spacer()
-      Button(isConfigured ? "Done" : "Cancel") { dismiss() }
-        .keyboardShortcut(.cancelAction)
-      if isConfigured {
-        Button("Test Signing") {
-          Task { await model.testIntegration() }
+      Spacer(minLength: 0)
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+        Button("Continue") {
+          replacedProgram = status?.currentProgram
+          navigator.go(to: .configure)
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(model.isTesting)
+      }
+    }
+  }
+
+  private var configureStep: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      SetupHeader(
+        title: "Add to gpg-agent.conf", detail: "This line is added to \(confPath).")
+      if let line = status?.expectedLine {
+        SetupCodeBlock(text: line)
       } else {
+        Label(
+          "Could not find the bundled ap-pinentry helper. Automatic setup is only available when running the installed app.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      DisclosureGroup("Configure manually") {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Add the line above to \(confPath), then run:")
+          SetupCodeBlock(text: "gpgconf --reload gpg-agent")
+        }
+        .font(.callout)
+        .padding(.top, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      Spacer(minLength: 0)
+      HStack {
+        Button("Back") { navigator.go(to: .overview, forward: false) }
+        Spacer()
+        if model.isConfiguring {
+          ProgressView().controlSize(.small)
+        }
+        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
         Button("Add to gpg-agent.conf") {
           Task { await model.configureAgentConf() }
         }
@@ -149,32 +121,29 @@ struct GpgSetupSheet: View {
     }
   }
 
-  @ViewBuilder
-  private var resultLabel: some View {
-    if model.isConfiguring {
-      Label("Writing…", systemImage: "hourglass").foregroundStyle(.secondary)
-    } else if model.isTesting {
-      Label("Testing…", systemImage: "hourglass").foregroundStyle(.secondary)
-    } else if let error = model.configureError {
-      Label(error, systemImage: "xmark.circle.fill")
-        .foregroundStyle(.red)
-        .lineLimit(2)
-    } else if let result = model.testResult {
-      switch result {
-      case .success:
-        Label("Signing works", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-      case .failure(let message):
-        Label(message, systemImage: "xmark.circle.fill")
-          .foregroundStyle(.red)
-          .lineLimit(2)
+  private var doneStep: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      SetupHeader(
+        title: "GPG Ready", detail: "gpg-agent prompts for passphrases in Axo Pass.")
+      SetupDoneSummary(
+        path: confPath, activeLine: status?.expectedLine, replaced: replacedProgram)
+      if case .success = model.testResult {
+        Label("Signing works", systemImage: "checkmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(.green)
       }
-    } else if isConfigured {
-      Label("Configured", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+      Spacer(minLength: 0)
+      HStack {
+        Button("Test Signing") {
+          Task { await model.testIntegration() }
+        }
+        .disabled(model.isTesting)
+        if model.isTesting {
+          ProgressView().controlSize(.small)
+        }
+        Spacer()
+        Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+      }
     }
-  }
-
-  private func copy(_ text: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(text, forType: .string)
   }
 }
