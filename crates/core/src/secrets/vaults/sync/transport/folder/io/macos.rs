@@ -1,7 +1,6 @@
 //! `NSFileCoordinator` file access for macOS.
 
 use std::cell::{Cell, RefCell};
-use std::ffi::CStr;
 use std::fs::{self, Metadata};
 use std::io;
 use std::os::macos::fs::MetadataExt;
@@ -19,28 +18,16 @@ use objc2_foundation::{
     NSURLUbiquitousItemDownloadingStatusKey,
 };
 
+pub(super) use super::apple::{RENAME_UNSUPPORTED, rename_noreplace};
 use super::{
     DownloadDone, FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place,
     read_limited, write_temp,
 };
 use crate::secrets::vaults::sync::sync_log::{self, Level};
 
-/// `st_flags` bit of a dataless file, whose contents are not local. The
-/// value of `SF_DATALESS` in `sys/stat.h`.
-const SF_DATALESS: u32 = 0x4000_0000;
-
-/// Error codes of `renamex_np` for a volume without `RENAME_EXCL`.
-pub(super) const RENAME_UNSUPPORTED: &[i32] = &[libc::ENOTSUP];
-
 /// Whether the contents of the file are not local.
 pub(super) fn is_dataless(meta: &Metadata) -> bool {
-    meta.st_flags() & SF_DATALESS != 0
-}
-
-/// Rename `from` to `to` with `RENAME_EXCL`. Returns the C result.
-pub(super) fn rename_noreplace(from: &CStr, to: &CStr) -> i32 {
-    // SAFETY: both paths are NUL-terminated strings that outlive the call.
-    unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) }
+    super::apple::is_dataless_flags(meta.st_flags())
 }
 
 /// File access through `NSFileCoordinator` and `NSFileManager`. A file whose

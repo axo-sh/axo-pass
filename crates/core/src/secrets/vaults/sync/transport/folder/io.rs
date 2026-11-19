@@ -6,6 +6,10 @@
 //! write each file to a temp file outside the synced folder, sync it, and move
 //! it into place, so the provider never uploads a partial file.
 
+#[cfg(apple)]
+mod apple;
+#[cfg(ios)]
+mod ios;
 #[cfg(linux)]
 mod linux;
 #[cfg(macos)]
@@ -23,6 +27,8 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Mutex;
 
+#[cfg(ios)]
+use ios as platform;
 #[cfg(linux)]
 use linux as platform;
 #[cfg(macos)]
