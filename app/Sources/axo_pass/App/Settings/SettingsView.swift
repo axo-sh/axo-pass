@@ -16,24 +16,18 @@ struct SettingsView: View {
 
   var body: some View {
     TabView {
-      GeneralSettingsView()
-        .scrollingSettingsPane()
-        .tabItem { SettingsTab.label("General", symbol: "gearshape") }
+      TerminalSettingsView()
+        .settingsPane()
+        .tabItem { SettingsTab.label("Terminal", symbol: "terminal") }
       VaultsSettingsView()
         .settingsPane()
         .tabItem { SettingsTab.label("Vaults", symbol: "archivebox") }
       AutoFillSettingsView()
         .settingsPane()
         .tabItem { SettingsTab.label("AutoFill", symbol: "key.viewfinder") }
-      SshSettingsView()
+      GeneralSettingsView()
         .settingsPane()
-        .tabItem { SettingsTab.label("SSH", symbol: "key.horizontal") }
-      GpgSettingsView()
-        .settingsPane()
-        .tabItem { SettingsTab.label("GPG", symbol: "lock.doc") }
-      ShellSettingsView()
-        .settingsPane()
-        .tabItem { SettingsTab.label("Shell", symbol: "terminal") }
+        .tabItem { SettingsTab.label("General", symbol: "gearshape") }
       SunshineUpdateSettingsView(controller: updaterUI)
         .settingsPane()
         .tabItem { SettingsTab.label("About", symbol: "info.circle") }
@@ -143,69 +137,83 @@ private struct GeneralSettingsView: View {
   @State private var confirmingClear = false
 
   var body: some View {
-    Form {
-      LabeledContent("Show palette:") {
+    SettingsForm {
+      SettingsRow("Show palette:") {
         HotKeyRecorder(hotKey: $paletteHotKey)
-      }
-      if GlobalHotKey.shared.registrationFailed {
-        Text("This shortcut is in use by another app. Choose a different one.")
-          .foregroundStyle(.red)
-          .settingsCaption()
-      }
-      Text("Opens the search palette from any app.")
-        .settingsCaption()
-
-      Picker("Lock when idle for:", selection: $autoLockMinutes) {
-        ForEach(Preferences.autoLockChoices, id: \.self) { minutes in
-          Text(Preferences.label(forAutoLockMinutes: minutes)).tag(minutes)
+        if GlobalHotKey.shared.registrationFailed {
+          Text("This shortcut is in use by another app. Choose a different one.")
+            .foregroundStyle(.red)
+            .captionStyle()
         }
+        Text("Opens the search palette from any app.")
+          .captionStyle()
       }
-      .fixedSize()
-      Text("App always locks on screen lock or sleep.")
-        .settingsCaption()
 
-      Toggle(
-        "Reuse an approval for up to \(Self.absolute)",
-        isOn: $reuseApprovals)
-      Text(
-        """
-        After you approve a GPG or `ap` request, the same program can repeat it on the \
-        same key without prompting. That ends \(Self.idle) after its last request, or \
-        \(Self.absolute) after the initial approval, whichever comes first. Reading a secret \
-        always prompts. SSH signatures always prompt, except for apps allowed in a key's \
-        details.
-        """
-      )
-      .settingsCaption()
+      SettingsRow("Lock when idle for:") {
+        Picker("Lock when idle for:", selection: $autoLockMinutes) {
+          ForEach(Preferences.autoLockChoices, id: \.self) { minutes in
+            Text(Preferences.label(forAutoLockMinutes: minutes)).tag(minutes)
+          }
+        }
+        .labelsHidden()
+        .fixedSize()
+        Text("Always locks on screen lock or sleep.")
+          .captionStyle()
+      }
 
-      Toggle(
-        "Include account details in the activity log",
-        isOn: Binding(get: { audit.includeDetails }, set: { audit.setIncludeDetails($0) }))
-      Text(
-        """
-        Records site names, hosts, key comments, item and vault names, file paths, and error \
-        text for each event. Details are stored in plaintext, and any program that runs as you \
-        can read them. Events are always recorded. This setting turns off only the details, \
-        and does not change entries already written. The setting is kept in the keychain, \
-        where other programs cannot change it. Events that `ap` records while this app is \
-        not running are written without details.
-        """
-      )
-      .settingsCaption()
+      SettingsDivider()
 
-      LabeledContent("") {
+      SettingsRow("Approvals:") {
+        Toggle("Reuse an approval for up to \(Self.absolute)", isOn: $reuseApprovals)
+          .help(
+            """
+            Reuse ends \(Self.idle) after the last request, or \(Self.absolute) after the \
+            initial approval, whichever comes first. SSH signatures always prompt, except for \
+            apps allowed in a key's details.
+            """)
+        Text(
+          """
+          Lets a program repeat a GPG or `ap` request on the same key without asking again. \
+          Reading a secret always asks.
+          """
+        )
+        .captionStyle()
+      }
+
+      SettingsDivider()
+
+      SettingsRow("Activity log:") {
+        Toggle(
+          "Include account details",
+          isOn: Binding(get: { audit.includeDetails }, set: { audit.setIncludeDetails($0) })
+        )
+        .help(
+          """
+          Events are always recorded. This setting turns off only the details, and does not \
+          change entries already written. The setting is stored in the keychain, where other \
+          programs cannot change it. Events that `ap` records while this app is not running \
+          are written without details.
+          """)
+        Text(
+          """
+          Records site names, hosts, file paths, and similar details with each event. Details \
+          are stored in plaintext, and any program that runs as you can read them.
+          """
+        )
+        .captionStyle()
         HStack(spacing: 8) {
-          Button("Clear details from existing entries…") { confirmingClear = true }
+          Button("Clear Details…") { confirmingClear = true }
             .disabled(audit.isClearing)
+            .help("Remove details from entries already written.")
           if let result = audit.clearResult {
             Text(result).captionStyle()
           }
         }
-      }
-      if let error = audit.error {
-        Text(error)
-          .foregroundStyle(.red)
-          .settingsCaption()
+        if let error = audit.error {
+          Text(error)
+            .foregroundStyle(.red)
+            .captionStyle()
+        }
       }
     }
     .confirmationDialog(
@@ -250,9 +258,9 @@ private struct VaultsSettingsView: View {
   @State private var showingMoved = false
 
   var body: some View {
-    Form {
+    SettingsForm {
       if !moved.isEmpty {
-        LabeledContent("Moved vaults:") {
+        SettingsRow("Moved vaults:") {
           HStack(spacing: 8) {
             Text(
               moved.count == 1
@@ -261,48 +269,37 @@ private struct VaultsSettingsView: View {
             Button("Show…") { showingMoved = true }
           }
         }
+        SettingsDivider()
       }
 
-      LabeledContent("Synced folder:") {
-        VStack(alignment: .leading) {
-          HStack(spacing: 8) {
-            Text(sync.folder.map(rootDescription) ?? "None")
-              .foregroundStyle(sync.folder == nil ? .secondary : .primary)
-              .lineLimit(1)
-              .truncationMode(.middle)
-              .help(sync.folder.map(rootDescription) ?? "")
-            Button("Choose…") { chooseSyncFolder() }
-          }
-          Text(
-            "Vaults sync here when you turn on sync. A change applies only to vaults turned on later. Use a folder that a sync service or shared drive copies to each Mac. The path can differ on each Mac."
-          )
-          .captionStyle()
-          if !syncIcloudAvailable() {
-            Text("iCloud Drive is not available yet.")
-              .captionStyle()
-          }
+      SettingsRow("Synced folder:") {
+        HStack(spacing: 8) {
+          Text(sync.folder.map(rootDescription) ?? "None")
+            .foregroundStyle(sync.folder == nil ? .secondary : .primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(sync.folder.map(rootDescription) ?? "")
+          Button(sync.folder == nil ? "Choose…" : "Change…") { chooseSyncFolder() }
         }
+        .help("A change applies only to vaults turned on later. The path can differ on each Mac.")
+        Text("Use a folder that a sync service or shared drive copies to your other Macs.")
+          .captionStyle()
       }
 
-      LabeledContent("Backups:") {
-        VStack(alignment: .leading) {
+      SettingsDivider()
+
+      SettingsRow("Backups:") {
+        HStack {
           Button("Export…") { showingExport = true }
             .disabled(model.vaults.isEmpty)
-          Text(
-            "Export the selected vaults into one passphrase-encrypted file."
-          )
-          .captionStyle()
-
           Button("Import…") { showingImport = true }
-          Text(
-            "Import vaults from a backup file; new vaults are created and existing vaults are not overwritten."
-          )
-          .captionStyle()
         }
+        Text(
+          "Backups are passphrase-encrypted. Import adds vaults and does not overwrite existing ones."
+        )
+        .captionStyle()
       }
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 12)
     .sheet(isPresented: $showingExport) {
       VaultExportSheet(model: model)
     }
@@ -338,16 +335,14 @@ private struct AutoFillSettingsView: View {
   private let core = AxoPass()
 
   var body: some View {
-    Form {
-      LabeledContent("Safari and apps:") {
-        VStack(alignment: .leading, spacing: 6) {
+    SettingsForm {
+      SettingsRow("Safari and apps:") {
+        HStack(spacing: 10) {
           switch isEnabled {
           case .some(true):
-            Label("Axo Pass is on", systemImage: "checkmark.circle.fill")
-              .foregroundStyle(.green)
+            StatusLabel("Enabled", symbol: "checkmark.circle.fill", color: .green)
           case .some(false):
-            Label("Axo Pass is off", systemImage: "xmark.circle.fill")
-              .foregroundStyle(.orange)
+            StatusLabel("Not Enabled", symbol: "xmark.circle.fill", color: .secondary)
           case .none:
             ProgressView().controlSize(.small)
           }
@@ -355,20 +350,36 @@ private struct AutoFillSettingsView: View {
             ASSettingsHelper.openCredentialProviderAppSettings { _ in }
           }
         }
+        Text(
+          isEnabled == false
+            ? "Turn on Axo Pass under Passwords > Password Options to fill logins, one-time codes, and passkeys."
+            : "Fills logins, one-time codes, and passkeys."
+        )
+        .captionStyle()
       }
-      Text(
-        "Turn on Axo Pass under Passwords > Password Options to fill logins, one-time codes, and passkeys in Safari and other apps."
-      )
-      .settingsCaption()
-      Divider()
-      ForEach(browsers, id: \.name) { status in
-        LabeledContent("\(status.name):") {
-          HStack(spacing: 6) {
-            Label(
-              BrowserManifestStyle.label(status),
-              systemImage: BrowserManifestStyle.icon(status)
-            )
-            .foregroundStyle(BrowserManifestStyle.color(status))
+
+      SettingsDivider()
+
+      SettingsRow("Browser extensions:") {
+        if installedBrowsers.isEmpty {
+          Text("No supported browsers found")
+            .foregroundStyle(.secondary)
+        } else {
+          HStack {
+            ForEach(installedBrowsers, id: \.name) { status in
+              Button("Get \(BrowserManifestStyle.shortName(status.browser)) Extension…") {
+                NSWorkspace.shared.open(BrowserManifestStyle.storeURL(status.browser))
+              }
+            }
+          }
+        }
+        // Only broken connections are listed. The app rewrites the manifests on
+        // launch, so a current one needs no attention.
+        ForEach(brokenBrowsers, id: \.name) { status in
+          HStack(spacing: 10) {
+            StatusLabel(
+              "\(status.name): \(BrowserManifestStyle.label(status))",
+              symbol: "exclamationmark.triangle.fill", color: .orange)
             if installing == status.browser {
               ProgressView().controlSize(.small)
             } else if let action = BrowserManifestStyle.action(status) {
@@ -377,47 +388,53 @@ private struct AutoFillSettingsView: View {
             }
           }
         }
+        if let error = installError {
+          Text(error)
+            .foregroundStyle(.red)
+            .captionStyle()
+        }
+        Text("Fills logins in Chrome and Firefox through the Axo Pass extension.")
+          .captionStyle()
       }
-      if let error = installError {
-        Text(error)
-          .foregroundStyle(.red)
-          .settingsCaption()
-      }
-      Text(
-        "Lets the Axo Pass extension in Chrome and Firefox reach this app. Axo Pass installs and repairs these on launch."
-      )
-      .settingsCaption()
-      Divider()
-      LabeledContent("Allowed to list logins:") {
-        VStack(alignment: .leading, spacing: 6) {
-          if listingGrants.isEmpty {
-            Text("No browsers")
-              .foregroundStyle(.secondary)
-          }
+
+      SettingsDivider()
+
+      SettingsRow("Approvals:") {
+        if listingGrants.isEmpty {
+          Text("All browsers prompt to show saved logins.")
+            .foregroundStyle(.secondary)
+        } else {
           ForEach(listingGrants, id: \.teamId) { grant in
             HStack(spacing: 8) {
               Text(grant.name)
               Text(Self.expiryText(grant))
-                .font(.caption)
                 .foregroundStyle(.secondary)
               Button("Remove") { Task { await removeListingGrant(grant) } }
-                .controlSize(.small)
             }
           }
+          Text(
+            "These browsers can show saved logins without prompting while Axo Pass is unlocked. Autofills and saves still prompt."
+          )
+          .captionStyle()
         }
       }
-      Text(
-        "Browsers allowed to list logins while Axo Pass is unlocked. Fills, one-time codes, and saves still prompt. Add a browser from its listing prompt."
-      )
-      .settingsCaption()
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 12)
     .task { await refresh() }
     .onReceive(
       NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
     ) { _ in
       Task { await refresh() }
+    }
+  }
+
+  private var installedBrowsers: [BrowserManifestStatus] {
+    browsers.filter(\.browserInstalled)
+  }
+
+  private var brokenBrowsers: [BrowserManifestStatus] {
+    installedBrowsers.filter {
+      if case .current = $0.state { return false }
+      return true
     }
   }
 
@@ -457,12 +474,12 @@ private struct AutoFillSettingsView: View {
   }
 }
 
-/// Labels for a browser manifest state in Settings > AutoFill.
+/// Labels and links for a browser and its manifest state in Settings > AutoFill.
 private enum BrowserManifestStyle {
   static func label(_ status: BrowserManifestStatus) -> String {
     switch status.state {
-    case .notInstalled: return status.browserInstalled ? "Not Installed" : "Browser Not Found"
-    case .current: return "Installed"
+    case .notInstalled: return "Not Connected"
+    case .current: return "Connected"
     case .pointsElsewhere: return "Points to Another Host"
     case .outdated: return "Outdated"
     case .foreign: return "Used by Another App"
@@ -470,19 +487,22 @@ private enum BrowserManifestStyle {
     }
   }
 
-  static func icon(_ status: BrowserManifestStatus) -> String {
-    switch status.state {
-    case .current: return "checkmark.circle.fill"
-    case .notInstalled: return "circle"
-    case .pointsElsewhere, .outdated, .foreign, .unreadable: return "exclamationmark.triangle.fill"
+  static func shortName(_ browser: BrowserKind) -> String {
+    switch browser {
+    case .chrome: return "Chrome"
+    case .firefox: return "Firefox"
     }
   }
 
-  static func color(_ status: BrowserManifestStatus) -> Color {
-    switch status.state {
-    case .current: return .green
-    case .notInstalled: return .secondary
-    case .pointsElsewhere, .outdated, .foreign, .unreadable: return .orange
+  /// Store page of the Axo Pass extension. The ids match `CHROME_EXTENSION_ID`
+  /// and `FIREFOX_EXTENSION_ID` in the core crate.
+  static func storeURL(_ browser: BrowserKind) -> URL {
+    switch browser {
+    case .chrome:
+      return URL(
+        string: "https://chromewebstore.google.com/detail/dnpdmaobhnnkiknbgbfbpjmmgjchfkob")!
+    case .firefox:
+      return URL(string: "https://addons.mozilla.org/firefox/addon/axo-pass@breakfastlabs.com/")!
     }
   }
 
@@ -497,11 +517,59 @@ private enum BrowserManifestStyle {
   }
 }
 
-/// The `IdentityAgent` line in `~/.ssh/config`, which decides whether ssh
-/// talks to this app's agent. The agents' own status lives in the SSH pane.
-private struct SshSettingsView: View {
-  @State private var model = SshModel()
-  @State private var showingSetup = false
+/// SSH, GPG, and `ap` setup. Each group reports whether a config file routes
+/// the tool into this app.
+private struct TerminalSettingsView: View {
+  @State private var ssh = SshModel()
+  @State private var gpg = GpgModel()
+  @State private var shell = ShellIntegrationModel()
+  @State private var setup: TerminalSetup?
+
+  var body: some View {
+    SettingsForm {
+      SshSettingsRows(model: ssh) { setup = .ssh }
+      SettingsDivider()
+      GpgSettingsRows(model: gpg) { setup = .gpg }
+      SettingsDivider()
+      ShellSettingsRows(model: shell) { setup = .shell }
+    }
+    .task { refresh() }
+    // The files may be edited outside the app, so re-read them on reactivation.
+    // The user may also have allowed the background item in System Settings.
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
+      refresh()
+    }
+    .sheet(item: $setup) { setup in
+      switch setup {
+      case .ssh: SshSetupSheet(model: ssh)
+      case .gpg: GpgSetupSheet(model: gpg)
+      case .shell: ShellIntegrationSetupSheet(model: shell)
+      }
+    }
+  }
+
+  private func refresh() {
+    ssh.refreshConfStatus()
+    ssh.agentService.refreshStatus()
+    gpg.refreshConfStatus()
+    shell.refreshStatus()
+  }
+}
+
+/// Setup sheet shown from the Terminal pane.
+private enum TerminalSetup: Identifiable {
+  case ssh, gpg, shell
+
+  var id: Self { self }
+}
+
+/// SSH agent login item, and the `IdentityAgent` line in `~/.ssh/config`,
+/// which decides whether ssh talks to this app's agent. The agents' own status
+/// lives in the SSH pane.
+private struct SshSettingsRows: View {
+  let model: SshModel
+  let showSetup: () -> Void
   @State private var startAtLoginError: String? = nil
 
   private var state: SshIdentityAgentState? { model.confStatus?.state }
@@ -524,79 +592,49 @@ private struct SshSettingsView: View {
   }
 
   var body: some View {
-    Form {
-      LabeledContent("Agent:") {
-        Toggle("Start at login", isOn: startAtLogin)
-      }
+    SettingsRow("SSH agent:") {
+      Toggle("Start at login", isOn: startAtLogin)
+      Text("Runs the agent in the background and restarts it if it stops.")
+        .captionStyle()
       if model.agentService.startsOnLogin && model.agentService.status == .requiresApproval {
         Text("Allow Axo Pass in System Settings > General > Login Items & Extensions.")
           .foregroundStyle(.orange)
-          .settingsCaption()
-        LabeledContent("") {
-          Button("Open Login Items…") { model.agentService.openLoginItemsSettings() }
-        }
+          .captionStyle()
+        Button("Open Login Items…") { model.agentService.openLoginItemsSettings() }
       }
       if let error = startAtLoginError {
         Text(error)
           .foregroundStyle(.red)
-          .settingsCaption()
+          .captionStyle()
       }
-      Text("Runs the agent in the background and restarts it if it stops.")
-        .settingsCaption()
-      Divider()
-      LabeledContent("IdentityAgent:") {
-        HStack(spacing: 6) {
-          if let state {
-            Label(label(state), systemImage: icon(state))
-              .foregroundStyle(color(state))
-          }
-          if model.isConfiguring {
-            ProgressView().controlSize(.small)
-          }
+    }
+    SettingsRow("SSH config:") {
+      HStack(spacing: 8) {
+        if let state {
+          StatusLabel(
+            label(state), symbol: icon(state), color: color(state),
+            path: model.confStatus?.configPath)
+        }
+        if model.isConfiguring {
+          ProgressView().controlSize(.small)
         }
       }
-      if let path = model.confStatus?.configPath {
-        Text(path)
-          .font(.callout.monospaced())
-          .textSelection(.enabled)
-          .settingsCaption()
-      }
-      LabeledContent("") {
-        HStack {
-          if state != .configured {
-            Button("Add to ~/.ssh/config") {
-              Task { await model.configureAgentConf() }
-            }
-            .disabled(model.isConfiguring)
+      Text("Lets ssh use keys stored in Axo Pass.")
+        .captionStyle()
+      HStack {
+        if state != .configured {
+          Button("Add to ~/.ssh/config") {
+            Task { await model.configureAgentConf() }
           }
-          Button("Setup Assistant…") { showingSetup = true }
+          .disabled(model.isConfiguring)
         }
+        Button("Setup…", action: showSetup)
       }
       if let error = model.configureError {
         Text(error)
           .foregroundStyle(.red)
-          .settingsCaption()
+          .captionStyle()
       }
-      Text("ssh asks whatever `IdentityAgent` names for your keys and signatures.")
-        .settingsCaption()
-    }
-    // This pane's rows are denser than the other tabs', which are a control
-    // and a caption apiece, so they need the room.
-    .padding(.horizontal, 10)
-    .padding(.vertical, 12)
-    .task {
-      model.refreshConfStatus()
-      model.agentService.refreshStatus()
-    }
-    // The file may be edited outside the app, so re-read it on reactivation.
-    // The user may also have allowed the background item in System Settings.
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
-    { _ in
-      model.refreshConfStatus()
-      model.agentService.refreshStatus()
-    }
-    .sheet(isPresented: $showingSetup) {
-      SshSetupSheet(model: model)
     }
   }
 
@@ -626,169 +664,201 @@ private struct SshSettingsView: View {
 }
 
 /// The `pinentry-program` line in `gpg-agent.conf`, which decides whether
-/// gpg's passphrase prompts appear in this app. Mirrors the SSH tab.
-private struct GpgSettingsView: View {
-  @State private var model = GpgModel()
-  @State private var showingSetup = false
+/// gpg's passphrase prompts appear in this app.
+private struct GpgSettingsRows: View {
+  let model: GpgModel
+  let showSetup: () -> Void
 
   private var state: GpgPinentryState? { model.confStatus?.state }
 
   var body: some View {
-    Form {
-      LabeledContent("Pinentry:") {
-        HStack(spacing: 6) {
-          if let state {
-            Label(GpgPinentryStyle.label(state), systemImage: GpgPinentryStyle.icon(state))
-              .foregroundStyle(GpgPinentryStyle.color(state))
-          }
-          if model.isConfiguring || model.isTesting {
-            ProgressView().controlSize(.small)
-          }
+    SettingsRow("GPG agent:") {
+      HStack(spacing: 8) {
+        if let state {
+          StatusLabel(
+            GpgPinentryStyle.label(state), symbol: GpgPinentryStyle.icon(state),
+            color: GpgPinentryStyle.color(state), path: model.confStatus?.confPath)
+        }
+        if model.isConfiguring || model.isTesting {
+          ProgressView().controlSize(.small)
         }
       }
-      if let path = model.confStatus?.confPath {
-        Text(path)
-          .font(.callout.monospaced())
-          .textSelection(.enabled)
-          .settingsCaption()
-      }
-      LabeledContent("") {
-        HStack {
-          if state != .configured {
-            Button("Add to gpg-agent.conf") {
-              Task { await model.configureAgentConf() }
-            }
-            .disabled(model.isConfiguring || model.confStatus?.expectedLine == nil)
-          } else {
-            Button("Test Signing") {
-              Task { await model.testIntegration() }
-            }
-            .disabled(model.isTesting)
+      Text("Shows GPG passphrase prompts in Axo Pass.")
+        .captionStyle()
+      HStack {
+        Button("Setup…", action: showSetup)
+        if state != .configured {
+          Button("Add to gpg-agent.conf") {
+            Task { await model.configureAgentConf() }
           }
-          Button("Setup Assistant…") { showingSetup = true }
+          .disabled(model.isConfiguring || model.confStatus?.expectedLine == nil)
+        } else {
+          Button("Test Signing") {
+            Task { await model.testIntegration() }
+          }
+          .disabled(model.isTesting)
         }
       }
       if let error = model.configureError {
         Text(error)
           .foregroundStyle(.red)
-          .settingsCaption()
+          .captionStyle()
       }
       if let result = model.testResult {
         switch result {
         case .success:
-          Text("Signing works")
+          Text("Signing successful")
             .foregroundStyle(.green)
-            .settingsCaption()
+            .captionStyle()
         case .failure(let message):
           Text(message)
             .foregroundStyle(.red)
             .lineLimit(2)
-            .settingsCaption()
+            .captionStyle()
         }
       }
-      Text("gpg-agent runs whatever `pinentry-program` names when it needs a passphrase.")
-        .settingsCaption()
-    }
-    // This pane's rows are denser than the other tabs', which are a control
-    // and a caption apiece, so they need the room.
-    .padding(.horizontal, 10)
-    .padding(.vertical, 12)
-    .task { model.refreshConfStatus() }
-    // The file may be edited outside the app, so re-read it on reactivation.
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
-    { _ in
-      model.refreshConfStatus()
-    }
-    .sheet(isPresented: $showingSetup) {
-      GpgSetupSheet(model: model)
     }
   }
 }
 
 /// The `ap` integration: a `~/.local/bin/ap` symlink plus a `~/.zshrc` block
-/// that adds it to PATH and routes ssh askpass prompts into this app. Mirrors
-/// the SSH and GPG tabs.
-private struct ShellSettingsView: View {
-  @State private var model = ShellIntegrationModel()
-  @State private var showingSetup = false
+/// that adds it to PATH and routes ssh askpass prompts into this app.
+private struct ShellSettingsRows: View {
+  let model: ShellIntegrationModel
+  let showSetup: () -> Void
 
   var body: some View {
-    Form {
-      LabeledContent("`ap` integration:") {
-        HStack(spacing: 6) {
-          if let status = model.status {
-            Label(
-              status.configured ? "Configured" : "Not Configured",
-              systemImage: status.configured ? "checkmark.circle.fill" : "circle"
-            )
-            .foregroundStyle(status.configured ? .green : .secondary)
-          }
-          if model.isConfiguring {
-            ProgressView().controlSize(.small)
-          }
+    SettingsRow("Shell:") {
+      HStack(spacing: 8) {
+        if let status = model.status {
+          StatusLabel(
+            status.configured ? "Configured" : "Not Configured",
+            symbol: status.configured ? "checkmark.circle.fill" : "circle",
+            color: status.configured ? .green : .secondary,
+            path: status.zshrcPath)
+        }
+        if model.isConfiguring {
+          ProgressView().controlSize(.small)
         }
       }
-      if let status = model.status {
-        Text(status.zshrcPath)
-          .font(.callout.monospaced())
-          .textSelection(.enabled)
-          .settingsCaption()
-      }
-      LabeledContent("") {
-        HStack {
-          if model.status?.configured != true {
-            Button("Set Up") {
-              Task { await model.configure() }
-            }
-            .disabled(model.isConfiguring)
+      Text("Adds the `ap` command to zsh and shows ssh passphrase prompts in Axo Pass.")
+        .captionStyle()
+      HStack {
+        if model.status?.configured != true {
+          Button("Add to .zshrc") {
+            Task { await model.configure() }
           }
-          Button("Setup Assistant…") { showingSetup = true }
+          .disabled(model.isConfiguring)
         }
+        Button("Setup…", action: showSetup)
       }
       if let error = model.configureError {
         Text(error)
           .foregroundStyle(.red)
-          .settingsCaption()
+          .captionStyle()
       }
-      Text(
-        "Links `ap` into `~/.local/bin` and appends a zsh block that puts it on PATH and routes ssh askpass prompts into Axo Pass."
-      )
-      .settingsCaption()
-    }
-    // This pane's rows are denser than the other tabs', which are a control
-    // and a caption apiece, so they need the room.
-    .padding(.horizontal, 10)
-    .padding(.vertical, 12)
-    .task { model.refreshStatus() }
-    // The file may be edited outside the app, so re-read it on reactivation.
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
-    { _ in
-      model.refreshStatus()
-    }
-    .sheet(isPresented: $showingSetup) {
-      ShellIntegrationSetupSheet(model: model)
     }
   }
 }
 
-extension View {
-  /// Gives every tab the same size. The tab controller resizes the window to
-  /// each tab's own fitting size, so a size set on the `TabView` itself does
-  /// not apply, and panes of different sizes resize the window on every tab
-  /// switch, which moves the centered toolbar items.
-  fileprivate func settingsPane() -> some View {
-    self
-      .padding(20)
-      .frame(width: 440, height: 340, alignment: .top)
+/// Status line in a settings row. Only the icon is colored. An optional config
+/// file path follows in secondary text, with the home directory shown as `~`.
+private struct StatusLabel: View {
+  let title: String
+  let symbol: String
+  let color: Color
+  let path: String?
+
+  init(_ title: String, symbol: String, color: Color, path: String? = nil) {
+    self.title = title
+    self.symbol = symbol
+    self.color = color
+    self.path = path
   }
 
-  /// Same size as `settingsPane`, with content that is taller than the pane
-  /// scrolled.
-  fileprivate func scrollingSettingsPane() -> some View {
-    ScrollView {
-      self.padding(20)
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: symbol)
+        .foregroundStyle(color)
+      Text(title)
+      if let path {
+        Text((path as NSString).abbreviatingWithTildeInPath)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .textSelection(.enabled)
+          .help(path)
+      }
     }
-    .frame(width: 440, height: 340, alignment: .top)
+  }
+}
+
+/// Layout constants of the settings panes.
+private enum SettingsLayout {
+  static let paneWidth: CGFloat = 540
+  /// Label column width. Every pane uses the same width, so the control column
+  /// does not move between tabs.
+  static let labelWidth: CGFloat = 140
+  static let columnSpacing: CGFloat = 10
+  static let rowSpacing: CGFloat = 16
+  /// Spacing between a control and its captions within one row.
+  static let rowContentSpacing: CGFloat = 6
+}
+
+/// Settings pane content of rows and dividers.
+private struct SettingsForm<Content: View>: View {
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+      content
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// Settings row with a trailing-aligned label and leading-aligned content. An
+/// empty label leaves the label column blank.
+private struct SettingsRow<Content: View>: View {
+  let label: String
+  @ViewBuilder let content: Content
+
+  init(_ label: String = "", @ViewBuilder content: () -> Content) {
+    self.label = label
+    self.content = content()
+  }
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: SettingsLayout.columnSpacing) {
+      Text(label)
+        .frame(width: SettingsLayout.labelWidth, alignment: .trailing)
+      VStack(alignment: .leading, spacing: SettingsLayout.rowContentSpacing) {
+        content
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+/// Full-width line between groups of rows.
+private struct SettingsDivider: View {
+  var body: some View {
+    Divider()
+      .padding(.vertical, 2)
+  }
+}
+
+extension View {
+  /// Gives every tab the same width and its own fitting height. The tab
+  /// controller resizes the window to each tab's fitting size, so a size set on
+  /// the `TabView` itself does not apply. A width change moves the centered
+  /// toolbar items, and a height change does not.
+  fileprivate func settingsPane() -> some View {
+    self
+      .padding(.horizontal, 28)
+      .padding(.vertical, 24)
+      .frame(width: SettingsLayout.paneWidth, alignment: .top)
+      .fixedSize(horizontal: false, vertical: true)
   }
 
   /// The look of explanatory text under a control: smaller and secondary.
@@ -797,12 +867,5 @@ extension View {
       .font(.callout)
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
-  }
-
-  /// Explanatory text under a control, in the column the controls occupy.
-  fileprivate func settingsCaption() -> some View {
-    LabeledContent("") {
-      self.captionStyle()
-    }
   }
 }
