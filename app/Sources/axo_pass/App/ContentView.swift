@@ -37,6 +37,9 @@ private struct MainView: View {
     }
     // Vault SSH key credentials read their key entry from this model.
     .environment(sshModel)
+    .onChange(of: ageModel.authExpired) { _, expired in
+      if expired { model.lock() }
+    }
   }
 
   @ViewBuilder

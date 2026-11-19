@@ -14,6 +14,9 @@ final class AgeModel {
   var selectedRecipient: String? = nil
   var loadError: String? = nil
   var isLoading = false
+  /// Set if a reload found the app authentication expired. The main view locks
+  /// the app in response.
+  private(set) var authExpired = false
 
   var selectedKey: AgeKeyEntry? {
     guard let selectedRecipient else { return nil }
@@ -25,6 +28,9 @@ final class AgeModel {
     do {
       keys = try await core.listAgeKeys()
       loadError = nil
+    } catch FfiError.AuthExpired {
+      keys = []
+      authExpired = true
     } catch {
       keys = []
       loadError = String(describing: error)

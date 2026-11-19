@@ -38,6 +38,9 @@ pub fn create_la_auth_callback() -> (
                 LAError::AppCancel => KeychainError::UserCancelled,
                 // cause: context has been invalidated
                 LAError::InvalidContext => KeychainError::AuthenticationExpired,
+                // cause: the shared context lost its authentication, and
+                // interaction is disallowed on it.
+                LAError::NotInteractive => KeychainError::AuthenticationExpired,
                 // cause: another process's concurrent evaluatePolicy call, the
                 // screen locking, or a focus change.
                 LAError::SystemCancel => KeychainError::SystemCancelled,

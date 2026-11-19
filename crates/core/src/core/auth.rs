@@ -183,6 +183,13 @@ static AUTH_THREAD: LazyLock<Mutex<mpsc::Sender<AuthMessage>>> = LazyLock::new(|
                                 .send(Err(KeychainError::AuthenticationExpired));
                             return;
                         }
+                        // The adopted context can lose its authentication while the
+                        // app still shows as unlocked. Evaluating it then would show the
+                        // system dialog. Disallow interaction so the evaluation fails
+                        // with `NotInteractive` and the app locks instead.
+                        if is_shared {
+                            unsafe { selected_la_ctx.setInteractionNotAllowed(true) };
+                        }
                         // An authenticated shared context does not show a prompt, so we
                         // skip the auth lock. Otherwise an open prompt panel would block
                         // vault reads. This includes access control evaluations, since the
@@ -483,27 +490,15 @@ where
     })
 }
 
-/// Run `probe_fn` against the shared context with interaction disallowed, so a
-/// keychain read reports that authentication is needed rather than prompting
-/// for it. The flag is restored afterwards.
-///
-/// The shared context is only touched on the auth thread, so the window where
-/// interaction is disallowed cannot overlap other work.
+/// Run `probe_fn` against the shared context. Interaction is disallowed on the
+/// shared context, so a keychain read reports that authentication is needed
+/// rather than prompting for it.
 pub fn probe_shared_context<F, R>(probe_fn: F) -> Result<R, KeychainError>
 where
     F: FnOnce(Retained<LAContext>) -> R + Send + 'static,
     R: Send + 'static,
 {
-    run_on_auth_thread(
-        AuthContext::SharedThreadLocal,
-        AuthMethod::None,
-        move |la_context| unsafe {
-            la_context.setInteractionNotAllowed(true);
-            let result = probe_fn(la_context.clone());
-            la_context.setInteractionNotAllowed(false);
-            result
-        },
-    )
+    run_on_auth_thread(AuthContext::SharedThreadLocal, AuthMethod::None, probe_fn)
 }
 
 /// Replace the shared LAContext, requiring the app to unlock again.
