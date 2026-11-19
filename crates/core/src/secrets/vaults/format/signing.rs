@@ -4,10 +4,12 @@
 //! encoded. This is the form [`ManagedKey::sign`] returns. [`verify`] checks a
 //! signature with the `p256` crate and makes no keychain call.
 
+#[cfg(secure_enclave)]
+mod apple;
 #[cfg(linux)]
 mod linux;
-#[cfg(macos)]
-mod macos;
+#[cfg(sim_keys)]
+mod sim;
 
 use std::fmt;
 use std::sync::RwLock;

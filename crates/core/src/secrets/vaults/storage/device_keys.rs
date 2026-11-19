@@ -1,17 +1,21 @@
+#[cfg(secure_enclave)]
+mod apple;
 #[cfg(linux)]
 mod linux;
-#[cfg(macos)]
-mod macos;
+#[cfg(sim_keys)]
+mod sim;
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use anyhow::anyhow;
+#[cfg(secure_enclave)]
+use apple as platform;
 use jiff::Zoned;
 #[cfg(linux)]
 use linux as platform;
-#[cfg(macos)]
-use macos as platform;
+#[cfg(sim_keys)]
+use sim as platform;
 pub(super) use platform::probe_vault_encryption_key;
 
 use crate::core::auth::AuthContext;
