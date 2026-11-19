@@ -1,5 +1,5 @@
 // Tests that need a software `ManagedKey` run on macOS only.
-#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+#![cfg_attr(linux, allow(unused_imports, dead_code))]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ fn deleted_own_key_json_written_again_with_device_wrappings_lost_and_age_wrappin
     assert_eq!(opened.as_bytes(), key().as_bytes());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn pairing_grant_and_age_wrappings_written_in_one_key_json_write() {
     let transport = Arc::new(FakeTransport::default());

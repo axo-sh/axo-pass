@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use super::access::extension_policy;
 use super::access::{
     Client, RequestScope, agent_policy, browser_host_policy, record_rejected_peer, verify_client,
@@ -18,14 +18,14 @@ use super::access::{
 use super::dispatch::serve_request;
 use super::in_flight::client_disconnected;
 use super::wire::{WireRequest, WireResponse};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use super::{autofill_service_name, mach};
 use super::{Authorizers, broker_socket_path};
 use crate::core::provenance::PeerIdentity;
 
 /// Serve requests on the socket until `shutdown` resolves, then remove the
 /// socket. There is no Mach service on Linux.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub async fn serve(
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -56,7 +56,7 @@ pub async fn serve(
 /// named under the App Group (see [`mach`]). The extension is sandboxed, and a
 /// Mach service lookup is the one path to the app it has that touches no
 /// files.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub async fn serve(
     authorizers: Authorizers,
     shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -157,7 +157,7 @@ async fn accept_loop(listener: UnixListener, authorizers: Authorizers, clients: 
             Ok((stream, _)) => {
                 // Writes to a closed peer must fail with EPIPE, not raise
                 // SIGPIPE, which would terminate the host process.
-                #[cfg(target_os = "macos")]
+                #[cfg(macos)]
                 if let Err(e) = socket2::SockRef::from(&stream).set_nosigpipe(true) {
                     log::debug!("App broker could not set SO_NOSIGPIPE: {e}");
                 }

@@ -1,11 +1,23 @@
 //! Build id of the crate: `{version}+{commit}`, with `-dirty` if a tracked
 //! file differs from the commit, or `{version}+unknown` outside a git tree.
 //! Sync compares it with `stopped_build` and `override_build`.
+//!
+//! Also defines the platform cfg aliases `macos`, `linux`, `apple`, and
+//! `desktop`.
 
 use std::path::Path;
 use std::process::Command;
 
+use cfg_aliases::cfg_aliases;
+
 fn main() {
+    cfg_aliases! {
+        macos: { target_os = "macos" },
+        linux: { target_os = "linux" },
+        apple: { target_vendor = "apple" },
+        desktop: { any(macos, linux) },
+    }
+
     let version = std::env::var("CARGO_PKG_VERSION").unwrap();
     let commit = git(&["rev-parse", "HEAD"]);
     let build = match &commit {

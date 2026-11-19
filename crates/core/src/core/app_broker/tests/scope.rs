@@ -1,6 +1,6 @@
 // Tests through a live broker run on macOS only: the Linux peer check is a
 // stub that refuses every client until M2.
-#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+#![cfg_attr(linux, allow(dead_code, unused_imports))]
 
 use super::support::{CHROME, PAGE, TestBroker, accepting_policy, browser_host_broker};
 use crate::core::app_broker::access::{
@@ -12,7 +12,7 @@ use crate::core::app_broker::{ClientIdentity, VaultAction};
 /// The AutoFill scope refuses a request outside it. The stub lister
 /// answers a keychain listing on any other socket, so `Failed` means the
 /// request never reached it.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn autofill_scope_refuses_other_requests() {
     let broker =
@@ -66,7 +66,7 @@ fn autofill_scope_allows_only_autofill_requests() {
 
 /// The AutoFill scope names the caller itself, so a request cannot pick
 /// the name its prompt, grant, and audit event carry.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn autofill_scope_names_its_own_caller() {
     for line in [
@@ -148,7 +148,7 @@ fn browser_host_scope_extends_requests() {
 
 /// The browser host names the caller from the browser it verified, and
 /// the request's own `caller` and `requester` cannot change that.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn browser_host_scope_names_verified_browser() {
     let broker = browser_host_broker().await;
@@ -177,7 +177,7 @@ async fn browser_host_scope_names_verified_browser() {
 
 /// A host with no verified browser is "Unknown process" and is never
 /// identified, so no approval is reused for it.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn unverified_browser_host_is_unknown_and_never_identified() {
     for client in [
@@ -204,7 +204,7 @@ async fn unverified_browser_host_is_unknown_and_never_identified() {
 
 /// Only a verified browser host may report a browser. The same report
 /// from `ap` or the AutoFill extension is ignored.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn other_scopes_ignore_browser_report() {
     for scope in [RequestScope::Agent, RequestScope::AutofillExtension] {
@@ -228,7 +228,7 @@ fn only_autofill_extension_names_requesting_app() {
     assert_eq!(requester_for(RequestScope::Agent, app()), None);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[tokio::test(flavor = "multi_thread")]
 async fn autofill_scope_cannot_generate_or_save() {
     let broker =

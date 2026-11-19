@@ -305,7 +305,7 @@ impl BrowserManifests {
 // Tests that need an installed browser run on macOS only: the Linux browser
 // paths come in 0.8, so no browser counts as installed.
 #[cfg(test)]
-#[cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+#[cfg_attr(linux, allow(dead_code, unused_imports))]
 mod tests {
     use super::*;
 
@@ -380,7 +380,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn install_writes_into_temp_home() {
         let f = fixture();
@@ -412,7 +412,7 @@ mod tests {
         assert!(!Browser::Chrome.manifest_dir_in(&f.home).exists());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn firefox_support_dir_alone_counts_as_installed() {
         let f = fixture();
@@ -499,7 +499,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn chrome_state_checks_allowed_origins() {
         let f = fixture();
@@ -526,7 +526,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn ensure_rewrites_only_differing_path() {
         let f = fixture();
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(f.manifests.ensure(), Vec::<Browser>::new());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn ensure_installs_missing_manifests() {
         let f = fixture();
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(f.manifests.ensure(), Vec::<Browser>::new());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn ensure_skips_browsers_that_are_not_installed() {
         let f = fixture();
@@ -588,7 +588,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn foreign_and_unreadable_manifests_are_untouched() {
         let f = fixture();
@@ -609,7 +609,7 @@ mod tests {
         assert_eq!(read_json(&chrome), foreign);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn install_replaces_unreadable_manifest() {
         let f = fixture();
@@ -620,7 +620,7 @@ mod tests {
         assert_eq!(status.state, ManifestState::Current);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn writes_leave_no_temp_files() {
         let f = fixture();

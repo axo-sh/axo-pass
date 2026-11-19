@@ -77,3 +77,6 @@ objc2-security = "0.3.2"
 [dev-dependencies]
 proptest = "1.12.0"
 tempfile = "3"
+
+[build-dependencies]
+cfg_aliases = "0.2.2"

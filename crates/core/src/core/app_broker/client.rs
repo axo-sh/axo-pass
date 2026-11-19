@@ -1,27 +1,27 @@
 //! The client side of the broker, used by `ap`: connect to the app's socket,
 //! starting the app when nothing is listening, and exchange one request.
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2::rc::Retained;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2_app_kit::NSRunningApplication;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2_foundation::{NSBundle, NSString, NSURL};
 
 use super::wire::{WireRequest, WireResponse};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use super::LAUNCH_FLAG;
 use super::{BrokerError, broker_socket_path};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use crate::core::dirs::app_data_dir;
 
 /// How long a client waits for the user to answer the app's prompt before
@@ -203,7 +203,7 @@ fn connect() -> std::io::Result<std::os::unix::net::UnixStream> {
 /// assuming a fixed depth: `current_exe` is not always canonical (a wrapper
 /// that execs `.../Contents/Resources/../MacOS/ap` leaves the `..` in place),
 /// so a fixed number of `parent()` calls can land in the wrong directory.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub(crate) fn app_bundle_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
@@ -218,7 +218,7 @@ pub(crate) fn app_bundle_path() -> Option<PathBuf> {
 /// Asks LaunchServices, which is the same authority `open` consults: if it
 /// reports an instance, `open` will reopen that one rather than launch a new
 /// one. `ap` itself is not a registered application, so it never counts.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn app_is_running(bundle: &Path) -> bool {
     let Some(id) = bundle_identifier(bundle) else {
         log::debug!("No bundle identifier for {}", bundle.display());
@@ -228,7 +228,7 @@ fn app_is_running(bundle: &Path) -> bool {
 }
 
 /// The `CFBundleIdentifier` of the bundle at `path`.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn bundle_identifier(path: &Path) -> Option<Retained<NSString>> {
     let url = NSURL::fileURLWithPath(&NSString::from_str(path.to_str()?));
     NSBundle::bundleWithURL(&url)?.bundleIdentifier()
@@ -236,7 +236,7 @@ fn bundle_identifier(path: &Path) -> Option<Retained<NSString>> {
 
 /// Serializes `launch_app` across processes, so two requests arriving together
 /// issue one `open` between them.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn launch_lock_path() -> PathBuf {
     app_data_dir().join("app-broker.launch.lock")
 }
@@ -249,7 +249,7 @@ fn launch_lock_path() -> PathBuf {
 /// The lock is an `flock` the kernel releases when the file closes or the
 /// process dies, so it cannot go stale and needs no timeout. Nothing reads the
 /// file's contents.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn lock_launch() -> Option<fs::File> {
     let file = fs::OpenOptions::new()
         .create(true)
@@ -266,7 +266,7 @@ fn lock_launch() -> Option<fs::File> {
 
 /// Start the app in the background, so a signature request does not pull focus
 /// away from whatever asked for it.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn launch_app() -> Result<(), BrokerError> {
     let Some(bundle) = app_bundle_path() else {
         log::debug!("Not running from an app bundle; cannot start the broker");
@@ -305,14 +305,14 @@ fn launch_app() -> Result<(), BrokerError> {
 }
 
 /// There is no app bundle on Linux.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub(crate) fn app_bundle_path() -> Option<PathBuf> {
     None
 }
 
 /// Nothing starts the daemon from the client on Linux. Socket activation
 /// starts it when the client connects.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 fn launch_app() -> Result<(), BrokerError> {
     Err(BrokerError::Unavailable)
 }

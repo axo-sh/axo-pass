@@ -1,19 +1,19 @@
 pub mod errors;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 mod linux;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 mod macos;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub use linux::{generic_password, managed_key, plain_item};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub use macos::{
     AccessControl, generic_password, keychain_query, managed_key, plain_item,
 };
 
 /// SEC1 key conversion, which has no platform dependency. The Linux stubs
 /// re-export it as `managed_key::utils`.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 #[path = "macos/managed_key/utils.rs"]
 pub mod sec1_utils;

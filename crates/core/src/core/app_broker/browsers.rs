@@ -64,7 +64,7 @@ impl Browser {
     /// Support directories the browser creates for the user, relative to the
     /// home directory. The browser counts as installed if any of them exists.
     /// The first entry holds the manifest directory.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     fn support_dirs(self) -> &'static [&'static str] {
         match self {
             Browser::Chrome => &["Library/Application Support/Google/Chrome"],
@@ -77,7 +77,7 @@ impl Browser {
 
     /// Linux stub with no directories, so no browser counts as installed and
     /// no manifest is written. The Linux paths are not decided yet.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(linux)]
     fn support_dirs(self) -> &'static [&'static str] {
         &[]
     }
@@ -160,7 +160,7 @@ mod tests {
     }
 
     // The Linux browser paths come in 0.8.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     fn manifest_paths_are_per_browser() {
         let chrome = Browser::Chrome.manifest_path().unwrap();

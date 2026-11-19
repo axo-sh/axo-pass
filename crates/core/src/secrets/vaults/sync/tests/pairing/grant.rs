@@ -1,5 +1,5 @@
 // Tests that need a software `ManagedKey` run on macOS only.
-#![cfg_attr(not(target_os = "macos"), allow(unused_imports, dead_code))]
+#![cfg_attr(linux, allow(unused_imports, dead_code))]
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -75,7 +75,7 @@ fn put_root(app_root: &Path, vault_id: Uuid, root: &TransportRoot) {
 }
 
 /// Software encryption key of a new Mac and its public keys.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn new_mac_keys()-> (ManagedKey, ReplicaKeys) {
     let software = ManagedKey::create_software_for_test().unwrap();
     let keys = ReplicaKeys {
@@ -207,7 +207,7 @@ impl UnlockedMac {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn one_request_pairs_every_picked_vault() {
     let transport = Arc::new(FakeTransport::default());
@@ -605,7 +605,7 @@ fn vault_list_has_synced_vaults_in_map() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn wrapping_is_under_current_key_id_and_other_wrappings_written_back_unchanged() {
     let transport = Arc::new(FakeTransport::default());
@@ -657,7 +657,7 @@ fn wrapping_is_under_current_key_id_and_other_wrappings_written_back_unchanged()
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn failed_sync_state_save_writes_no_wrapping() {
     let transport = Arc::new(FakeTransport::default());
@@ -687,7 +687,7 @@ fn failed_sync_state_save_writes_no_wrapping() {
 /// Write the sync state of a test case for the vault of a fixture.
 type PutState = fn(&Fixture);
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn vault_whose_sync_state_not_trusted_receives_no_wrapping() {
     let code = PairingCode::generate();
@@ -728,7 +728,7 @@ fn vault_whose_sync_state_not_trusted_receives_no_wrapping() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn replica_pinned_to_other_keys_refused() {
     let transport = Arc::new(FakeTransport::default());
@@ -773,7 +773,7 @@ fn replica_pinned_to_other_keys_refused() {
     assert!(own_key_file(&transport, fx.id(), REPLICA).is_none());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn first_use_pin_with_keys_of_request_becomes_pairing() {
     let transport = Arc::new(FakeTransport::default());
@@ -811,7 +811,7 @@ fn first_use_pin_with_keys_of_request_becomes_pairing() {
     );
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn failed_key_json_write_keeps_pin_and_later_grant_writes_one_wrapping() {
     let transport = Arc::new(FakeTransport::default());
@@ -852,7 +852,7 @@ fn failed_key_json_write_keeps_pin_and_later_grant_writes_one_wrapping() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[test]
 fn vault_outside_root_or_map_gets_no_wrapping() {
     let code = PairingCode::generate();

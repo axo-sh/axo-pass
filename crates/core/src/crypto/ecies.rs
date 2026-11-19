@@ -40,7 +40,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, macos))]
 mod apple_tests;
 #[cfg(test)]
 mod tests;

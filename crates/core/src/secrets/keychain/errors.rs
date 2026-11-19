@@ -1,23 +1,23 @@
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::ptr::{self, NonNull};
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2_core_foundation::{CFError, CFRetained};
 use thiserror::Error;
 
 /// Receives the `CFError` a Security call reports through its out-parameter,
 /// and releases it on drop.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub struct CFErrorOut(*mut CFError);
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl Default for CFErrorOut {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl CFErrorOut {
     pub fn new() -> Self {
         Self(ptr::null_mut())
@@ -34,7 +34,7 @@ impl CFErrorOut {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl Drop for CFErrorOut {
     fn drop(&mut self) {
         if let Some(error) = NonNull::new(self.0) {

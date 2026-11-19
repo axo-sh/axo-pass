@@ -4,7 +4,7 @@
 
 use super::vault::ClientIdentity;
 use super::wire::{BrowserClient, WireRequest};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use super::AUTOFILL_EXTENSION_NAME;
 use super::{AGENT_EXECUTABLE_NAME, BROWSER_HOST_EXECUTABLE_NAME};
 use crate::audit;
@@ -117,7 +117,7 @@ pub(super) fn agent_policy() -> PeerPolicy {
 
 /// Who the AutoFill broker takes requests from: only the credential provider
 /// extension staged in our own bundle, signed by the same team.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub(super) fn extension_policy() -> PeerPolicy {
     let policy = PeerPolicy::bundled_executable(&format!(
         "PlugIns/{AUTOFILL_EXTENSION_NAME}.appex/Contents/MacOS/{AUTOFILL_EXTENSION_NAME}"

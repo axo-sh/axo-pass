@@ -10,12 +10,12 @@ use std::sync::RwLock;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use crate::core::auth::run_local_onetime;
 use crate::secrets::keychain::errors::KeychainError;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use crate::secrets::keychain::managed_key::{KeyClass, ManagedKeyQuery};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
@@ -89,7 +89,7 @@ pub struct KeychainSigner;
 
 /// Linux stub. Every operation fails with `Unsupported`. The TPM and software
 /// signers replace it.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 impl KeychainSigner {
     pub(crate) fn probe_key() -> Result<Option<ManagedKey>, KeychainError> {
         Err(KeychainError::Unsupported)
@@ -101,7 +101,7 @@ impl KeychainSigner {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 impl VaultSigner for KeychainSigner {
     fn sign(&self, _message: &[u8]) -> Result<Vec<u8>, Error> {
         Err(Error::VaultSigningFailed(
@@ -115,7 +115,7 @@ impl VaultSigner for KeychainSigner {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl KeychainSigner {
     /// Look for `device-signing-key` with interaction not allowed. A key gated
     /// by authentication fails with `ItemNotAccessible`.
@@ -160,7 +160,7 @@ impl KeychainSigner {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl VaultSigner for KeychainSigner {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         let key = Self::find_key()?.ok_or(Error::SigningKeyNotFound)?;
@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// Needs a binary signed with the app's keychain access group.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     #[test]
     #[ignore = "creates a Secure Enclave key in the keychain"]
     fn secure_enclave_signature_verifies() {

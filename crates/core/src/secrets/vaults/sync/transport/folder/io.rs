@@ -6,7 +6,7 @@
 //! synced folder, sync it, and move it into place, so the provider never
 //! uploads a partial file.
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::cell::{Cell, RefCell};
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -14,25 +14,25 @@ use std::ffi::CString;
 use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::os::macos::fs::MetadataExt;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use std::ptr::NonNull;
 #[cfg(test)]
 use std::sync::Mutex;
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use block2::{RcBlock, StackBlock};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2::AllocAnyThread;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2::rc::{Retained, autoreleasepool};
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2::runtime::AnyObject;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 use objc2_foundation::{
     NSArray, NSError, NSFileAccessIntent, NSFileCoordinator, NSFileCoordinatorReadingOptions,
     NSFileCoordinatorWritingOptions, NSFileManager, NSOperationQueue, NSSearchPathDirectory,
@@ -44,7 +44,7 @@ use uuid::Uuid;
 
 /// `st_flags` bit of a dataless file, whose contents are not local. The
 /// value of `SF_DATALESS` in `sys/stat.h`.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 const SF_DATALESS: u32 = 0x4000_0000;
 
 /// Local state of a file in the synced folder.
@@ -103,13 +103,13 @@ fn status_of(meta: &Metadata) -> FileStatus {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 fn is_dataless(meta: &Metadata) -> bool {
     meta.st_flags() & SF_DATALESS != 0
 }
 
 /// Linux files are always local.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 fn is_dataless(_meta: &Metadata) -> bool {
     false
 }
@@ -154,10 +154,10 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let from_c = CString::new(from.as_os_str().as_bytes())?;
     let to_c = CString::new(to.as_os_str().as_bytes())?;
     // SAFETY: both paths are NUL-terminated strings that outlive the call.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     let result = unsafe { libc::renamex_np(from_c.as_ptr(), to_c.as_ptr(), libc::RENAME_EXCL) };
     // SAFETY: both paths are NUL-terminated strings that outlive the call.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(linux)]
     let result = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
@@ -173,9 +173,9 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let e = io::Error::last_os_error();
     // Linux reports a filesystem without the flag as EINVAL, and a kernel
     // without `renameat2` as ENOSYS.
-    #[cfg(target_os = "macos")]
+    #[cfg(macos)]
     let unsupported = [libc::ENOTSUP];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(linux)]
     let unsupported = [libc::ENOTSUP, libc::EINVAL, libc::ENOSYS];
     if !e.raw_os_error().is_some_and(|code| unsupported.contains(&code)) {
         return Err(e);
@@ -203,11 +203,11 @@ fn delete_path(path: &Path) -> io::Result<()> {
 /// File access through `NSFileCoordinator` and `NSFileManager`. A file whose
 /// ubiquitous download status is not current is `Remote`, as is a dataless
 /// file.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 #[derive(Debug, Default)]
 pub struct CoordinatedIo;
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl CoordinatedIo {
     fn url(path: &Path) -> Retained<NSURL> {
         NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
@@ -336,7 +336,7 @@ impl CoordinatedIo {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 impl FolderIo for CoordinatedIo {
     fn status(&self, path: &Path) -> io::Result<FileStatus> {
         let status = metadata_status(path)?;
@@ -420,12 +420,12 @@ impl FolderIo for CoordinatedIo {
 /// the target. Otherwise the temp file is an unnamed `O_TMPFILE` file of the
 /// target's directory, which no listing shows until it is linked in. If the
 /// file system has no `O_TMPFILE`, the write fails.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 #[derive(Debug, Default)]
 pub struct CoordinatedIo;
 
 /// Where a write puts its temp file.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TempPlace {
     /// A file in the cache temp directory, moved into place by rename.
@@ -434,7 +434,7 @@ enum TempPlace {
     Tmpfile,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 impl TempPlace {
     /// Place for a write of a file in a directory on device `target_dev`,
     /// with the cache temp directory on device `cache_dev`. A rename works
@@ -448,7 +448,7 @@ impl TempPlace {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 impl CoordinatedIo {
     /// Directory of the temp files that are renamed into place.
     #[cfg(not(test))]
@@ -609,7 +609,7 @@ impl CoordinatedIo {
 /// Give the unnamed file at `/proc/self/fd/<fd>` the name `to`. Fails with
 /// `AlreadyExists` if `to` exists. `AT_EMPTY_PATH` would need
 /// `CAP_DAC_READ_SEARCH`.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 fn link_fd(source: &str, to: &Path) -> io::Result<()> {
     let source = CString::new(source)?;
     let to = CString::new(to.as_os_str().as_bytes())?;
@@ -630,7 +630,7 @@ fn link_fd(source: &str, to: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 impl FolderIo for CoordinatedIo {
     fn status(&self, path: &Path) -> io::Result<FileStatus> {
         metadata_status(path)
@@ -741,7 +741,7 @@ impl FolderIo for PlainIo {
     }
 }
 
-#[cfg(all(test, not(target_os = "macos")))]
+#[cfg(all(test, linux))]
 mod linux_tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 

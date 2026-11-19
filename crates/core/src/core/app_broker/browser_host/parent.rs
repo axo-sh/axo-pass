@@ -53,7 +53,7 @@ pub(super) fn verify_parent() -> Result<VerifiedParent, String> {
 }
 
 // Linux has no parent process lookup or code requirement yet.
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, macos))]
 mod tests {
     use super::*;
 

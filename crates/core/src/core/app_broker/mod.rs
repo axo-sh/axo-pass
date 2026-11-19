@@ -36,7 +36,7 @@ pub mod gpg;
 mod in_flight;
 pub mod keychain;
 mod login_index;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 mod mach;
 mod placement;
 mod server;

@@ -6,37 +6,37 @@ use crate::core::provenance::team_identifier;
 /// extension, minus the team identifier prefix macOS requires.
 pub const APP_GROUP_SUFFIX: &str = "com.breakfastlabs.frittata.shared";
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub fn app_data_dir() -> PathBuf {
     // ~/Library/Application Support/Axo Pass
     dirs::data_dir().unwrap().join("Axo Pass")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub fn log_data_dir() -> PathBuf {
     // ~/Library/Logs/Axo Pass
     dirs::home_dir().unwrap().join("Library/Logs/Axo Pass")
 }
 
 /// Directory of the broker socket.
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub fn socket_dir() -> PathBuf {
     app_data_dir()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub fn app_data_dir() -> PathBuf {
     // $XDG_DATA_HOME/axo-pass, typically ~/.local/share/axo-pass
     dirs::data_dir().unwrap().join("axo-pass")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub fn log_data_dir() -> PathBuf {
     // $XDG_STATE_HOME/axo-pass, typically ~/.local/state/axo-pass
     dirs::state_dir().unwrap().join("axo-pass")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub fn cache_dir() -> PathBuf {
     // $XDG_CACHE_HOME/axo-pass, typically ~/.cache/axo-pass
     dirs::cache_dir().unwrap().join("axo-pass")
@@ -44,7 +44,7 @@ pub fn cache_dir() -> PathBuf {
 
 /// Directory of the broker socket. `$XDG_RUNTIME_DIR/axo-pass`, or
 /// `/run/user/<uid>/axo-pass` if the variable is unset.
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub fn socket_dir() -> PathBuf {
     let runtime = dirs::runtime_dir()
         .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::geteuid() })));

@@ -1,9 +1,9 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 mod linux;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 mod macos;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(linux)]
 pub use linux::FolderWatch;
-#[cfg(target_os = "macos")]
+#[cfg(macos)]
 pub use macos::FolderWatch;
