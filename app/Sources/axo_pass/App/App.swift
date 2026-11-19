@@ -90,6 +90,15 @@ struct AxoPassApp: App {
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
 
+    // Needs no vault access, so it opens even while locked.
+    Window("Generate Password", id: Self.generatorWindowID) {
+      PasswordGeneratorView()
+        .frame(width: 340)
+        .background(WindowAccessor { $0.isRestorable = false })
+    }
+    .windowResizability(.contentSize)
+    .defaultLaunchBehavior(.suppressed)
+
     Settings {
       SettingsView()
         .environment(appDelegate.model)
@@ -106,6 +115,9 @@ struct AxoPassApp: App {
       CommandGroup(after: .appSettings) {
         LockMenuItem()
           .environment(appDelegate.model)
+      }
+      CommandGroup(after: .newItem) {
+        GeneratePasswordMenuItem()
       }
       CommandGroup(after: .help) {
         AuditLogMenuItem(windows: appDelegate.windows)
@@ -139,6 +151,20 @@ struct AxoPassApp: App {
   static let welcomeWindowID = "welcome"
   static let auditWindowID = "audit"
   static let keychainWindowID = "keychain"
+  static let generatorWindowID = "generator"
+}
+
+/// File ▸ Generate Password…, a standalone generator.
+private struct GeneratePasswordMenuItem: View {
+  @Environment(\.openWindow) private var openWindow
+
+  var body: some View {
+    Button("Generate Password…") {
+      NSApp.setActivationPolicy(.regular)
+      NSApp.activate(ignoringOtherApps: true)
+      openWindow(id: AxoPassApp.generatorWindowID)
+    }
+  }
 }
 
 #if DEBUG

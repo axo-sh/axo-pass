@@ -73,6 +73,7 @@ struct CredentialRow: View {
   // Value-only inline edit.
   @State private var quickEditing: Bool = false
   @State private var quickDraft: String = ""
+  @State private var showingGenerator = false
   // The value the quick editor opened with, used to disable Save until it
   // actually changes. Nil until the secret is revealed.
   @State private var quickOriginal: String? = nil
@@ -328,12 +329,31 @@ struct CredentialRow: View {
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
-        ValueTextEditor(
-          text: $quickDraft,
-          placeholder: "Value",
-          multiline: cred.kind.multiline,
-          minLines: 3,
-          maxLines: 12)
+        HStack(alignment: .top, spacing: 6) {
+          ValueTextEditor(
+            text: $quickDraft,
+            placeholder: "Value",
+            multiline: cred.kind.multiline,
+            minLines: 3,
+            maxLines: 12)
+          if cred.kind.concealed {
+            Button {
+              showingGenerator = true
+            } label: {
+              Label("Generate Password", systemImage: "dice")
+                .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Generate password")
+            .popover(isPresented: $showingGenerator, arrowEdge: .bottom) {
+              PasswordGeneratorView { generated in
+                quickDraft = generated
+                showingGenerator = false
+              }
+              .frame(width: 320)
+            }
+          }
+        }
       }
     }
     .font(.system(.body, design: .monospaced))
