@@ -1,19 +1,29 @@
+#[cfg(feature = "desktop")]
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+#[cfg(feature = "desktop")]
 use ssh_agent_lib::proto::Identity;
+#[cfg(feature = "desktop")]
 use ssh_key::PublicKey;
 use uuid::Uuid;
 
+#[cfg(feature = "desktop")]
 use crate::core::app_broker::ssh::vault_keys::{self, VaultKeyEntry};
+#[cfg(feature = "desktop")]
 use crate::core::app_broker::ssh::vault_keys_path;
+#[cfg(feature = "desktop")]
 use crate::core::config::APP_CONFIG;
+#[cfg(feature = "desktop")]
 use crate::secrets::keychain::generic_password::PasswordEntry;
 use crate::secrets::keychain::managed_key::{KeyPolicy, ManagedSshKey};
+#[cfg(feature = "desktop")]
 use crate::ssh::agent_client::{list_axo_agent_identities, list_system_agent_identities};
 use crate::ssh::ssh_keys::{SshKeyType, SystemSshKey};
+#[cfg(feature = "desktop")]
 use crate::ssh::utils::{compute_md5_fingerprint, compute_sha256_fingerprint, ssh_dir_path};
+#[cfg(feature = "desktop")]
 use crate::ssh::vault_pubkeys;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +150,7 @@ impl From<ManagedSshKey> for SshKeyOverview {
     }
 }
 
+#[cfg(feature = "desktop")]
 impl From<VaultKeyEntry> for SshKeyOverview {
     fn from(entry: VaultKeyEntry) -> Self {
         let pubkey_path = entry
@@ -191,6 +202,7 @@ impl From<VaultKeyEntry> for SshKeyOverview {
     }
 }
 
+#[cfg(feature = "desktop")]
 impl From<Identity> for SshKeyOverview {
     fn from(identity: Identity) -> Self {
         let key_data = identity.credential.key_data();
@@ -224,6 +236,7 @@ impl From<Identity> for SshKeyOverview {
 
 /// Merge on-disk, Secure Enclave-managed, and transient agent-loaded SSH
 /// keys into one deduplicated, fingerprint-keyed view.
+#[cfg(feature = "desktop")]
 pub async fn list_all_ssh_keys() -> anyhow::Result<Vec<SshKeyOverview>> {
     let mut keys_map: HashMap<String, SshKeyOverview> = HashMap::new();
 

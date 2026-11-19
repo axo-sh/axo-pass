@@ -8,6 +8,10 @@ description = "axo-pass core"
 crate-type = ["rlib"]
 name = "axo_pass_core"
 
+[features]
+default = ["desktop"]
+desktop = []
+
 [dependencies]
 aes-gcm = {version = "0.10.3", features = ["zeroize"]}
 age = {version = "0.11.5", features = ["armor"]}

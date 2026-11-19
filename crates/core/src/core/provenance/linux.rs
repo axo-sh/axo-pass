@@ -146,6 +146,7 @@ pub fn get_parent_pid(_pid: u32) -> anyhow::Result<u32> {
 }
 
 /// macOS audit token of `pid`.
+#[cfg(feature = "desktop")]
 pub fn get_audit_token_for_pid(_pid: u32) -> anyhow::Result<[u32; 8]> {
     anyhow::bail!("audit tokens are not supported on this platform")
 }

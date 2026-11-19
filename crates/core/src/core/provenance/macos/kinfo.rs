@@ -160,14 +160,19 @@ pub fn get_effective_uid(pid: u32) -> anyhow::Result<u32> {
     Ok(fetch(pid)?.kp_eproc.e_ucred.cr_uid)
 }
 
+#[cfg(feature = "desktop")]
 type MachPort = u32;
+#[cfg(feature = "desktop")]
 type KernReturn = i32;
 
 // `task_flavor_t` for `TASK_AUDIT_TOKEN` and its count in `natural_t` words.
 // From `mach/task_info.h`.
+#[cfg(feature = "desktop")]
 const TASK_AUDIT_TOKEN: u32 = 15;
+#[cfg(feature = "desktop")]
 const TASK_AUDIT_TOKEN_COUNT: u32 = 8;
 
+#[cfg(feature = "desktop")]
 unsafe extern "C" {
     static mach_task_self_: MachPort;
 
@@ -182,6 +187,7 @@ unsafe extern "C" {
 /// `task_info` and nothing that reads or controls the task. The token names one
 /// process instance, but the pid lookup itself can race with pid reuse. Callers
 /// confirm afterwards that `pid` still names the expected process.
+#[cfg(feature = "desktop")]
 pub fn get_audit_token_for_pid(pid: u32) -> anyhow::Result<[u32; 8]> {
     let mut name: MachPort = 0;
     // SAFETY: `mach_task_self_` is a process-wide constant set before `main`.
@@ -239,6 +245,7 @@ fn fetch(pid: u32) -> anyhow::Result<KinfoProc> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "desktop")]
 mod audit_token_tests {
     use super::{get_audit_token_for_pid, get_parent_pid};
 

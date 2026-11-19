@@ -4,7 +4,9 @@ mod peer;
 mod proc_info;
 mod signing_info;
 
-pub(crate) use helpers::{get_audit_token_for_pid, get_parent_pid};
+#[cfg(feature = "desktop")]
+pub(crate) use helpers::get_audit_token_for_pid;
+pub(crate) use helpers::get_parent_pid;
 use objc2_security::SecCode;
 pub use peer::{PeerError, PeerIdentity, PeerPolicy, own_signing_info};
 pub use proc_info::ProcInfo;

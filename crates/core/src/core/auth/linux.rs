@@ -25,7 +25,7 @@ impl ForeignContext {
 
     /// A context that nothing has unlocked, for tests that pass a context
     /// through.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop"))]
     pub(crate) fn for_test() -> Self {
         ForeignContext
     }

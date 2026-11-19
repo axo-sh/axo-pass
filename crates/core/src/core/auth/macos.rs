@@ -65,7 +65,7 @@ impl ForeignContext {
 
     /// A new context that nothing has evaluated, for tests that pass a context
     /// through without unlocking anything on it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop"))]
     pub(crate) fn for_test() -> Self {
         Self {
             context: unsafe { LAContext::new() },

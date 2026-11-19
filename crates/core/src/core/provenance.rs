@@ -11,8 +11,10 @@ use linux as platform;
 #[cfg(macos)]
 use macos as platform;
 use platform::ProcInfo;
+#[cfg(feature = "desktop")]
+pub(crate) use platform::get_audit_token_for_pid;
+pub(crate) use platform::get_parent_pid;
 pub use platform::{PeerError, PeerIdentity, PeerPolicy, team_identifier};
-pub(crate) use platform::{get_audit_token_for_pid, get_parent_pid};
 use serde::{Deserialize, Serialize};
 
 use crate::audit::Actor;

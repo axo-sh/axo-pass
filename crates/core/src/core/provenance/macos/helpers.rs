@@ -112,9 +112,9 @@ pub fn get_static_code_for_sec_code(code: &SecCode) -> anyhow::Result<Retained<S
     }
 }
 
-pub use crate::core::provenance::macos::kinfo::{
-    get_audit_token_for_pid, get_effective_uid, get_parent_pid,
-};
+#[cfg(feature = "desktop")]
+pub use crate::core::provenance::macos::kinfo::get_audit_token_for_pid;
+pub use crate::core::provenance::macos::kinfo::{get_effective_uid, get_parent_pid};
 
 /// Check that `code` is validly signed and that the running process matches
 /// its signature, without any further requirement.

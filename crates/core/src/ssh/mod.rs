@@ -1,4 +1,6 @@
+#[cfg(feature = "desktop")]
 pub mod agent_client;
+#[cfg(feature = "desktop")]
 pub mod agent_conf;
 pub mod app_grants;
 pub mod askpass;

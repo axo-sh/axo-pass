@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::audit::{self, Source};
+#[cfg(feature = "desktop")]
 use crate::core::app_broker;
 use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::plain_item::PlainItem;
@@ -46,10 +47,20 @@ impl ProtectedSettings {
         if audit::process_source() == Source::App {
             return Self::load();
         }
+        Self::request_from_app()
+    }
+
+    #[cfg(feature = "desktop")]
+    fn request_from_app() -> Self {
         app_broker::request_protected_settings().unwrap_or_else(|e| {
             log::debug!("Protected settings unavailable, using defaults: {e}");
             Self::default()
         })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    fn request_from_app() -> Self {
+        Self::default()
     }
 
     /// Read the keychain item. Needs the app's keychain access group. Gives the
