@@ -5,7 +5,7 @@ use objc2_security::{
     kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
 };
 
-use crate::secrets::keychain::macos::CFErrorOut;
+use crate::secrets::keychain::apple::CFErrorOut;
 
 pub enum AccessControl {
     GenericPassword,

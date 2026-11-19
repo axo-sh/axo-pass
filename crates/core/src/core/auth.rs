@@ -1,9 +1,9 @@
+#[cfg(apple)]
+mod apple;
 #[cfg(linux)]
 mod linux;
-#[cfg(macos)]
-mod macos;
 
+#[cfg(apple)]
+pub use apple::*;
 #[cfg(linux)]
 pub use linux::*;
-#[cfg(macos)]
-pub use macos::*;

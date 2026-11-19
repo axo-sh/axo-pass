@@ -10,7 +10,7 @@ use objc2_foundation::NSString;
 use objc2_local_authentication::{LAAccessControlOperation, LAContext, LAPolicy};
 use ssh_key::Signature;
 
-use crate::core::auth::macos::la_context::create_la_auth_callback;
+use crate::core::auth::apple::la_context::create_la_auth_callback;
 use crate::core::dirs::app_data_dir;
 use crate::secrets::keychain::AccessControl;
 use crate::secrets::keychain::errors::KeychainError;

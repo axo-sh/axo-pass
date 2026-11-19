@@ -26,7 +26,7 @@ use ssh_key::public::KeyData;
 use zeroize::Zeroizing;
 
 use crate::secrets::keychain::errors::KeychainError;
-use crate::secrets::keychain::macos::{AccessControl, CFErrorOut};
+use crate::secrets::keychain::apple::{AccessControl, CFErrorOut};
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 use crate::secrets::keychain::sec1_utils::sec1_to_ssh_ecdsa;
 
@@ -94,6 +94,41 @@ impl ManagedKey {
             label,
             tag,
             sec_key,
+        }
+    }
+
+    /// Software key of `secret`, with no keychain item and no Secure Enclave.
+    /// Its public key and signatures have the formats of a Secure Enclave key.
+    pub fn from_secret(
+        label: Option<String>,
+        secret: &p256::SecretKey,
+    ) -> Result<ManagedKey, KeychainError> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+
+        // Security.framework reads a private key as `04 || X || Y || K`.
+        let mut external = secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        external.extend_from_slice(&secret.to_bytes());
+        unsafe {
+            let attrs = CFMutableDictionary::<CFString, CFType>::empty();
+            attrs.add(kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom);
+            attrs.add(kSecAttrKeyClass, KeyClass::Private.as_objc());
+            let mut cf_error = CFErrorOut::new();
+            let sec_key = SecKey::with_data(
+                &CFData::from_bytes(&external),
+                attrs.as_opaque(),
+                cf_error.out(),
+            );
+            if let Some(cf_error) = cf_error.get() {
+                return Err(KeychainError::Generic(anyhow::anyhow!(
+                    "Failed to import software key: {cf_error}"
+                )));
+            }
+            let sec_key = sec_key.ok_or(KeychainError::KeyCreationFailed)?;
+            Ok(ManagedKey::new(label, None, sec_key.into()))
         }
     }
 

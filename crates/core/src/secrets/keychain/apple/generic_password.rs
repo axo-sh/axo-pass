@@ -21,7 +21,7 @@ use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
 pub use crate::secrets::keychain::generic_password::query::GenericPasswordQuery;
 use crate::secrets::keychain::keychain_query::KeychainQuery;
-use crate::secrets::keychain::macos::AccessControl;
+use crate::secrets::keychain::apple::AccessControl;
 
 static SERVICE_NAME: &str = "com.breakfastlabs.frittata";
 
