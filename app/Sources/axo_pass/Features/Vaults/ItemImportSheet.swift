@@ -17,15 +17,16 @@ enum ImportSource: String, CaseIterable, Identifiable {
     }
   }
 
-  /// Name of the new vault.
-  var defaultVaultName: String { title }
-
-  var symbol: String {
+  /// Label of the source in the format list.
+  var listLabel: String {
     switch self {
-    case .onePassword: "1.circle.fill"
-    case .applePasswords: "key.fill"
+    case .onePassword: "1Password 7 and earlier (.1pif)"
+    case .applePasswords: "Apple Passwords (.csv)"
     }
   }
+
+  /// Name of the new vault.
+  var defaultVaultName: String { title }
 
   /// Steps to export from the source.
   var exportSteps: [String] {
@@ -49,9 +50,9 @@ enum ImportSource: String, CaseIterable, Identifiable {
   var formatNote: String {
     switch self {
     case .onePassword:
-      "1Password 8 exports a different format (.1pux), which Axo Pass cannot read yet. Use 1Password 7 or earlier."
+      "1Password 8 (.1pux) is not supported yet. Warning: Export is saved without encryption. Passwords will be visible to anyone with access to the file. Delete it after import."
     case .applePasswords:
-      "The export holds logins only. It has no notes, attachments, or folders, and no record ids, so importing it twice adds every login twice."
+      "Only logins are exported. Other items such as passkeys and wifi passwords are not supported. Warning: Export is saved without encryption. Passwords will be visible to anyone with access to the file. Delete it after import."
     }
   }
 
@@ -122,17 +123,14 @@ struct ItemImportSheet: View {
 
   private var formatStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      header("Import Passwords", "Choose where the export comes from.")
+      header("Import Passwords", "Import items from another password manager.")
       VStack(spacing: 8) {
         ForEach(ImportSource.allCases) { option in
           Button {
             choose(option)
           } label: {
             HStack(spacing: 10) {
-              Image(systemName: option.symbol)
-                .frame(width: 24)
-                .foregroundStyle(Color.accentColor)
-              Text(option.title)
+              Text(option.listLabel)
               Spacer()
               Image(systemName: "chevron.right").foregroundStyle(.tertiary)
             }
@@ -152,23 +150,17 @@ struct ItemImportSheet: View {
 
   private var instructionsStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      header("Export from \(source.title)", "Axo Pass reads an export file, not the app.")
+      header("Export from \(source.title)", source.formatNote)
       VStack(alignment: .leading, spacing: 6) {
         ForEach(Array(source.exportSteps.enumerated()), id: \.offset) { index, text in
-          Text("\(index + 1). \(text)").fixedSize(horizontal: false, vertical: true)
+          HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(index + 1).")
+              .monospacedDigit()
+              .frame(width: 16, alignment: .trailing)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+          }
         }
       }
-      Text(source.formatNote)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-      Label(
-        "The export holds every password as plain text. Delete it after the import.",
-        systemImage: "exclamationmark.triangle.fill"
-      )
-      .font(.caption)
-      .foregroundStyle(.orange)
-      .fixedSize(horizontal: false, vertical: true)
       HStack {
         Button("Back") { goBack(to: .format) }
         Spacer()
@@ -188,17 +180,15 @@ struct ItemImportSheet: View {
           .foregroundStyle(file == nil ? .secondary : .primary)
           .lineLimit(1)
           .truncationMode(.middle)
+        Spacer(minLength: 0)
       }
+      .padding(10)
+      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary))
       Form {
         TextField("Vault name", text: $vaultName)
         if source.hasTrash {
-          Toggle("Include deleted items", isOn: $includeTrashed)
+          Toggle("Import deleted items into Recently Deleted", isOn: $includeTrashed)
         }
-      }
-      if source.hasTrash {
-        Text("Deleted items go to Recently Deleted in the new vault.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
       }
       HStack {
         Button("Back") { goBack(to: .instructions) }
@@ -218,26 +208,32 @@ struct ItemImportSheet: View {
   private var reportStep: some View {
     if let preview {
       VStack(alignment: .leading, spacing: 16) {
-        header("Review", "Nothing is written until you import.")
-        GroupBox {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(countLine("item", preview.items))
-            if preview.trashed > 0 {
-              Text("\(preview.trashed) of them deleted").foregroundStyle(.secondary)
-            }
-            if preview.files > 0 { Text(countLine("attachment", preview.files)) }
-            if preview.folders > 0 { Text(countLine("folder", preview.folders)) }
-            if preview.skippedTrashed > 0 {
-              Text("\(preview.skippedTrashed) deleted left out").foregroundStyle(.secondary)
-            }
-            Text("New vault: \(trimmedName)").foregroundStyle(.secondary)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(6)
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Review").font(.headline)
+          Text(
+            "\(countLine("item", preview.items)) will be imported into a new vault, \(trimmedName)."
+          )
+          .fixedSize(horizontal: false, vertical: true)
         }
-        if source == .applePasswords {
-          note("The export has no record ids, so importing it again adds every login again.")
-        } else {
+        if preview.trashed > 0 || preview.files > 0 || preview.folders > 0
+          || preview.skippedTrashed > 0
+        {
+          GroupBox {
+            VStack(alignment: .leading, spacing: 4) {
+              if preview.trashed > 0 {
+                Text("\(preview.trashed) of them deleted").foregroundStyle(.secondary)
+              }
+              if preview.files > 0 { Text(countLine("attachment", preview.files)) }
+              if preview.folders > 0 { Text(countLine("folder", preview.folders)) }
+              if preview.skippedTrashed > 0 {
+                Text("\(preview.skippedTrashed) deleted left out").foregroundStyle(.secondary)
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+          }
+        }
+        if source != .applePasswords {
           note("The vault is new, so importing the same export again creates another vault.")
         }
         if !preview.repeatedUuids.isEmpty {
@@ -273,7 +269,15 @@ struct ItemImportSheet: View {
   private var doneStep: some View {
     if let result {
       VStack(alignment: .leading, spacing: 16) {
-        header("Import Complete", "Added \(countLine("item", result.added)) to “\(trimmedName)”.")
+        Text("Import Complete").font(.headline)
+        VStack(spacing: 10) {
+          Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 48))
+            .foregroundStyle(.green)
+          Text("Imported \(countLine("item", result.added)) to \(trimmedName).")
+            .font(.callout)
+        }
+        .frame(maxWidth: .infinity)
         if result.filesAdded > 0 {
           Text(countLine("attachment", result.filesAdded)).font(.callout)
         }
@@ -302,7 +306,6 @@ struct ItemImportSheet: View {
           "The export holds every password as plain text. Delete it now.",
           systemImage: "exclamationmark.triangle.fill"
         )
-        .font(.caption)
         .foregroundStyle(.orange)
         if let trashError {
           Text(trashError).font(.caption).foregroundStyle(.red)
