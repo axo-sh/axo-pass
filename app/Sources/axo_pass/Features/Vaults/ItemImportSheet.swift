@@ -17,11 +17,19 @@ enum ImportSource: String, CaseIterable, Identifiable {
     }
   }
 
-  /// Label of the source in the format list.
-  var listLabel: String {
+  /// Detail line of the source in the format list.
+  var listDetail: String {
     switch self {
-    case .onePassword: "1Password 7 and earlier (.1pif)"
-    case .applePasswords: "Apple Passwords (.csv)"
+    case .onePassword: "1Password 7 and earlier, .1pif export"
+    case .applePasswords: "Passwords app, .csv export"
+    }
+  }
+
+  /// Symbol of the source in the format list.
+  var symbol: String {
+    switch self {
+    case .onePassword: "lock.fill"
+    case .applePasswords: "key.fill"
     }
   }
 
@@ -68,8 +76,17 @@ struct ItemImportSheet: View {
   let model: VaultsModel
   /// Called with the new vault key when the user finishes the last step.
   var onFinished: ((String) -> Void)? = nil
+  /// Called in place of dismissing if the user cancels. Set if the view is
+  /// shown in a window instead of a sheet.
+  var onCancel: (() -> Void)? = nil
 
   @Environment(\.dismiss) private var dismiss
+
+  private var isEmbedded: Bool { onCancel != nil }
+
+  /// Minimum height of the flow. Steps of different lengths resize the window
+  /// less.
+  private static let minHeight: CGFloat = 360
 
   private enum Step {
     case format
@@ -93,18 +110,47 @@ struct ItemImportSheet: View {
   @State private var trashed = false
   @State private var trashError: String?
 
+  /// Direction of the last step change. Sets the slide direction.
+  @State private var forward = true
+
   private var trimmedName: String { vaultName.trimmingCharacters(in: .whitespaces) }
 
+  /// Slide of a step. Forward steps come in from the right.
+  private var stepTransition: AnyTransition {
+    .asymmetric(
+      insertion: .move(edge: forward ? .trailing : .leading),
+      removal: .move(edge: forward ? .leading : .trailing))
+  }
+
   var body: some View {
+    ZStack(alignment: .topLeading) {
+      page
+        .id(step)
+        .transition(stepTransition)
+    }
+    .frame(width: isEmbedded ? nil : 460)
+    .frame(
+      maxWidth: isEmbedded ? .infinity : nil, minHeight: Self.minHeight,
+      alignment: .topLeading
+    )
+    .clipped()
+    .interactiveDismissDisabled(step == .importing)
+  }
+
+  private var page: some View {
     VStack(alignment: .leading, spacing: 16) {
-      switch step {
-      case .format: formatStep
-      case .instructions: instructionsStep
-      case .options: optionsStep
-      case .report: reportStep
-      case .importing: importingStep
-      case .done: doneStep
+      // Each step ends with its button row, which is pushed to the bottom.
+      Group {
+        switch step {
+        case .format: formatStep
+        case .instructions: instructionsStep
+        case .options: optionsStep
+        case .report: reportStep
+        case .importing: importingStep
+        case .done: doneStep
+        }
       }
+      .frame(maxHeight: .infinity)
 
       if let error {
         Label(error, systemImage: "xmark.circle.fill")
@@ -114,9 +160,8 @@ struct ItemImportSheet: View {
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(20)
-    .frame(width: 460)
-    .interactiveDismissDisabled(step == .importing)
+    .padding(isEmbedded ? 36 : 28)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
   // MARK: - Steps
@@ -129,21 +174,20 @@ struct ItemImportSheet: View {
           Button {
             choose(option)
           } label: {
-            HStack(spacing: 10) {
-              Text(option.listLabel)
-              Spacer()
-              Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-            }
-            .padding(10)
-            .contentShape(.rect)
+            SourceRow(source: option)
           }
           .buttonStyle(.plain)
-          .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 8))
         }
       }
+      Spacer(minLength: 0)
       HStack {
-        Spacer()
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+        if isEmbedded {
+          Button("Back") { cancel() }.keyboardShortcut(.cancelAction)
+          Spacer()
+        } else {
+          Spacer()
+          Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
+        }
       }
     }
   }
@@ -161,11 +205,12 @@ struct ItemImportSheet: View {
           }
         }
       }
+      Spacer(minLength: 0)
       HStack {
         Button("Back") { goBack(to: .format) }
         Spacer()
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button("Continue") { step = .options }.keyboardShortcut(.defaultAction)
+        Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
+        Button("Continue") { go(to: .options) }.keyboardShortcut(.defaultAction)
       }
     }
   }
@@ -190,13 +235,14 @@ struct ItemImportSheet: View {
           Toggle("Import deleted items into Recently Deleted", isOn: $includeTrashed)
         }
       }
+      Spacer(minLength: 0)
       HStack {
         Button("Back") { goBack(to: .instructions) }
         Spacer()
         if isWorking {
           ProgressView().controlSize(.small)
         }
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+        Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
         Button("Review") { runPreview() }
           .keyboardShortcut(.defaultAction)
           .disabled(file == nil || trimmedName.isEmpty || isWorking)
@@ -209,7 +255,7 @@ struct ItemImportSheet: View {
     if let preview {
       VStack(alignment: .leading, spacing: 16) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Review").font(.headline)
+          title("Review")
           Text(
             "\(countLine("item", preview.items)) will be imported into a new vault, \(trimmedName)."
           )
@@ -242,10 +288,11 @@ struct ItemImportSheet: View {
           )
         }
         if !preview.dropped.isEmpty { droppedList(preview.dropped) }
+        Spacer(minLength: 0)
         HStack {
           Button("Back") { goBack(to: .options) }
           Spacer()
-          Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+          Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction)
           Button("Import") { runImport() }
             .keyboardShortcut(.defaultAction)
             .disabled(preview.items == 0)
@@ -269,7 +316,7 @@ struct ItemImportSheet: View {
   private var doneStep: some View {
     if let result {
       VStack(alignment: .leading, spacing: 16) {
-        Text("Import Complete").font(.headline)
+        title("Import Complete")
         VStack(spacing: 10) {
           Image(systemName: "checkmark.circle.fill")
             .font(.system(size: 48))
@@ -277,7 +324,7 @@ struct ItemImportSheet: View {
           Text("Imported \(countLine("item", result.added)) to \(trimmedName).")
             .font(.callout)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         if result.filesAdded > 0 {
           Text(countLine("attachment", result.filesAdded)).font(.callout)
         }
@@ -311,6 +358,7 @@ struct ItemImportSheet: View {
           Text(trashError).font(.caption).foregroundStyle(.red)
             .fixedSize(horizontal: false, vertical: true)
         }
+        Spacer(minLength: 0)
         HStack {
           if trashed {
             Label("Moved to the Trash", systemImage: "checkmark.circle.fill")
@@ -336,9 +384,15 @@ struct ItemImportSheet: View {
 
   // MARK: - Pieces
 
+  private func title(_ text: String) -> some View {
+    Text(text)
+      .font(.title2)
+      .fontWeight(.semibold)
+  }
+
   private func header(_ title: String, _ detail: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(title).font(.headline)
+      self.title(title)
       Text(detail)
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -396,14 +450,27 @@ struct ItemImportSheet: View {
       file = nil
       includeTrashed = false
     }
-    error = nil
-    step = .instructions
+    go(to: .instructions)
   }
 
   private func goBack(to previous: Step) {
-    error = nil
-    preview = nil
-    step = previous
+    go(to: previous, forward: false) { preview = nil }
+  }
+
+  /// Slide to `next` and clear the error. `update` runs with the step change.
+  /// Direction is set one update before the step changes, so the outgoing step
+  /// slides the same way as the incoming one.
+  private func go(
+    to next: Step, forward: Bool = true, _ update: @escaping () -> Void = {}
+  ) {
+    self.forward = forward
+    DispatchQueue.main.async {
+      withAnimation(.smooth(duration: 0.35)) {
+        error = nil
+        update()
+        step = next
+      }
+    }
   }
 
   /// Pick the export. A 1Password export is a `.1pif` file or a folder, and
@@ -435,8 +502,7 @@ struct ItemImportSheet: View {
         source: file, includeTrashed: source.hasTrash && includeTrashed)
       isWorking = false
       if let found = outcome.preview {
-        preview = found
-        step = .report
+        go(to: .report) { preview = found }
       } else {
         error = outcome.message
       }
@@ -445,17 +511,14 @@ struct ItemImportSheet: View {
 
   private func runImport() {
     guard let file, !trimmedName.isEmpty else { return }
-    step = .importing
-    error = nil
+    go(to: .importing)
     Task {
       let outcome = await model.importItems(
         source: file, name: trimmedName, includeTrashed: source.hasTrash && includeTrashed)
       if let done = outcome.result {
-        result = done
-        step = .done
+        go(to: .done) { result = done }
       } else {
-        error = outcome.message
-        step = .report
+        go(to: .report, forward: false) { error = outcome.message }
       }
     }
   }
@@ -474,8 +537,51 @@ struct ItemImportSheet: View {
     }
   }
 
+  private func cancel() {
+    if let onCancel { onCancel() } else { dismiss() }
+  }
+
   private func finish(_ vaultKey: String) {
     onFinished?(vaultKey)
-    dismiss()
+    if !isEmbedded { dismiss() }
+  }
+}
+
+/// Row of an import source in the format list. Matches the welcome screen
+/// choice cards. Background is lighter on hover.
+private struct SourceRow: View {
+  let source: ImportSource
+
+  @State private var hovering = false
+
+  var body: some View {
+    HStack(spacing: 12) {
+      TodayIcon(symbol: source.symbol, color: .accentColor)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(source.title)
+          .fontWeight(.medium)
+        Text(source.listDetail)
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 0)
+      Image(systemName: "chevron.right")
+        .font(.callout.weight(.semibold))
+        .foregroundStyle(.tertiary)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.background.secondary),
+      in: RoundedRectangle(cornerRadius: 10)
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: 10)
+        .strokeBorder(.separator)
+    }
+    .contentShape(.rect)
+    .onHover { hovering = $0 }
+    .animation(.easeOut(duration: 0.12), value: hovering)
   }
 }

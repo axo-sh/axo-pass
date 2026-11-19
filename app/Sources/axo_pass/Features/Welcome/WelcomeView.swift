@@ -31,8 +31,11 @@ struct WelcomeView: View {
   /// Whether a sync sheet opened by a choice is showing. Closing it ends the
   /// choice.
   @State private var syncChoiceOpen = false
-  /// Whether the import sheet is showing. Finishing it ends the choice.
+  /// Whether the import flow is showing in place of the choices. Finishing it
+  /// ends the choice.
   @State private var showingItemImport = false
+
+  private let width: CGFloat = 460
 
   /// Reason shown with the unlock prompt. Without Touch ID the prompt asks for
   /// the login password.
@@ -42,7 +45,36 @@ struct WelcomeView: View {
       : "Axo Pass uses your login password to protect your vaults."
   }
 
+  /// Choices page and import flow side by side. The import flow slides in from
+  /// the right and the choices page moves out to the left. The window keeps
+  /// the height of the taller page.
   var body: some View {
+    ZStack(alignment: .top) {
+      choicesPage
+        .offset(x: showingItemImport ? -width : 0)
+        .allowsHitTesting(!showingItemImport)
+        .accessibilityHidden(showingItemImport)
+
+      if showingItemImport {
+        ItemImportSheet(
+          model: model,
+          onFinished: { _ in finish() },
+          onCancel: { setShowingItemImport(false) }
+        )
+        .transition(.move(edge: .trailing))
+      }
+    }
+    .frame(width: width)
+    .clipped()
+    .syncSheets()
+    .onChange(of: sync.sheet?.id) { old, new in
+      guard old != nil, new == nil, syncChoiceOpen else { return }
+      syncChoiceOpen = false
+      endSyncChoice()
+    }
+  }
+
+  private var choicesPage: some View {
     VStack(spacing: 20) {
       AxoLogo(spins: false)
         .frame(width: 72, height: 72)
@@ -124,16 +156,12 @@ struct WelcomeView: View {
       .multilineTextAlignment(.center)
     }
     .padding(32)
-    .frame(width: 460)
-    .syncSheets()
-    .sheet(isPresented: $showingItemImport) {
-      ItemImportSheet(model: model) { _ in finish() }
-    }
-    .onChange(of: sync.sheet?.id) { old, new in
-      guard old != nil, new == nil, syncChoiceOpen else { return }
-      syncChoiceOpen = false
-      endSyncChoice()
-    }
+    .frame(width: width)
+  }
+
+  /// Slide the import flow in or out.
+  private func setShowingItemImport(_ showing: Bool) {
+    withAnimation(.smooth(duration: 0.35)) { showingItemImport = showing }
   }
 
   /// Run `choice`. Every choice unlocks first. A cancelled prompt leaves the
@@ -153,7 +181,7 @@ struct WelcomeView: View {
           error = model.actionError ?? "Could not create the vault."
         }
       case .importItems:
-        showingItemImport = true
+        setShowingItemImport(true)
       case .pair:
         guard sync.ensureFolder() else { return }
         syncChoiceOpen = true
