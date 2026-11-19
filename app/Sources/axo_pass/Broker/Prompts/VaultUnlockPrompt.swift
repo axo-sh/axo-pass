@@ -3,7 +3,6 @@ import AxoPassFFI
 import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 import SwiftUI
-import UserNotifications
 
 /// Draws the authorization prompt for `ap item list`, `ap item get`, `ap read`,
 /// and `ap item set`, which the core's broker delegates here.
@@ -145,20 +144,21 @@ final class VaultUnlockPromptModel {
   /// No prompt appeared, so the notification is the only sign of the fill.
   func notifyPreapproved(prompt: VaultAccessPrompt, account: String?) {
     guard case .fillLogin(let page, _, _, _, _) = prompt.action else { return }
-    let content = UNMutableNotificationContent()
-    content.title = "Login filled"
     var body = "Filled \(account ?? "a login") on \(page.host)"
     if case .browser(let name, _) = prompt.client {
       body += " in \(name)"
     }
-    content.body = body + "."
-    let request = UNNotificationRequest(
-      identifier: UUID().uuidString, content: content, trigger: nil)
-    UNUserNotificationCenter.current().add(request) { error in
-      if let error {
-        NSLog("VaultUnlockPrompt: could not post notification: %@", String(describing: error))
-      }
+    ActivityNotification.loginFills.post(title: "Login filled", body: body + ".")
+  }
+
+  /// Tell the user that a vault request failed. A cancellation does not notify.
+  private func reportFailure(prompt: VaultAccessPrompt, outcome: PromptOutcome) {
+    guard case .failed = outcome else { return }
+    var body = "A request to use a vault failed"
+    if let caller = prompt.caller, !caller.isEmpty {
+      body += " for \(caller)"
     }
+    ActivityNotification.failures.post(title: "Vault request failed", body: body + ".")
   }
 
   /// The choice to reuse this approval, offered on a fill for a verified
@@ -236,6 +236,7 @@ final class VaultUnlockPromptModel {
     showTask = nil
     panel.hide()
     grants.end(Self.grantKey(prompt), outcome: outcome)
+    reportFailure(prompt: prompt, outcome: outcome)
 
     let offer = listingGrant
     let peer = listingPeer

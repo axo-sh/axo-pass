@@ -201,6 +201,16 @@ private struct GeneralSettingsView: View {
 
       SettingsDivider()
 
+      SettingsRow("Notifications:") {
+        ForEach(ActivityNotification.allCases) { kind in
+          NotificationToggle(kind: kind)
+        }
+        Text("Shown when a key or login is used without a prompt, or a request fails.")
+          .captionStyle()
+      }
+
+      SettingsDivider()
+
       SettingsRow("Activity log:") {
         Toggle(
           "Include account details",
@@ -262,6 +272,22 @@ private struct GeneralSettingsView: View {
       return minutes == 1 ? "1 minute" : "\(minutes) minutes"
     }
     return value == 1 ? "1 second" : "\(value) seconds"
+  }
+}
+
+/// Switch for one kind of notification.
+private struct NotificationToggle: View {
+  let kind: ActivityNotification
+  @AppStorage private var isOn: Bool
+
+  init(kind: ActivityNotification) {
+    self.kind = kind
+    _isOn = AppStorage(wrappedValue: true, kind.key)
+  }
+
+  var body: some View {
+    Toggle(kind.label, isOn: $isOn)
+      .help(kind.caption)
   }
 }
 

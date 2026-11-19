@@ -154,27 +154,22 @@ final class SigningPromptModel {
 
   // MARK: - Reporting
 
-  /// Tell the user a key was used. A signature served from a still-valid
-  /// approval raises no prompt and shows no window, so this notification is the
-  /// only indication it happened.
+  /// Tell the user a key was used, or that using it failed. A signature served
+  /// from a still-valid approval raises no prompt and shows no window, so this
+  /// notification is the only indication it happened. A cancellation does not
+  /// notify.
   private func report(name: String, caller: String?, managed: Bool, outcome: PromptOutcome) {
-    guard case .succeeded = outcome else { return }
-
-    let content = UNMutableNotificationContent()
-    content.title = "SSH key used"
     let kind = managed ? "Secure Enclave SSH key" : "SSH key"
-    if let caller, !caller.isEmpty {
-      content.body = "Signed with \(kind) \(name) for \(caller)."
-    } else {
-      content.body = "Signed with \(kind) \(name)."
-    }
-
-    let request = UNNotificationRequest(
-      identifier: UUID().uuidString, content: content, trigger: nil)
-    UNUserNotificationCenter.current().add(request) { error in
-      if let error {
-        NSLog("SigningPrompt: could not post notification: %@", String(describing: error))
-      }
+    let suffix = if let caller, !caller.isEmpty { " for \(caller)" } else { "" }
+    switch outcome {
+    case .succeeded:
+      ActivityNotification.signatures.post(
+        title: "SSH key used", body: "Signed with \(kind) \(name)\(suffix).")
+    case .failed:
+      ActivityNotification.failures.post(
+        title: "SSH signing failed", body: "Could not sign with \(kind) \(name)\(suffix).")
+    case .cancelled:
+      break
     }
   }
 

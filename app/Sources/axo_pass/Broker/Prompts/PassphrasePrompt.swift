@@ -26,6 +26,10 @@ final class PassphrasePromptModel {
   private var nextPromptID: UInt64 = 0
   private var typedPassphraseRequested = false
 
+  /// Whether the request in flight is answered from an earlier approval, so
+  /// `end` reports the reuse.
+  private var reusingApproval = false
+
   /// Where the prompts are drawn. `VaultsModel` watches it, so the app can step
   /// aside while one is up. Watching the panel rather than the broker's
   /// `begin`/`end` pair means a request served with no UI at all does not
@@ -46,10 +50,14 @@ final class PassphrasePromptModel {
   /// prompt on screen.
   func begin(prompt: PassphrasePrompt, peer: RequestActor) -> UInt64 {
     typedPassphraseRequested = false
+    reusingApproval = false
     let context: LAContext
     let view: LAAuthenticationView
     if let key = Self.grantKey(prompt) {
       let grant = grants.begin(key, peer: peer)
+      // `begin` drops an expired or unsettled grant, so an approval on the grant
+      // it returns is still valid.
+      reusingApproval = grant.approvedAt != nil
       context = grant.context
       view = grant.view
     } else {
@@ -78,10 +86,39 @@ final class PassphrasePromptModel {
     showTask?.cancel()
     showTask = nil
     panel.hide()
+    let reused = reusingApproval
+    reusingApproval = false
     if let key = Self.grantKey(prompt) {
       grants.end(key, outcome: outcome)
     } else {
       endListing()
+    }
+    report(prompt: prompt, outcome: outcome, reused: reused)
+  }
+
+  /// Tell the user that a request was answered from an earlier approval, or
+  /// that it failed. A reused approval raises no prompt, so the notification is
+  /// the only sign of it. A cancellation does not notify.
+  private func report(prompt: PassphrasePrompt, outcome: PromptOutcome, reused: Bool) {
+    let target =
+      switch prompt.kind {
+      case .gpg: "OpenPGP key"
+      case .ssh: "SSH key"
+      case .age: "age key"
+      case .keychainList, .ageList: "saved passwords"
+      }
+    let suffix = if let caller = prompt.caller, !caller.isEmpty { " for \(caller)" } else { "" }
+    switch outcome {
+    case .succeeded where reused:
+      ActivityNotification.reusedApprovals.post(
+        title: "\(target.prefix(1).uppercased() + target.dropFirst()) unlocked",
+        body: "Reused an earlier approval\(suffix).",
+        identifier: "reuse-\(prompt.kind)-\(prompt.keyId ?? "")-\(prompt.callerIdentity ?? "")")
+    case .failed:
+      ActivityNotification.failures.post(
+        title: "Could not unlock \(target)", body: "The request failed\(suffix).")
+    case .succeeded, .cancelled:
+      break
     }
   }
 

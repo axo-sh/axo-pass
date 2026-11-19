@@ -69,11 +69,14 @@ enum Preferences {
   /// Register defaults so a read before the user has ever opened Settings
   /// returns the same value the window shows.
   static func registerDefaults() {
-    UserDefaults.standard.register(defaults: [
+    let defaults: [String: Any] = [
       Key.autoLockMinutes: defaultAutoLockMinutes,
       Key.reuseApprovals: defaultReuseApprovals,
       Key.sshStartOnLogin: defaultSshStartOnLogin,
-    ])
+      Key.quitBehavior: defaultQuitBehavior.rawValue,
+    ]
+    UserDefaults.standard.register(
+      defaults: defaults.merging(ActivityNotification.defaults) { current, _ in current })
   }
 
   /// Idle time before the app locks, or nil when the user has turned the idle
