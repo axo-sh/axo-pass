@@ -634,6 +634,34 @@ pub fn create_login(
     Ok(item_key)
 }
 
+/// Create a login with an empty password credential and an empty username
+/// credential, the way the New Login sheet does. A key that is already taken
+/// gets a numeric suffix. The caller saves the vault. Returns the item's key.
+pub fn create_blank_login(
+    vw: &mut VaultHandle,
+    item_key: &str,
+    title: &str,
+) -> Result<String, Error> {
+    if !validate_key(item_key) {
+        return Err(Error::InvalidItemKey(item_key.to_string()));
+    }
+    let item_key = unused_item_key(vw, item_key)?;
+
+    write_login(
+        vw,
+        LoginWrite {
+            item_key: &item_key,
+            title,
+            password_key: "password",
+            password: SecretString::from(String::new()),
+            username: Some(""),
+            websites: &[],
+            match_kind: MatchKind::Domain,
+        },
+    )?;
+    Ok(item_key)
+}
+
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }

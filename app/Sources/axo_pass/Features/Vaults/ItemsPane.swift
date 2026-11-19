@@ -157,18 +157,11 @@ struct ItemsPane: View {
       }
     }
     .sheet(isPresented: $showingNewLoginSheet) {
-      NewLoginSheet(
-        onSubmit: { website, username, password, key, title in
-          guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
-          let created = await model.createLogin(
-            vaultKey: vaultKey, website: website,
-            username: username.isEmpty ? nil : username, password: password,
-            itemKey: key.isEmpty ? nil : key, title: title.isEmpty ? nil : title)
-          return created == nil ? (model.actionError ?? "Failed to create login.") : nil
-        },
-        generatePassword: { length, symbols in
-          model.generatePassword(length: length, symbols: symbols)
-        })
+      NewItemSheet(heading: "New Login") { key, title in
+        guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
+        let created = await model.createLogin(vaultKey: vaultKey, itemKey: key, title: title)
+        return created == nil ? (model.actionError ?? "Failed to create login.") : nil
+      }
     }
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
@@ -485,6 +478,7 @@ private struct FolderRow: View {
 }
 
 private struct NewItemSheet: View {
+  var heading = "New Item"
   let onSubmit: (_ key: String, _ title: String) async -> String?
 
   @Environment(\.dismiss) private var dismiss
@@ -495,7 +489,7 @@ private struct NewItemSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("New Item").font(.headline)
+      Text(heading).font(.headline)
       Form {
         TextField("Title", text: $title)
         TextField("Key", text: $key)

@@ -2052,16 +2052,11 @@ final class VaultsModel {
 
   /// Create a login and select it. Returns the new item's key, or nil with
   /// `actionError` set.
-  func createLogin(
-    vaultKey: String, website: String, username: String?, password: String, itemKey: String?,
-    title: String?
-  ) async -> String? {
+  func createLogin(vaultKey: String, itemKey: String, title: String) async -> String? {
     actionError = nil
     let key: String
     do {
-      key = try await core.createLogin(
-        vaultKey: vaultKey, website: website, username: username, password: password,
-        itemKey: itemKey, title: title)
+      key = try await core.createLogin(vaultKey: vaultKey, itemKey: itemKey, title: title)
     } catch {
       actionError = String(describing: error)
       return nil

@@ -2117,29 +2117,18 @@ impl AxoPass {
         Ok(())
     }
 
-    /// Create a login from a website, an optional username, and a password.
-    /// The item key and title come from the website unless given, and a taken
+    /// Create a login with an empty username and an empty password. A taken
     /// key gets a numeric suffix. Returns the item's key.
     pub async fn create_login(
         &self,
         vault_key: String,
-        website: String,
-        username: Option<String>,
-        password: String,
-        item_key: Option<String>,
-        title: Option<String>,
+        item_key: String,
+        title: String,
     ) -> Result<String, FfiError> {
         let key = vault_key.clone();
         let (created_key, ids) = self
             .edit_vault(vault_key, move |vw| {
-                let created_key = autofill::create_login(
-                    vw,
-                    &website,
-                    username.as_deref(),
-                    SecretString::from(password),
-                    item_key.as_deref(),
-                    title.as_deref(),
-                )?;
+                let created_key = autofill::create_blank_login(vw, &item_key, &title)?;
                 let ids = vw.item_ids(&created_key)?;
                 Ok((created_key, ids))
             })
