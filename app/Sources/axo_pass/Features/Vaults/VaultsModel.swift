@@ -334,6 +334,7 @@ final class VaultsModel {
     unlockIfActive()
 
     guard unlockEngaged, !isAppUnlocked, !isUnlocking, NSApp.isActive else { return }
+    biometry = Self.probeBiometry(authContext)
     guard biometry == .touchID else { return }
     guard !isBrokerPromptVisible else { return }
     unlock()
@@ -374,6 +375,9 @@ final class VaultsModel {
   func unlock() {
     guard !isUnlocking else { return }
     unlockEngaged = true
+    // Touch ID availability changes with the lid, displays, and lockout, so the
+    // probe from init may be out of date.
+    biometry = Self.probeBiometry(authContext)
     // The model owns the task. The lock screen's `.task` would cancel the
     // attempt as soon as a successful unlock swapped the view out.
     unlockTask = Task { [self] in
