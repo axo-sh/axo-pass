@@ -13,18 +13,21 @@
 //! the sync log with its signal, so a log shows which signal reported a
 //! change.
 
-#[cfg(macos)]
-pub mod metadata;
-
+#[cfg(ios)]
+mod ios;
 #[cfg(linux)]
 mod linux;
 #[cfg(macos)]
 mod macos;
+#[cfg(macos)]
+pub mod metadata;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::{fmt, fs};
 
+#[cfg(ios)]
+pub use ios::FolderWatch;
 #[cfg(linux)]
 pub use linux::FolderWatch;
 #[cfg(macos)]

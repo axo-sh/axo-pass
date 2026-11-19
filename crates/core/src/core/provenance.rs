@@ -1,3 +1,5 @@
+#[cfg(ios)]
+mod ios;
 #[cfg(linux)]
 mod linux;
 #[cfg(macos)]
@@ -6,6 +8,8 @@ mod macos;
 use std::collections::HashSet;
 use std::fmt;
 
+#[cfg(ios)]
+use ios as platform;
 #[cfg(linux)]
 use linux as platform;
 #[cfg(macos)]

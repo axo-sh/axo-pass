@@ -8,7 +8,7 @@ pub mod files;
 pub mod find_bin_folder;
 pub mod interpolate;
 pub mod names;
-#[cfg(macos)]
+#[cfg(apple)]
 mod objc_helpers;
 pub mod protected_settings;
 pub mod provenance;
