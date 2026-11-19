@@ -133,6 +133,8 @@ private struct GeneralSettingsView: View {
   private var reuseApprovals = Preferences.defaultReuseApprovals
   @AppStorage(Preferences.Key.paletteHotKey)
   private var paletteHotKey: HotKey?
+  @AppStorage(Preferences.Key.quitBehavior)
+  private var quitBehavior = Preferences.defaultQuitBehavior
   @State private var audit = AuditSettingsModel()
   @State private var confirmingClear = false
 
@@ -159,6 +161,23 @@ private struct GeneralSettingsView: View {
         .fixedSize()
         Text("Always locks on screen lock or sleep.")
           .captionStyle()
+      }
+
+      SettingsRow("When quitting:") {
+        Picker("When quitting:", selection: $quitBehavior) {
+          ForEach(Preferences.QuitBehavior.allCases, id: \.self) { behavior in
+            Text(behavior.label).tag(behavior)
+          }
+        }
+        .labelsHidden()
+        .fixedSize()
+        Text(
+          """
+          Quitting stops the helper. The SSH agent, GPG, `ap`, and the browser extension restart \
+          it when needed. AutoFill does not, and fails until the app is reopened.
+          """
+        )
+        .captionStyle()
       }
 
       SettingsDivider()

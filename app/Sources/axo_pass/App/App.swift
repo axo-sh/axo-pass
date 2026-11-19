@@ -116,6 +116,9 @@ struct AxoPassApp: App {
         LockMenuItem()
           .environment(appDelegate.model)
       }
+      CommandGroup(replacing: .appTermination) {
+        QuitMenuItem(appDelegate: appDelegate)
+      }
       CommandGroup(after: .newItem) {
         GeneratePasswordMenuItem()
       }

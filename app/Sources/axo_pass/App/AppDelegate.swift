@@ -154,6 +154,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return true
   }
 
+  /// Ask before a menu bar quit, since quitting stops the broker. Returns true
+  /// if the app should quit. The user can keep the app running in the
+  /// background instead.
+  ///
+  /// This runs before `NSApp.terminate`, not in `applicationShouldTerminate`.
+  /// Cancelling from there removes the menu bar icon. The status item, the
+  /// palette, an update relaunch, and a system shutdown quit without asking.
+  func confirmQuit() -> Bool {
+    switch Preferences.quitBehavior {
+    case .quit:
+      return true
+    case .keepRunning:
+      keepRunningInBackground()
+      return false
+    case .ask:
+      break
+    }
+
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "Quit Axo Pass?"
+    alert.informativeText =
+      "Quitting also stops the helper, and AutoFill stops working until the app is opened. Close the window instead to keep it running."
+    alert.addButton(withTitle: "Close Window and Keep Running")
+    alert.addButton(withTitle: "Quit")
+    alert.addButton(withTitle: "Cancel")
+    alert.showsSuppressionButton = true
+    alert.suppressionButton?.title = "Remember my choice"
+
+    let response = alert.runModal()
+    let remember = alert.suppressionButton?.state == .on
+    switch response {
+    case .alertSecondButtonReturn:
+      if remember { Preferences.quitBehavior = .quit }
+      return true
+    case .alertFirstButtonReturn:
+      if remember { Preferences.quitBehavior = .keepRunning }
+      keepRunningInBackground()
+      return false
+    default:
+      return false
+    }
+  }
+
+  /// Close the windows and leave the app running without a Dock icon.
+  private func keepRunningInBackground() {
+    // Titled windows only. `NSApp.windows` also holds the status item's
+    // window, and closing that removes the menu bar icon.
+    for window in NSApp.windows where window.styleMask.contains(.titled) && window.isVisible {
+      window.close()
+    }
+    NSApp.setActivationPolicy(.accessory)
+  }
+
   /// Stop the sync manager, which deletes a pending pairing request.
   func applicationWillTerminate(_ notification: Notification) {
     syncShutdown()
@@ -205,6 +259,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
       }
     }
+  }
+}
+
+/// Axo Pass ▸ Quit, replacing the default item so the app delegate can ask
+/// before quitting.
+struct QuitMenuItem: View {
+  let appDelegate: AppDelegate
+
+  var body: some View {
+    Button("Quit Axo Pass") {
+      if appDelegate.confirmQuit() { NSApp.terminate(nil) }
+    }
+    .keyboardShortcut("q", modifiers: .command)
   }
 }
 

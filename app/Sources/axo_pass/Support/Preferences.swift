@@ -18,6 +18,8 @@ enum Preferences {
     /// The system-wide shortcut that shows the palette, as a `HotKey` raw
     /// value. Absent when none is set.
     static let paletteHotKey = "general.paletteHotKey"
+    /// What Quit in the menu bar does, as a `QuitBehavior` raw value.
+    static let quitBehavior = "general.quitBehavior"
     /// Item ids whose "Use this item for AutoFill?" banner the user
     /// dismissed.
     static let dismissedConversions = "autofill.dismissedConversions"
@@ -41,6 +43,25 @@ enum Preferences {
   static let defaultAutoLockMinutes = 5
   static let defaultReuseApprovals = true
   static let defaultSshStartOnLogin = true
+  static let defaultQuitBehavior = QuitBehavior.ask
+
+  /// What Quit in the menu bar does. Quitting also stops the broker.
+  enum QuitBehavior: String, CaseIterable {
+    /// Show a dialog with the alternatives.
+    case ask
+    /// Quit the app.
+    case quit
+    /// Close the windows and keep the app running in the background.
+    case keepRunning
+
+    var label: String {
+      switch self {
+      case .ask: return "Ask"
+      case .quit: return "Quit"
+      case .keepRunning: return "Close window and keep running"
+      }
+    }
+  }
 
   /// The values offered in Settings, in minutes. 0 is "Never".
   static let autoLockChoices = [1, 5, 15, 30, 60, 0]
@@ -65,6 +86,14 @@ enum Preferences {
 
   static var reuseApprovals: Bool {
     UserDefaults.standard.bool(forKey: Key.reuseApprovals)
+  }
+
+  static var quitBehavior: QuitBehavior {
+    get {
+      UserDefaults.standard.string(forKey: Key.quitBehavior).flatMap(QuitBehavior.init(rawValue:))
+        ?? defaultQuitBehavior
+    }
+    set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.quitBehavior) }
   }
 
   static var hasCompletedFirstRun: Bool {
