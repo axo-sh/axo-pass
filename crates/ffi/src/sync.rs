@@ -30,6 +30,8 @@ use axo_pass_core::secrets::vaults::sync::report::{KnownMac, QuarantinedEntry, S
 use axo_pass_core::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncStatus};
 use axo_pass_core::secrets::vaults::sync::transport::TransportRoot;
+use axo_pass_core::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
+use axo_pass_core::secrets::vaults::sync::transport::s3::{S3Config, test_connection};
 use axo_pass_core::secrets::vaults::{
     Error as VaultError, KeyState, MissingVault, MovedVault, Resigned, ShortId, SyncedVault,
     VaultCatalog, VaultsManager,
@@ -206,6 +208,49 @@ impl From<SyncRootInfo> for TransportRoot {
             SyncRootInfo::S3 { name } => Self::S3 { name },
         }
     }
+}
+
+/// Settings of an S3 location, with its secret access key.
+#[derive(uniffi::Record)]
+pub struct S3SettingsInput {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    /// Key prefix of every object. Empty for the root of the bucket.
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+impl S3SettingsInput {
+    fn config(&self) -> Result<S3Config, FfiError> {
+        Ok(S3Config::new(
+            &self.access_key_id,
+            SecretString::from(self.secret_access_key.clone()),
+            &self.endpoint,
+            &self.region,
+            &self.bucket,
+            &self.prefix,
+        )?)
+    }
+}
+
+/// Saved settings of an S3 location. Does not hold the secret access key.
+#[derive(uniffi::Record)]
+pub struct S3SettingsInfo {
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+}
+
+/// Outcome of a passed S3 connection test.
+#[derive(uniffi::Record)]
+pub struct S3TestInfo {
+    /// Reads of the listing until it showed the probe object. One means the
+    /// listing was consistent with the write.
+    pub list_attempts: u32,
 }
 
 /// Sync status of a synced vault. Mirrors the core `SyncStatus`.
@@ -958,6 +1003,50 @@ impl AxoPass {
         Self::run_blocking(move || Ok(store.set_sync_root(&vault_key, &root.into())?)).await?;
         Self::refresh_sync();
         Ok(())
+    }
+
+    /// Test the S3 bucket of `settings`. Writes, lists, reads, and deletes a
+    /// probe object. Saves nothing.
+    pub async fn s3_test(&self, settings: S3SettingsInput) -> Result<S3TestInfo, FfiError> {
+        Self::run_blocking(move || {
+            let report = test_connection(&settings.config()?)?;
+            Ok(S3TestInfo {
+                list_attempts: report.list_attempts,
+            })
+        })
+        .await
+    }
+
+    /// Save `settings` as the S3 location `name`, replacing an earlier one.
+    /// Does not test the connection. Fails if the platform has no credential
+    /// store.
+    pub async fn s3_save(&self, name: String, settings: S3SettingsInput) -> Result<(), FfiError> {
+        Self::run_blocking(move || {
+            let config = settings.config()?;
+            let store = default_credential_store().ok_or_else(|| {
+                FfiError::Internal("this platform has no S3 credential store".into())
+            })?;
+            Ok(store.save(&name, &config)?)
+        })
+        .await
+    }
+
+    /// Saved settings of the S3 location `name`, without the secret. `None`
+    /// if none is saved.
+    pub async fn s3_load(&self, name: String) -> Result<Option<S3SettingsInfo>, FfiError> {
+        Self::run_blocking(move || {
+            let Some(store) = default_credential_store() else {
+                return Ok(None);
+            };
+            Ok(store.load(&name)?.map(|config| S3SettingsInfo {
+                endpoint: config.endpoint.to_string(),
+                region: config.region,
+                bucket: config.bucket,
+                prefix: config.prefix,
+                access_key_id: config.access_key_id,
+            }))
+        })
+        .await
     }
 
     /// Start pairing this Mac as the new Mac with the synced folder `root`,
