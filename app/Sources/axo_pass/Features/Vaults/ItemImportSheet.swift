@@ -174,7 +174,7 @@ struct ItemImportSheet: View {
           Button {
             choose(option)
           } label: {
-            SourceRow(source: option)
+            ChoiceCard(symbol: option.symbol, title: option.title, detail: option.listDetail)
           }
           .buttonStyle(.plain)
         }
@@ -547,20 +547,22 @@ struct ItemImportSheet: View {
   }
 }
 
-/// Row of an import source in the format list. Matches the welcome screen
-/// choice cards. Background is lighter on hover.
-private struct SourceRow: View {
-  let source: ImportSource
+/// Choice card of a list in a sheet, such as the import sources. Matches the
+/// welcome screen choice cards. Background is lighter on hover.
+struct ChoiceCard: View {
+  let symbol: String
+  let title: String
+  let detail: String
 
   @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 12) {
-      TodayIcon(symbol: source.symbol, color: .accentColor)
+      TodayIcon(symbol: symbol, color: .accentColor)
       VStack(alignment: .leading, spacing: 2) {
-        Text(source.title)
+        Text(title)
           .fontWeight(.medium)
-        Text(source.listDetail)
+        Text(detail)
           .font(.callout)
           .foregroundStyle(.secondary)
       }

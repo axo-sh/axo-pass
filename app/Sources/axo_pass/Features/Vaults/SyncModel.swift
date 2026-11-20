@@ -141,8 +141,7 @@ final class SyncModel {
   /// Synced folder of the app, chosen in Settings. Each vault turned on syncs
   /// with it. The folder of a vault is set when sync is turned on, so a change
   /// applies to vaults turned on later. Nil until the user chooses one.
-  private(set) var folder: SyncRootInfo? =
-    UserDefaults.standard.string(forKey: Preferences.Key.syncFolder).map { .folder(path: $0) }
+  private(set) var folder: SyncRootInfo? = SyncModel.savedRoot()
 
   init(vaults: VaultsModel) {
     self.vaults = vaults
@@ -154,10 +153,45 @@ final class SyncModel {
     }
   }
 
+  /// Synced location chosen in Settings. An S3 location wins over a folder.
+  private static func savedRoot() -> SyncRootInfo? {
+    let defaults = UserDefaults.standard
+    if let name = defaults.string(forKey: Preferences.Key.syncS3) { return .s3(name: name) }
+    return defaults.string(forKey: Preferences.Key.syncFolder).map { .folder(path: $0) }
+  }
+
   /// Set the synced folder of the app to `url`.
   func setFolder(_ url: URL) {
     UserDefaults.standard.set(url.path, forKey: Preferences.Key.syncFolder)
+    UserDefaults.standard.removeObject(forKey: Preferences.Key.syncS3)
     folder = .folder(path: url.path)
+  }
+
+  /// Name of the S3 location of the app. Settings saved under it are
+  /// replaced if the user saves again.
+  static let s3Name = "default"
+
+  /// Set the synced location of the app to the saved S3 location `s3Name`.
+  func setS3() {
+    UserDefaults.standard.set(Self.s3Name, forKey: Preferences.Key.syncS3)
+    folder = .s3(name: Self.s3Name)
+  }
+
+  /// Test the bucket of `settings`. Saves nothing.
+  func testS3(_ settings: S3SettingsInput) async throws -> S3TestInfo {
+    try await vaults.core.s3Test(settings: settings)
+  }
+
+  /// Save `settings` as the S3 location of the app and make it the synced
+  /// location.
+  func saveS3(_ settings: S3SettingsInput) async throws {
+    try await vaults.core.s3Save(name: Self.s3Name, settings: settings)
+    setS3()
+  }
+
+  /// Saved S3 settings of the app, without the secret. Nil if none is saved.
+  func loadS3() async throws -> S3SettingsInfo? {
+    try await vaults.core.s3Load(name: Self.s3Name)
   }
 
   /// Show the pairing sheet that adds synced vaults from another Mac. The

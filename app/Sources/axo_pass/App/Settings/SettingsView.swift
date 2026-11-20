@@ -301,6 +301,7 @@ private struct VaultsSettingsView: View {
   /// Vault files moved to `unreadable/` on new hardware.
   @State private var moved: [MovedVaultInfo] = []
   @State private var showingMoved = false
+  @State private var showingLocation = false
 
   var body: some View {
     SettingsForm {
@@ -324,11 +325,13 @@ private struct VaultsSettingsView: View {
             .lineLimit(1)
             .truncationMode(.middle)
             .help(sync.folder.map(rootDescription) ?? "")
-          Button(sync.folder == nil ? "Choose…" : "Change…") { chooseSyncFolder() }
+          Button(sync.folder == nil ? "Choose…" : "Change…") { showingLocation = true }
         }
         .help("A change applies only to vaults turned on later. The path can differ on each Mac.")
-        Text("Use a folder that a sync service or shared drive copies to your other Macs.")
-          .captionStyle()
+        Text(
+          "Use a folder that a sync service or shared drive copies to your other Macs, or an S3-compatible bucket."
+        )
+        .captionStyle()
       }
 
       SettingsDivider()
@@ -354,18 +357,10 @@ private struct VaultsSettingsView: View {
     .sheet(isPresented: $showingMoved) {
       MovedVaultsSheet(moved: moved)
     }
+    .sheet(isPresented: $showingLocation) {
+      SyncLocationSheet()
+    }
     .task { moved = (try? await sync.movedVaults()) ?? [] }
-  }
-
-  private func chooseSyncFolder() {
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true
-    panel.canChooseFiles = false
-    panel.canCreateDirectories = true
-    panel.allowsMultipleSelection = false
-    panel.prompt = "Choose"
-    panel.message = "Choose the synced folder for your vaults."
-    if panel.runModal() == .OK, let url = panel.url { sync.setFolder(url) }
   }
 }
 

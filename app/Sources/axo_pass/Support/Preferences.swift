@@ -32,6 +32,9 @@ enum Preferences {
     /// Path of the synced folder of the app. Vaults turned on later sync with
     /// it. Unset until the user chooses one.
     static let syncFolder = "sync.folder"
+    /// Name of the S3 location that is the synced location of the app. Takes
+    /// the place of `syncFolder`. Unset if a folder is chosen.
+    static let syncS3 = "sync.s3"
     /// Dismissed advice issues, as `Issue.id` to the end of the snooze in
     /// seconds since 1970. A dismissal without an end is stored as 0.
     static let dismissedIssues = "issues.dismissed"
