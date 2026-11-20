@@ -27,7 +27,7 @@ struct PaletteView: View {
       case .unlock:
         unlockPrompt
       case .search:
-        field("Search, or vault/item/credential", text: $model.query)
+        field("Search Axo Pass", text: $model.query)
         Divider()
         resultList
         Divider()
