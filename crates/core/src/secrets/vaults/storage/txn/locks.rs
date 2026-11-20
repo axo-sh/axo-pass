@@ -274,7 +274,7 @@ impl VaultLock {
     fn set_pending(&self) {
         let _ = self
             .pending
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                 Some((((value >> 1) + 1) << 1) | 1)
             });
     }
