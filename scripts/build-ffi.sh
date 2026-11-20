@@ -8,7 +8,7 @@
 # Outputs:
 #   target/<profile>/libaxo_pass_ffi.a
 #   target/swift-lib -> target/<profile>   (symlink used by Package.swift)
-#   app/Sources/axo_pass_ffiFFI/{axo_pass_ffiFFI.h,module.modulemap}
+#   app/Sources/AxoPassFFIHeaders/{axo_pass_ffiFFI.h,module.modulemap}
 #   app/Sources/AxoPassFFI/axo_pass_ffi.swift
 set -euo pipefail
 
@@ -38,7 +38,7 @@ trap 'rm -rf "$TMP"' EXIT
 cargo run --quiet "${cargo_flags[@]}" --bin uniffi-bindgen -- \
   generate --language swift --out-dir "$TMP" "$LIB"
 
-FFI_C_DIR="$ROOT/app/Sources/axo_pass_ffiFFI"
+FFI_C_DIR="$ROOT/app/Sources/AxoPassFFIHeaders"
 FFI_SWIFT_DIR="$ROOT/app/Sources/AxoPassFFI"
 mkdir -p "$FFI_C_DIR" "$FFI_SWIFT_DIR"
 

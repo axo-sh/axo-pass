@@ -4,7 +4,7 @@
 import PackageDescription
 
 // Static library + UniFFI Swift bindings are produced by `axo ffi` (see axo.toml).
-// Outputs land in target/<profile>/libaxo_pass_ffi.a and Sources/{axo_pass_ffiFFI,AxoPassFFI}.
+// Outputs land in target/<profile>/libaxo_pass_ffi.a and Sources/{AxoPassFFIHeaders,AxoPassFFI}.
 
 let package = Package(
   name: "Axo Pass",
@@ -15,7 +15,7 @@ let package = Package(
   targets: [
     .systemLibrary(
       name: "axo_pass_ffiFFI",
-      path: "Sources/axo_pass_ffiFFI"
+      path: "Sources/AxoPassFFIHeaders"
     ),
     .target(
       name: "AxoPassFFI",
@@ -39,7 +39,7 @@ let package = Package(
         "AxoArtwork",
         .product(name: "Sunshine", package: "sunshine"),
       ],
-      path: "Sources/axo_pass",
+      path: "Sources/AxoPass",
       linkerSettings: [
         // target/swift-lib is a symlink maintained by scripts/build-ffi.sh
         // pointing at target/debug or target/release depending on PROFILE.
