@@ -79,6 +79,17 @@ struct AxoPassApp: App {
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
 
+    Window("Sync Log", id: Self.syncLogWindowID) {
+      SyncLogWindow()
+        .environment(appDelegate.model)
+        .frame(minWidth: 640, minHeight: 360)
+        // Only reachable from an unlocked app, so a relaunch (always locked)
+        // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
+        .background(WindowAccessor { $0.isRestorable = false })
+    }
+    .defaultSize(width: 900, height: 520)
+    .defaultLaunchBehavior(.suppressed)
+
     Window("Keychain", id: Self.keychainWindowID) {
       KeychainWindow()
         .environment(appDelegate.model)
@@ -125,6 +136,8 @@ struct AxoPassApp: App {
       CommandGroup(after: .help) {
         AuditLogMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
+        SyncLogMenuItem(windows: appDelegate.windows)
+          .environment(appDelegate.model)
         KeychainMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
       }
@@ -153,6 +166,7 @@ struct AxoPassApp: App {
   static let mainWindowID = "main"
   static let welcomeWindowID = "welcome"
   static let auditWindowID = "audit"
+  static let syncLogWindowID = "sync-log"
   static let keychainWindowID = "keychain"
   static let generatorWindowID = "generator"
 }
@@ -223,6 +237,27 @@ private struct AuditLogMenuItem: View {
       NSApp.setActivationPolicy(.regular)
       NSApp.activate(ignoringOtherApps: true)
       openWindow(id: AxoPassApp.auditWindowID)
+    }
+    .disabled(!model.isAppUnlocked)
+  }
+}
+
+/// Help ▸ Sync Log. Only available while unlocked; a locked app shows the main
+/// window, and its lock screen, instead.
+private struct SyncLogMenuItem: View {
+  let windows: WindowRequests
+  @Environment(VaultsModel.self) private var model
+  @Environment(\.openWindow) private var openWindow
+
+  var body: some View {
+    Button("Sync Log") {
+      guard model.isAppUnlocked, !windows.isFirstRunPending() else {
+        windows.requestMain()
+        return
+      }
+      NSApp.setActivationPolicy(.regular)
+      NSApp.activate(ignoringOtherApps: true)
+      openWindow(id: AxoPassApp.syncLogWindowID)
     }
     .disabled(!model.isAppUnlocked)
   }
