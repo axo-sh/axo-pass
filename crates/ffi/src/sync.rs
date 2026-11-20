@@ -29,6 +29,9 @@ use axo_pass_core::secrets::vaults::sync::repair::SyncOverride;
 use axo_pass_core::secrets::vaults::sync::report::{KnownMac, QuarantinedEntry, SyncReport};
 use axo_pass_core::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncStatus};
+use axo_pass_core::secrets::vaults::sync::sync_log::{
+    self, Entry as SyncLogEntry, Level as SyncLogLevel,
+};
 use axo_pass_core::secrets::vaults::sync::transport::TransportRoot;
 use axo_pass_core::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use axo_pass_core::secrets::vaults::sync::transport::s3::{S3Config, test_connection};
@@ -173,6 +176,68 @@ pub fn set_sync_events(delegate: Arc<dyn SyncEventsDelegate>) {
 #[uniffi::export]
 pub fn sync_icloud_available() -> bool {
     false
+}
+
+/// Severity of a sync log entry.
+#[derive(uniffi::Enum)]
+pub enum SyncLogLevelInfo {
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<SyncLogLevel> for SyncLogLevelInfo {
+    fn from(level: SyncLogLevel) -> Self {
+        match level {
+            SyncLogLevel::Info => Self::Info,
+            SyncLogLevel::Warn => Self::Warn,
+            SyncLogLevel::Error => Self::Error,
+        }
+    }
+}
+
+/// Row of the sync log, with repeats merged into it.
+#[derive(uniffi::Record)]
+pub struct SyncLogEntryInfo {
+    pub level: SyncLogLevelInfo,
+    /// Short id of the vault, or `None` for an event of no vault.
+    pub vault_id: Option<String>,
+    pub message: String,
+    /// Account details of the event. `None` if audit details are off.
+    pub detail: Option<String>,
+    /// Number of events merged into the row.
+    pub count: u32,
+    /// RFC 3339 timestamp of the first event.
+    pub first: String,
+    /// RFC 3339 timestamp of the latest event.
+    pub last: String,
+}
+
+impl From<SyncLogEntry> for SyncLogEntryInfo {
+    fn from(entry: SyncLogEntry) -> Self {
+        Self {
+            level: entry.level.into(),
+            vault_id: entry.vault_id.map(ShortId::encode_uuid),
+            message: entry.message,
+            detail: entry.detail,
+            count: entry.count,
+            first: entry.first.to_string(),
+            last: entry.last.to_string(),
+        }
+    }
+}
+
+/// Entries of the in-memory sync log, oldest first. The log resets at
+/// restart.
+#[uniffi::export]
+pub fn sync_log_entries() -> Vec<SyncLogEntryInfo> {
+    sync_log::entries().into_iter().map(Into::into).collect()
+}
+
+/// Remove all entries of the sync log.
+#[uniffi::export]
+pub fn clear_sync_log() {
+    sync_log::clear();
 }
 
 /// Synced folder of a vault.

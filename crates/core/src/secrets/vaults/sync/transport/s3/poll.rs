@@ -12,8 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use super::client::ObjectInfo;
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::sync::sync_log::{self, Level};
 use crate::secrets::vaults::sync::transport::WatchHandle;
 
 /// Poll thread that stops when its handle drops.
@@ -22,11 +25,13 @@ pub struct PollWatch;
 impl PollWatch {
     /// Start a thread that calls `snapshot` every `interval` and `notify` if
     /// the result changes, and after the first result. `None` if the thread
-    /// does not start.
+    /// does not start. A failed listing and the next listing that succeeds
+    /// are recorded in the sync log under `vault_id`.
     ///
     /// Drop of the handle waits for a `notify` call in flight and does not
     /// wait for a listing. The handle must not drop inside `notify`.
     pub fn start(
+        vault_id: Option<Uuid>,
         interval: Duration,
         snapshot: impl Fn() -> Result<Vec<ObjectInfo>, Error> + Send + 'static,
         notify: Box<dyn Fn() + Send>,
@@ -38,9 +43,14 @@ impl PollWatch {
             .name("s3-poll".to_string())
             .spawn(move || {
                 let mut last: Option<Vec<ObjectInfo>> = None;
+                let mut failing = false;
                 loop {
                     match snapshot() {
                         Ok(current) => {
+                            if failing {
+                                failing = false;
+                                sync_log::record(Level::Info, vault_id, "S3 poll recovered", None);
+                            }
                             if last.as_ref() != Some(&current) {
                                 let stopped = thread_stopped.lock().unwrap();
                                 if *stopped {
@@ -50,7 +60,15 @@ impl PollWatch {
                             }
                             last = Some(current);
                         },
-                        Err(e) => log::warn!("S3 poll failed: {e}"),
+                        Err(e) => {
+                            failing = true;
+                            sync_log::record(
+                                Level::Warn,
+                                vault_id,
+                                "S3 poll failed",
+                                Some(e.to_string()),
+                            );
+                        },
                     }
                     if !matches!(sleep.recv_timeout(interval), Err(RecvTimeoutError::Timeout)) {
                         return;
@@ -90,6 +108,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let listing = listing.clone();
         let handle = PollWatch::start(
+            None,
             INTERVAL,
             move || {
                 listing

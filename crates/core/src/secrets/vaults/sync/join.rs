@@ -17,6 +17,7 @@ use super::model::{KeyId, SyncState};
 use super::sidecar::Sidecar;
 use super::state_file::{StateFile, StateFileError, StateHash, StateSource};
 use super::status::FoundCauses;
+use super::sync_log;
 use super::transport::{FileName, ReadResult, SyncTransport};
 
 /// Result of the join of one state file.
@@ -108,7 +109,11 @@ impl StateJoin<'_> {
             Ok(ReadResult::Remote) => return FileJoin::Remote,
             Ok(ReadResult::Missing) => return FileJoin::NotJoined,
             Err(e) => {
-                log::warn!("Failed to read state file {file_name} of vault {vault_id}: {e}");
+                sync_log::warn(
+                    vault_id,
+                    "Failed to read a state file",
+                    &format!("{file_name}: {e}"),
+                );
                 return FileJoin::NotJoined;
             },
         };
@@ -132,7 +137,11 @@ impl StateJoin<'_> {
                 return FileJoin::Quarantined;
             },
             Err(e @ StateFileError::VersionSkew(_)) => {
-                log::warn!("State file {file_name} of vault {vault_id} is not joined: {e}");
+                sync_log::warn(
+                    vault_id,
+                    "State file from a newer version is not joined",
+                    &format!("{file_name}: {e}"),
+                );
                 self.found.version_skew += 1;
                 return FileJoin::NotJoined;
             },
@@ -158,7 +167,11 @@ impl StateJoin<'_> {
             },
             Err(e) => match e.action() {
                 JoinAction::Refuse => {
-                    log::warn!("State file {file_name} of vault {vault_id} is refused: {e}");
+                    sync_log::warn(
+                        vault_id,
+                        "State file is refused",
+                        &format!("{file_name}: {e}"),
+                    );
                     FileJoin::NotJoined
                 },
                 JoinAction::Quarantine => {
@@ -199,7 +212,7 @@ impl StateJoin<'_> {
         let replicas = match transport.list_replicas(vault_id) {
             Ok(replicas) => replicas,
             Err(e) => {
-                log::warn!("Failed to list the replicas of vault {vault_id}: {e}");
+                sync_log::warn(vault_id, "Failed to list the replicas", &e);
                 self.found.unreachable(e);
                 return join;
             },
@@ -210,8 +223,10 @@ impl StateJoin<'_> {
                 Ok(listed) => listed,
                 Err(e) => {
                     let replica = replica.0;
-                    log::warn!(
-                        "Failed to list state files of replica {replica} of vault {vault_id}: {e}"
+                    sync_log::warn(
+                        vault_id,
+                        "Failed to list the state files of a replica",
+                        &format!("{replica}: {e}"),
                     );
                     self.found.unreachable(e);
                     join.listed = false;
@@ -233,7 +248,11 @@ impl StateJoin<'_> {
     /// Quarantine the file `name` of `replica` with content hash `hash`.
     fn quarantine(&mut self, replica: ReplicaId, name: String, hash: StateHash, reason: String) {
         let vault_id = self.vault_id;
-        log::warn!("State file {name} of vault {vault_id} is quarantined: {reason}");
+        sync_log::warn(
+            vault_id,
+            "State file is quarantined",
+            &format!("{name}: {reason}"),
+        );
         self.sidecar.quarantine(replica, name, hash, reason);
         *self.sidecar_changed = true;
         self.found.quarantined += 1;

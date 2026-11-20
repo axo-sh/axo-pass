@@ -25,6 +25,7 @@ pub mod setup;
 pub mod sidecar;
 pub mod state_file;
 pub mod status;
+pub mod sync_log;
 pub mod transport;
 pub mod txn;
 pub mod view;

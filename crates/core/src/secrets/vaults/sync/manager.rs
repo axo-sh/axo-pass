@@ -73,6 +73,7 @@ use super::pairing::watcher::{POLL_INTERVAL, PairingWatcher};
 use super::pairing::{PairedVault, PendingPairing};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
+use super::sync_log;
 use super::transport::{FileName, SyncTransport, TransportRoot, WatchHandle};
 use super::wrapping::{DeviceUnwrap, PairingKeys};
 use crate::secrets::vaults::errors::Error;
@@ -764,12 +765,12 @@ impl Worker {
         };
         match result {
             Ok(committed) => {
-                log::info!("Vault {vault_id} was imported by pairing");
+                sync_log::info(vault_id, "Imported by pairing");
                 self.events.vault_imported(vault_id, &committed.vault.key);
                 let _ = self.sender.send(Message::Refresh);
             },
             Err(e) => {
-                log::warn!("Failed to import vault {vault_id} by pairing: {e}");
+                sync_log::warn(vault_id, "Failed to import by pairing", &e);
                 self.events.import_failed(vault_id, &e);
             },
         }
@@ -955,7 +956,7 @@ impl Worker {
         if vault.transport.is_none() {
             match self.files().transport_of(vault.root.as_ref()) {
                 Ok(transport) => vault.transport = transport,
-                Err(e) => log::warn!("Failed to resolve the transport of vault {id}: {e}"),
+                Err(e) => sync_log::warn(id, "Failed to resolve the transport", &e),
             }
         }
         if vault.watch.is_some() {
@@ -1001,16 +1002,18 @@ impl Worker {
         let locks = self.files().locks();
         if !self.unlock.unlocked() {
             locks.set_pending(id);
+            sync_log::info(id, "Peer change waits for the next unlock");
             self.events.peer_changed(id);
             return;
         }
         match self.unlock.transaction(self.files(), target) {
             Ok(committed) => {
                 vault.target = Some(Target::of(&committed.vault));
+                sync_log::info(id, "Joined a peer change");
                 self.events.vault_synced(id);
             },
             Err(e) => {
-                log::warn!("Failed to join a peer change of vault {id}: {e}");
+                sync_log::warn(id, "Failed to join a peer change", &e);
                 locks.set_pending(id);
             },
         }
@@ -1025,13 +1028,13 @@ impl Worker {
         let path = vault.target.as_ref().map(|target| target.path.as_path());
         vault.copy_pending = match self.files().copy_staged(id, path) {
             Ok(StagedCopy::Left) => {
-                log::info!("Vault {id} left sync, the manager drops it");
+                sync_log::info(id, "Left sync");
                 return false;
             },
             Ok(StagedCopy::Copied | StagedCopy::NotStaged) => false,
             Ok(StagedCopy::Refused) => true,
             Err(e) => {
-                log::warn!("Failed to copy the staged file of vault {id}: {e}");
+                sync_log::warn(id, "Failed to copy the staged file", &e);
                 true
             },
         };
@@ -1095,7 +1098,7 @@ impl ManagedVault {
         let changed = match listed {
             Ok(changed) => changed,
             Err(e) => {
-                log::warn!("Failed to list the peer state files of vault {id}: {e}");
+                sync_log::warn(id, "Failed to list the peer state files", &e);
                 return false;
             },
         };
@@ -1113,14 +1116,14 @@ impl ManagedVault {
                 },
                 Ok(false) => remote = true,
                 Err(e) => {
-                    log::warn!("Failed to check state file {hash} of vault {id}: {e}");
+                    sync_log::warn(id, "Failed to check a state file", &format!("{hash}: {e}"));
                     remote = true;
                 },
             }
         }
         self.reported.retain(|file| changed.contains(file));
         if remote && let Err(e) = transport.request_download(id) {
-            log::warn!("Failed to request the download of vault {id}: {e}");
+            sync_log::warn(id, "Failed to request the download", &e);
         }
         found
     }

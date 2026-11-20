@@ -167,9 +167,15 @@ impl S3Transport {
 
     /// Watch of the objects under `dir`. The listing of each interval is
     /// compared with the last one.
-    fn watch_dir(&self, dir: String, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
+    fn watch_dir(
+        &self,
+        vault_id: Option<Uuid>,
+        dir: String,
+        notify: Box<dyn Fn() + Send>,
+    ) -> Option<WatchHandle> {
         let client = self.client.clone();
         PollWatch::start(
+            vault_id,
             self.poll_interval,
             move || Ok(Self::list_all(client.as_ref(), &dir, false)?.objects),
             notify,
@@ -254,7 +260,7 @@ impl SyncTransport for S3Transport {
     /// its listing changes. `notify` is also called after the first listing,
     /// so a watch started at unlock polls at unlock.
     fn watch(&self, vault_id: Uuid, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.watch_dir(self.layout.vault_dir(vault_id), notify)
+        self.watch_dir(Some(vault_id), self.layout.vault_dir(vault_id), notify)
     }
 
     fn list_pairings(&self) -> Result<Vec<PairingEntry>, Error> {
@@ -290,7 +296,7 @@ impl SyncTransport for S3Transport {
     /// Poll `pairing/` at the poll interval and call `notify` if its listing
     /// changes.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.watch_dir(self.layout.pairing_dir(), notify)
+        self.watch_dir(None, self.layout.pairing_dir(), notify)
     }
 
     fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error> {
