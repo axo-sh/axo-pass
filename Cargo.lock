@@ -255,7 +255,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axo-pass-cli"
-version = "0.2.0"
+version = "0.5.0-alpha.1"
 dependencies = [
  "age",
  "anyhow",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "axo-pass-core"
-version = "0.2.0"
+version = "0.5.0-alpha.1"
 dependencies = [
  "aes-gcm",
  "age",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "axo-pass-ffi"
-version = "0.2.0"
+version = "0.5.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",
