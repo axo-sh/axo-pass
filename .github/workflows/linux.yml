@@ -1,0 +1,29 @@
+name: 'Linux'
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      # The ffi crate is macOS only and is not built here.
+      - name: check
+        run: cargo check -p axo-pass-core -p axo-pass-cli --all-targets
+
+      - name: test
+        run: cargo test -p axo-pass-core -p axo-pass-cli
