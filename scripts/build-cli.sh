@@ -24,6 +24,8 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 
 echo "==> building ${BINS[*]} ($PROFILE)"
+# Match the platform in app/Package.swift so binaries run on the minimum macOS.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 cargo build "${cargo_flags[@]}"
 
 DIST_DIR="$ROOT/target/dist"

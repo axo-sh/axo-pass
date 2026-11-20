@@ -1,4 +1,5 @@
 {
+  "LSMinimumSystemVersion": "15.0",
   "UTExportedTypeDeclarations": [
     {
       "UTTypeIdentifier": "com.breakfastlabs.frittata.item-drag",

@@ -21,6 +21,8 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 
 echo "==> building axo-pass-ffi ($PROFILE)"
+# Match the platform in app/Package.swift so objects are not built for a newer macOS.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 cargo build "${cargo_flags[@]}"
 
 LIB="$ROOT/target/$PROFILE/libaxo_pass_ffi.a"
