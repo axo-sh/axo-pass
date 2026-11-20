@@ -4,8 +4,7 @@ import SwiftUI
 
 /// The menu bar icon. A click opens the command palette under it; an Option
 /// click or a right click opens a menu instead. The shortcut set in Settings
-/// also opens the palette. A dot on the icon shows counted issues, and the
-/// menu lists them.
+/// also opens the palette. A dot on the icon shows counted issues.
 @MainActor
 final class StatusItemController: NSObject {
   private let model: VaultsModel
@@ -13,7 +12,6 @@ final class StatusItemController: NSObject {
   private let windows: WindowRequests
   /// Dot over the icon, in the color of the worst counted issue.
   private let issueDot = NSView()
-  private let checkForUpdates: () -> Void
   private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
   private let panel = PalettePanel()
   private let palette: PaletteModel
@@ -32,7 +30,6 @@ final class StatusItemController: NSObject {
     self.model = model
     self.issues = issues
     self.windows = windows
-    self.checkForUpdates = checkForUpdates
     palette = PaletteModel(vaults: model, windows: windows, checkForUpdates: checkForUpdates)
     super.init()
 
@@ -149,80 +146,20 @@ final class StatusItemController: NSObject {
   }
 
   private func makeMenu() -> NSMenu {
-    SetupStatus.shared.refreshAgents()
     let unlocked = model.isAppUnlocked
-    let agentRunning = issues.agentStatus == .running
     let menu = NSMenu()
     menu.autoenablesItems = false
 
-    let counted = issues.countedIssues
-    if !counted.isEmpty {
-      menu.addItem(.label(counted.count == 1 ? "1 Issue" : "\(counted.count) Issues"))
-      for issue in counted {
-        let item = ClosureMenuItem(issue.title) { [weak self] in self?.showToday() }
-        item.image = Self.issueImage(issue.severity)
-        menu.addItem(item)
-      }
-      menu.addItem(.separator())
-    }
-
-    menu.addItem(.label(unlocked ? "Unlocked" : "Locked"))
-    if unlocked {
-      menu.addItem(ClosureMenuItem("Lock Now") { [model] in model.lock() })
-    } else {
-      menu.addItem(ClosureMenuItem("Unlock…") { [weak self] in self?.openPaletteFromMenu() })
-    }
-
-    menu.addItem(.separator())
-    menu.addItem(.label(agentRunning ? "SSH Agent: Running" : "SSH Agent: Stopped"))
-    if agentRunning {
-      menu.addItem(
-        ClosureMenuItem("Stop SSH Agent") { [palette] in
-          Task { await palette.sshModel.stopAgent() }
-        })
-    } else {
-      menu.addItem(
-        ClosureMenuItem("Start SSH Agent") { [palette] in
-          Task { await palette.sshModel.startAgent() }
-        })
-    }
-
-    menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem("Search…") { [weak self] in self?.openPaletteFromMenu() })
     menu.addItem(ClosureMenuItem("Open Axo Pass") { [windows] in windows.requestMain() })
     menu.addItem(
-      ClosureMenuItem("Audit Log", enabled: unlocked) { [windows] in windows.requestAudit() })
-    menu.addItem(
-      ClosureMenuItem("Keychain", enabled: unlocked) { [windows] in windows.requestKeychain() })
-    menu.addItem(
       ClosureMenuItem("Settings…", enabled: unlocked) { [windows] in windows.requestSettings() })
-    menu.addItem(ClosureMenuItem("Check for Updates…") { [checkForUpdates] in checkForUpdates() })
+
+    menu.addItem(.separator())
+    menu.addItem(ClosureMenuItem("Lock Now", enabled: unlocked) { [model] in model.lock() })
 
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem("Quit Axo Pass") { NSApp.terminate(nil) })
     return menu
-  }
-
-  /// Open the main window on the Today page.
-  private func showToday() {
-    model.selectSidebarDestination(.today)
-    windows.requestMain()
-  }
-
-  /// Filled circle in the severity color, for issue menu items.
-  private static func issueImage(_ severity: IssueSeverity) -> NSImage? {
-    let config = NSImage.SymbolConfiguration(pointSize: 8, weight: .regular)
-      .applying(NSImage.SymbolConfiguration(paletteColors: [nsColor(severity)]))
-    return NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)?
-      .withSymbolConfiguration(config)
-  }
-
-  /// Open the palette after the menu has closed and its tracking has ended.
-  private func openPaletteFromMenu() {
-    DispatchQueue.main.async { [weak self] in
-      guard let self, let button = self.statusItem.button else { return }
-      self.showPalette(below: button)
-    }
   }
 
   /// The Axo Pass mark as a template image, so the menu bar tints it.
@@ -261,14 +198,5 @@ private final class ClosureMenuItem: NSMenuItem {
 
   @objc private func fire() {
     handler()
-  }
-}
-
-extension NSMenuItem {
-  /// A disabled item that shows state rather than doing anything.
-  fileprivate static func label(_ title: String) -> NSMenuItem {
-    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    item.isEnabled = false
-    return item
   }
 }
