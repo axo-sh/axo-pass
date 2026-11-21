@@ -30,7 +30,7 @@ enum FileFailure: Equatable {
     case .FileMissing: self = .missing
     case .FileBlobMismatch: self = .damaged
     case .AuthExpired, .AuthCancelled: self = .authentication
-    default: self = .other(String(describing: error))
+    default: self = .other(error.userMessage)
     }
   }
 }

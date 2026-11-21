@@ -27,7 +27,7 @@ final class AuditSettingsModel {
       try core.setAuditIncludeDetails(on: on)
       error = nil
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
     includeDetails = core.auditIncludeDetails()
   }
@@ -42,7 +42,7 @@ final class AuditSettingsModel {
       clearResult = changed == 1 ? "Cleared 1 entry." : "Cleared \(changed) entries."
       error = nil
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 }

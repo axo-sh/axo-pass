@@ -488,7 +488,7 @@ private struct AutoFillSettingsView: View {
     do {
       try await core.removeBrowserListingGrant(name: grant.name, teamId: grant.teamId)
     } catch {
-      installError = String(describing: error)
+      installError = error.userMessage
     }
     listingGrants = (try? await core.listBrowserListingGrants()) ?? []
   }
@@ -507,7 +507,7 @@ private struct AutoFillSettingsView: View {
     do {
       _ = try await installBrowserManifest(browser: browser)
     } catch {
-      installError = String(describing: error)
+      installError = error.userMessage
     }
     browsers = browserManifestStatuses()
     installing = nil
@@ -623,7 +623,7 @@ private struct SshSettingsRows: View {
           do {
             try await model.agentService.setStartsOnLogin(on)
           } catch {
-            startAtLoginError = String(describing: error)
+            startAtLoginError = error.userMessage
           }
           await model.reload()
         }

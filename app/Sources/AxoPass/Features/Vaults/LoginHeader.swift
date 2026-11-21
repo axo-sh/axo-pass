@@ -267,7 +267,7 @@ extension CredentialList {
       errors.removeValue(forKey: cred.key)
       return true
     } catch {
-      errors[cred.key] = String(describing: error)
+      errors[cred.key] = error.userMessage
       return false
     }
   }
@@ -555,7 +555,7 @@ struct TotpCodeValue: View {
         return
       } catch {
         code = nil
-        self.error = String(describing: error)
+        self.error = error.userMessage
         return
       }
     }

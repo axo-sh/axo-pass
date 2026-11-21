@@ -33,7 +33,7 @@ final class AgeModel {
       authExpired = true
     } catch {
       keys = []
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
     if let selectedRecipient, !keys.contains(where: { $0.recipient == selectedRecipient }) {
       self.selectedRecipient = nil
@@ -49,7 +49,7 @@ final class AgeModel {
       selectedRecipient = key.recipient
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -61,7 +61,7 @@ final class AgeModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -72,7 +72,7 @@ final class AgeModel {
     do {
       return try await core.revealKeyPassword(passwordType: .ageKey, keyId: name)
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return nil
     }
   }

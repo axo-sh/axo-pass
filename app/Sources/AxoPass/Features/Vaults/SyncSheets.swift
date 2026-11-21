@@ -147,7 +147,7 @@ struct RecoveryKitPanel: View {
     do {
       try text.write(to: url, atomically: true, encoding: .utf8)
     } catch {
-      onError(String(describing: error))
+      onError(error.userMessage)
     }
   }
 
@@ -339,7 +339,7 @@ struct SyncEnableSheet: View {
     } catch FfiError.InvalidInput(let message) {
       await showRefusal(message, root: root)
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 
@@ -395,7 +395,7 @@ struct SyncEnableSheet: View {
           self.error = message
         }
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }

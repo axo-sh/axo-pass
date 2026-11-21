@@ -72,7 +72,7 @@ final class ActivityModel {
       loadError = nil
     } catch {
       guard current == generation else { return }
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
     isLoading = false
   }

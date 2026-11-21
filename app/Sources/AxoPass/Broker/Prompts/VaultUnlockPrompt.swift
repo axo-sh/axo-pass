@@ -114,7 +114,7 @@ final class VaultUnlockPromptModel {
     } catch {
       showTask?.cancel()
       panel.hide()
-      grants.end(key, outcome: .failed(message: String(describing: error)))
+      grants.end(key, outcome: .failed(message: error.userMessage))
       return declined
     }
 

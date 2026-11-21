@@ -132,7 +132,7 @@ struct ExportSshKeySheet: View {
     {
       error = message
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 }

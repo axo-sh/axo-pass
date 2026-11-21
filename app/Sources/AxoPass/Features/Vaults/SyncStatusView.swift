@@ -395,7 +395,7 @@ struct SyncStatusSheet: View {
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -410,7 +410,7 @@ struct SyncStatusSheet: View {
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -434,7 +434,7 @@ struct SyncStatusSheet: View {
       do {
         try await sync.setRoot(vaultKey: vault.key, url: url)
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -519,7 +519,7 @@ struct NewRecoveryKitSheet: View {
     } catch FfiError.AuthExpired {
       // The app locked, which closes the sheet.
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 
@@ -534,7 +534,7 @@ struct NewRecoveryKitSheet: View {
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -639,7 +639,7 @@ struct MissingVaultsSheet: View {
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }

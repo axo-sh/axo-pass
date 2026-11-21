@@ -167,7 +167,7 @@ struct PreviousValuesSheet: View {
       do {
         currentRevealed = try await fetchCurrent()
       } catch {
-        errorMessage = String(describing: error)
+        errorMessage = error.userMessage
       }
     }
   }
@@ -194,7 +194,7 @@ struct PreviousValuesSheet: View {
         errorMessage = "The value is not text."
       }
     } catch {
-      errorMessage = String(describing: error)
+      errorMessage = error.userMessage
     }
   }
 
@@ -204,7 +204,7 @@ struct PreviousValuesSheet: View {
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
     } catch {
       entries = []
-      errorMessage = String(describing: error)
+      errorMessage = error.userMessage
     }
   }
 
@@ -219,7 +219,7 @@ struct PreviousValuesSheet: View {
       do {
         revealed[entry.id] = try await fetch(entry)
       } catch {
-        errorMessage = String(describing: error)
+        errorMessage = error.userMessage
       }
     }
   }
@@ -247,7 +247,7 @@ struct PreviousValuesSheet: View {
         errorMessage = "The value is not text."
       }
     } catch {
-      errorMessage = String(describing: error)
+      errorMessage = error.userMessage
     }
   }
 

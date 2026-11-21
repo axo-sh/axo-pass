@@ -146,7 +146,7 @@ struct VaultVersionsSheet: View {
       versions = try await model.vaultVersions(vaultKey)
     } catch {
       versions = []
-      errorMessage = String(describing: error)
+      errorMessage = error.userMessage
     }
   }
 

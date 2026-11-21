@@ -136,7 +136,7 @@ struct S3SettingsSheet: View {
           ? "Connection works. The listing showed a new file after \(report.listAttempts) reads, so changes can take a moment to appear."
           : "Connection works."
       } catch {
-        self.error = Self.message(for: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -151,23 +151,8 @@ struct S3SettingsSheet: View {
         try await sync.saveS3(input)
         dismiss()
       } catch {
-        self.error = Self.message(for: error)
+        self.error = error.userMessage
       }
-    }
-  }
-
-  /// Error text without the case name wrapped around it.
-  private static func message(for error: Error) -> String {
-    switch error {
-    case let error as FfiError:
-      switch error {
-      case .NotFound(let message), .InvalidInput(let message), .Internal(let message):
-        return message
-      default:
-        return error.localizedDescription
-      }
-    default:
-      return String(describing: error)
     }
   }
 }

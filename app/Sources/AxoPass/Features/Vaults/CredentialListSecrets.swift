@@ -45,7 +45,7 @@ extension CredentialList {
         vaultKey: vaultKey, itemKey: item.key, credKey: cred.key
       )
     } catch {
-      errors[cred.key] = String(describing: error)
+      errors[cred.key] = error.userMessage
     }
     revealing.remove(cred.key)
   }
@@ -70,7 +70,7 @@ extension CredentialList {
       )
       return secureCopy(secret)
     } catch {
-      errors[cred.key] = String(describing: error)
+      errors[cred.key] = error.userMessage
       return false
     }
   }

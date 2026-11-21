@@ -20,7 +20,7 @@ final class ShellIntegrationModel {
     do {
       try await setupStatus.configureShell()
     } catch {
-      configureError = String(describing: error)
+      configureError = error.userMessage
     }
     isConfiguring = false
   }

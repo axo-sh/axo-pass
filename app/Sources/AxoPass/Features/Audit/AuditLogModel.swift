@@ -78,7 +78,7 @@ final class AuditLogModel {
       events.append(contentsOf: page.map(AuditLogRow.init))
       loadError = nil
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
   }
 

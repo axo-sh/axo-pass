@@ -87,7 +87,7 @@ func failureMessage(_ action: () async throws -> Void) async -> String? {
     try await action()
     return nil
   } catch {
-    return String(describing: error)
+    return error.userMessage
   }
 }
 
@@ -243,7 +243,7 @@ final class VaultsModel {
       vaults = []
       duplicateVaults = []
       duplicateVaultKeys = []
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
   }
 
@@ -469,7 +469,7 @@ final class VaultsModel {
       // a concurrent prompt from another axo-pass process cancels this one.
       try await core.beginEmbeddedAuth()
     } catch {
-      unlockError = String(describing: error)
+      unlockError = error.userMessage
       return
     }
 
@@ -553,7 +553,7 @@ final class VaultsModel {
       return "Touch ID is locked after too many failed attempts. Use your login password instead."
     case .passcodeNotSet:
       return "Set a login password in System Settings to use Axo Pass."
-    default: return String(describing: error)
+    default: return error.userMessage
     }
   }
 
@@ -567,7 +567,7 @@ final class VaultsModel {
     do {
       try core.lock()
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
     }
     // `core.lock()` records `vault.lock`; add the automatic cause on top.
     if let trigger {
@@ -751,10 +751,10 @@ final class VaultsModel {
       case .AuthExpired, .AuthCancelled:
         lock()
       default:
-        recordLoadFailure(vaultKey, String(describing: e))
+        recordLoadFailure(vaultKey, e.userMessage)
       }
     } catch {
-      recordLoadFailure(vaultKey, String(describing: error))
+      recordLoadFailure(vaultKey, error.userMessage)
     }
   }
 
@@ -825,7 +825,7 @@ final class VaultsModel {
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey)
       return secureCopy(secret) ? nil : "Value is not text."
     } catch {
-      return String(describing: error)
+      return error.userMessage
     }
   }
 
@@ -851,7 +851,7 @@ final class VaultsModel {
       selectSidebarDestination(.vault(key))
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -871,7 +871,7 @@ final class VaultsModel {
       reload()
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -890,7 +890,7 @@ final class VaultsModel {
       }
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -907,7 +907,7 @@ final class VaultsModel {
       if isAppUnlocked { scheduleAutofillRefresh() }
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -929,7 +929,7 @@ final class VaultsModel {
       lock()
       return false
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -1023,7 +1023,7 @@ final class VaultsModel {
         workFactor: workFactor, includePasskeys: includePasskeys, progress: delegate)
       return (report, nil)
     } catch {
-      return (nil, String(describing: error))
+      return (nil, error.userMessage)
     }
   }
 
@@ -1036,7 +1036,7 @@ final class VaultsModel {
       let vaults = try await core.inspectVaultBundle(srcPath: source.path, passphrase: passphrase)
       return (vaults, nil)
     } catch {
-      return (nil, String(describing: error))
+      return (nil, error.userMessage)
     }
   }
 
@@ -1053,7 +1053,7 @@ final class VaultsModel {
       if let first = keys.first { selectSidebarDestination(.vault(first)) }
       return (keys, nil)
     } catch {
-      return (nil, String(describing: error))
+      return (nil, error.userMessage)
     }
   }
 
@@ -1067,7 +1067,7 @@ final class VaultsModel {
         path: source.path, includeTrashed: includeTrashed)
       return (preview, nil)
     } catch {
-      return (nil, String(describing: error))
+      return (nil, error.userMessage)
     }
   }
 
@@ -1083,7 +1083,7 @@ final class VaultsModel {
       selectSidebarDestination(.vault(result.vaultKey))
       return (result, nil)
     } catch {
-      return (nil, String(describing: error))
+      return (nil, error.userMessage)
     }
   }
 
@@ -1098,7 +1098,7 @@ final class VaultsModel {
       selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: itemKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -1215,7 +1215,7 @@ final class VaultsModel {
     } catch FfiError.NotFound {
       return nil
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return nil
     }
   }
@@ -1256,7 +1256,7 @@ final class VaultsModel {
       await loadItems(for: vaultKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -1278,7 +1278,7 @@ final class VaultsModel {
       await loadItems(for: vaultKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -1297,7 +1297,7 @@ final class VaultsModel {
       await loadItems(for: vaultKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -1542,7 +1542,7 @@ final class VaultsModel {
       lock()
       return "Authentication expired."
     } catch {
-      return String(describing: error)
+      return error.userMessage
     }
   }
 
@@ -1587,7 +1587,7 @@ final class VaultsModel {
       }
       return url
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return nil
     }
   }
@@ -1997,7 +1997,7 @@ final class VaultsModel {
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, destVaultKey: destVaultKey,
         destItemKey: destItemKey)
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
     await loadItems(for: vaultKey)
@@ -2012,7 +2012,7 @@ final class VaultsModel {
       try await core.applyPasskeyName(
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, name: name)
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return
     }
     await loadItems(for: vaultKey)
@@ -2028,7 +2028,7 @@ final class VaultsModel {
       try await core.dismissPasskeyReport(
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, kind: kind)
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return
     }
     await loadItems(for: vaultKey)
@@ -2070,7 +2070,7 @@ final class VaultsModel {
       try await core.mergeItems(
         vaultKey: vaultKey, sourceItemKey: sourceItemKey, destItemKey: destItemKey)
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
     await loadItems(for: vaultKey)
@@ -2087,7 +2087,7 @@ final class VaultsModel {
     do {
       key = try await core.createLogin(vaultKey: vaultKey, itemKey: itemKey, title: title)
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return nil
     }
     await loadItems(for: vaultKey)
@@ -2113,7 +2113,7 @@ final class VaultsModel {
       await loadItems(for: vaultKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -2126,7 +2126,7 @@ final class VaultsModel {
       await loadItems(for: vaultKey)
       return true
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }
@@ -2140,7 +2140,7 @@ final class VaultsModel {
       if converted { await offerAutofillSetupIfNeeded() }
       return converted
     } catch {
-      actionError = String(describing: error)
+      actionError = error.userMessage
       return false
     }
   }

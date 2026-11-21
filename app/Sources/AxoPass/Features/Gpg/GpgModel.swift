@@ -62,7 +62,7 @@ final class GpgModel {
       loadError = nil
     } catch {
       keys = []
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
     passwords = (try? await core.listPasswords()) ?? []
     if let selectedFingerprint, !keys.contains(where: { $0.fingerprint == selectedFingerprint }) {
@@ -84,7 +84,7 @@ final class GpgModel {
     do {
       try await status.configureGpgConf()
     } catch {
-      configureError = String(describing: error)
+      configureError = error.userMessage
     }
     isConfiguring = false
   }
@@ -98,7 +98,7 @@ final class GpgModel {
       testResult = .success
       fadeOutSuccess()
     } catch {
-      testResult = .failure(String(describing: error))
+      testResult = .failure(error.userMessage)
     }
     isTesting = false
   }
@@ -109,7 +109,7 @@ final class GpgModel {
     do {
       return try await core.exportGpgPublicKey(fingerprint: fingerprint)
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return nil
     }
   }
@@ -132,7 +132,7 @@ final class GpgModel {
       await reload()
       return nil
     } catch {
-      return Self.message(for: error)
+      return error.userMessage
     }
   }
 
@@ -142,7 +142,7 @@ final class GpgModel {
     do {
       return try await core.revealKeyPassword(passwordType: .gpgKey, keyId: keygrip)
     } catch {
-      loadError = Self.message(for: error)
+      loadError = error.userMessage
       return nil
     }
   }
@@ -155,24 +155,8 @@ final class GpgModel {
       await reload()
       return true
     } catch {
-      loadError = Self.message(for: error)
+      loadError = error.userMessage
       return false
-    }
-  }
-
-  /// An error's text without the case name wrapped around it: this one is read
-  /// by the user, who typed the passphrase gpg just refused.
-  private static func message(for error: Error) -> String {
-    switch error {
-    case let error as FfiError:
-      switch error {
-      case .NotFound(let message), .InvalidInput(let message), .Internal(let message):
-        return message
-      default:
-        return error.localizedDescription
-      }
-    default:
-      return String(describing: error)
     }
   }
 
@@ -183,7 +167,7 @@ final class GpgModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }

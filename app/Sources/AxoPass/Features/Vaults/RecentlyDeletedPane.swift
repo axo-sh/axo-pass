@@ -298,7 +298,7 @@ private struct DeletedSecretRow: View {
       do {
         secret = try await fetch()
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
       isRevealing = false
     }
@@ -326,7 +326,7 @@ private struct DeletedSecretRow: View {
         error = "Value is not text."
       }
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 

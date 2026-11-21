@@ -209,7 +209,7 @@ struct AddVaultKeySheet: View {
     } catch FfiError.AuthExpired, FfiError.AuthCancelled {
       error = "Authentication expired."
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 }

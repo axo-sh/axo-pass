@@ -483,7 +483,7 @@ private struct SshKeyDetail: View {
               commentError = nil
               await model.reload()
             } catch {
-              commentError = String(describing: error)
+              commentError = error.userMessage
             }
           } else {
             await model.writeManagedKeyPubkey(fingerprintSha256: key.fingerprintSha256)
@@ -526,7 +526,7 @@ private struct SshKeyDetail: View {
         commentError = nil
         await model.reload()
       } catch {
-        commentError = String(describing: error)
+        commentError = error.userMessage
       }
     }
   }
@@ -625,7 +625,7 @@ private struct SshKeyDetail: View {
         accessError = nil
         await model.reload()
       } catch {
-        accessError = String(describing: error)
+        accessError = error.userMessage
       }
     }
   }

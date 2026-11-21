@@ -79,7 +79,7 @@ final class SshModel {
       keys = try await core.listSshKeys()
     } catch {
       keys = []
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
     if let selectedFingerprint,
       !keys.contains(where: { $0.fingerprintSha256 == selectedFingerprint })
@@ -107,7 +107,7 @@ final class SshModel {
     do {
       try await status.configureSshConf()
     } catch {
-      configureError = String(describing: error)
+      configureError = error.userMessage
     }
     isConfiguring = false
   }
@@ -121,7 +121,7 @@ final class SshModel {
       testResult = .success
       fadeOutSuccess()
     } catch {
-      testResult = .failure(String(describing: error))
+      testResult = .failure(error.userMessage)
     }
     isTesting = false
   }
@@ -132,7 +132,7 @@ final class SshModel {
     do {
       try await agentService.start()
     } catch {
-      agentError = String(describing: error)
+      agentError = error.userMessage
     }
     await reload()
     isTogglingAgent = false
@@ -144,7 +144,7 @@ final class SshModel {
     do {
       try await agentService.stop()
     } catch {
-      agentError = String(describing: error)
+      agentError = error.userMessage
     }
     await reload()
     isTogglingAgent = false
@@ -158,7 +158,7 @@ final class SshModel {
       selectedFingerprint = key.fingerprintSha256
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -170,7 +170,7 @@ final class SshModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -184,7 +184,7 @@ final class SshModel {
       await reload()
       return path
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return nil
     }
   }
@@ -206,7 +206,7 @@ final class SshModel {
         fingerprintSha256: fingerprintSha256, teamId: app.teamId, bundleId: app.bundleId)
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -221,7 +221,7 @@ final class SshModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -253,7 +253,7 @@ final class SshModel {
     do {
       return try await core.revealKeyPassword(passwordType: .sshKey, keyId: fingerprint)
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return nil
     }
   }
@@ -265,7 +265,7 @@ final class SshModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }
@@ -278,7 +278,7 @@ final class SshModel {
       await reload()
       return true
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
       return false
     }
   }

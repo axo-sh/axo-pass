@@ -116,7 +116,7 @@ struct ItemHistorySheet: View {
       events = try await model.itemHistory(vaultKey: target.vaultKey, itemKey: target.itemKey)
     } catch {
       events = []
-      errorMessage = String(describing: error)
+      errorMessage = error.userMessage
     }
   }
 

@@ -140,7 +140,7 @@ struct SshKeyBox: View {
         error = nil
         copy(line)
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }

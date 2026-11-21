@@ -262,7 +262,7 @@ final class SyncModel {
       vaults.lock()
     } catch {
       reports[vaultKey] = nil
-      states[vaultKey] = .unknown(message: String(describing: error))
+      states[vaultKey] = .unknown(message: error.userMessage)
     }
   }
 
@@ -432,7 +432,7 @@ final class SyncModel {
       vaults.lock()
       return
     } catch {
-      disableError = (vaultKey, String(describing: error))
+      disableError = (vaultKey, error.userMessage)
     }
     await reload(vaultKey)
     await vaults.syncedVaultChanged(vaultKey)

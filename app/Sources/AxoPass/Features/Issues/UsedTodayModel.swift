@@ -36,7 +36,7 @@ final class UsedTodayModel {
       entries = UsedTodayEntry.group(events)
       loadError = nil
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
   }
 }

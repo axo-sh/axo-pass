@@ -621,7 +621,7 @@ struct CredentialList: View {
         selection = [.section(id)]
         renaming = .section(id)
       } catch {
-        listError = String(describing: error)
+        listError = error.userMessage
       }
     }
   }

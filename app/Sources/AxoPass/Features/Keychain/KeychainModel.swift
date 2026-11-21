@@ -26,7 +26,7 @@ final class KeychainModel {
       managedKeys = try await keysResult.filter { $0.isManaged }.map(ManagedKeyRow.init)
       loadError = nil
     } catch {
-      loadError = String(describing: error)
+      loadError = error.userMessage
     }
   }
 }

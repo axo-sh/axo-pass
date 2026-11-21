@@ -149,7 +149,7 @@ struct KeyStateSheet: View {
       do {
         resigned = try await sync.resign()
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }

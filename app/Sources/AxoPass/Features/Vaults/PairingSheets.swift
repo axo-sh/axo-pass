@@ -80,7 +80,7 @@ struct PairingSheet: View {
     } catch FfiError.AuthExpired {
       // The app locked, which closes the sheet.
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 
@@ -306,7 +306,7 @@ struct PairingPromptSheet: View {
         picked = []
         step = .share(name: name, vaults: vaults)
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -320,7 +320,7 @@ struct PairingPromptSheet: View {
         try await sync.dismissPairing(root: root)
         dismiss()
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -383,7 +383,7 @@ struct PairingPromptSheet: View {
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
       } catch {
-        self.error = String(describing: error)
+        self.error = error.userMessage
       }
     }
   }
@@ -552,7 +552,7 @@ struct KitImportSheet: View {
       step = .checking
       round += 1
     } catch {
-      self.error = String(describing: error)
+      self.error = error.userMessage
     }
   }
 
@@ -622,7 +622,7 @@ struct KitImportSheet: View {
 
   private func fail(_ error: Error) {
     if case FfiError.AuthExpired = error { return }
-    self.error = String(describing: error)
+    self.error = error.userMessage
     step = .choose
   }
 
