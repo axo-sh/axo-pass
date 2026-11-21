@@ -1,6 +1,7 @@
 {
   "name": "__MANIFEST_NAME__",
   "version": "__MANIFEST_VERSION__",
+  "version_name": "__MANIFEST_VERSION_NAME__",
   "description": "__MANIFEST_DESCRIPTION__",
   "homepage_url": "https://axo.sh",
   "manifest_version": 3,

@@ -3,7 +3,10 @@ const path = require('node:path');
 
 const CopyPlugin = require('copy-webpack-plugin');
 
-const VERSION = '0.1.0';
+// Store version while testing. Stores require a higher number on every upload.
+const VERSION = '0.0.1';
+// Version shown to users in Chrome.
+const VERSION_NAME = '0.5.0';
 const NAME = 'Axo Pass';
 const DESCRIPTION = 'Fill logins from Axo Pass';
 
@@ -60,6 +63,7 @@ module.exports = (env) => {
                 .toString()
                 .replaceAll('__MANIFEST_NAME__', NAME)
                 .replaceAll('__MANIFEST_VERSION__', VERSION)
+                .replaceAll('__MANIFEST_VERSION_NAME__', VERSION_NAME)
                 .replaceAll('__MANIFEST_DESCRIPTION__', DESCRIPTION);
             },
           },
