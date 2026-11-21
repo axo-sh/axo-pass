@@ -136,6 +136,7 @@ use crate::secrets::vaults::sync::transport::s3::credentials::default_credential
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
 use crate::secrets::vaults::sync::txn::SyncTxn;
 
+mod legacy_v1; // MIGRATE_V1
 mod locks;
 mod vault_file;
 mod versions;

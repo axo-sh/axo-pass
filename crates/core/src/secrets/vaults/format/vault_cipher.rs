@@ -457,6 +457,22 @@ impl VaultCipher {
         serde_json::from_value(serde_json::to_value(&blob).unwrap()).unwrap()
     }
 
+    /// Item metadata blob whose plaintext is `value`, for tests that store
+    /// fields `VaultItemMetadata` does not hold.
+    #[cfg(test)]
+    pub(crate) fn encrypt_item_metadata_as_for_test<T>(
+        &self,
+        item_id: Uuid,
+        value: &T,
+    ) -> EncryptedBlob<VaultItemMetadata>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + zeroize::Zeroize,
+    {
+        let blob =
+            EncryptedBlob::encrypt(value, &self.cipher, self.item_metadata_aad(item_id)).unwrap();
+        serde_json::from_value(serde_json::to_value(&blob).unwrap()).unwrap()
+    }
+
     /// Plaintext of a credential metadata blob read as `T`, for tests.
     #[cfg(test)]
     pub(crate) fn decrypt_cred_metadata_as_for_test<T>(

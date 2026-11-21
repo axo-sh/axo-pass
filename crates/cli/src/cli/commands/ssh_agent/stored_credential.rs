@@ -248,7 +248,7 @@ impl Debug for StoredCredential {
                 let key_data = credential.key_data();
                 format!(
                     "{} {cred_type} {} {comment}",
-                    &key_data.algorithm(),
+                    key_data.algorithm(),
                     compute_short_sha256_fingerprint(key_data)
                 )
             },

@@ -116,17 +116,6 @@ fn hyphenated_and_short_forms_of_one_id_both_reported() {
 }
 
 #[test]
-fn format1_file_not_listed() {
-    let fx = Fixture::new();
-    fx.write_without_envelope("legacy");
-
-    let scan = fx.catalog.scan();
-
-    assert_eq!(scan.vaults.into_keys().collect::<Vec<_>>(), ["personal"]);
-    assert!(scan.duplicates.is_empty(), "{:?}", scan.duplicates);
-}
-
-#[test]
 fn external_vault_signed_and_verified() {
     let fx = Fixture::with_external(&["outside"]);
     let path = fx.external_path("outside");

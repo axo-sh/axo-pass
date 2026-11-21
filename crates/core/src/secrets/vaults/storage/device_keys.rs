@@ -151,6 +151,17 @@ impl VaultFiles {
                 .any(|(_, dir)| Self::holds_file(dir, &dismissed))
     }
 
+    // MIGRATE_V1
+    /// Whether `versions/` or `sync/` holds a file. A Mac that only ever ran
+    /// 0.2.0 has neither, so no file on it was signed. A path that cannot be
+    /// read counts as present.
+    pub(super) fn holds_saved_state(&self) -> bool {
+        let dismissed = DismissedRequests::path(&self.root);
+        [&self.versions, &self.sync]
+            .into_iter()
+            .any(|dir| Self::holds_file(dir, &dismissed))
+    }
+
     /// Whether `path` exists. Only a not found error counts as absent.
     fn exists(path: &Path) -> bool {
         match fs::metadata(path) {

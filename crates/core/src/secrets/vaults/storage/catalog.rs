@@ -255,9 +255,22 @@ impl VaultCatalog {
         )
     }
 
-    /// Key state of this Mac, probed without a prompt.
+    /// Key state of this Mac, probed without a prompt. Vault files of 0.2.0
+    /// are upgraded first, since they are unsigned.
     pub fn key_state(&self) -> KeyState {
+        self.upgrade_legacy_vaults(); // MIGRATE_V1
         KeyState::probe(self.keys.as_ref(), &self.vault_files())
+    }
+
+    // MIGRATE_V1
+    /// Upgrade the vault files that 0.2.0 wrote. Creates
+    /// `device-signing-key` if only such files exist. See `txn/legacy_v1.rs`.
+    fn upgrade_legacy_vaults(&self) {
+        self.files.upgrade_legacy_vaults(
+            self.keys.as_ref(),
+            &self.vault_files(),
+            &self.vault_paths(),
+        );
     }
 
     /// Create the missing keys on `context` if no vault file exists, and on
@@ -369,17 +382,8 @@ impl VaultCatalog {
     /// vaults directory, is skipped. Files that fail to load are logged and
     /// skipped.
     pub(super) fn read_all(&self) -> Vec<(Uuid, VaultHandle)> {
-        let mut paths: Vec<PathBuf> = fs::read_dir(&self.vaults_dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json")
-            })
-            .collect();
-        paths.sort();
-        paths.extend(self.external_vaults());
+        self.upgrade_legacy_vaults(); // MIGRATE_V1
+        let paths = self.vault_paths();
 
         let mut seen = BTreeSet::new();
         let mut found = Vec::new();
@@ -394,6 +398,24 @@ impl VaultCatalog {
         }
         found.sort_by(|(_, a), (_, b)| a.path.cmp(&b.path));
         found
+    }
+
+    /// Paths of the `.json` files in the vaults directory, ordered, then the
+    /// external vault paths. A path can be listed twice, and a listed external
+    /// path can be missing.
+    fn vault_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(&self.vaults_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json")
+            })
+            .collect();
+        paths.sort();
+        paths.extend(self.external_vaults());
+        paths
     }
 
     /// Path with links and `..` resolved, or `path` if it cannot be resolved.

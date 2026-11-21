@@ -19,6 +19,7 @@ mod collision;
 mod ids;
 mod import;
 mod keys;
+mod legacy_v1; // MIGRATE_V1
 
 /// Catalog of one vault named "Personal" at key `personal`, in a temp
 /// directory. The unlocker holds its file key.
@@ -94,15 +95,6 @@ impl Fixture {
         let data = EncryptedVault::sign_file_for_test(&file, &TestSigner::device());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, data).unwrap();
-    }
-
-    /// Write the `personal` vault object to `{name}.json` without its
-    /// envelope, as a format 1 file is.
-    fn write_without_envelope(&self, name: &str) {
-        let data = fs::read_to_string(self.vault_path("personal")).unwrap();
-        let file: Value = serde_json::from_str(&data).unwrap();
-        let data = serde_json::to_string_pretty(&file["vault"]).unwrap();
-        fs::write(self.vault_path(name), data).unwrap();
     }
 
     /// Write the `personal` vault file to `{name}.json` after `edit`, as

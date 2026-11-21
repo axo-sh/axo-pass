@@ -26,6 +26,27 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+// MIGRATE_V1: remove in 0.6, with the other MIGRATE_V1 markers.
+/// `created_at` of metadata that was written before the field existed. Such
+/// metadata is read with the time of the load. The next save writes that time.
+pub(super) const UNSET_CREATED_AT: i64 = i64::MIN;
+
+// MIGRATE_V1
+fn unset_created_at() -> i64 {
+    UNSET_CREATED_AT
+}
+
+// MIGRATE_V1
+/// `created_at` as read from metadata, with the current time for an unset
+/// value.
+fn created_or_now(created_at: i64) -> i64 {
+    if created_at == UNSET_CREATED_AT {
+        now_unix()
+    } else {
+        created_at
+    }
+}
+
 /// Sort key for folders, sections, and credentials. Entries with a position
 /// come first, ordered by position, then the rest by title.
 pub fn display_order(position: Option<u32>, title: &str) -> (u32, &str) {
@@ -139,7 +160,7 @@ impl VaultItemOverview {
             category: metadata.category.clone(),
             autofill: ItemAutofill::default(),
             credentials: BTreeMap::new(),
-            created_at: metadata.created_at,
+            created_at: created_or_now(metadata.created_at),
         }
     }
 
@@ -208,7 +229,7 @@ impl VaultItemCredentialOverview {
             position: metadata.position,
             section: metadata.section,
             last_used_day_at: metadata.last_used_day_at,
-            created_at: metadata.created_at,
+            created_at: created_or_now(metadata.created_at),
         }
     }
 
@@ -350,8 +371,17 @@ pub struct VaultItemMetadata {
     pub sections: Vec<VaultSectionMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// Unix seconds of creation.
+    /// Unix seconds of creation. Absent in metadata of 0.2.0 vaults.
+    #[serde(default = "unset_created_at")] // MIGRATE_V1
     pub created_at: i64,
+}
+
+impl VaultItemMetadata {
+    // MIGRATE_V1
+    /// Whether this metadata was written without `created_at`.
+    pub(super) fn lacks_created_at(&self) -> bool {
+        self.created_at == UNSET_CREATED_AT
+    }
 }
 
 #[serde_as]
@@ -387,6 +417,15 @@ pub struct VaultCredentialMetadata {
     /// until the first recorded use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_day_at: Option<i64>,
-    /// Unix seconds of creation.
+    /// Unix seconds of creation. Absent in metadata of 0.2.0 vaults.
+    #[serde(default = "unset_created_at")] // MIGRATE_V1
     pub created_at: i64,
+}
+
+impl VaultCredentialMetadata {
+    // MIGRATE_V1
+    /// Whether this metadata was written without `created_at`.
+    pub(super) fn lacks_created_at(&self) -> bool {
+        self.created_at == UNSET_CREATED_AT
+    }
 }

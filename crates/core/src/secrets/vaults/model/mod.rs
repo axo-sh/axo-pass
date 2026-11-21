@@ -646,13 +646,14 @@ impl Vault {
         item_id: ItemId,
         encrypted_item: EncryptedVaultItem,
     ) -> Result<DecryptedItem, Error> {
-        let mut overview = cipher
-            .decrypt_item_metadata(item_id, &encrypted_item.metadata)
-            .map(|m| VaultItemOverview::from_metadata(item_id, m.expose_secret()))?;
+        let metadata = cipher.decrypt_item_metadata(item_id, &encrypted_item.metadata)?;
+        let mut overview = VaultItemOverview::from_metadata(item_id, metadata.expose_secret());
 
         // An item filed in a folder that no longer exists is unfiled. Its
-        // metadata blob is not current, so the next save persists that.
-        let mut metadata_current = true;
+        // metadata blob is not current, so the next save persists that. The
+        // same holds for metadata of a 0.2.0 vault, which has no creation time.
+        // MIGRATE_V1
+        let mut metadata_current = !metadata.expose_secret().lacks_created_at();
         if overview.folder.is_some_and(|f| !folders.contains_key(&f)) {
             overview.folder = None;
             metadata_current = false;
@@ -667,13 +668,15 @@ impl Vault {
 
         let mut credentials = BTreeMap::new();
         for (cred_id, encrypted_cred) in encrypted_item.credentials {
-            let mut cred_overview = cipher
-                .decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)
-                .map(|m| VaultItemCredentialOverview::from_metadata(cred_id, m.expose_secret()))?;
+            let cred_metadata =
+                cipher.decrypt_cred_metadata(item_id, cred_id, &encrypted_cred.metadata)?;
+            let mut cred_overview =
+                VaultItemCredentialOverview::from_metadata(cred_id, cred_metadata.expose_secret());
             cipher.check_history_metadata(item_id, cred_id, &encrypted_cred.history)?;
 
             // Same as above, for a credential in a missing section.
-            let mut cred_metadata_current = true;
+            // MIGRATE_V1
+            let mut cred_metadata_current = !cred_metadata.expose_secret().lacks_created_at();
             if cred_overview
                 .section
                 .is_some_and(|s| !overview.sections.contains_key(&s))
