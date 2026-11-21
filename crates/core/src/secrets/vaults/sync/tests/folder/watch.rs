@@ -13,6 +13,16 @@ fn watch_calls() -> (Box<dyn Fn() + Send>, Receiver<Instant>) {
     (notify, receiver)
 }
 
+/// Wait past the FSEvents latency, then discard calls of `calls`. FSEvents can
+/// deliver events of the folder setup to a stream that started afterwards, and
+/// those events match every watch of the folder.
+fn settle(calls: &[&Receiver<Instant>]) {
+    std::thread::sleep(Duration::from_millis(2500));
+    for calls in calls {
+        while calls.try_recv().is_ok() {}
+    }
+}
+
 /// Assert that the callback of `calls` is dropped, so no call can follow.
 /// Calls sent before the drop are skipped.
 fn assert_callback_dropped(calls: &Receiver<Instant>) {
@@ -56,6 +66,7 @@ fn state_file_written_into_peer_directory_calls_watch_and_write_in_other_vault_d
     let _watch = folder.transport.watch(VAULT, notify).unwrap();
     let (other_notify, other_calls) = watch_calls();
     let _other_watch = folder.transport.watch(other, other_notify).unwrap();
+    settle(&[&calls, &other_calls]);
 
     // The watch of the other vault shows that FSEvents delivered the write.
     folder.put(
@@ -86,6 +97,7 @@ fn pairing_request_written_calls_pairing_watch() {
     let (vault_notify, vault_calls) = watch_calls();
     let _watch = folder.transport.watch_pairings(notify).unwrap();
     let _vault_watch = folder.transport.watch(VAULT, vault_notify).unwrap();
+    settle(&[&calls, &vault_calls]);
 
     folder
         .transport
