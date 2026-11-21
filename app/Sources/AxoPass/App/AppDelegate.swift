@@ -66,16 +66,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let locationMonitor = AppLocationMonitor()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    // A launch from a disk image offers to move the app before any setup runs.
-    // A broker launch shows no prompt.
-    if !model.isBrokerLaunch(), let source = MoveToApplications.diskImageBundle() {
-      Task {
-        await MoveToApplications.offer(source: source)
-        finishLaunching()
-      }
-      return
-    }
+    // An unsuitable install location offers to move the app before any setup
+    // runs. A broker launch shows no prompt.
+    if !model.isBrokerLaunch() { offerToMoveToApplications() }
     finishLaunching()
+  }
+
+  /// Browser manifests and the SSH agent point into the bundle, so the offer
+  /// cannot be suppressed.
+  private func offerToMoveToApplications() {
+    var text = MoveToApplicationsText()
+    text.offerTitle = "Move Axo Pass to Applications?"
+    text.offerMessage =
+      "Axo Pass cannot update itself or keep the browser extension and SSH agent working from here."
+    text.dontMoveButton = "Not Now"
+    text.failureTitle = "Axo Pass could not be moved"
+    NSApp.activate(ignoringOtherApps: true)
+    updaterUI.offerToMoveToApplicationsIfNeeded(allowsSuppression: false, text: text)
   }
 
   private func finishLaunching() {
