@@ -12,7 +12,6 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
-axo-pass-cli = {path = "crates/cli"}
 axo-pass-core = {path = "crates/core"}
 log = "0.4.34"
 secrecy = "0.10.3"
