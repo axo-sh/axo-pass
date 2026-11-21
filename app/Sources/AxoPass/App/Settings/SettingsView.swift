@@ -542,7 +542,7 @@ private enum BrowserManifestStyle {
       return URL(
         string: "https://chromewebstore.google.com/detail/dnpdmaobhnnkiknbgbfbpjmmgjchfkob")!
     case .firefox:
-      return URL(string: "https://addons.mozilla.org/firefox/addon/axo-pass@breakfastlabs.com/")!
+      return URL(string: "https://addons.mozilla.org/firefox/addon/pass@axo.sh/")!
     }
   }
 

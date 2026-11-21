@@ -14,7 +14,7 @@ pub const NATIVE_HOST_NAME: &str = "com.breakfastlabs.axo_pass";
 
 /// Gecko id of the Firefox extension, listed in the Firefox manifest's
 /// `allowed_extensions`.
-pub const FIREFOX_EXTENSION_ID: &str = "axo-pass@breakfastlabs.com";
+pub const FIREFOX_EXTENSION_ID: &str = "pass@axo.sh";
 
 /// Id of the Chrome extension, derived from the `key` in
 /// `extension/src/manifest.chrome.json` and listed in the Chrome manifest's

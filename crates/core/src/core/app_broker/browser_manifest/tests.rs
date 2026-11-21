@@ -67,7 +67,7 @@ fn firefox_manifest_lists_allowed_extensions() {
             "description": "Axo Pass",
             "path": "/h",
             "type": "stdio",
-            "allowed_extensions": ["axo-pass@breakfastlabs.com"],
+            "allowed_extensions": ["pass@axo.sh"],
         })
     );
 }

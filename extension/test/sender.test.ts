@@ -3,7 +3,7 @@ import type {Runtime} from 'webextension-polyfill';
 
 import {frameFromSender, isExtensionPage} from '@/lib/sender';
 
-const ID = 'axo-pass@breakfastlabs.com';
+const ID = 'pass@axo.sh';
 
 const sender = (fields: Record<string, unknown>): Runtime.MessageSender => {
   return {

@@ -282,8 +282,8 @@ mod tests {
             Some("chrome-extension://abc/")
         );
         assert_eq!(
-            reported_extension(&args(&["/tmp/m.json", "axo-pass@breakfastlabs.com"])).as_deref(),
-            Some("axo-pass@breakfastlabs.com")
+            reported_extension(&args(&["/tmp/m.json", "pass@axo.sh"])).as_deref(),
+            Some("pass@axo.sh")
         );
         assert_eq!(reported_extension(&args(&[])), None);
     }

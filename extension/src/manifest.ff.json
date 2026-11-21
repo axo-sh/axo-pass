@@ -2,7 +2,7 @@
   "name": "__MANIFEST_NAME__",
   "version": "__MANIFEST_VERSION__",
   "description": "__MANIFEST_DESCRIPTION__",
-  "homepage_url": "https://github.com/octavore",
+  "homepage_url": "https://axo.sh",
   "manifest_version": 3,
   "icons": {
     "48": "axo-auto.svg",
@@ -57,7 +57,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "axo-pass@breakfastlabs.com",
+      "id": "pass@axo.sh",
       "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": ["none"]

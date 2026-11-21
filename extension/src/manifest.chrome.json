@@ -2,7 +2,7 @@
   "name": "__MANIFEST_NAME__",
   "version": "__MANIFEST_VERSION__",
   "description": "__MANIFEST_DESCRIPTION__",
-  "homepage_url": "https://github.com/octavore",
+  "homepage_url": "https://axo.sh",
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw5ryApL0+5tNVWkI82qkIovv5FbQFn2TdCyim9KtIslqZIqOzsWrKp/G2Os0nLUAKoB7+w1etjFxA06M+bMBjwzGHDreji27kmRHulkeQtc/RF5bJUupfK6LqBIjngGYzS0a2V5EgNLrpBBpjYXmhNfnaRNRNsPeOc+45/+r1dzUhP+8t5OdutgrarT3muvaWmoMMqo9a7D81vxYaWwPrt89ahSbToZRScaEoceAx7RH6OyHCYtV0z2+R065bxfmkcZd83dyUZxGYmSSZX1QXTkxn4guIyFEV6GFiSMW1vbsHFuVlzrvOtgIb5V7RruenrCzId1IXU8Lk1/N7h8UvwIDAQAB",
   "icons": {
