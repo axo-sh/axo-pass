@@ -34,7 +34,7 @@ use crate::secrets::vaults::sync::meta::MetaFile;
 use crate::secrets::vaults::sync::model::{KeyId, SYNC_FORMAT_VERSION};
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::report::{KnownMac, SyncReport};
-use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::sidecar::{Health, LoadFailure, Sidecar};
 use crate::secrets::vaults::sync::state_file::padded::PaddedBody;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::{BUILD_ID, PausedCause, StopCause, SyncStatus};
@@ -555,7 +555,19 @@ fn kit_refused_where_confirm_saved_refuses_its_recipient() {
             matches!(confirm(&fx, &kit), Err(Error::RecoveryKitNotAdded(_))),
             "{name}: confirm"
         );
-        assert_eq!(files(&fx), before, "{name}: confirm writes nothing");
+        // The vault, the sync state, and the staged file are unchanged. A
+        // missing sync state is recorded once in the sidecar.
+        let after = files(&fx);
+        assert_eq!(after[..3], before[..3], "{name}: confirm writes nothing");
+        if name == "sync state missing" {
+            let failure = LoadFailure::StateMissing;
+            assert_eq!(
+                Sidecar::load(&fx.root, fx.id()).health,
+                Health::Failed { failure }
+            );
+        } else {
+            assert_eq!(after[3], before[3], "{name}: confirm writes no sidecar");
+        }
     }
 
     // A sync stopped by drift on another build is resumed by the next

@@ -78,17 +78,36 @@ pub fn record_managed_key_delete(actor: Option<Actor>, result: &Result<(String, 
 /// Any test that records an event needs one, not only the tests that read the
 /// log back: the directory is process-global, so an event written without a
 /// guard lands in whichever test's directory is current and breaks its counts.
+///
+/// Sync transactions record their events only on a thread that holds a guard,
+/// so the many sync tests that read no audit log need none.
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::cell::Cell;
     use std::sync::{Mutex, MutexGuard};
 
     /// The audit dir and the details setting are process-global via env vars,
     /// so tests that set them must not run concurrently.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    thread_local! {
+        static HELD: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Whether the current thread holds a [`TestDir`].
+    pub(crate) fn held() -> bool {
+        HELD.with(Cell::get)
+    }
+
     pub(crate) struct TestDir {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            HELD.with(|held| held.set(false));
+        }
     }
 
     impl TestDir {
@@ -108,6 +127,7 @@ pub(crate) mod test_support {
             _dir: dir,
         };
         test_dir.details(true);
+        HELD.with(|held| held.set(true));
         test_dir
     }
 }

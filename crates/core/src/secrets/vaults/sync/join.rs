@@ -8,6 +8,8 @@
 //! every other replica directory. Rules for removed replicas and lower key
 //! ids are milestone 13.
 
+use std::collections::BTreeSet;
+
 use uuid::Uuid;
 
 use super::crdt::{CausalState, JoinAction, JoinOutcome, OwnFileState, ReplicaId, Session};
@@ -54,10 +56,12 @@ impl From<FileJoin> for OwnFileState {
 }
 
 /// Result of the join of the peer state files.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PeerJoin {
     /// Whether the state changed.
     pub changed: bool,
+    /// Replicas whose files changed the state.
+    pub sources: BTreeSet<ReplicaId>,
     /// Whether the replica directories and every peer directory were listed.
     pub listed: bool,
     /// Count of listed peer files that are not local yet.
@@ -236,7 +240,11 @@ impl StateJoin<'_> {
             for hash in &listed {
                 match self.file(transport, replica, *hash) {
                     FileJoin::Remote => join.remote += 1,
-                    file => join.changed |= file.changed(),
+                    file if file.changed() => {
+                        join.changed = true;
+                        join.sources.insert(replica);
+                    },
+                    _ => {},
                 }
             }
             self.retain(replica, &listed);
@@ -253,6 +261,7 @@ impl StateJoin<'_> {
             "State file is quarantined",
             &format!("{name}: {reason}"),
         );
+        self.found.new_quarantined.push((replica, name.clone()));
         self.sidecar.quarantine(replica, name, hash, reason);
         *self.sidecar_changed = true;
         self.found.quarantined += 1;

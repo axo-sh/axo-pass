@@ -97,6 +97,15 @@ impl Repair {
         Ok(edits.len())
     }
 
+    /// Cause recorded in the `sync.repair` event.
+    pub(crate) fn cause(self) -> &'static str {
+        match self {
+            Self::NewerVault => "newer vault file",
+            Self::NewBuild => "recovery merge",
+            Self::Override => "user override",
+        }
+    }
+
     /// Set the header of `local` for this repair. A recovery merge resumes
     /// sync, and the override records this build in `override_build`.
     pub(crate) fn start(self, local: &mut LocalSyncState) {

@@ -96,7 +96,7 @@ final class AuditLogModel {
 extension AuditCategory: CaseIterable {
   /// Categories in toolbar order.
   public static var allCases: [AuditCategory] {
-    [.ssh, .gpg, .age, .vault, .item, .credential, .passkey, .grant, .broker]
+    [.ssh, .gpg, .age, .vault, .item, .credential, .passkey, .grant, .broker, .sync]
   }
 
   var label: String {
@@ -110,6 +110,7 @@ extension AuditCategory: CaseIterable {
     case .passkey: return "Passkeys"
     case .grant: return "Grants"
     case .broker: return "Broker"
+    case .sync: return "Sync"
     }
   }
 }

@@ -35,6 +35,12 @@ pub struct ApplyReport {
     /// Every entity changed. Folders and signals count as the vault. Sections
     /// and websites count as their item, and history as its credential.
     pub changed: BTreeSet<Entity>,
+    /// Items and credentials purged. Each is also in `changed`.
+    pub purged: BTreeSet<Entity>,
+    /// Items that gained a website URL.
+    pub websites_added: BTreeSet<ItemId>,
+    /// Items whose username, password, or one-time code slot changed.
+    pub slots_changed: BTreeSet<ItemId>,
 }
 
 /// Key of an entry before and after the apply step.
@@ -339,6 +345,15 @@ impl Apply<'_, '_> {
             .map(|w| Website::new(w.url.clone(), w.match_kind))
             .collect();
         if stored.autofill.websites != websites {
+            let known: BTreeSet<&str> = stored
+                .autofill
+                .websites
+                .iter()
+                .map(|w| w.url.as_str())
+                .collect();
+            if websites.iter().any(|w| !known.contains(w.url.as_str())) {
+                self.report.websites_added.insert(id);
+            }
             self.writer.set_websites(id, websites)?;
             changed = true;
         }
@@ -361,6 +376,7 @@ impl Apply<'_, '_> {
             .collect();
         for id in purged {
             self.writer.purge_credential(id)?;
+            self.report.purged.insert(Entity::Credential(id));
             self.changed(Entity::Credential(id));
         }
 
@@ -511,6 +527,7 @@ impl Apply<'_, '_> {
             .collect();
         for id in purged {
             self.writer.purge_item(id)?;
+            self.report.purged.insert(Entity::Item(id));
             self.changed(Entity::Item(id));
         }
         Ok(())
@@ -525,6 +542,7 @@ impl Apply<'_, '_> {
             if stored != slots {
                 self.writer
                     .set_slots(*id, shown.username, shown.password, shown.totp)?;
+                self.report.slots_changed.insert(*id);
                 self.changed(Entity::Item(*id));
             }
         }

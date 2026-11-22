@@ -1,6 +1,7 @@
 //! Vault sync between the Macs of one user.
 
 pub mod apply;
+pub(crate) mod audit_events;
 pub(crate) mod blobs;
 pub mod crdt;
 pub mod diff;

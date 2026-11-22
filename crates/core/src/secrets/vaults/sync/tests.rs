@@ -3,6 +3,7 @@ use uuid::Uuid;
 use super::crdt::{ReplicaId, Session};
 
 mod apply;
+mod audit_events;
 mod diff;
 mod disable;
 mod edit_rule;

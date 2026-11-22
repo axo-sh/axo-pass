@@ -78,6 +78,7 @@ pub enum AuditCategory {
     Passkey,
     Grant,
     Broker,
+    Sync,
 }
 
 impl From<audit::Category> for AuditCategory {
@@ -92,6 +93,7 @@ impl From<audit::Category> for AuditCategory {
             audit::Category::Passkey => Self::Passkey,
             audit::Category::Grant => Self::Grant,
             audit::Category::Broker => Self::Broker,
+            audit::Category::Sync => Self::Sync,
         }
     }
 }
@@ -108,6 +110,7 @@ impl From<AuditCategory> for audit::Category {
             AuditCategory::Passkey => Self::Passkey,
             AuditCategory::Grant => Self::Grant,
             AuditCategory::Broker => Self::Broker,
+            AuditCategory::Sync => Self::Sync,
         }
     }
 }

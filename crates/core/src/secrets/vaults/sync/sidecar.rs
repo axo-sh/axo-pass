@@ -2,7 +2,7 @@
 //!
 //! The sidecar holds the content hash of the last publish, the hashes of the
 //! state files joined, the quarantined files, the causes of a paused sync,
-//! and the transport root. It is at
+//! the last failure to load the sync state, and the transport root. It is at
 //! `sync/{short_vault_id}.json` and is written under the vault locks. It is
 //! not a source of truth, except for the transport root. A sidecar that fails
 //! to parse is read as empty, which causes an extra join and never a wrong
@@ -37,7 +37,8 @@ pub struct Sidecar {
     pub joined: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
     /// Quarantined state files. An entry is kept when its file is gone.
     pub quarantined: Vec<QuarantinedFile>,
-    /// Health found by the last transaction that synced.
+    /// Health found by the last transaction that ran. A transaction records
+    /// audit events only if it finds another health.
     #[serde(default)]
     pub health: Health,
     /// Root of the transport of the vault. `None` gives no transport. The
@@ -51,12 +52,14 @@ pub struct Sidecar {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Health {
-    /// No cause was found.
+    /// The sync state loaded and no cause was found.
     #[default]
     Ok,
     /// Causes of a paused sync found by the last transaction that synced. A
     /// sync stopped by drift keeps the health as found before the stop.
     Paused { causes: Vec<PausedCause> },
+    /// The sync state failed to load.
+    Failed { failure: LoadFailure },
 }
 
 impl Health {
@@ -69,13 +72,40 @@ impl Health {
         }
     }
 
-    /// Causes of a paused sync. Empty if the health is `Ok`.
+    /// Causes of a paused sync. Empty if the health is not `Paused`.
     pub fn paused(&self) -> &[PausedCause] {
         match self {
-            Self::Ok => &[],
             Self::Paused { causes } => causes,
+            _ => &[],
         }
     }
+
+    /// Whether `other` is the same health for an audit event. Causes are
+    /// compared by name, so another error text records no event.
+    pub fn same_event(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Ok, Self::Ok) => true,
+            (Self::Failed { failure: a }, Self::Failed { failure: b }) => a == b,
+            (Self::Paused { causes: a }, Self::Paused { causes: b }) => {
+                let names = |causes: &[PausedCause]| -> BTreeSet<&'static str> {
+                    causes.iter().map(PausedCause::name).collect()
+                };
+                names(a) == names(b)
+            },
+            _ => false,
+        }
+    }
+}
+
+/// Failure to load the sync state of a vault that stops the transaction before
+/// any sync step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadFailure {
+    /// The vault names a replica and its sync state file is missing.
+    StateMissing,
+    /// The sync state fails its signature check.
+    SignatureFailed,
 }
 
 /// State file quarantined by path and content hash. A later file at the same
@@ -202,7 +232,7 @@ impl Sidecar {
             .any(|cause| matches!(cause, PausedCause::SeparateKey { .. }))
     }
 
-    /// Causes of a paused sync. Empty if the health is `Ok`.
+    /// Causes of a paused sync. Empty if the health is not `Paused`.
     pub fn paused(&self) -> &[PausedCause] {
         self.health.paused()
     }

@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::crdt::{Ask, CausalState, MvRegister, ReplicaId, Versioned, WriteId};
+use super::crdt::{Ask, CausalState, MvRegister, Policy, ReplicaId, Versioned, WriteId};
 use super::diff::{CredentialWrite, Edit, ItemWrite, LocalEdits};
 use super::model::{CredentialId, HistoryId, HistoryValue, ItemId, SecretText, SyncState};
 use super::view::{AskRegister, Conflict, Entity, VaultView};
@@ -428,6 +428,76 @@ impl LocalEdits {
             !self.edits.iter().any(|e| e.history_entry() == entry)
         });
         self.edits.extend(history);
+    }
+
+    /// Ask registers that these edits write while the register of `state`
+    /// holds several values, for `sync.conflict_resolved`. Under the MVP edit
+    /// rule each write supersedes every value, so `not_chosen` lists them
+    /// all.
+    pub fn superseded(&self, state: &CausalState<SyncState>) -> Vec<ResolveReport> {
+        let mut seen = BTreeSet::new();
+        let mut reports = Vec::new();
+        for register in self.edits.iter().filter_map(Edit::ask_register) {
+            if !seen.insert(register) {
+                continue;
+            }
+            let values = Self::register_values(state, register);
+            if values.len() < 2 {
+                continue;
+            }
+            let not_chosen = values
+                .into_iter()
+                .map(|(write_id, written_at)| NotChosen {
+                    write_id,
+                    replica: state.actors.get(&write_id.actor).map(|a| a.replica),
+                    written_at,
+                })
+                .collect();
+            reports.push(ResolveReport {
+                register,
+                not_chosen,
+            });
+        }
+        reports
+    }
+
+    /// Write id and write time of each value of `register` in `state`. Empty
+    /// if the state lacks the entity.
+    fn register_values(state: &CausalState<SyncState>, register: Conflict) -> Vec<(WriteId, i64)> {
+        fn times<T, P: Policy>(values: &MvRegister<T, P>) -> Vec<(WriteId, i64)> {
+            values.values().map(|(id, v)| (id, v.written_at)).collect()
+        }
+        let store = &state.store;
+        match (register.entity, register.register) {
+            (Entity::Vault, AskRegister::Name) => times(&store.name),
+            (Entity::Item(id), kind) => {
+                let Some(item) = store.items.get(&id) else {
+                    return Vec::new();
+                };
+                match kind {
+                    AskRegister::Title => times(&item.title),
+                    AskRegister::Category => times(&item.category),
+                    AskRegister::Key => times(&item.key),
+                    AskRegister::Username => times(&item.username),
+                    AskRegister::Password => times(&item.password),
+                    AskRegister::Totp => times(&item.totp),
+                    _ => Vec::new(),
+                }
+            },
+            (Entity::Credential(id), kind) => {
+                let Some(credential) = store.credentials.get(&id) else {
+                    return Vec::new();
+                };
+                match kind {
+                    AskRegister::Title => times(&credential.title),
+                    AskRegister::Kind => times(&credential.kind),
+                    AskRegister::Key => times(&credential.key),
+                    AskRegister::Value => times(&credential.value),
+                    _ => Vec::new(),
+                }
+            },
+            _ => Vec::new(),
+        }
     }
 
     /// Replace the edits to `register` with `edit`.

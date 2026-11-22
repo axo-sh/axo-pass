@@ -340,6 +340,7 @@ fn category_matches_action_namespace() {
         (Action::PasskeyMoved, Category::Passkey, "passkey"),
         (Action::AuthGrantExpired, Category::Grant, "auth"),
         (Action::BrokerPeerRejected, Category::Broker, "broker"),
+        (Action::SyncDeletedByPeer, Category::Sync, "sync"),
     ];
     for (action, category, namespace) in cases {
         assert_eq!(action.category(), category);

@@ -109,6 +109,7 @@ use crate::secrets::vaults::storage::handle::{
 use crate::secrets::vaults::storage::resign::Resigned;
 #[cfg(test)]
 use crate::secrets::vaults::sync::apply::ApplyFault;
+use crate::secrets::vaults::sync::audit_events::SyncEvents;
 use crate::secrets::vaults::sync::blobs;
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinKey};
 #[cfg(test)]
@@ -1001,12 +1002,14 @@ impl VaultWriter {
                 Some(sync)
             },
             _ => {
+                SyncEvents::load_failed(&self.root, id, &case);
                 case.check()?;
                 None
             },
         };
         // A pairing grant refuses a vault whose sync state is not trusted
-        // before any join, and writes nothing.
+        // before any join. It writes nothing, except the sidecar record of a
+        // sync state that is missing or fails its signature check.
         if let Some(grant) = grant.as_deref() {
             grant.check(&case, sync.as_ref())?;
         }
@@ -1018,8 +1021,8 @@ impl VaultWriter {
         if recovery.is_some() && sync.is_none() {
             return Err(Error::RecoveryKitNotAdded(case.to_string()).into());
         }
-        // The override runs only while it is offered, and writes nothing
-        // otherwise.
+        // The override runs only while it is offered. Otherwise it writes
+        // nothing, except the sidecar record of a load failure.
         let confirmed = *request == SyncRequest::Override;
         if confirmed
             && !sync
@@ -1529,8 +1532,10 @@ impl VaultWriter {
         }
         sidecar.last_publish = Some(hash);
         sidecar.record_joined(replica, hash);
+        let before = sidecar.health.clone();
         sidecar.clear_publish_failed();
         sidecar.save(&self.root, id)?;
+        SyncEvents::record_health_change(id, &before, &sidecar.health);
         log::info!("Copied the staged file {hash} of vault {id} to the synced folder");
         Ok(StagedCopy::Copied)
     }
@@ -1758,6 +1763,8 @@ impl VaultWriter {
                 Disabled::Deleted
             },
         };
+        // Audit events of a rebuild, recorded after the vault save.
+        let mut events = sync.as_mut().map(SyncTxn::take_events);
         // A separate enable saves no sync state, so its files are deleted.
         if disabled == Disabled::DirectoryDeleted {
             sync = None;
@@ -1784,6 +1791,9 @@ impl VaultWriter {
         // No write id of this replica is minted after a disable.
         locked.state.end_actor();
         let changed = result?;
+        if let Some(events) = &mut events {
+            events.record();
+        }
         // A vault that no longer syncs joins no peer change, so a flag set
         // before the disable would never clear.
         vault_lock.clear_pending(vault_lock.pending_epoch());

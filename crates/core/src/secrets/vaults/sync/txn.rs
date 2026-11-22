@@ -53,6 +53,8 @@ use zeroize::Zeroizing;
 
 #[cfg(test)]
 use super::apply::ApplyFault;
+use super::apply::ApplyReport;
+use super::audit_events::SyncEvents;
 use super::blobs;
 use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
@@ -118,6 +120,10 @@ pub(crate) struct SyncTxn {
     vault_only: bool,
     /// Paused causes found by this transaction.
     found: FoundCauses,
+    /// Audit events of this transaction, recorded after its saves.
+    events: SyncEvents,
+    /// Replicas whose peer files changed the state in this transaction.
+    sources: BTreeSet<ReplicaId>,
     /// Count of listed own and peer files that are not local yet.
     remote: usize,
     /// Whether the peer join listed the replica directories and every peer
@@ -142,6 +148,7 @@ impl SyncTxn {
         sidecar: Sidecar,
     ) -> Self {
         let TrustedState { local, state } = trusted;
+        let events = SyncEvents::new(local.vault_id);
         let loaded_joined = sidecar.joined.clone();
         let loaded_stop = (local.stopped_build.clone(), local.override_build.clone());
         Self {
@@ -162,6 +169,8 @@ impl SyncTxn {
             repairing: false,
             vault_only: false,
             found: FoundCauses::default(),
+            events,
+            sources: BTreeSet::new(),
             remote: 0,
             peers_listed: false,
             blob_store: None,
@@ -343,6 +352,7 @@ impl SyncTxn {
         self.remote += join.remote;
         self.peers_listed = join.listed;
         self.changed |= join.changed;
+        self.sources.extend(join.sources);
         join.changed
     }
 
@@ -557,16 +567,17 @@ impl SyncTxn {
     ) -> Result<Vault, Error> {
         let mut vault = Rebuild::empty(&self.local, key.clone(), file_key)?;
         match self.apply_view(&mut vault) {
-            Ok(()) => Ok(vault),
+            Ok(_) => {},
             Err(e) if self.changed => {
                 self.apply_failed(e);
                 self.discard_join()?;
-                let mut vault = Rebuild::empty(&self.local, key, file_key)?;
+                vault = Rebuild::empty(&self.local, key, file_key)?;
                 self.apply_view(&mut vault)?;
-                Ok(vault)
             },
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
         }
+        self.events.rebuilt();
+        Ok(vault)
     }
 
     /// New vault with file key `file_key`, holding the view of the joined
@@ -588,34 +599,34 @@ impl SyncTxn {
     /// Apply the view of the joined state to `vault`, an existing vault
     /// after the recovery merge of a join. Fails if the view fails to apply.
     pub(crate) fn apply_merged(&self, vault: &mut Vault) -> Result<(), Error> {
-        self.apply_view(vault)
+        self.apply_view(vault).map(|_| ())
     }
 
     /// Apply the view of the state to `vault`, without a diff.
-    fn apply_view(&self, vault: &mut Vault) -> Result<(), Error> {
+    fn apply_view(&self, vault: &mut Vault) -> Result<ApplyReport, Error> {
         self.apply(&VaultView::of(&self.state), vault)
     }
 
     /// Apply `view` to `vault`, without a diff.
-    fn apply(&self, view: &VaultView, vault: &mut Vault) -> Result<(), Error> {
+    fn apply(&self, view: &VaultView, vault: &mut Vault) -> Result<ApplyReport, Error> {
         #[cfg(test)]
         if let Some(fault) = self.apply_fault {
-            return view.apply_with_fault(vault, fault).map(|_| ());
+            return view.apply_with_fault(vault, fault);
         }
-        view.apply(vault).map(|_| ())
+        view.apply(vault)
     }
 
     /// Apply the view of the state to `vault`. If the apply fails, `vault`
     /// is put back as it was before the apply, the failure is recorded as a
-    /// paused cause, and `false` is returned.
-    fn try_apply(&mut self, vault: &mut Vault) -> Result<bool, Error> {
+    /// paused cause, and `None` is returned.
+    fn try_apply(&mut self, vault: &mut Vault) -> Result<Option<ApplyReport>, Error> {
         let before = vault.duplicate()?;
         match self.apply_view(vault) {
-            Ok(()) => Ok(true),
+            Ok(report) => Ok(Some(report)),
             Err(e) => {
                 *vault = before;
                 self.apply_failed(e);
-                Ok(false)
+                Ok(None)
             },
         }
     }
@@ -624,8 +635,12 @@ impl SyncTxn {
     /// change. If the apply fails, the join is discarded, and `vault` is as
     /// it was before the join. In a repair, the repair is discarded too, and
     /// the transaction saves the vault only.
+    ///
+    /// A successful apply queues the audit events of the changes that came
+    /// from other Macs.
     pub(crate) fn apply_joined(&mut self, vault: &mut Vault) -> Result<(), Error> {
-        if self.try_apply(vault)? {
+        if let Some(report) = self.try_apply(vault)? {
+            self.events.applied(&self.sources, &report);
             return Ok(());
         }
         if self.repairing {
@@ -646,7 +661,7 @@ impl SyncTxn {
     /// apply fails, the join and the recorded differences are discarded, and
     /// the transaction saves the vault only.
     pub(crate) fn apply_restored(&mut self, vault: &mut Vault) -> Result<(), Error> {
-        if self.try_apply(vault)? {
+        if self.try_apply(vault)?.is_some() {
             return Ok(());
         }
         self.fall_back()
@@ -664,6 +679,7 @@ impl SyncTxn {
     /// is not joined for the delete rule. Quarantined files stay
     /// quarantined.
     fn discard_join(&mut self) -> Result<(), Error> {
+        self.sources.clear();
         if self.changed {
             self.state = self
                 .local
@@ -691,6 +707,7 @@ impl SyncTxn {
     /// changed, so the next transaction runs the `v > s` repair.
     fn fall_back(&mut self) -> Result<(), Error> {
         self.discard_join()?;
+        self.events.discard_writes();
         let (stopped_build, override_build) = self.loaded_stop.clone();
         self.local.stopped_build = stopped_build;
         self.local.override_build = override_build;
@@ -740,6 +757,7 @@ impl SyncTxn {
         log::error!("Vault {vault_id} differs from its sync state in {count} edits, sync stopped");
         self.local.stopped_build = Some(BUILD_ID.to_string());
         self.header_changed = true;
+        self.events.stopped("drift", Some(count));
         Ok(())
     }
 
@@ -771,7 +789,9 @@ impl SyncTxn {
         log::warn!("Vault {vault_id} runs the sync repair {repair:?}");
         self.repairing = true;
         repair.start(&mut self.local);
+        self.events.repair(repair.cause());
         if repair != Repair::NewerVault {
+            self.events.resumed();
             self.header_changed = true;
         }
         if self.newer_vault.is_some() && !self.sidecar.joined.is_empty() {
@@ -811,6 +831,9 @@ impl SyncTxn {
         now: i64,
     ) -> Result<Option<WriteId>, Error> {
         let edits = LocalEdits::find_repair(&self.state, vault, self.replica())?;
+        if !edits.is_empty() {
+            self.events.repair("recovery merge");
+        }
         Ok(self.record_repair_edits(edits, session, now))
     }
 
@@ -828,6 +851,7 @@ impl SyncTxn {
         if write_id.is_some() {
             let vault_id = self.vault_id();
             log::warn!("Vault {vault_id} sync repair added {count} differences as conflicts");
+            self.events.repair_differences(count);
             self.mark_changed();
         }
         write_id
@@ -880,8 +904,15 @@ impl SyncTxn {
         if let SyncRequest::AddRecovery(add) = request {
             edits.add_recovery(add.recipient.clone(), add.value.clone());
         }
+        let resolved = edits.superseded(&self.state);
+        let differences = edits.len();
         let write_id = edits.record(&mut self.state, session, now);
         if write_id.is_some() {
+            self.events.conflicts_resolved(&resolved);
+            if *request == SyncRequest::Restore {
+                self.events.repair("restored version");
+                self.events.repair_differences(differences);
+            }
             self.mark_changed();
         }
         Ok(write_id)
@@ -1168,18 +1199,40 @@ impl SyncTxn {
     }
 
     /// Record the health this transaction found in the sidecar, in place of
-    /// the health of the last transaction that synced. A cause that was not
-    /// found again clears. A stopped sync found no causes, so the sidecar is
-    /// unchanged.
+    /// the health of the last transaction that ran. A cause that was not found
+    /// again clears. A stopped sync found no causes, so its paused causes are
+    /// unchanged. The state loaded, so a load failure clears.
+    ///
+    /// Records the audit events of the transaction, which runs after every
+    /// save. A change of health queues `sync.paused`, `sync.resumed`, or the
+    /// event of a load failure, and each file quarantined by this transaction
+    /// queues `sync.file_quarantined`. A load failure that clears while sync
+    /// is stopped queues no event, since sync does not resume.
     pub(crate) fn settle_status(&mut self) {
-        if self.is_stopped() {
-            return;
+        for (replica, file) in self.found.new_quarantined.drain(..) {
+            self.events.file_quarantined(replica, &file);
         }
-        let health = Health::of_causes(self.found.causes());
-        if self.sidecar.health != health {
-            self.sidecar.health = health;
+        let stopped = self.is_stopped();
+        let before = &self.sidecar.health;
+        let after = match (stopped, before) {
+            (true, Health::Failed { .. }) => Health::Ok,
+            (true, health) => health.clone(),
+            (false, _) => Health::of_causes(self.found.causes()),
+        };
+        if *before != after {
+            if !stopped {
+                self.events.health_changed(before, &after);
+            }
+            self.sidecar.health = after;
             self.sidecar_changed = true;
         }
+        self.events.record();
+    }
+
+    /// Audit events queued by this transaction, for a transaction that records
+    /// them without [`Self::settle_status`].
+    pub(crate) fn take_events(&mut self) -> SyncEvents {
+        self.events.take()
     }
 
     /// Sync status after this transaction.

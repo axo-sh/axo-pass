@@ -88,6 +88,8 @@ pub(crate) struct FoundCauses {
     pub(crate) publish_failed: Option<String>,
     /// Number of listed state files found quarantined.
     pub(crate) quarantined: usize,
+    /// Replica and file name of each file quarantined by this transaction.
+    pub(crate) new_quarantined: Vec<(ReplicaId, String)>,
     /// Number of listed state files of a newer format.
     pub(crate) version_skew: usize,
     pub(crate) apply_failed: Option<String>,

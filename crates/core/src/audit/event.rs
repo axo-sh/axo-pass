@@ -511,6 +511,25 @@ pub enum Action {
 
     #[serde(rename = "broker.peer_rejected")]
     BrokerPeerRejected,
+
+    #[serde(rename = "sync.applied")]
+    SyncApplied,
+    #[serde(rename = "sync.deleted_by_peer")]
+    SyncDeletedByPeer,
+    #[serde(rename = "sync.conflict_resolved")]
+    SyncConflictResolved,
+    #[serde(rename = "sync.repair")]
+    SyncRepair,
+    #[serde(rename = "sync.paused")]
+    SyncPaused,
+    #[serde(rename = "sync.stopped")]
+    SyncStopped,
+    #[serde(rename = "sync.resumed")]
+    SyncResumed,
+    #[serde(rename = "sync.file_quarantined")]
+    SyncFileQuarantined,
+    #[serde(rename = "sync.local_file_missing")]
+    SyncLocalFileMissing,
 }
 
 impl Action {
@@ -589,12 +608,21 @@ impl Action {
             Action::AuthBrowserGrantAdd => "auth.browser_grant_add",
             Action::AuthBrowserGrantRemove => "auth.browser_grant_remove",
             Action::BrokerPeerRejected => "broker.peer_rejected",
+            Action::SyncApplied => "sync.applied",
+            Action::SyncDeletedByPeer => "sync.deleted_by_peer",
+            Action::SyncConflictResolved => "sync.conflict_resolved",
+            Action::SyncRepair => "sync.repair",
+            Action::SyncPaused => "sync.paused",
+            Action::SyncStopped => "sync.stopped",
+            Action::SyncResumed => "sync.resumed",
+            Action::SyncFileQuarantined => "sync.file_quarantined",
+            Action::SyncLocalFileMissing => "sync.local_file_missing",
         }
     }
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 72] = [
+    pub const ALL: [Action; 81] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -667,6 +695,15 @@ impl Action {
         Action::AuthBrowserGrantAdd,
         Action::AuthBrowserGrantRemove,
         Action::BrokerPeerRejected,
+        Action::SyncApplied,
+        Action::SyncDeletedByPeer,
+        Action::SyncConflictResolved,
+        Action::SyncRepair,
+        Action::SyncPaused,
+        Action::SyncStopped,
+        Action::SyncResumed,
+        Action::SyncFileQuarantined,
+        Action::SyncLocalFileMissing,
     ];
 
     /// Parse the dotted string form.
@@ -785,6 +822,25 @@ impl Action {
             Action::BrokerPeerRejected => {
                 "Refused a request from a process that failed verification."
             },
+            Action::SyncApplied => {
+                "Applied changes from other Macs to a synced vault. Marks websites added and role slots changed."
+            },
+            Action::SyncDeletedByPeer => {
+                "Applied a permanent deletion from another Mac to a synced vault."
+            },
+            Action::SyncConflictResolved => {
+                "Wrote a value over every conflicting value of a synced vault."
+            },
+            Action::SyncRepair => {
+                "Repaired a synced vault against its sync state, after an older vault file, a newer vault file, a stop, or a restored version."
+            },
+            Action::SyncPaused => "Paused sync of a vault. The event records the cause.",
+            Action::SyncStopped => "Stopped sync of a vault. The event records the cause.",
+            Action::SyncResumed => "Resumed sync of a vault.",
+            Action::SyncFileQuarantined => {
+                "Quarantined a sync file of another Mac that failed a check."
+            },
+            Action::SyncLocalFileMissing => "A sync file of a vault is missing on this Mac.",
         }
     }
 
@@ -863,6 +919,15 @@ impl Action {
             | Action::AuthBrowserGrantAdd
             | Action::AuthBrowserGrantRemove => Category::Grant,
             Action::BrokerPeerRejected => Category::Broker,
+            Action::SyncApplied
+            | Action::SyncDeletedByPeer
+            | Action::SyncConflictResolved
+            | Action::SyncRepair
+            | Action::SyncPaused
+            | Action::SyncStopped
+            | Action::SyncResumed
+            | Action::SyncFileQuarantined
+            | Action::SyncLocalFileMissing => Category::Sync,
         }
     }
 
@@ -929,7 +994,11 @@ impl Action {
             | Action::CredentialRoleChanged
             | Action::PasskeyRegistered
             | Action::PasskeyMoved
-            | Action::PasskeyRenamed => ActionKind::Change,
+            | Action::PasskeyRenamed
+            | Action::SyncApplied
+            | Action::SyncDeletedByPeer
+            | Action::SyncConflictResolved
+            | Action::SyncRepair => ActionKind::Change,
             Action::SshSessionBind
             | Action::SshAgentStart
             | Action::SshAgentStop
@@ -941,7 +1010,12 @@ impl Action {
             | Action::AuthGrantReused
             | Action::AuthGrantExpired
             | Action::PasskeyReported
-            | Action::BrokerPeerRejected => ActionKind::Other,
+            | Action::BrokerPeerRejected
+            | Action::SyncPaused
+            | Action::SyncStopped
+            | Action::SyncResumed
+            | Action::SyncFileQuarantined
+            | Action::SyncLocalFileMissing => ActionKind::Other,
         }
     }
 }
@@ -958,6 +1032,7 @@ pub enum Category {
     Passkey,
     Grant,
     Broker,
+    Sync,
 }
 
 /// What an action does.
