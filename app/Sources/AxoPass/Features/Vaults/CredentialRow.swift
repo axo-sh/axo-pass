@@ -24,7 +24,8 @@ struct CredentialRow: View {
   let onRename: (_ field: RenameField, _ text: String) -> Void
   let onCancelRename: () -> Void
   /// Save a new value for this credential, keeping its title, key and kind.
-  let onQuickSaveValue: (_ value: String) -> Void
+  /// `reads` are the item reads when the edit began.
+  let onQuickSaveValue: (_ value: String, _ reads: [RegisterRead]) -> Void
   /// Ask to delete this credential. Offered by login card rows. The credential
   /// list confirms.
   let onDelete: () -> Void
@@ -60,6 +61,8 @@ struct CredentialRow: View {
   var showsCopied: Bool = false
   /// Another passkey on the item has the same site and account.
   var isDuplicatePasskey: Bool = false
+  /// Item reads, taken when a value edit begins.
+  var reads: [RegisterRead] = []
 
   @Environment(VaultsModel.self) private var model
 
@@ -77,6 +80,8 @@ struct CredentialRow: View {
   // The value the quick editor opened with, used to disable Save until it
   // actually changes. Nil until the secret is revealed.
   @State private var quickOriginal: String? = nil
+  // Item reads when the quick editor opened.
+  @State private var quickReads: [RegisterRead] = []
 
   /// Sign-ins listed in the passkey details.
   private static let recentSignInCount: UInt32 = 5
@@ -893,6 +898,7 @@ struct CredentialRow: View {
   }
 
   private func beginQuickEdit() {
+    quickReads = reads
     quickOriginal = revealedText
     quickDraft = revealedText ?? ""
     if revealedText == nil {
@@ -913,7 +919,7 @@ struct CredentialRow: View {
       cancelQuickEdit()
       return
     }
-    onQuickSaveValue(value)
+    onQuickSaveValue(value, quickReads)
     cancelQuickEdit()
   }
 }

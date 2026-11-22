@@ -207,6 +207,10 @@ final class VaultsModel {
   // Last partially failed undo or redo of a delete.
   private(set) var undoFailure: UndoFailure? = nil
 
+  /// Unsaved input of edits the vault refused, by the item or credential they
+  /// change. A value draft holds a secret, so a lock drops every draft.
+  var drafts: [DraftTarget: EditDraft] = [:]
+
   init() {
     authContext = LAContext()
     biometry = Self.probeBiometry(authContext)
@@ -583,6 +587,7 @@ final class VaultsModel {
     passphrasePrompt.forgetAll()
     vaultUnlockPrompt.forgetAll()
     undoFailure = nil
+    drafts.removeAll()
     // Fail whatever prompt is on screen, which is not always on `authContext`,
     // then drop the authenticated context itself.
     cancelEvaluation()
@@ -866,17 +871,20 @@ final class VaultsModel {
     await addVault(name: "Personal", key: "personal")
   }
 
-  @discardableResult
-  func renameVault(vaultKey: String, newName: String?) async -> Bool {
-    actionError = nil
-    do {
-      _ = try await core.updateVault(vaultKey: vaultKey, newVaultKey: nil, newName: newName)
-      reload()
-      return true
-    } catch {
-      actionError = error.userMessage
-      return false
-    }
+  /// Rename a vault. `reads` are the write ids of the name from `vaultReads`.
+  /// A synced vault refuses the rename with `FfiError.EditRefused` if the
+  /// name changed since the read or holds a conflict.
+  func renameVault(vaultKey: String, newName: String?, reads: [RegisterRead]) async throws {
+    _ = try await core.updateVault(
+      vaultKey: vaultKey, newVaultKey: nil, newName: newName, reads: reads)
+    reload()
+  }
+
+  /// Write ids of the vault name, for a rename. Empty for a vault that is not
+  /// synced, and if the read fails. A rename with no reads of a synced vault
+  /// is refused as `not_read`.
+  func vaultReads(_ vaultKey: String) async -> [RegisterRead] {
+    (try? await core.vaultReads(vaultKey: vaultKey)) ?? []
   }
 
   /// Change the key of a vault. The vault stays selected under its new key.
@@ -884,8 +892,9 @@ final class VaultsModel {
   func changeVaultKey(vaultKey: String, newKey: String) async -> Bool {
     actionError = nil
     do {
+      // The vault key is not synced, so the change reads no register.
       let finalKey = try await core.updateVault(
-        vaultKey: vaultKey, newVaultKey: newKey, newName: nil)
+        vaultKey: vaultKey, newVaultKey: newKey, newName: nil, reads: [])
       reload()
       if finalKey != vaultKey, selectedVaultKey == vaultKey {
         itemCache[vaultKey] = nil
@@ -1092,11 +1101,13 @@ final class VaultsModel {
 
   // MARK: - Item CRUD
 
+  /// Create an item and select it. A new item reads no register.
   @discardableResult
-  func addOrUpdateItem(vaultKey: String, itemKey: String, itemTitle: String) async -> Bool {
+  func addItem(vaultKey: String, itemKey: String, itemTitle: String) async -> Bool {
     actionError = nil
     do {
-      try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle)
+      try await core.addOrUpdateItem(
+        vaultKey: vaultKey, itemKey: itemKey, itemTitle: itemTitle, reads: [])
       await loadItems(for: vaultKey)
       selectedItemRef = ItemRef(vaultKey: vaultKey, itemKey: itemKey)
       return true
@@ -1106,11 +1117,15 @@ final class VaultsModel {
     }
   }
 
-  /// Change the title of an item. An unchanged title is skipped.
-  func renameItem(vaultKey: String, itemKey: String, title: String) async throws {
+  /// Change the title of an item. An unchanged title is skipped. `reads` are
+  /// the `reads` of the item when the edit began.
+  func renameItem(vaultKey: String, itemKey: String, title: String, reads: [RegisterRead])
+    async throws
+  {
     do {
       if let item = item(vaultKey: vaultKey, itemKey: itemKey), item.title != title {
-        try await core.addOrUpdateItem(vaultKey: vaultKey, itemKey: itemKey, itemTitle: title)
+        try await core.addOrUpdateItem(
+          vaultKey: vaultKey, itemKey: itemKey, itemTitle: title, reads: reads)
       }
     } catch {
       await loadItems(for: vaultKey)
@@ -1120,14 +1135,17 @@ final class VaultsModel {
   }
 
   /// Change the key of an item. An unchanged key is skipped. Throws if another
-  /// item has the new key. The item stays selected under its new key.
-  func changeItemKey(vaultKey: String, itemKey: String, newKey: String) async throws {
+  /// item has the new key. The item stays selected under its new key. `reads`
+  /// are the `reads` of the item when the edit began.
+  func changeItemKey(vaultKey: String, itemKey: String, newKey: String, reads: [RegisterRead])
+    async throws
+  {
     let wasSelected = selectedItemRef == ItemRef(vaultKey: vaultKey, itemKey: itemKey)
     var finalKey = itemKey
     do {
       if newKey != itemKey {
         finalKey = try await core.changeItemKey(
-          vaultKey: vaultKey, itemKey: itemKey, newKey: newKey)
+          vaultKey: vaultKey, itemKey: itemKey, newKey: newKey, reads: reads)
       }
     } catch {
       await loadItems(for: vaultKey)
@@ -1286,35 +1304,30 @@ final class VaultsModel {
     }
   }
 
-  @discardableResult
+  /// Set the title, value, and kind of a credential. `reads` are the `reads`
+  /// of the item when the edit began. Items reload whether or not it saves.
   func addOrUpdateCredential(
     vaultKey: String, itemKey: String, credKey: String, title: String, value: String,
-    kind: FieldKindInfo? = nil
-  ) async -> Bool {
-    actionError = nil
-    do {
+    kind: FieldKindInfo? = nil, reads: [RegisterRead]
+  ) async throws {
+    try await mutate(vaultKey) {
       try await core.addOrUpdateCredential(
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, title: title, value: value,
-        kind: kind
-      )
-      await loadItems(for: vaultKey)
-      return true
-    } catch {
-      actionError = error.userMessage
-      return false
+        kind: kind, reads: reads)
     }
   }
 
   /// Change the key, title, or kind of a credential without resubmitting its
-  /// value. Nil arguments are left unchanged.
+  /// value. Nil arguments are left unchanged. `reads` are the `reads` of the
+  /// item when the edit began.
   func updateCredential(
     vaultKey: String, itemKey: String, credKey: String, newKey: String? = nil,
-    title: String? = nil, kind: FieldKindInfo? = nil
+    title: String? = nil, kind: FieldKindInfo? = nil, reads: [RegisterRead]
   ) async throws {
     try await mutate(vaultKey) {
       try await core.updateCredential(
         vaultKey: vaultKey, itemKey: itemKey, credKey: credKey, newKey: newKey, title: title,
-        kind: kind)
+        kind: kind, reads: reads)
     }
   }
 
@@ -2104,20 +2117,14 @@ final class VaultsModel {
   }
 
   /// Assign `role` ("username", "password", or "totp") to a credential, or
-  /// clear it when `credKey` is nil.
-  @discardableResult
-  func setCredentialRole(vaultKey: String, itemKey: String, role: String, credKey: String?) async
-    -> Bool
-  {
-    actionError = nil
-    do {
+  /// clear it when `credKey` is nil. `reads` are the `reads` of the item.
+  /// Items reload whether or not it saves.
+  func setCredentialRole(
+    vaultKey: String, itemKey: String, role: String, credKey: String?, reads: [RegisterRead]
+  ) async throws {
+    try await mutate(vaultKey) {
       try await core.setCredentialRole(
-        vaultKey: vaultKey, itemKey: itemKey, role: role, credKey: credKey)
-      await loadItems(for: vaultKey)
-      return true
-    } catch {
-      actionError = error.userMessage
-      return false
+        vaultKey: vaultKey, itemKey: itemKey, role: role, credKey: credKey, reads: reads)
     }
   }
 
@@ -2134,18 +2141,17 @@ final class VaultsModel {
     }
   }
 
+  /// Give an item the roles and websites its credentials suggest. `reads` are
+  /// the `reads` of the item. Items reload whether or not it saves.
   @discardableResult
-  func convertItemToLogin(vaultKey: String, itemKey: String) async -> Bool {
-    actionError = nil
-    do {
-      let converted = try await core.convertItemToLogin(vaultKey: vaultKey, itemKey: itemKey)
-      await loadItems(for: vaultKey)
-      if converted { await offerAutofillSetupIfNeeded() }
-      return converted
-    } catch {
-      actionError = error.userMessage
-      return false
+  func convertItemToLogin(vaultKey: String, itemKey: String, reads: [RegisterRead]) async throws
+    -> Bool
+  {
+    let converted = try await mutate(vaultKey) {
+      try await core.convertItemToLogin(vaultKey: vaultKey, itemKey: itemKey, reads: reads)
     }
+    if converted { await offerAutofillSetupIfNeeded() }
+    return converted
   }
 
   func currentTotpCode(vaultKey: String, itemKey: String, credKey: String) async throws

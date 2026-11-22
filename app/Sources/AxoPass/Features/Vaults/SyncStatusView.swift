@@ -216,7 +216,11 @@ struct SyncStatusSheet: View {
 
       if report.conflicts > 0 {
         LabeledContent("Conflicts") {
-          Text(report.conflicts == 1 ? "1 value" : "\(report.conflicts) values")
+          HStack {
+            Text(report.conflicts == 1 ? "1 value" : "\(report.conflicts) values")
+            Button("Resolve…") { sync.sheet = .conflicts(vault, itemKey: nil) }
+              .controlSize(.small)
+          }
         }
       }
     } footer: {

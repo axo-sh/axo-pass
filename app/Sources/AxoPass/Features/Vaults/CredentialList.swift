@@ -29,6 +29,8 @@ struct CredentialList: View {
   @Environment(VaultsModel.self) var model
   /// Nil in windows without the SSH pane.
   @Environment(SshModel.self) var ssh: SshModel?
+  /// Nil in windows without the sync sheets.
+  @Environment(SyncModel.self) var sync: SyncModel?
   @Environment(\.undoManager) var undoManager
   let item: ItemInfo
   let vaultKey: String
@@ -39,6 +41,9 @@ struct CredentialList: View {
   @State var revealing: Set<String> = []
   @State var selection: Set<CredentialEntry> = []
   @State var renaming: RenameTarget? = nil
+  // Item reads when the current rename began. A rename saves with them, so a
+  // value changed on another Mac during the rename refuses it.
+  @State var renameReads: [RegisterRead]? = nil
   @State var collapsedSections: Set<String> = []
   // Local override of the row order while a move is being saved. Cleared once
   // the save finishes and the model has reloaded.
@@ -114,6 +119,9 @@ struct CredentialList: View {
     }
     .onChange(of: selection) { _, new in
       if !new.isEmpty { cardSelection = nil }
+    }
+    .onChange(of: renaming) { old, new in
+      if old == nil, new != nil { renameReads = item.reads }
     }
     .quickLookPreview($previewURL)
     .onChange(of: previewURL) { old, new in
@@ -226,6 +234,7 @@ struct CredentialList: View {
             top: 20, leading: credentialRowInset, bottom: 16, trailing: credentialRowInset))
 
       VStack(alignment: .leading, spacing: credentialRowInset * 2) {
+        itemNotices
         loginSection(isEmphasized: isEmphasized)
       }
       .padding(.horizontal, credentialRowInset)
@@ -338,24 +347,11 @@ struct CredentialList: View {
   }
 
   private func showRenameItemSheet() {
-    titleSheet = TitleSheetRequest(
-      heading: "Rename Item", actionLabel: "Rename", initialTitle: item.title
-    ) { [itemKey = item.key] title in
-      await failureMessage {
-        try await model.renameItem(vaultKey: vaultKey, itemKey: itemKey, title: title)
-      }
-    }
+    titleSheet = TitleSheetRequest.renameItem(item, vaultKey: vaultKey, model: model)
   }
 
   private func showChangeItemKeySheet() {
-    titleSheet = TitleSheetRequest(
-      heading: "Change Item Key", actionLabel: "Change", initialTitle: item.key,
-      fieldLabel: "Key", footnote: keyChangeWarning
-    ) { [itemKey = item.key] key in
-      await failureMessage {
-        try await model.changeItemKey(vaultKey: vaultKey, itemKey: itemKey, newKey: key)
-      }
-    }
+    titleSheet = TitleSheetRequest.changeItemKey(item, vaultKey: vaultKey, model: model)
   }
 
   private func copyItemKey() {
@@ -425,8 +421,16 @@ struct CredentialList: View {
     )
   }
 
-  /// A credential row. `fieldLabel` gives it the login card layout.
+  /// A credential row with its draft notice and conflict marker. `fieldLabel`
+  /// gives it the login card layout.
   func credentialRowBody(_ cred: CredentialInfo, fieldLabel: String? = nil) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      credentialRow(cred, fieldLabel: fieldLabel)
+      credentialNotices(cred)
+    }
+  }
+
+  private func credentialRow(_ cred: CredentialInfo, fieldLabel: String?) -> some View {
     CredentialRow(
       cred: cred,
       vaultKey: vaultKey,
@@ -440,8 +444,8 @@ struct CredentialList: View {
       onCopy: { await copy(cred) },
       onRename: { field, text in rename(cred, field: field, to: text) },
       onCancelRename: { renaming = nil },
-      onQuickSaveValue: { newValue in
-        Task { await quickSaveValue(cred, newValue: newValue) }
+      onQuickSaveValue: { newValue, reads in
+        Task { await quickSaveValue(cred, newValue: newValue, reads: reads) }
       },
       onDelete: { delete([.credential(cred.key)]) },
       onMove: { movingPasskey = cred.key },
@@ -460,7 +464,8 @@ struct CredentialList: View {
       onReplaceFileWith: { replaceFile(cred, with: $0) },
       fieldLabel: fieldLabel,
       showsCopied: shortcutCopied == cred.key,
-      isDuplicatePasskey: item.hasDuplicate(of: cred)
+      isDuplicatePasskey: item.hasDuplicate(of: cred),
+      reads: item.reads
     )
   }
 

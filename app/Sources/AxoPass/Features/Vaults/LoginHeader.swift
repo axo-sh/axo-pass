@@ -180,7 +180,7 @@ extension CredentialList {
         .foregroundStyle(.secondary)
       HStack {
         Button("Use for AutoFill") {
-          Task { await model.convertItemToLogin(vaultKey: vaultKey, itemKey: item.key) }
+          Task { await convertToLogin(reads: item.reads) }
         }
         Button("Dismiss") { model.dismissConversion(item) }
       }
@@ -213,14 +213,26 @@ extension CredentialList {
     .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
   }
 
-  /// Assign or clear a role, reporting a failure on the credential's row.
+  /// Assign or clear a role, reporting a failure on the credential's row. A
+  /// refusal keeps the change as a draft of the credential.
   func setRole(_ cred: CredentialInfo, role: String, assign: Bool) async {
-    let ok = await model.setCredentialRole(
-      vaultKey: vaultKey, itemKey: item.key, role: role, credKey: assign ? cred.key : nil)
-    if ok {
-      errors.removeValue(forKey: cred.key)
-    } else if let err = model.actionError {
-      errors[cred.key] = err
+    await saveRole(cred, role: role, assign: assign, reads: item.reads)
+  }
+
+  /// Assign or clear a role of `cred`, read with `reads`.
+  func saveRole(_ cred: CredentialInfo, role: String, assign: Bool, reads: [RegisterRead]) async {
+    errors[cred.key] = await model.saveEdit(draftTarget(cred), .role(role, assign: assign)) {
+      try await model.setCredentialRole(
+        vaultKey: vaultKey, itemKey: item.key, role: role, credKey: assign ? cred.key : nil,
+        reads: reads)
+    }
+  }
+
+  /// Convert the item to a login, read with `reads`. A refusal keeps the
+  /// conversion as a draft of the item.
+  func convertToLogin(reads: [RegisterRead]) async {
+    listError = await model.saveEdit(itemDraftTarget, .convertToLogin) {
+      _ = try await model.convertItemToLogin(vaultKey: vaultKey, itemKey: item.key, reads: reads)
     }
   }
 
@@ -471,11 +483,14 @@ private struct LoginFieldEditor: View {
         error = model.actionError
         return
       }
-      guard
-        await model.setCredentialRole(
-          vaultKey: vaultKey, itemKey: item.key, role: field.rawValue, credKey: key)
-      else {
-        error = model.actionError
+      // The add reloaded the item. The role is a step of the same action, so
+      // it reads the item as reloaded.
+      let reads = model.item(vaultKey: vaultKey, itemKey: item.key)?.reads ?? []
+      do {
+        try await model.setCredentialRole(
+          vaultKey: vaultKey, itemKey: item.key, role: field.rawValue, credKey: key, reads: reads)
+      } catch {
+        self.error = error.userMessage
         return
       }
       onClose()

@@ -82,6 +82,9 @@ enum SyncSheet: Identifiable {
   case pendingPairings(root: SyncRootInfo)
   /// Sync status of the vault, with its notices.
   case status(SyncVaultRef)
+  /// Conflicts of the vault to resolve. `itemKey` limits the list to one item
+  /// and its credentials.
+  case conflicts(SyncVaultRef, itemKey: String?)
   /// New recovery kit for the current sync key of the vault.
   case newKit(SyncVaultRef)
   /// Synced vaults whose vault file is missing.
@@ -98,6 +101,7 @@ enum SyncSheet: Identifiable {
     case .pairingPrompt(let root): return "prompt-\(rootDescription(root))"
     case .pendingPairings(let root): return "pending-\(rootDescription(root))"
     case .status(let vault): return "status-\(vault.key)"
+    case .conflicts(let vault, let itemKey): return "conflicts-\(vault.key)-\(itemKey ?? "")"
     case .newKit(let vault): return "new-kit-\(vault.key)"
     case .missingVaults: return "missing-vaults"
     case .keyState: return "key-state"

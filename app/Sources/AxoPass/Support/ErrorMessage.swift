@@ -14,6 +14,7 @@ extension FfiError {
     case .SshKeyPassphraseRequired: "The SSH key is encrypted and needs a passphrase"
     case .SshKeyWrongPassphrase: "The passphrase does not decrypt the SSH key"
     case .SshKeyDuplicate(let fingerprint): "This vault already holds the SSH key \(fingerprint)"
+    case .EditRefused(_, _, _, _, let message): message
     case .InvalidInput(let message), .Internal(let message): message
     case .Poisoned: "State corrupted (mutex poisoned)"
     }

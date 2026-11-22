@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 
 extension View {
   /// Present the sync sheets that `SyncModel` requests: the enable sheet, the
-  /// pairing sheets, the kit import, the status sheets, the key state sheet,
-  /// and the turn-off confirmation. Attach in the main window and in the
+  /// pairing sheets, the kit import, the status sheets, the conflicts sheet,
+  /// the key state sheet, and the turn-off confirmation. Attach in the main window and in the
   /// welcome window. Only one of the two is open at a time, so a shared
   /// `sync.sheet` never presents twice. Do not attach it to a third window.
   func syncSheets() -> some View {
@@ -48,6 +48,7 @@ private struct SyncSheetsModifier: ViewModifier {
         case .pairingPrompt(let root): PairingPromptSheet(root: root)
         case .pendingPairings(let root): PendingPairingsSheet(root: root)
         case .status(let vault): SyncStatusSheet(vault: vault)
+        case .conflicts(let vault, let itemKey): ConflictsSheet(vault: vault, itemKey: itemKey)
         case .newKit(let vault): NewRecoveryKitSheet(vault: vault)
         case .missingVaults: MissingVaultsSheet()
         case .keyState: KeyStateSheet()

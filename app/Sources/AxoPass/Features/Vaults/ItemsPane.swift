@@ -133,7 +133,7 @@ struct ItemsPane: View {
     .sheet(isPresented: $showingNewItemSheet) {
       NewItemSheet { key, title in
         guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
-        if await model.addOrUpdateItem(vaultKey: vaultKey, itemKey: key, itemTitle: title) {
+        if await model.addItem(vaultKey: vaultKey, itemKey: key, itemTitle: title) {
           return nil
         }
         return model.actionError ?? "Failed to create item."
@@ -295,25 +295,12 @@ struct ItemsPane: View {
     }
     if targets.count == 1 {
       Button("Rename…") {
-        titleSheet = TitleSheetRequest(
-          heading: "Rename Item", actionLabel: "Rename", initialTitle: display.item.title
-        ) { title in
-          await failureMessage {
-            try await model.renameItem(
-              vaultKey: display.vaultKey, itemKey: display.item.key, title: title)
-          }
-        }
+        titleSheet = TitleSheetRequest.renameItem(
+          display.item, vaultKey: display.vaultKey, model: model)
       }
       Button("Change Key…") {
-        titleSheet = TitleSheetRequest(
-          heading: "Change Item Key", actionLabel: "Change", initialTitle: display.item.key,
-          fieldLabel: "Key", footnote: keyChangeWarning
-        ) { key in
-          await failureMessage {
-            try await model.changeItemKey(
-              vaultKey: display.vaultKey, itemKey: display.item.key, newKey: key)
-          }
-        }
+        titleSheet = TitleSheetRequest.changeItemKey(
+          display.item, vaultKey: display.vaultKey, model: model)
       }
       Button("History…") {
         historyTarget = ItemHistoryTarget(display.item, vaultKey: display.vaultKey)
@@ -554,6 +541,12 @@ private struct ItemRow: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
           .truncationMode(.middle)
+      }
+      if item.hasConflicts {
+        Spacer(minLength: 0)
+        Image(systemName: "arrow.triangle.branch")
+          .foregroundStyle(.orange)
+          .help("Values from more than one Mac conflict. Open the item to resolve them.")
       }
     }
   }

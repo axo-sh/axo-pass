@@ -425,13 +425,24 @@ struct VaultsSidebar: View {
     .listRowSeparator(.hidden)
   }
 
+  /// Read the vault name, then show the rename sheet. A refused rename keeps
+  /// the input in the sheet and reads the name again.
   private func showRenameSheet(_ vault: VaultInfo) {
-    titleSheet = TitleSheetRequest(
-      heading: "Rename Vault", actionLabel: "Rename", initialTitle: vault.name ?? vault.key,
-      fieldLabel: "Name"
-    ) { name in
-      await model.renameVault(vaultKey: vault.key, newName: name)
-        ? nil : (model.actionError ?? "Failed to rename vault.")
+    Task {
+      let reads = SheetReads(await model.vaultReads(vault.key))
+      titleSheet = TitleSheetRequest(
+        heading: "Rename Vault", actionLabel: "Rename", initialTitle: vault.name ?? vault.key,
+        fieldLabel: "Name"
+      ) { name in
+        do {
+          try await model.renameVault(vaultKey: vault.key, newName: name, reads: reads.reads)
+          return nil
+        } catch {
+          guard let refusal = EditRefusal(error) else { return error.userMessage }
+          reads.reads = await model.vaultReads(vault.key)
+          return refusal.sheetMessage(action: "Rename")
+        }
+      }
     }
   }
 

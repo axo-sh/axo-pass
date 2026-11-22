@@ -75,31 +75,52 @@ extension CredentialList {
     }
   }
 
-  /// Save a renamed title or id. A new id moves the cached secret, error, and
-  /// selection to the new key.
+  /// Save a renamed title or id with the reads taken when the rename began. A
+  /// new id moves the cached secret, error, and selection to the new key.
   func rename(_ cred: CredentialInfo, field: CredentialRow.RenameField, to text: String) {
+    let reads = renameReads ?? item.reads
     renaming = nil
+    renameReads = nil
+    saveRename(cred, field: field, to: text, reads: reads)
+  }
+
+  /// Save a title or id of `cred` read with `reads`. A refusal keeps the text
+  /// as a draft of the credential. Text equal to the current value drops the
+  /// draft.
+  func saveRename(
+    _ cred: CredentialInfo, field: CredentialRow.RenameField, to text: String,
+    reads: [RegisterRead]
+  ) {
+    let target = draftTarget(cred)
     switch field {
     case .title:
-      guard text != cred.title else { return }
+      guard text != cred.title else {
+        model.discardDraft(target)
+        return
+      }
       Task {
-        errors[cred.key] = await failureMessage {
+        errors[cred.key] = await model.saveEdit(target, .credentialTitle(text)) {
           try await model.updateCredential(
-            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: text)
+            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: text, reads: reads)
         }
       }
     case .key:
-      guard text != cred.key else { return }
+      guard text != cred.key else {
+        model.discardDraft(target)
+        return
+      }
       let oldKeys = Set(item.credentials.map(\.key))
       Task {
-        let error = await failureMessage {
+        var saved = false
+        let error = await model.saveEdit(target, .credentialKey(text)) {
           try await model.updateCredential(
-            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, newKey: text)
+            vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, newKey: text, reads: reads)
+          saved = true
         }
         // The core may normalize the key. The new key is the one present in
         // the item now and absent before.
         let reloaded = model.item(vaultKey: vaultKey, itemKey: item.key)
-        if error == nil,
+        if saved,
           let newKey = reloaded?.credentials.map(\.key).first(where: { !oldKeys.contains($0) })
         {
           secrets[newKey] = secrets.removeValue(forKey: cred.key)
@@ -118,35 +139,38 @@ extension CredentialList {
   /// immediately. A newly concealed credential is hidden again.
   func setTextOptions(_ cred: CredentialInfo, concealed: Bool, multiline: Bool) {
     let kind = FieldKindInfo(kind: "text", concealed: concealed, multiline: multiline)
+    saveKind(cred, kind, reads: item.reads)
+  }
+
+  /// Save the kind of `cred` read with `reads`. A newly concealed credential
+  /// is hidden again. A refusal keeps the kind as a draft.
+  func saveKind(_ cred: CredentialInfo, _ kind: FieldKindInfo, reads: [RegisterRead]) {
     Task {
-      let error = await failureMessage {
+      var saved = false
+      let error = await model.saveEdit(draftTarget(cred), .credentialKind(kind)) {
         try await model.updateCredential(
-          vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, kind: kind)
+          vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, kind: kind, reads: reads)
+        saved = true
       }
-      if error == nil, concealed, !cred.kind.concealed {
+      if saved, kind.concealed, !cred.kind.concealed {
         secrets.removeValue(forKey: cred.key)
       }
       errors[cred.key] = error
     }
   }
 
-  func quickSaveValue(_ cred: CredentialInfo, newValue: String) async {
-    let ok = await model.addOrUpdateCredential(
-      vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: cred.title, value: newValue,
-      kind: nil
-    )
-    if ok {
-      refreshCachedSecret(newValue, for: cred.key)
+  /// Save a new value of `cred` read with `reads`. A refusal keeps the value
+  /// as a draft.
+  func quickSaveValue(_ cred: CredentialInfo, newValue: String, reads: [RegisterRead]) async {
+    var saved = false
+    errors[cred.key] = await model.saveEdit(draftTarget(cred), .credentialValue(newValue)) {
+      try await model.addOrUpdateCredential(
+        vaultKey: vaultKey, itemKey: item.key, credKey: cred.key, title: cred.title,
+        value: newValue, kind: nil, reads: reads)
+      saved = true
     }
-    finishEdit(cred.key, ok: ok)
-  }
-
-  /// Set or clear a credential error after a save.
-  private func finishEdit(_ key: String, ok: Bool) {
-    if ok {
-      errors.removeValue(forKey: key)
-    } else {
-      errors[key] = model.actionError ?? "Failed to save."
+    if saved {
+      refreshCachedSecret(newValue, for: cred.key)
     }
   }
 
