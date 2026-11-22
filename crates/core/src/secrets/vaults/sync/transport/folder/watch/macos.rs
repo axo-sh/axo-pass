@@ -24,9 +24,12 @@ use objc2_core_services::{
     FSEventStreamEventId, FSEventStreamInvalidate, FSEventStreamRef, FSEventStreamRelease,
     FSEventStreamSetDispatchQueue, FSEventStreamStart, FSEventStreamStop,
     kFSEventStreamCreateFlagFileEvents, kFSEventStreamCreateFlagWatchRoot,
+    kFSEventStreamEventFlagKernelDropped, kFSEventStreamEventFlagMustScanSubDirs,
+    kFSEventStreamEventFlagRootChanged, kFSEventStreamEventFlagUserDropped,
     kFSEventStreamEventIdSinceNow,
 };
 
+use crate::secrets::vaults::sync::sync_log::{self, Level};
 use crate::secrets::vaults::sync::transport::WatchHandle;
 
 /// Time in seconds that FSEvents gathers events before it delivers them.
@@ -117,6 +120,17 @@ impl FolderWatch {
         Some(WatchHandle::new(move || drop(watch)))
     }
 
+    /// Whether the flags of an event report that events were lost or that the
+    /// root moved. FSEvents then does not report the changed paths, so every
+    /// watch of the stream must scan.
+    pub fn lost_events(flags: FSEventStreamEventFlags) -> bool {
+        const LOST: FSEventStreamEventFlags = kFSEventStreamEventFlagMustScanSubDirs
+            | kFSEventStreamEventFlagUserDropped
+            | kFSEventStreamEventFlagKernelDropped
+            | kFSEventStreamEventFlagRootChanged;
+        flags & LOST != 0
+    }
+
     /// Whether an event at `path` reports a change under `dir`: the path is
     /// `dir`, a path under it, or an ancestor of it.
     pub fn matches(dir: &Path, path: &Path) -> bool {
@@ -129,25 +143,37 @@ impl FolderWatch {
         info: *mut c_void,
         count: usize,
         paths: NonNull<c_void>,
-        _flags: NonNull<FSEventStreamEventFlags>,
+        flags: NonNull<FSEventStreamEventFlags>,
         _ids: NonNull<FSEventStreamEventId>,
     ) {
         // SAFETY: `info` is the context of `start`, valid until drop, which
         // waits for this callback. Without `kFSEventStreamCreateFlagUseCFTypes`,
-        // `paths` is an array of `count` C strings.
-        let (context, paths) = unsafe {
+        // `paths` is an array of `count` C strings, and `flags` is an array of
+        // `count` flag sets.
+        let (context, paths, flags) = unsafe {
             (
                 &*info.cast::<WatchContext>(),
                 slice::from_raw_parts(paths.as_ptr().cast::<*const c_char>(), count),
+                slice::from_raw_parts(flags.as_ptr(), count),
             )
         };
-        let matched = paths.iter().any(|&path| {
-            // SAFETY: each path is a NUL-terminated string that FSEvents
-            // holds for the call.
-            let path = unsafe { CStr::from_ptr(path) };
-            let path = Path::new(OsStr::from_bytes(path.to_bytes()));
-            Self::matches(&context.dir, path)
-        });
+        let lost = flags.iter().any(|&flags| Self::lost_events(flags));
+        if lost {
+            sync_log::record(
+                Level::Warn,
+                None,
+                "File events were dropped or the root changed, scanning again",
+                Some(context.dir.display().to_string()),
+            );
+        }
+        let matched = lost
+            || paths.iter().any(|&path| {
+                // SAFETY: each path is a NUL-terminated string that FSEvents
+                // holds for the call.
+                let path = unsafe { CStr::from_ptr(path) };
+                let path = Path::new(OsStr::from_bytes(path.to_bytes()));
+                Self::matches(&context.dir, path)
+            });
         if matched && catch_unwind(AssertUnwindSafe(|| (context.notify)())).is_err() {
             log::error!("Watch callback of {} panicked", context.dir.display());
         }

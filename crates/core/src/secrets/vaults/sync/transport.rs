@@ -9,8 +9,10 @@
 //!
 //! The root of a vault's transport is in its sidecar. [`SyncTransports`]
 //! resolves a root to a transport. [`folder::FolderTransport`] is the local
-//! folder transport, which watches with FSEvents. [`s3::S3Transport`] is the
-//! S3 transport, which watches by polling.
+//! folder transport, which watches with FSEvents or inotify, with a metadata
+//! query on macOS, and with the end of the downloads it requests.
+//! [`s3::S3Transport`] is the S3 transport, which watches by polling. The
+//! `SyncManager` scans again at an interval, whatever the transport reports.
 
 pub mod folder;
 pub mod s3;
@@ -70,6 +72,11 @@ pub trait SyncTransport: fmt::Debug + Send + Sync {
     fn read_pairing(&self, request: RequestId) -> Result<ReadResult, Error>;
     fn write_pairing(&self, request: RequestId, data: &[u8]) -> Result<(), Error>;
     fn delete_pairing(&self, request: RequestId) -> Result<(), Error>;
+    /// Ask the provider to make the pairing request local. Does not wait.
+    /// Does nothing for a transport whose files are always local.
+    fn request_pairing_download(&self, _request: RequestId) -> Result<(), Error> {
+        Ok(())
+    }
     /// Call `notify` when a pairing request changes. `None` if the transport
     /// has no watch. The watch ends when the handle drops.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle>;

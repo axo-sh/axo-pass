@@ -20,9 +20,10 @@ use objc2_foundation::{
 };
 
 use super::{
-    FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place, read_limited,
-    write_temp,
+    DownloadDone, FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place,
+    read_limited, write_temp,
 };
+use crate::secrets::vaults::sync::sync_log::{self, Level};
 
 /// `st_flags` bit of a dataless file, whose contents are not local. The
 /// value of `SF_DATALESS` in `sys/stat.h`.
@@ -213,7 +214,7 @@ impl FolderIo for CoordinatedIo {
         )
     }
 
-    fn download(&self, paths: Vec<PathBuf>) {
+    fn download(&self, paths: Vec<PathBuf>, done: DownloadDone) {
         autoreleasepool(|_| {
             let intents: Vec<Retained<NSFileAccessIntent>> = paths
                 .iter()
@@ -230,15 +231,25 @@ impl FolderIo for CoordinatedIo {
             // The accessor holds the coordinator and the queue until it runs.
             let held = (coordinator.clone(), queue.clone());
             let count = paths.len();
+            // The block is called once. `RcBlock::new` takes a `Fn`, so the
+            // callback is held in a cell.
+            let done = Cell::new(Some(done));
             let accessor = RcBlock::new(move |error: *mut NSError| {
                 let _ = &held;
                 // SAFETY: the error is null or valid for the call.
                 match unsafe { error.as_ref() } {
-                    Some(error) => log::warn!(
-                        "Failed to download {count} files: {}",
-                        error.localizedDescription()
+                    Some(error) => sync_log::record(
+                        Level::Warn,
+                        None,
+                        "Failed to download files",
+                        Some(format!("{count} files: {}", error.localizedDescription())),
                     ),
-                    None => log::debug!("Downloaded {count} files"),
+                    None => {
+                        log::debug!("Downloaded {count} files");
+                        if let Some(done) = done.take() {
+                            done();
+                        }
+                    },
                 }
             });
             // SAFETY: the accessor is a heap block that holds what it uses.

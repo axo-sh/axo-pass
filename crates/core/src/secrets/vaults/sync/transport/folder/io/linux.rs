@@ -8,8 +8,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use super::{
-    FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place, read_limited,
-    write_temp,
+    DownloadDone, FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place,
+    read_limited, write_temp,
 };
 
 /// Error codes of `renameat2` for a file system without `RENAME_NOREPLACE`.
@@ -267,7 +267,7 @@ impl FolderIo for CoordinatedIo {
         delete_path(path)
     }
 
-    fn download(&self, _paths: Vec<PathBuf>) {}
+    fn download(&self, _paths: Vec<PathBuf>, _done: DownloadDone) {}
 }
 
 #[cfg(test)]
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(io.status(&path).unwrap(), FileStatus::Local);
         assert_eq!(io.read(&path, 10).unwrap(), b"data");
         assert!(io.read(&path, 3).is_err());
-        io.download(vec![path.clone()]);
+        io.download(vec![path.clone()], Box::new(|| {}));
         io.delete(&path).unwrap();
         io.delete(&path).unwrap();
         assert_eq!(io.status(&path).unwrap(), FileStatus::Missing);

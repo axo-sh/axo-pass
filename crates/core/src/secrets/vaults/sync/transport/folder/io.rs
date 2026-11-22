@@ -63,9 +63,14 @@ pub trait FolderIo: fmt::Debug + Send + Sync {
     /// Delete the file or the directory at `path`, with its contents. A
     /// missing path is not an error. A symlink is deleted, not its target.
     fn delete(&self, path: &Path) -> io::Result<()>;
-    /// Start a download of each file of `paths`. Does not wait.
-    fn download(&self, paths: Vec<PathBuf>);
+    /// Start a download of each file of `paths`. Does not wait. `done` runs
+    /// once, on any thread, when the download ended without an error. It does
+    /// not run for a download that failed.
+    fn download(&self, paths: Vec<PathBuf>, done: DownloadDone);
 }
+
+/// Callback of the end of a download.
+pub type DownloadDone = Box<dyn FnOnce() + Send>;
 
 /// Status of the file at `path` from its metadata. A dataless file is
 /// `Remote`.
@@ -175,6 +180,19 @@ struct PlainHooks {
     reads: usize,
     /// Paths of the download calls, in call order.
     downloads: Vec<Vec<PathBuf>>,
+    /// Callbacks of the downloads that did not end yet.
+    done: DoneCallbacks,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct DoneCallbacks(Vec<DownloadDone>);
+
+#[cfg(test)]
+impl fmt::Debug for DoneCallbacks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} callbacks", self.0.len())
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +228,17 @@ impl PlainIo {
     pub fn downloads(&self) -> Vec<Vec<PathBuf>> {
         self.hooks().downloads.clone()
     }
+
+    /// End each download that did not end, as a provider does. Returns the
+    /// count.
+    pub fn finish_downloads(&self) -> usize {
+        let done = std::mem::take(&mut self.hooks().done).0;
+        let count = done.len();
+        for done in done {
+            done();
+        }
+        count
+    }
 }
 
 #[cfg(test)]
@@ -241,7 +270,9 @@ impl FolderIo for PlainIo {
         delete_path(path)
     }
 
-    fn download(&self, paths: Vec<PathBuf>) {
-        self.hooks().downloads.push(paths);
+    fn download(&self, paths: Vec<PathBuf>, done: DownloadDone) {
+        let mut hooks = self.hooks();
+        hooks.downloads.push(paths);
+        hooks.done.0.push(done);
     }
 }
