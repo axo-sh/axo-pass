@@ -46,6 +46,7 @@ private struct SyncSheetsModifier: ViewModifier {
         case .pair(let root, let join): PairingSheet(root: root, join: join)
         case .kitImport(let root, let join): KitImportSheet(root: root, join: join)
         case .pairingPrompt(let root): PairingPromptSheet(root: root)
+        case .pendingPairings(let root): PendingPairingsSheet(root: root)
         case .status(let vault): SyncStatusSheet(vault: vault)
         case .newKit(let vault): NewRecoveryKitSheet(vault: vault)
         case .missingVaults: MissingVaultsSheet()
@@ -79,11 +80,11 @@ private struct SyncSheetsModifier: ViewModifier {
 
 /// Text of the turn-off confirmation.
 let syncDisableMessage =
-  "This Mac stops syncing the vault. The vault stays here and on your other Macs. This Mac still has the vault's sync key until key rotation arrives in a later version."
+  "This Mac stops syncing the vault. The vault stays here and on your other devices. This Mac still has the vault's sync key until key rotation arrives in a later version."
 
 /// Text of the delete confirmation of a synced vault.
 let syncedVaultDeleteMessage =
-  "This deletes the vault on this Mac only. Your other Macs still have it. Sync turns off first, so Axo Pass must be unlocked."
+  "This deletes the vault on this Mac only. Your other devices still have it. Sync turns off first, so Axo Pass must be unlocked."
 
 /// Text of the delete confirmation of a vault that is not synced.
 let vaultDeleteMessage =
@@ -92,6 +93,10 @@ let vaultDeleteMessage =
 /// Text for a vault whose earlier turn-off waits for the synced folder.
 let syncDisableInProgressMessage =
   "Sync is still turning off for this vault. You can turn it on again once the change reaches the synced folder."
+
+/// Text above a new recovery kit.
+let recoveryKitMessage =
+  "The kit opens the vault if no other device is available. Store it away from the synced folder, since anyone with both can read the vault."
 
 /// Text for a sync sheet if no synced folder is chosen.
 let syncNoFolderMessage = "Choose a synced folder in Settings › Vaults first."
@@ -227,13 +232,26 @@ struct VaultSyncSymbol: View {
   }
 }
 
-/// Folder of `root`, for display.
+/// Folder of `root`, for display. A folder in iCloud Drive shows as
+/// "iCloud Drive/…" and a folder in the home folder starts with "~".
 func rootDescription(_ root: SyncRootInfo) -> String {
   switch root {
-  case .folder(let path): return path
+  case .folder(let path):
+    let iCloudDrive = NSHomeDirectory() + "/Library/Mobile Documents/com~apple~CloudDocs"
+    if path == iCloudDrive { return "iCloud Drive" }
+    if path.hasPrefix(iCloudDrive + "/") {
+      return "iCloud Drive" + path.dropFirst(iCloudDrive.count)
+    }
+    return (path as NSString).abbreviatingWithTildeInPath
   case .iCloud: return "iCloud Drive"
   case .s3(let name): return "S3 location \(name)"
   }
+}
+
+/// Full path of `root` for help text, or its description if it has no path.
+func rootHelp(_ root: SyncRootInfo) -> String {
+  if case .folder(let path) = root { return path }
+  return rootDescription(root)
 }
 
 /// Turn on sync for one vault with the synced folder of the app: save the
@@ -356,11 +374,9 @@ struct SyncEnableSheet: View {
 
   private func kitStep(_ setup: SyncSetupHandle, text: String) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(
-        "Save this recovery kit before turning on sync. If no other Mac is available, the kit opens the synced vault. Anyone with the kit and the folder can read the vault, so store it somewhere else."
-      )
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(recoveryKitMessage)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
 
       RecoveryKitPanel(text: text, vaultName: vault.name, kitSaved: $kitSaved) {
         error = $0
@@ -405,19 +421,14 @@ struct SyncEnableSheet: View {
   private func joinStep(_ root: SyncRootInfo) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "The synced folder already has this vault. To join it, pair with a Mac that syncs it or use its recovery kit. Entries are merged, and values that differ show as conflicts."
+        "\(rootDescription(root)) already has this vault. Join it by pairing with a device that syncs it or with its recovery kit. Values that differ show as conflicts."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
-
-      Text(rootDescription(root))
-        .font(.callout.monospaced())
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .help(rootDescription(root))
+      .help(rootHelp(root))
 
       HStack {
-        Button("Pair with Another Mac…") { join(.pair, root) }
+        Button("Pair with Another Device…") { join(.pair, root) }
         Button("Use a Recovery Kit…") { join(.recoveryKit, root) }
       }
       .disabled(sync.onJoin == nil)

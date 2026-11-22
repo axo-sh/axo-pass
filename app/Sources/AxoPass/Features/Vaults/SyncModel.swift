@@ -24,13 +24,31 @@ enum VaultSyncState: Equatable {
 
 /// Progress of a vault that this Mac receives by pairing.
 enum VaultImportProgress: Equatable {
+  /// The sync key has not arrived, for the reason in `message`.
+  case awaitingKey(message: String)
   /// The sync key arrived.
   case paired
   /// The import waits for a state file of the Mac that paired.
   case waiting
+  /// The import waits for the reason in `message`.
+  case blocked(message: String)
   /// The vault was built or joined under `vaultKey`.
   case imported(vaultKey: String)
   case failed(message: String)
+
+  /// Whether the import still runs.
+  var isPending: Bool {
+    switch self {
+    case .awaitingKey, .paired, .waiting, .blocked: true
+    case .imported, .failed: false
+    }
+  }
+
+  /// Whether the sync key of the vault arrived.
+  var hasKey: Bool {
+    if case .awaitingKey = self { return false }
+    return true
+  }
 }
 
 /// Choice of the join offer, for a vault that the synced folder already holds.
@@ -59,6 +77,9 @@ enum SyncSheet: Identifiable {
   case kitImport(root: SyncRootInfo?, join: SyncVaultRef?)
   /// Pairing prompt of the pairing requests under `root`.
   case pairingPrompt(root: SyncRootInfo)
+  /// Pairing of this Mac and the pairing requests in the folder `root`, to
+  /// cancel or delete.
+  case pendingPairings(root: SyncRootInfo)
   /// Sync status of the vault, with its notices.
   case status(SyncVaultRef)
   /// New recovery kit for the current sync key of the vault.
@@ -75,6 +96,7 @@ enum SyncSheet: Identifiable {
     case .pair(_, let join): return "pair-\(join?.key ?? "")"
     case .kitImport(_, let join): return "kit-\(join?.key ?? "")"
     case .pairingPrompt(let root): return "prompt-\(rootDescription(root))"
+    case .pendingPairings(let root): return "pending-\(rootDescription(root))"
     case .status(let vault): return "status-\(vault.key)"
     case .newKit(let vault): return "new-kit-\(vault.key)"
     case .missingVaults: return "missing-vaults"
@@ -121,6 +143,28 @@ final class SyncModel {
 
   /// Pairing imports by vault id.
   private(set) var imports: [String: VaultImportProgress] = [:]
+
+  /// Pairing of this Mac as the new Mac, while it runs. It continues if its
+  /// sheet closes, until it ends or the user cancels it.
+  private(set) var activePairing: PairingHandle? = nil
+
+  /// Whether this Mac waits for a pairing or for the import of a vault it
+  /// received.
+  var isPairing: Bool {
+    activePairing != nil || imports.values.contains { $0.isPending }
+  }
+
+  /// Short description of the pairing progress. Nil if nothing runs.
+  var pairingStatus: String? {
+    guard isPairing else { return nil }
+    let pending = imports.values.filter(\.isPending).count
+    if let activePairing {
+      let total = activePairing.vaultIds().count
+      let received = activePairing.vaultIds().filter { imports[$0]?.hasKey == true }.count
+      if received < total { return "Pairing: \(received) of \(total) vaults received" }
+    }
+    return pending == 1 ? "Importing 1 vault" : "Importing \(pending) vaults"
+  }
 
   /// Sync sheet that is shown. Setting another sheet replaces it.
   var sheet: SyncSheet? = nil
@@ -455,9 +499,43 @@ final class SyncModel {
       try await vaults.core.pairingStart(root: root, name: macName)
     }
     for id in handle.vaultIds() { imports[id] = nil }
+    activePairing = handle
     vaults.reload()
     await reloadKeyState()
     return handle
+  }
+
+  /// Stop the running pairing and delete its request. Imports of vaults that
+  /// already received their key continue.
+  func cancelPairing() {
+    try? activePairing?.finish()
+    activePairing = nil
+  }
+
+  /// Show the pairing of this Mac and the requests in the synced folder.
+  func showPendingPairings() {
+    guard let folder else { return }
+    sheet = .pendingPairings(root: folder)
+  }
+
+  /// Requests in the folder `root`, oldest first, with their age.
+  func pairingRequestList(root: SyncRootInfo) async throws -> [PairingRequestInfo] {
+    try await vaults.core.pairingRequestList(root: root)
+  }
+
+  /// Delete the request `requestId` in the folder `root`.
+  func deletePairingRequest(root: SyncRootInfo, requestId: String) async throws {
+    try await vaults.core.pairingRequestDelete(root: root, requestId: requestId)
+  }
+
+  /// Run the failed import of the vault again.
+  func retryImport(_ vaultId: String) {
+    imports[vaultId] = .waiting
+    do {
+      try vaults.core.pairingRetryImport(vaultId: vaultId)
+    } catch {
+      imports[vaultId] = .failed(message: error.userMessage)
+    }
   }
 
   // MARK: - Pairing prompt
@@ -478,9 +556,15 @@ final class SyncModel {
   func grant(root: SyncRootInfo, code: String, vaultIds: [String]) async throws
     -> [PairingGrantInfo]
   {
-    try await lockingOnExpiry {
+    let results = try await lockingOnExpiry {
       try await vaults.core.pairingGrant(root: root, code: code, vaultIds: vaultIds)
     }
+    // A granted request no longer prompts.
+    let granted = results.contains { if case .granted = $0.outcome { true } else { false } }
+    if granted, let count = pairingCounts[root] {
+      pairingCounts[root] = count > 1 ? count - 1 : nil
+    }
+    return results
   }
 
   /// Dismiss the current pairing requests under `root` and clear their count.
@@ -547,6 +631,10 @@ final class SyncModel {
     pairingCounts[root] = count == 0 ? nil : count
   }
 
+  fileprivate func pairingEnded() {
+    activePairing = nil
+  }
+
   fileprivate func importProgress(_ vaultId: String, _ progress: VaultImportProgress) {
     imports[vaultId] = progress
     guard case .imported(let key) = progress else { return }
@@ -593,5 +681,17 @@ final class SyncEventsBridge: SyncEventsDelegate {
 
   func importFailed(vaultId: String, message: String) {
     Task { @MainActor [model] in model.importProgress(vaultId, .failed(message: message)) }
+  }
+
+  func importBlocked(vaultId: String, message: String) {
+    Task { @MainActor [model] in model.importProgress(vaultId, .blocked(message: message)) }
+  }
+
+  func pairingBlocked(vaultId: String, message: String) {
+    Task { @MainActor [model] in model.importProgress(vaultId, .awaitingKey(message: message)) }
+  }
+
+  func pairingEnded() {
+    Task { @MainActor [model] in model.pairingEnded() }
   }
 }

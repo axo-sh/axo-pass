@@ -103,13 +103,20 @@ struct VaultsSidebar: View {
         Spacer()
         // Add synced vaults to this Mac from the synced folder of the app.
         Menu {
-          Button("Pair with Another Mac…") { sync.showPairing() }
+          Button("Pair with Another Device…") { sync.showPairing() }
           Button("Use a Recovery Kit…") { sync.showKitImport() }
+          Divider()
+          Button("Pending Pairings…") { sync.showPendingPairings() }
+            .disabled(sync.folder == nil)
         } label: {
-          Label("Add Synced Vaults", systemImage: "arrow.triangle.2.circlepath")
+          Label {
+            Text("Add Synced Vaults")
+          } icon: {
+            SpinningSyncIcon(isSpinning: sync.isPairing)
+          }
         }
         .menuIndicator(.hidden)
-        .help("Add synced vaults from another Mac or with a recovery kit")
+        .help("Add synced vaults from another device or with a recovery kit")
         Button {
           showPalette()
         } label: {
@@ -120,21 +127,40 @@ struct VaultsSidebar: View {
       }
     }
     .safeAreaInset(edge: .bottom) {
-      HStack(spacing: 8) {
-        Button {
-          model.reload()
-        } label: {
-          Label("Reload", systemImage: "arrow.clockwise")
+      VStack(alignment: .leading, spacing: 6) {
+        if let status = sync.pairingStatus {
+          Button {
+            sync.showPendingPairings()
+          } label: {
+            HStack(spacing: 6) {
+              SpinningSyncIcon(isSpinning: true)
+              Text(status)
+                .lineLimit(1)
+              Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .contentShape(.rect)
+          }
+          .buttonStyle(.plain)
+          .help("Show pending pairings")
         }
-        Spacer()
-        Button {
-          model.lock()
-        } label: {
-          Label("Lock", systemImage: "lock")
+        HStack(spacing: 8) {
+          Button {
+            model.reload()
+          } label: {
+            Label("Reload", systemImage: "arrow.clockwise")
+          }
+          Spacer()
+          Button {
+            model.lock()
+          } label: {
+            Label("Lock", systemImage: "lock")
+          }
         }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
       }
-      .labelStyle(.iconOnly)
-      .buttonStyle(.borderless)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
     }
@@ -386,7 +412,7 @@ struct VaultsSidebar: View {
         Button("Import Passwords…") { showingItemImportSheet = true }
         Button("Import Backup…") { showingImportSheet = true }
         Divider()
-        Button("Add from Another Mac…") { sync.showPairing() }
+        Button("Add from Another Device…") { sync.showPairing() }
         Button("Use a Recovery Kit…") { sync.showKitImport() }
       } label: {
         Color.clear
@@ -443,6 +469,26 @@ struct VaultsSidebar: View {
 }
 
 /// Task id for loading the item type counts.
+/// Sync icon that turns slowly while `isSpinning`, and rests while it is not.
+private struct SpinningSyncIcon: View {
+  let isSpinning: Bool
+  @State private var angle = 0.0
+
+  var body: some View {
+    Image(systemName: "arrow.triangle.2.circlepath")
+      .rotationEffect(.degrees(angle))
+      .onChange(of: isSpinning, initial: true) { _, spinning in
+        if spinning {
+          withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+            angle = 360
+          }
+        } else {
+          withAnimation(.linear(duration: 0)) { angle = 0 }
+        }
+      }
+  }
+}
+
 private struct TypeCountsTrigger: Equatable {
   let mode: LibraryMode
   let vaults: [VaultInfo]

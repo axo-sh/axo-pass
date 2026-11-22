@@ -53,7 +53,7 @@ struct KeyStateSheet: View {
       Button("Sign Again") { resign() }
     } message: {
       Text(
-        "Axo Pass creates a new signing key and signs every vault file and previous version again. Sign again only if you are the only person who could change the vault files while the key was missing. A synced vault then stops syncing until you pair with another Mac or use its recovery kit."
+        "Axo Pass creates a new signing key and signs every vault file and previous version again. Sign again only if you are the only person who could change the vault files while the key was missing. A synced vault then stops syncing until you pair with another device or use its recovery kit."
       )
     }
   }
@@ -75,7 +75,7 @@ struct KeyStateSheet: View {
           .foregroundStyle(.secondary)
       } else {
         Text(
-          "These vaults sync. Pair with a Mac that syncs them, or use their recovery kits, to add them to this Mac:"
+          "These vaults sync. Pair with a device that syncs them, or use their recovery kits, to add them to this Mac:"
         )
         .fixedSize(horizontal: false, vertical: true)
         VStack(alignment: .leading, spacing: 4) {
@@ -97,7 +97,7 @@ struct KeyStateSheet: View {
         .fixedSize(horizontal: false, vertical: true)
 
       HStack {
-        Button("Pair with Another Mac…") { sync.sheet = .pair(root: sync.folder, join: nil) }
+        Button("Pair with Another Device…") { sync.sheet = .pair(root: sync.folder, join: nil) }
         Button("Use a Recovery Kit…") { sync.sheet = .kitImport(root: sync.folder, join: nil) }
         Spacer()
         Button("Close") { dismiss() }

@@ -25,7 +25,7 @@ struct PairingSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text(join.map { "Pair to Join \($0.name)" } ?? "Pair with Another Mac").font(.headline)
+      Text(join.map { "Pair to Join \($0.name)" } ?? "Pair with Another Device").font(.headline)
 
       if root == nil {
         Text(syncNoFolderMessage)
@@ -57,7 +57,6 @@ struct PairingSheet: View {
     .padding(20)
     .frame(width: 520)
     .task { await start() }
-    .onDisappear { try? handle?.finish() }
     .onChange(of: model.isAppUnlocked) { _, unlocked in
       if !unlocked { dismiss() }
     }
@@ -67,6 +66,11 @@ struct PairingSheet: View {
   /// the user confirms the move first.
   private func start(moveConfirmed: Bool = false) async {
     guard let root, handle == nil else { return }
+    // A pairing that runs continues after its sheet closed, so show it again.
+    if let active = sync.activePairing {
+      handle = active
+      return
+    }
     if !moveConfirmed {
       await sync.reloadKeyState()
       if sync.keyState == .newHardware {
@@ -104,7 +108,7 @@ struct PairingSheet: View {
   private func codeStep(_ handle: PairingHandle) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "On a Mac that syncs your vaults, open Axo Pass, click the pairing request in the sidebar, and enter this code. Then choose the vaults to share."
+        "On a device that syncs your vaults, open Axo Pass, click the pairing request in the sidebar, and enter this code."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -134,15 +138,21 @@ struct PairingSheet: View {
       }
 
       Text(
-        "Keep this open until the other Mac shares the vaults. Vaults already received continue to download after you finish."
+        "Pairing continues in the background after you close this."
       )
       .font(.callout)
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
 
       HStack {
+        if sync.activePairing != nil {
+          Button("Cancel Pairing") {
+            sync.cancelPairing()
+            dismiss()
+          }
+        }
         Spacer()
-        Button("Finish") { dismiss() }
+        Button("Close") { dismiss() }
           .keyboardShortcut(.defaultAction)
       }
     }
@@ -153,6 +163,8 @@ struct PairingSheet: View {
       switch progress {
       case .paired, .waiting:
         ProgressView().controlSize(.mini)
+      case .awaitingKey, .blocked:
+        Image(systemName: "clock.fill").foregroundStyle(.orange)
       case .imported:
         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
       case .failed:
@@ -166,6 +178,10 @@ struct PairingSheet: View {
         .lineLimit(3)
         .multilineTextAlignment(.trailing)
         .textSelection(.enabled)
+      if case .failed = progress {
+        Button("Retry") { sync.retryImport(vaultId) }
+          .controlSize(.small)
+      }
     }
   }
 
@@ -187,7 +203,8 @@ struct PairingSheet: View {
   private func progressText(_ progress: VaultImportProgress) -> String {
     switch progress {
     case .paired: return "Received"
-    case .waiting: return "Waiting for files from the other Mac"
+    case .waiting: return "Waiting for files from the other device"
+    case .awaitingKey(let message), .blocked(let message): return message
     case .imported: return "Ready"
     case .failed(let message): return "Failed: \(message)"
     }
@@ -243,48 +260,53 @@ struct PairingPromptSheet: View {
 
   private var requestText: String {
     switch sync.pairingCounts[root] ?? 0 {
-    case 0: return "A Mac asked to pair with the vaults in this synced folder."
-    case 1: return "A Mac asks to pair with the vaults in this synced folder."
-    case let count: return "\(count) Macs ask to pair with the vaults in this synced folder."
+    case 0: return "A device asked to pair."
+    case 1: return "A device asks to pair."
+    case let count: return "\(count) devices ask to pair."
     }
   }
 
   private var codeStep: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "\(requestText) Enter the code shown on the new Mac. Pair only with a Mac you set up yourself."
+        "\(requestText) Enter the code shown on the new device. Only pair with a device you set up yourself."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
-
-      Text(rootDescription(root))
-        .font(.callout.monospaced())
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .help(rootDescription(root))
+      .help(rootHelp(root))
 
       TextField("XXXX-XXXX-XXXX-XXXX", text: $code)
-        .font(.title3.monospaced())
-        .textFieldStyle(.roundedBorder)
+        .font(.title2.monospaced())
+        .multilineTextAlignment(.center)
+        .textFieldStyle(.plain)
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         .onSubmit { if codeComplete { enterCode() } }
-        .onChange(of: code) { noMatch = false }
+        .onChange(of: code) {
+          noMatch = false
+          let normalized = String(
+            code.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") })
+          if normalized != code { code = normalized }
+        }
 
       if noMatch {
-        Text("This code does not match any request. Check the code on the new Mac.")
+        Text("This code does not match any request.")
           .font(.caption)
           .foregroundStyle(.red)
       }
       if let error { SyncErrorLabel(message: error) }
 
       HStack {
-        Button("Dismiss") { dismissRequests() }
-          .help("Stop showing these requests. Only a new request shows again.")
-          .disabled(isWorking)
+        Button(sync.pairingCounts[root] ?? 0 > 1 ? "Ignore Requests" : "Ignore Request") {
+          dismissRequests()
+        }
+        .help("Stop showing these requests. Only a new request shows again.")
+        .disabled(isWorking)
         if isWorking { ProgressView().controlSize(.small) }
         Spacer()
         Button("Cancel") { dismiss() }
           .keyboardShortcut(.cancelAction)
-        Button("Enter Code") { enterCode() }
+        Button("Continue") { enterCode() }
           .keyboardShortcut(.defaultAction)
           .disabled(!codeComplete || isWorking)
       }
@@ -333,11 +355,11 @@ struct PairingPromptSheet: View {
         .fixedSize(horizontal: false, vertical: true)
 
       if vaults.isEmpty {
-        Text("This Mac does not sync any of the vaults that the new Mac asks for.")
+        Text("This Mac does not sync any of the requested vaults.")
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       } else {
-        Text("Choose the vaults to share. The new Mac receives their sync keys.")
+        Text("Choose the vaults to share.")
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
         VStack(alignment: .leading, spacing: 6) {
@@ -416,7 +438,7 @@ struct PairingPromptSheet: View {
       .padding(8)
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
 
-      Text("The new Mac adds each shared vault once its files download.")
+      Text("The new device adds each vault once its files download.")
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
@@ -431,7 +453,7 @@ struct PairingPromptSheet: View {
   private func outcomeText(_ outcome: GrantOutcomeInfo) -> String {
     switch outcome {
     case .granted: return "Shared"
-    case .conflict: return "Not shared. This vault knows the new Mac with other keys."
+    case .conflict: return "Not shared. This vault knows the new device with other keys."
     case .notTrusted(let reason): return "Not shared. \(reason)"
     case .failed(let message): return "Failed: \(message)"
     }
@@ -510,8 +532,8 @@ struct KitImportSheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
         join == nil
-          ? "Choose the recovery kit file of a vault in the synced folder. The vault is added to this Mac."
-          : "Choose the recovery kit file of this vault. Entries are merged, and values that differ show as conflicts."
+          ? "Choose the recovery kit of a vault in the synced folder."
+          : "Choose the recovery kit of this vault. Values that differ show as conflicts."
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -593,7 +615,7 @@ struct KitImportSheet: View {
       return true
     case .kitOutdated:
       step = .refused(
-        "This recovery kit is for an older sync key of the vault, so it cannot open the vault. Use a newer kit, or pair with a Mac that syncs the vault."
+        "This recovery kit is for an older sync key of the vault, so it cannot open the vault. Use a newer kit, or pair with a device that syncs the vault."
       )
       return false
     case .noKey:
@@ -654,14 +676,14 @@ struct KitImportSheet: View {
   private func waitingStep(_ macs: [WaitingMacInfo], paused: Bool) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "Files in the synced folder are still downloading. The kit is checked once every file is on this Mac. Waiting for files from:"
+        "Waiting for files from these devices to download:"
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
 
       VStack(alignment: .leading, spacing: 4) {
         ForEach(macs, id: \.replicaId) { mac in
-          Text(mac.name ?? "Another Mac")
+          Text(mac.name ?? "Another device")
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)

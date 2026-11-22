@@ -368,9 +368,10 @@ private struct VaultsSettingsView: View {
             .help(sync.folder.map(rootDescription) ?? "")
           Button(sync.folder == nil ? "Choose…" : "Change…") { showingLocation = true }
         }
-        .help("A change applies only to vaults turned on later. The path can differ on each Mac.")
+        .help(
+          "A change applies only to vaults turned on later. The path can differ on each device.")
         Text(
-          "Use a folder that a sync service or shared drive copies to your other Macs, or an S3-compatible bucket."
+          "Use a folder that a sync service or shared drive copies to your other devices, or an S3-compatible bucket."
         )
         .captionStyle()
       }

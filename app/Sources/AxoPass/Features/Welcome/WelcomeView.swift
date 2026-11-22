@@ -117,14 +117,14 @@ struct WelcomeView: View {
           showingSyncChoices = true
         } label: {
           ChoiceLabel(
-            title: "Set up from another Mac",
-            detail: "Add vaults that sync from a Mac that has them.",
+            title: "Set up from another device",
+            detail: "Add vaults that sync from a device that has them.",
             symbol: "laptopcomputer.and.arrow.down")
         }
         .buttonStyle(.plain)
         .popover(isPresented: $showingSyncChoices, arrowEdge: .trailing) {
           VStack(alignment: .leading, spacing: 8) {
-            Button("Pair with Another Mac…") {
+            Button("Pair with Another Device…") {
               showingSyncChoices = false
               choose(.pair)
             }

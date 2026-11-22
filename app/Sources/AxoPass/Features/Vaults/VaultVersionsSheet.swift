@@ -100,11 +100,11 @@ struct VaultVersionsSheet: View {
   private var restoreMessage: String {
     if refused == true {
       return
-        "The vault file that failed to load is replaced with this version and kept aside. If the vault syncs, the differences are recorded as edits on every Mac."
+        "The vault file that failed to load is replaced with this version and kept aside. If the vault syncs, the differences are recorded as edits on every device."
     }
     if sync.state(vaultKey)?.isOn == true {
       return
-        "The vault is replaced with this version. The current vault is kept as a previous version. The vault syncs, so the differences are recorded as edits on every Mac."
+        "The vault is replaced with this version. The current vault is kept as a previous version. The vault syncs, so the differences are recorded as edits on every device."
     }
     return
       "The vault is replaced with this version. The current vault is kept as a previous version."
