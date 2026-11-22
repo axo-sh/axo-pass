@@ -132,6 +132,17 @@ impl Fixture {
         action: VaultAction,
         payload: Option<VaultPayload>,
     ) -> AuditEvent {
+        // Other tests write to the same audit dir if they hold no test dir, so
+        // the read is limited to the action of this request.
+        let recorded = access_event(
+            &prompt(vault_key, action.clone()),
+            &Actor::default(),
+            Outcome::Failed,
+            None,
+            &AccessIds::None,
+            None,
+        )
+        .action;
         self.rt.block_on(authorize_and_serve(
             &Approver {
                 approve,
@@ -144,6 +155,7 @@ impl Fixture {
             &InFlightRequest::default(),
         ));
         audit::read(&audit::AuditFilter {
+            actions: vec![recorded],
             limit: Some(1),
             ..Default::default()
         })
