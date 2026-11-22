@@ -301,16 +301,13 @@ dependencies = [
  "block2",
  "cfg_aliases",
  "ciborium",
- "clml",
  "coset",
  "dirs",
  "dispatch2",
  "flate2",
- "glob",
  "hkdf",
  "hmac",
  "indoc",
- "itertools 0.15.0",
  "jiff",
  "libc",
  "libproc",
@@ -802,9 +799,9 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clml"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "049a7a91b2cc8db5562fa646b8657e67ade4bde79ae86514db4a36ef26f280d2"
+checksum = "6f57086086618f3b5f9893e6fd1413909bc886208c0584bb9f81642bc89df3aa"
 dependencies = [
  "anstream",
  "clml-proc-macro",
@@ -812,14 +809,15 @@ dependencies = [
 
 [[package]]
 name = "clml-proc-macro"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b51c254ae1d054d3f0e58f0f1f9ef24f6e55f7eaafc8cd20ef4fbf889cf3b4"
+checksum = "e262225193b371fdb8b1905ce107c86b0f1260b142b8bd64d15b25928994ded4"
 dependencies = [
  "nom 8.0.0",
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+ "unindent",
 ]
 
 [[package]]
@@ -4293,6 +4291,12 @@ dependencies = [
  "uniffi_meta",
  "weedle2",
 ]
+
+[[package]]
+name = "unindent"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
 name = "universal-hash"
