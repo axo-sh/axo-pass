@@ -87,6 +87,11 @@ pub enum Error {
     #[error("Sync override is not offered for this vault")]
     SyncOverrideNotOffered,
 
+    /// Edit refused by the check of the Ask registers it writes. The join of
+    /// the transaction was saved.
+    #[error("{0}")]
+    EditRefused(crate::secrets::vaults::sync::edit_check::EditRefusal),
+
     #[error("Synced folder failed: {0}")]
     SyncTransportError(String),
 

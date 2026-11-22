@@ -111,6 +111,10 @@ use crate::secrets::vaults::storage::resign::Resigned;
 use crate::secrets::vaults::sync::apply::ApplyFault;
 use crate::secrets::vaults::sync::audit_events::SyncEvents;
 use crate::secrets::vaults::sync::blobs;
+use crate::secrets::vaults::sync::crdt::CausalState;
+use crate::secrets::vaults::sync::edit_check::{
+    ConflictDetail, EditRequest, ResolvePick, SyncReads,
+};
 use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinKey};
 #[cfg(test)]
 use crate::secrets::vaults::sync::keys::TestKeyWrapper;
@@ -119,7 +123,7 @@ use crate::secrets::vaults::sync::listing::PeerListing;
 use crate::secrets::vaults::sync::load::{Mismatch, SyncLoad, TrustedState};
 use crate::secrets::vaults::sync::local_state::{LocalStateError, LocalSyncState};
 use crate::secrets::vaults::sync::meta::MetaFile;
-use crate::secrets::vaults::sync::model::{ItemId, PublicKey, ReplicaKeys};
+use crate::secrets::vaults::sync::model::{ItemId, PublicKey, ReplicaKeys, SyncState};
 use crate::secrets::vaults::sync::pairing::grant::PairingGrant;
 use crate::secrets::vaults::sync::publish::Staged;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
@@ -127,6 +131,7 @@ use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::setup::{FIRST_KEY_ID, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::state_file::StateHash;
 use crate::secrets::vaults::sync::status::SyncStatus;
 #[cfg(test)]
 use crate::secrets::vaults::sync::transport::FixedTransport;
@@ -135,7 +140,7 @@ use crate::secrets::vaults::sync::transport::folder::io::CoordinatedIo;
 use crate::secrets::vaults::sync::transport::s3::S3Transport;
 use crate::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
-use crate::secrets::vaults::sync::txn::SyncTxn;
+use crate::secrets::vaults::sync::txn::{Recorded, SyncTxn};
 
 mod legacy_v1; // MIGRATE_V1
 mod locks;
@@ -1122,10 +1127,18 @@ impl VaultWriter {
             .as_ref()
             .map(|sync| sync.keyring().clone())
             .unwrap_or_default();
+        // The vault before the change, which a refused edit saves in place of
+        // the change, with the join.
+        let mut before_change = match &sync {
+            Some(sync) if sync.syncs() => Some(vault.duplicate()?),
+            _ => None,
+        };
         let mut vh = VaultHandle::unlocked_with_keyring(path.clone(), vault, keyring);
 
         // Apply the change. An error leaves the files unchanged.
         let value = f(&mut vh)?;
+        let edit = vh.take_edit();
+        let mut edit_refused = None;
 
         let mut sync_status = SyncStatus::of_case(&case);
         let changed = match (&mut sync, session) {
@@ -1141,15 +1154,25 @@ impl VaultWriter {
                 // recovery recipient is refused before any save if sync does
                 // not run or the kit is not for the current key, and if the
                 // diff fails it is not recorded and nothing is saved.
+                //
+                // An edit refused by its edit check records nothing. The vault
+                // as it was before the change is saved with the join, and the
+                // refusal is returned after the saves.
                 if let Some(add) = recovery {
                     sync.check_recovery(add)?;
                 }
-                if sync.syncs()
-                    && sync
-                        .record(vh.get_unlocked_vault_mut()?, session, now, request)?
-                        .is_some()
-                {
-                    sync.apply_recorded(vh.get_unlocked_vault_mut()?)?;
+                if sync.syncs() {
+                    let vault = vh.get_unlocked_vault_mut()?;
+                    match sync.record(vault, session, now, request, &edit)? {
+                        Recorded::Minted(Some(_)) => sync.apply_recorded(vault)?,
+                        Recorded::Minted(None) => {},
+                        Recorded::Refused(refusal) => {
+                            if let Some(before) = before_change.take() {
+                                *vault = before;
+                            }
+                            edit_refused = Some(refusal);
+                        },
+                    }
                 }
                 if recovery.is_some() && !sync.syncs() {
                     return Err(Error::RecoveryKitNotAdded(
@@ -1271,6 +1294,9 @@ impl VaultWriter {
         } else {
             vault_lock.save_count()
         };
+        if let Some(refusal) = edit_refused {
+            return Err(Error::EditRefused(refusal).into());
+        }
         let recovery_kit_missing = sync.as_ref().is_some_and(SyncTxn::recovery_kit_missing);
         Ok(Attempt::Done(Committed {
             value,
@@ -1379,6 +1405,87 @@ impl VaultWriter {
             })?;
             vh.restore_vault(vault)
         })
+    }
+
+    /// Local sync state of the unlocked vault `vh`, and the hash of its file,
+    /// if it is at the generation and replica id of the vault. `None` if the
+    /// vault is not synced, if the sync state fails to load, or if a later
+    /// save replaced `vh`.
+    fn matching_state(
+        &self,
+        vh: &VaultHandle,
+    ) -> Result<Option<(LocalSyncState, StateHash)>, Error> {
+        let vault = vh.get_unlocked_vault()?;
+        let Some(replica) = vault.replica_id() else {
+            return Ok(None);
+        };
+        let id = vault.id();
+        let (local, hash) = match LocalSyncState::load_hashed(&self.root, id, &*self.signer) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                log::info!("Vault {id} has no sync state to read edits against: {e}");
+                return Ok(None);
+            },
+        };
+        if local.generation != vault.generation() || local.replica_id.0 != replica {
+            return Ok(None);
+        }
+        Ok(Some((local, hash)))
+    }
+
+    /// Sync state of the unlocked vault `vh`, opened with its keyring, as
+    /// [`Self::matching_state`] finds it.
+    fn matching_body(&self, vh: &VaultHandle) -> Result<Option<CausalState<SyncState>>, Error> {
+        let Some((local, _)) = self.matching_state(vh)? else {
+            return Ok(None);
+        };
+        Ok(local.open(vh.keyring()?).ok())
+    }
+
+    /// Write ids of the Ask registers of the unlocked vault `vh`, for edits
+    /// from the UI. The reads are cached in `vh` by the hash of the sync state
+    /// file. `None` for a vault that is not synced, a sync state that fails
+    /// to load or open, and a copy that a later save replaced. An edit made
+    /// with no reads is refused if it writes an Ask register, and the UI then
+    /// reads again.
+    pub fn sync_reads(&self, vh: &mut VaultHandle) -> Result<Option<Arc<SyncReads>>, Error> {
+        let Some((local, hash)) = self.matching_state(vh)? else {
+            return Ok(None);
+        };
+        if let Some(reads) = vh.cached_reads(hash) {
+            return Ok(Some(reads));
+        }
+        let Ok(state) = local.open(vh.keyring()?) else {
+            return Ok(None);
+        };
+        let reads = Arc::new(SyncReads::of(&state));
+        vh.cache_reads(hash, Arc::clone(&reads));
+        Ok(Some(reads))
+    }
+
+    /// Conflicts of the unlocked vault `vh`, each with its values, the Mac
+    /// that wrote each value, and its write time. Empty for a vault that is
+    /// not synced, as [`Self::sync_reads`] states.
+    pub fn conflicts(&self, vh: &VaultHandle) -> Result<Vec<ConflictDetail>, Error> {
+        Ok(self
+            .matching_body(vh)?
+            .map(|state| ConflictDetail::of(&state))
+            .unwrap_or_default())
+    }
+
+    /// Resolve a conflict of the vault `target` with the value `pick`
+    /// chooses, in a transaction. It supersedes every value of the register,
+    /// writes each credential value not chosen to `history`, and records
+    /// `sync.conflict_resolved`. Fails with `EditRefused` if the register
+    /// holds other write ids than `pick` read. A vault that is not synced
+    /// changes nothing.
+    pub fn resolve_conflict(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        pick: ResolvePick,
+    ) -> Result<Committed<()>, Error> {
+        self.write_as(target, unlock, SyncRequest::Resolve(pick), |_| Ok(()))
     }
 
     /// Replace a refused vault file, one that fails to load, with its retained
@@ -2499,7 +2606,9 @@ impl VaultWriter {
             sync.join_peers(&**transport, session);
             sync.request_downloads(&**transport);
         }
-        sync.record(&mut vault, session, now, &SyncRequest::Restore)?;
+        // A restore is not checked, so it is never refused.
+        let edit = EditRequest::default();
+        sync.record(&mut vault, session, now, &SyncRequest::Restore, &edit)?;
         if sync.state_changed() {
             sync.apply_restored(&mut vault)?;
         }

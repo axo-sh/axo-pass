@@ -182,7 +182,69 @@ pub enum ResolveError {
 }
 
 impl Choice {
-    fn register(&self) -> Conflict {
+    /// Value of `register` in `state` at `write_id`, or the shown value, the
+    /// value with the highest order key, for `None`. `None` if the register
+    /// lacks it.
+    pub(crate) fn of(
+        state: &CausalState<SyncState>,
+        register: Conflict,
+        write_id: Option<WriteId>,
+    ) -> Option<Self> {
+        let values = Self::ordered(state, register)?;
+        let picked = match write_id {
+            Some(write_id) => values.into_iter().find(|(id, _, _)| *id == write_id),
+            None => values.into_iter().last(),
+        };
+        picked.map(|(_, _, choice)| choice)
+    }
+
+    /// Values of `register` in `state`, lowest order key first, each with its
+    /// write id and write time. `None` if the state lacks the entity or the
+    /// entity has no such register.
+    pub(crate) fn ordered(
+        state: &CausalState<SyncState>,
+        register: Conflict,
+    ) -> Option<Vec<(WriteId, i64, Self)>> {
+        fn each<T: Clone, P: Policy>(
+            values: &MvRegister<T, P>,
+            choice: impl Fn(T) -> Choice,
+        ) -> Vec<(WriteId, i64, Choice)> {
+            values
+                .ordered()
+                .into_iter()
+                .map(|(key, v)| (key.write_id, v.written_at, choice(v.value.clone())))
+                .collect()
+        }
+        let store = &state.store;
+        Some(match (register.entity, register.register) {
+            (Entity::Vault, AskRegister::Name) => each(&store.name, Self::Name),
+            (Entity::Item(id), kind) => {
+                let item = store.items.get(&id)?;
+                match kind {
+                    AskRegister::Title => each(&item.title, |v| Self::ItemTitle(id, v)),
+                    AskRegister::Category => each(&item.category, |v| Self::Category(id, v)),
+                    AskRegister::Key => each(&item.key, |v| Self::ItemKey(id, v)),
+                    AskRegister::Username => each(&item.username, |v| Self::Username(id, v)),
+                    AskRegister::Password => each(&item.password, |v| Self::Password(id, v)),
+                    AskRegister::Totp => each(&item.totp, |v| Self::Totp(id, v)),
+                    _ => return None,
+                }
+            },
+            (Entity::Credential(id), kind) => {
+                let credential = store.credentials.get(&id)?;
+                match kind {
+                    AskRegister::Title => each(&credential.title, |v| Self::CredentialTitle(id, v)),
+                    AskRegister::Kind => each(&credential.kind, |v| Self::Kind(id, v)),
+                    AskRegister::Key => each(&credential.key, |v| Self::CredentialKey(id, v)),
+                    AskRegister::Value => each(&credential.value, |v| Self::Value(id, v)),
+                    _ => return None,
+                }
+            },
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn register(&self) -> Conflict {
         let (entity, register) = match self {
             Self::Name(_) => (Entity::Vault, AskRegister::Name),
             Self::ItemTitle(id, _) => (Entity::Item(*id), AskRegister::Title),
@@ -200,7 +262,7 @@ impl Choice {
     }
 
     /// Write of the chosen value.
-    fn edit(self) -> Edit {
+    pub(super) fn edit(self) -> Edit {
         match self {
             Self::Name(name) => Edit::Name(name),
             Self::ItemTitle(id, title) => Edit::Item(id, ItemWrite::Title(title)),
@@ -219,7 +281,7 @@ impl Choice {
 
 impl Edit {
     /// Ask register that this edit writes, if any.
-    fn ask_register(&self) -> Option<Conflict> {
+    pub(super) fn ask_register(&self) -> Option<Conflict> {
         let (entity, register) = match self {
             Self::Name(_) => (Entity::Vault, AskRegister::Name),
             Self::Item(id, write) => {

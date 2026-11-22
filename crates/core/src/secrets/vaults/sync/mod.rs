@@ -5,6 +5,7 @@ pub(crate) mod audit_events;
 pub(crate) mod blobs;
 pub mod crdt;
 pub mod diff;
+pub mod edit_check;
 pub mod join;
 pub mod join_sync;
 pub mod keys;

@@ -58,6 +58,7 @@ use super::audit_events::SyncEvents;
 use super::blobs;
 use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
+use super::edit_check::{EditRefusal, EditRequest, RefusalReason, ResolvePick};
 use super::join::{FileJoin, StateJoin};
 use super::keys::{SyncKey, SyncKeyring};
 use super::load::TrustedState;
@@ -80,6 +81,15 @@ use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::{UnlockedKey, Vault};
+
+/// Outcome of [`SyncTxn::record`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Recorded {
+    /// The write id minted for the edits, or `None` if nothing was recorded.
+    Minted(Option<WriteId>),
+    /// The edit check refused the change. Nothing was recorded.
+    Refused(EditRefusal),
+}
 
 /// Trusted sync state of one transaction, with the keyring that opened it and
 /// the sidecar.
@@ -871,20 +881,28 @@ impl SyncTxn {
     /// one value therefore write one entry. A rewrite that fails is handled
     /// as a diff that fails.
     ///
-    /// MVP edit rule. A write to an Ask register supersedes every value of
-    /// the register, for every request and writer. Each credential value not
-    /// chosen is written to `history` under the same write id
-    /// ([`LocalEdits::keep_not_chosen`]).
+    /// Before the mint, the Ask registers that the change writes are checked
+    /// by `edit`, the edit check the change declared
+    /// ([`EditRequest::check`]). A refused edit records nothing, and is
+    /// returned as `Refused`. A restore is not checked, since it changes no
+    /// value that a request read. `SyncRequest::Resolve` writes the value it
+    /// picks and is refused if the register holds other write ids than it
+    /// read.
+    ///
+    /// A write to an Ask register supersedes every value of the register.
+    /// Each credential value not chosen is written to `history` under the
+    /// same write id ([`LocalEdits::keep_not_chosen`]).
     pub(crate) fn record(
         &mut self,
         vault: &mut Vault,
         session: &mut Session,
         now: i64,
         request: &SyncRequest,
-    ) -> Result<Option<WriteId>, Error> {
+        edit: &EditRequest,
+    ) -> Result<Recorded, Error> {
         if let Err(e) = HistoryIds::rewrite(&self.state, vault) {
             self.diff_failed(e)?;
-            return Ok(None);
+            return Ok(Recorded::Minted(None));
         }
         let edits = if *request == SyncRequest::Restore {
             let trashed_at = Timestamp::now().as_second();
@@ -897,9 +915,19 @@ impl SyncTxn {
             Ok(edits) => edits,
             Err(e) => {
                 self.diff_failed(e)?;
-                return Ok(None);
+                return Ok(Recorded::Minted(None));
             },
         };
+        let checked = match request {
+            SyncRequest::Restore => Ok(()),
+            SyncRequest::Resolve(pick) => self.resolve(&mut edits, pick, now),
+            _ => edit.check(&self.state, &mut edits),
+        };
+        if let Err(refusal) = checked {
+            let vault_id = self.vault_id();
+            log::info!("Vault {vault_id} refused an edit: {refusal}");
+            return Ok(Recorded::Refused(refusal));
+        }
         edits.keep_not_chosen(&self.state, now);
         if let SyncRequest::AddRecovery(add) = request {
             edits.add_recovery(add.recipient.clone(), add.value.clone());
@@ -915,7 +943,28 @@ impl SyncTxn {
             }
             self.mark_changed();
         }
-        Ok(write_id)
+        Ok(Recorded::Minted(write_id))
+    }
+
+    /// Add the write of the value that `pick` chooses to `edits`, with `now`
+    /// in Unix seconds as the time of each history entry it writes. Refused
+    /// as `Changed` if the register holds other write ids than `pick` read,
+    /// or no longer holds the chosen value.
+    fn resolve(
+        &self,
+        edits: &mut LocalEdits,
+        pick: &ResolvePick,
+        now: i64,
+    ) -> Result<(), EditRefusal> {
+        let changed = EditRefusal {
+            register: pick.register,
+            reason: RefusalReason::Changed,
+        };
+        let request = pick.resolve(&self.state).ok_or(changed)?;
+        edits
+            .resolve(&self.state, request, now)
+            .map(|_| ())
+            .map_err(|_| changed)
     }
 
     /// Record the first state of a sync setup under one write id of `session`

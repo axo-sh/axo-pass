@@ -15,6 +15,7 @@ use crate::secrets::vaults::storage::catalog::{
 use crate::secrets::vaults::storage::device_keys::KeyState;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Disabled, Target, Unlock};
+use crate::secrets::vaults::sync::edit_check::ResolvePick;
 use crate::secrets::vaults::vault_import::{
     FileFailure, ImportPlan, ImportSummary, StagedFiles, existing_item_ids, stage_plan_files,
     write_plan,
@@ -240,6 +241,20 @@ impl VaultsManager {
         let (store, target) = Self::locate(manager, vault_key)?;
         let committed = store.files().write(&target, Unlock::App, f)?;
         Ok(VaultsManager::lock(manager).install(committed))
+    }
+
+    /// Resolve a conflict of vault `vault_key` of a shared manager with the
+    /// value `pick` chooses, as [`super::txn::VaultWriter::resolve_conflict`]
+    /// does, and keep the saved copy.
+    pub fn resolve_conflict(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        pick: ResolvePick,
+    ) -> Result<(), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().resolve_conflict(&target, Unlock::App, pick)?;
+        VaultsManager::lock(manager).install(committed);
+        Ok(())
     }
 
     /// Write `plan` to the unlocked vault `vault_key` of a shared manager, and

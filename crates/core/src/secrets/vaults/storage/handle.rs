@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use aes_gcm::aead::OsRng;
 use aes_gcm::{Aes256Gcm, KeyInit};
@@ -31,8 +31,11 @@ use crate::secrets::vaults::storage::device_keys::{
     DeviceKeys, KeychainKeys, probe_vault_encryption_key,
 };
 use crate::secrets::vaults::storage::txn::{VaultLocks, VaultWriter};
+use crate::secrets::vaults::sync::edit_check::{EditMode, EditRequest, ReadSet, SyncReads};
 use crate::secrets::vaults::sync::keys::SyncKeyring;
 use crate::secrets::vaults::sync::load::SyncLoad;
+use crate::secrets::vaults::sync::state_file::StateHash;
+use crate::secrets::vaults::sync::view::{AskRegister, Conflict, Entity};
 
 pub const DEFAULT_VAULT: &str = "default";
 
@@ -69,6 +72,12 @@ pub struct VaultHandle {
     pub key: String,
     pub path: PathBuf,
     state: VaultState,
+    /// Edit check that the change of a transaction declares. The transaction
+    /// takes it after the change (`sync/edit_check.rs`).
+    edit: EditRequest,
+    /// Sync reads of the vault, by the hash of the sync state file they were
+    /// read from.
+    reads: Option<(StateHash, Arc<SyncReads>)>,
 }
 
 impl VaultHandle {
@@ -101,6 +110,8 @@ impl VaultHandle {
                 vault: Box::new(vault),
                 keyring,
             },
+            edit: EditRequest::default(),
+            reads: None,
         }
     }
 
@@ -141,6 +152,8 @@ impl VaultHandle {
             key: header.key,
             path: vault_path.to_path_buf(),
             state: VaultState::Locked { name: header.name },
+            edit: EditRequest::default(),
+            reads: None,
         }
     }
 
@@ -184,6 +197,63 @@ impl VaultHandle {
                 name: vault.name.clone(),
             };
         }
+        self.reads = None;
+    }
+
+    /// Declare the change of this transaction an edit from the UI that read
+    /// the Ask registers of `reads`. A later call adds its reads. A vault that
+    /// is not synced ignores it.
+    pub fn carry_reads(&mut self, reads: ReadSet) {
+        match &mut self.edit.mode {
+            EditMode::Ui(carried) => carried.extend(reads),
+            EditMode::Writer => {},
+            mode @ EditMode::Undeclared => *mode = EditMode::Ui(reads),
+        }
+    }
+
+    /// Declare the change of this transaction a writer outside the UI. It
+    /// supersedes every value of each Ask register it writes, and is never
+    /// refused. It takes precedence over [`Self::carry_reads`].
+    pub fn write_outside_ui(&mut self) {
+        self.edit.mode = EditMode::Writer;
+    }
+
+    /// Request a write to `register`, whether or not the change alters its
+    /// value. A writer outside the UI then resolves a conflict in it, and an
+    /// edit from the UI is refused while it holds one.
+    pub fn request_write(&mut self, register: Conflict) {
+        self.edit.requested.insert(register);
+    }
+
+    /// Request a write to the value register of credential
+    /// `item_key`/`cred_key`, if it exists.
+    fn request_value_write(&mut self, item_key: &str, cred_key: &str) -> Result<(), Error> {
+        if let Some(cred) = self.get_secret_overview(item_key, cred_key)? {
+            let register = Conflict {
+                entity: Entity::Credential(cred.id),
+                register: AskRegister::Value,
+            };
+            self.request_write(register);
+        }
+        Ok(())
+    }
+
+    /// Edit check that the change declared. The handle is left with none.
+    pub(crate) fn take_edit(&mut self) -> EditRequest {
+        std::mem::take(&mut self.edit)
+    }
+
+    /// Sync reads cached for the sync state file with hash `hash`.
+    pub(crate) fn cached_reads(&self, hash: StateHash) -> Option<Arc<SyncReads>> {
+        self.reads
+            .as_ref()
+            .filter(|(cached, _)| *cached == hash)
+            .map(|(_, reads)| Arc::clone(reads))
+    }
+
+    /// Cache `reads`, read from the sync state file with hash `hash`.
+    pub(crate) fn cache_reads(&mut self, hash: StateHash, reads: Arc<SyncReads>) {
+        self.reads = Some((hash, reads));
     }
 
     pub(crate) fn get_unlocked_vault(&self) -> Result<&Vault, Error> {
@@ -377,6 +447,9 @@ impl VaultHandle {
         Ok(vault.purge_deleted_items(older_than))
     }
 
+    /// Set the title, kind, and value of a credential, adding it if the item
+    /// lacks it. Requests a write to the value register
+    /// ([`Self::request_write`]).
     pub fn add_secret(
         &mut self,
         item_key: &str,
@@ -388,11 +461,12 @@ impl VaultHandle {
         let vault = self.get_unlocked_vault_mut()?;
         vault
             .add_or_update_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value)?;
-        Ok(())
+        self.request_value_write(item_key, cred_key)
     }
 
     /// Replace the title, kind, and value of an existing credential. The
-    /// replaced value is not kept in history.
+    /// replaced value is not kept in history. Requests a write to the value
+    /// register.
     pub fn replace_secret(
         &mut self,
         item_key: &str,
@@ -403,7 +477,7 @@ impl VaultHandle {
     ) -> Result<(), Error> {
         let vault = self.get_unlocked_vault_mut()?;
         vault.replace_item_credential(item_key, cred_key, cred_title, cred_kind, cred_value)?;
-        Ok(())
+        self.request_value_write(item_key, cred_key)
     }
 
     /// Add a credential. Fails if the key is already taken in the item.
@@ -455,15 +529,19 @@ impl VaultHandle {
         vault.get_history_value(item_key, cred_key, history_id)
     }
 
-    /// Make a previous value the current value.
+    /// Make a previous value the current value. A writer outside the UI
+    /// ([`Self::write_outside_ui`]) that requests a write to the value
+    /// register, so it supersedes a conflict in it.
     pub fn restore_history_value(
         &mut self,
         item_key: &str,
         cred_key: &str,
         history_id: Uuid,
     ) -> Result<(), Error> {
+        self.write_outside_ui();
         let vault = self.get_unlocked_vault_mut()?;
-        vault.restore_history_value(item_key, cred_key, history_id)
+        vault.restore_history_value(item_key, cred_key, history_id)?;
+        self.request_value_write(item_key, cred_key)
     }
 
     /// Delete a previous value permanently.
@@ -645,6 +723,12 @@ impl VaultHandle {
     /// This vault's id, the first segment of a record identifier.
     pub fn vault_id(&self) -> Result<Uuid, Error> {
         Ok(self.get_unlocked_vault()?.id())
+    }
+
+    /// Replica id of this Mac for the vault. `None` if the vault is not
+    /// synced.
+    pub fn replica_id(&self) -> Result<Option<Uuid>, Error> {
+        Ok(self.get_unlocked_vault()?.replica_id())
     }
 
     /// This vault's id. A locked vault is read from its file header, without

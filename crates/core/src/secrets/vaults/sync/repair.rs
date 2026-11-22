@@ -15,6 +15,7 @@
 //! [`LocalEdits::find_repair`]: super::diff::LocalEdits::find_repair
 
 use super::diff::LocalEdits;
+use super::edit_check::ResolvePick;
 use super::load::{SyncLoad, TrustedState};
 use super::local_state::LocalSyncState;
 use super::recovery::RecoveryAdd;
@@ -51,6 +52,10 @@ pub(crate) enum SyncRequest {
     /// and writes nothing if sync does not run or the kit is not for the
     /// current key.
     AddRecovery(RecoveryAdd),
+    /// Resolve a conflict with the value it picks, under the write id of the
+    /// change. Refused with `EditRefused` if the register holds other write
+    /// ids than the request read.
+    Resolve(ResolvePick),
 }
 
 impl Repair {
