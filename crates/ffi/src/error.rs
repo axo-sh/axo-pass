@@ -45,6 +45,20 @@ pub enum FfiError {
     #[error("This vault already holds the SSH key {0}")]
     SshKeyDuplicate(String),
 
+    /// Edit refused by the check of a synced Ask register it writes. Nothing of
+    /// the edit was saved. `reason` is `changed` if the register changed since
+    /// the read, `conflicted` if it holds a conflict to resolve first, or
+    /// `not_read` if the edit did not carry its write ids. `entity_kind`,
+    /// `entity_id`, and `register` name the register, as `RegisterRead` does.
+    #[error("{message}")]
+    EditRefused {
+        reason: String,
+        entity_kind: String,
+        entity_id: String,
+        register: String,
+        message: String,
+    },
+
     /// The request itself was invalid (e.g. a malformed vault/item/credential
     /// key, or a value that fails a precondition like "already exists").
     #[error("{0}")]
@@ -80,6 +94,17 @@ impl From<VaultError> for FfiError {
             VaultError::InvalidFolder(id) => FfiError::NotFound(format!("Folder {id}")),
             VaultError::InvalidSection(id) => FfiError::NotFound(format!("Section {id}")),
             VaultError::DeletedItemNotFound(id) => FfiError::NotFound(format!("Deleted item {id}")),
+            VaultError::EditRefused(refusal) => {
+                let (entity_kind, entity_id, register) =
+                    crate::edits::refusal_parts(refusal.register);
+                FfiError::EditRefused {
+                    reason: crate::edits::refusal_reason(refusal.reason).to_string(),
+                    entity_kind,
+                    entity_id,
+                    register,
+                    message: refusal.to_string(),
+                }
+            },
             VaultError::FilePending(blob) => FfiError::FilePending(blob),
             VaultError::FileMissing(blob) => FfiError::FileMissing(blob),
             // A blob that does not hash to its name, and contents that do not

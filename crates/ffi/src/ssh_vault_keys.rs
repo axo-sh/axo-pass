@@ -383,6 +383,9 @@ impl AxoPass {
         let key = vault_key.clone();
         let (line, ids) = tokio::task::spawn_blocking(move || {
             let (line, ids) = VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                // The SSH key view carries no reads, so the comment is written
+                // as a writer outside the UI writes the key record.
+                vw.write_outside_ui();
                 let line = ops::set_comment(vw, &item_key, &cred_key, &comment)?;
                 let ids = vw.credential_ids(&item_key, &cred_key)?;
                 Ok::<_, FfiError>((line, ids))
@@ -421,6 +424,8 @@ impl AxoPass {
         let key = vault_key.clone();
         let ids = tokio::task::spawn_blocking(move || {
             let ids = VaultsManager::write_vault(&manager, &vault_key, |vw| {
+                // The SSH key view carries no reads, as for the comment.
+                vw.write_outside_ui();
                 ops::set_ssh_access(vw, &item_key, &cred_key, auto_load, ssh_use)?;
                 Ok::<_, FfiError>(vw.credential_ids(&item_key, &cred_key)?)
             })?;

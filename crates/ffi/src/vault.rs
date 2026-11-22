@@ -19,6 +19,7 @@ use axo_pass_core::secrets::vaults::{
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
+use crate::edits::{item_reads, read_set, register_reads};
 use crate::files::{FileInfo, refuse_file};
 use crate::ssh_vault_keys::{sweep_ssh_pubkey_files, sync_ssh_key_listing};
 use crate::*;
@@ -466,6 +467,9 @@ pub struct ItemInfo {
     pub can_convert_to_login: bool,
     /// The item names a password credential that is missing or cannot be one.
     pub password_role_broken: bool,
+    /// Write ids of the Ask registers of the item and its credentials, passed
+    /// back with an edit. Empty for a vault that is not synced.
+    pub reads: Vec<RegisterRead>,
 }
 
 /// A one-time code and how long it stays valid.
@@ -900,6 +904,11 @@ impl AxoPass {
                 .get_or_create_vault_mut(&vault_key)
                 .map_err(FfiError::from)?;
 
+            let reads = catalog
+                .files()
+                .sync_reads(vault)?
+                .map(|reads| register_reads(&reads))
+                .unwrap_or_default();
             let signals = vault.passkey_signals().map_err(FfiError::from)?;
             let items = vault.list_items().map_err(FfiError::from)?;
             let mut result: Vec<ItemInfo> = items
@@ -981,6 +990,7 @@ impl AxoPass {
                         can_convert_to_login,
                         password_role_broken: roles.password.is_some()
                             && roles.password_credential(item).is_none(),
+                        reads: item_reads(&reads, item.id, item.credentials.values().map(|c| c.id)),
                     }
                 })
                 .collect();
@@ -1363,15 +1373,22 @@ impl AxoPass {
     /// once. Mirrors `update_vault` in the Tauri app. The new key is
     /// normalized, and refused if another vault file claims it. The file name
     /// is unchanged. Returns the key the vault has afterward.
+    ///
+    /// `reads` are the write ids of the vault name from `vault_reads`. A
+    /// synced vault refuses a rename with `EditRefused` if the name changed
+    /// since the read or holds a conflict.
     pub async fn update_vault(
         &self,
         vault_key: String,
         new_vault_key: Option<String>,
         new_name: Option<String>,
+        reads: Vec<RegisterRead>,
     ) -> Result<String, FfiError> {
         let store = self.store()?;
+        let reads = read_set(&reads)?;
         let (renamed, rekeyed, final_key, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
+                vw.carry_reads(reads);
                 let mut renamed = None;
                 if new_name.as_deref() != vw.vault_name()
                     && let Some(new_name) = new_name
@@ -1540,17 +1557,22 @@ impl AxoPass {
         Ok(())
     }
 
-    /// Create or rename an item within a vault.
+    /// Create or rename an item within a vault. `reads` are the `reads` of the
+    /// item, empty for a new item. A synced vault refuses a rename with
+    /// `EditRefused` if the title changed since the read or holds a conflict.
     pub async fn add_or_update_item(
         &self,
         vault_key: String,
         item_key: String,
         item_title: String,
+        reads: Vec<RegisterRead>,
     ) -> Result<(), FfiError> {
         let subject = item_subject(&vault_key, &item_key).label(item_title.clone());
         let (key, title) = (vault_key.clone(), item_title.clone());
+        let reads = read_set(&reads)?;
         let (previous_title, ids) = self
             .edit_vault(vault_key, move |vw| {
+                vw.carry_reads(reads);
                 let previous_title = vw.get_item_overview(&item_key)?.map(|i| i.title.clone());
                 vw.add_item(&item_key, &item_title)?;
                 Ok((previous_title, vw.item_ids(&item_key)?))
@@ -1601,6 +1623,7 @@ impl AxoPass {
                 let item_id = transfer.item_id();
                 let (final_key, dest_ids) =
                     VaultsManager::write_vault(&manager, &dest_vault_key, |vw| {
+                        vw.write_outside_ui();
                         let key = vw
                             .import_item(transfer, dest_item_key.as_deref())?
                             .key
@@ -1639,16 +1662,19 @@ impl AxoPass {
     }
 
     /// Change the key of an item and return the normalized key. Fails if
-    /// another item has the key.
+    /// another item has the key. `reads` are the `reads` of the item.
     pub async fn change_item_key(
         &self,
         vault_key: String,
         item_key: String,
         new_key: String,
+        reads: Vec<RegisterRead>,
     ) -> Result<String, FfiError> {
         let key = vault_key.clone();
+        let reads = read_set(&reads)?;
         let (title, new_key, ids) = self
             .edit_vault(vault_key, move |vw| {
+                vw.carry_reads(reads);
                 let item = vw.change_item_key(&item_key, &new_key)?;
                 let (title, new_key) = (item.title.clone(), item.key.clone());
                 Ok((title, new_key.clone(), vw.item_ids(&new_key)?))
@@ -1737,6 +1763,9 @@ impl AxoPass {
         let id = item_id.clone();
         let (restored, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
+                // A new key is not a value the user read, so the restore
+                // supersedes a conflict in the key.
+                vw.write_outside_ui();
                 let id = parse_id(&item_id)?;
                 vw.restore_item(id, new_key)?;
                 let restored = vw
@@ -1840,7 +1869,10 @@ impl AxoPass {
         Ok(())
     }
 
-    /// Create or update a credential's title/value within an item.
+    /// Create or update a credential's title/value within an item. `reads` are
+    /// the `reads` of the item. A synced vault refuses the edit with
+    /// `EditRefused` if a register it writes changed since the read or holds a
+    /// conflict.
     pub async fn add_or_update_credential(
         &self,
         vault_key: String,
@@ -1849,11 +1881,14 @@ impl AxoPass {
         title: String,
         value: String,
         kind: Option<FieldKindInfo>,
+        reads: Vec<RegisterRead>,
     ) -> Result<(), FfiError> {
         let subject = credential_subject(&vault_key, &item_key, &cred_key).label(title.clone());
         let key = vault_key.clone();
+        let reads = read_set(&reads)?;
         let (changed, ids) = self
             .edit_vault(vault_key, move |vw| {
+                vw.carry_reads(reads);
                 refuse_file(vw, &item_key, &cred_key)?;
                 let previous = vw
                     .get_secret_overview(&item_key, &cred_key)?
@@ -1900,7 +1935,8 @@ impl AxoPass {
     }
 
     /// Change the key, title, or kind of a credential without resubmitting its
-    /// value. `None` arguments are left unchanged.
+    /// value. `None` arguments are left unchanged. `reads` are the `reads` of
+    /// the item.
     pub async fn update_credential(
         &self,
         vault_key: String,
@@ -1909,7 +1945,9 @@ impl AxoPass {
         new_key: Option<String>,
         title: Option<String>,
         kind: Option<FieldKindInfo>,
+        reads: Vec<RegisterRead>,
     ) -> Result<(), FfiError> {
+        let reads = read_set(&reads)?;
         let subject = credential_subject(&vault_key, &item_key, &cred_key);
         let changed = [
             new_key.as_ref().map(|_| "key"),
@@ -1923,6 +1961,7 @@ impl AxoPass {
         let renamed_to = new_key.clone();
         let ids = self
             .edit_vault(vault_key.clone(), move |vw| {
+                vw.carry_reads(reads);
                 let ids = vw.credential_ids(&item_key, &cred_key)?;
                 let update = CredentialUpdate {
                     key: new_key,
@@ -2025,6 +2064,9 @@ impl AxoPass {
         let (item, id) = (item_key.clone(), cred_id.clone());
         let (restored, ids) = self
             .edit_vault(vault_key.clone(), move |vw| {
+                // A new key is not a value the user read, so the restore
+                // supersedes a conflict in the key.
+                vw.write_outside_ui();
                 let id = parse_id(&cred_id)?;
                 vw.restore_item_credential(&item_key, id, new_key)?;
                 let restored = vw.get_item_overview(&item_key)?.and_then(|i| {
@@ -2195,15 +2237,20 @@ impl AxoPass {
 
     /// Assign a role ("username", "password", or "totp") to a credential, or
     /// clear the role when `cred_key` is `None`. A credential has one role.
+    /// `reads` are the `reads` of the item. A synced vault refuses the change
+    /// with `EditRefused` if the slot changed since the read or holds a
+    /// conflict.
     pub async fn set_credential_role(
         &self,
         vault_key: String,
         item_key: String,
         role: String,
         cred_key: Option<String>,
+        reads: Vec<RegisterRead>,
     ) -> Result<(), FfiError> {
         let role_name = role.clone();
         let role = parse_role(&role)?;
+        let reads = read_set(&reads)?;
         // A cleared role names the item. A set role names the credential.
         let subject = match &cred_key {
             Some(cred_key) => credential_subject(&vault_key, &item_key, cred_key),
@@ -2213,6 +2260,7 @@ impl AxoPass {
         let key = vault_key.clone();
         let ids = self
             .edit_vault(vault_key, move |vw| {
+                vw.carry_reads(reads);
                 autofill::set_role(vw, &item_key, role, cred_key.as_deref())?;
                 Ok(match &cred_key {
                     Some(cred_key) => vw.credential_ids(&item_key, cred_key)?,
@@ -2264,15 +2312,19 @@ impl AxoPass {
 
     /// Give an item with no autofill data the roles and websites its
     /// credentials suggest. Returns false when there was nothing to convert.
+    /// `reads` are the `reads` of the item.
     pub async fn convert_item_to_login(
         &self,
         vault_key: String,
         item_key: String,
+        reads: Vec<RegisterRead>,
     ) -> Result<bool, FfiError> {
         let subject = item_subject(&vault_key, &item_key);
         let key = vault_key.clone();
+        let reads = read_set(&reads)?;
         let (converted, ids) = self
             .edit_vault(vault_key, move |vw| {
+                vw.carry_reads(reads);
                 let converted = autofill::convert_to_login(vw, &item_key)?;
                 Ok((converted, vw.item_ids(&item_key)?))
             })
