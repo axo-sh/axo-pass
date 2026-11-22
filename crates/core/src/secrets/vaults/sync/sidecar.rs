@@ -37,14 +37,45 @@ pub struct Sidecar {
     pub joined: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
     /// Quarantined state files. An entry is kept when its file is gone.
     pub quarantined: Vec<QuarantinedFile>,
-    /// Causes of a paused sync found by the last transaction that synced.
+    /// Health found by the last transaction that synced.
     #[serde(default)]
-    pub paused: Vec<PausedCause>,
+    pub health: Health,
     /// Root of the transport of the vault. `None` gives no transport. The
     /// root is unsigned. A changed root can withhold files, and cannot plant
     /// a state or read one.
     #[serde(default)]
     pub transport: Option<TransportRoot>,
+}
+
+/// What the last transaction found about the sync of a vault.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Health {
+    /// No cause was found.
+    #[default]
+    Ok,
+    /// Causes of a paused sync found by the last transaction that synced. A
+    /// sync stopped by drift keeps the health as found before the stop.
+    Paused { causes: Vec<PausedCause> },
+}
+
+impl Health {
+    /// Health of a transaction that found `causes`.
+    pub fn of_causes(causes: Vec<PausedCause>) -> Self {
+        if causes.is_empty() {
+            Self::Ok
+        } else {
+            Self::Paused { causes }
+        }
+    }
+
+    /// Causes of a paused sync. Empty if the health is `Ok`.
+    pub fn paused(&self) -> &[PausedCause] {
+        match self {
+            Self::Ok => &[],
+            Self::Paused { causes } => causes,
+        }
+    }
 }
 
 /// State file quarantined by path and content hash. A later file at the same
@@ -165,9 +196,26 @@ impl Sidecar {
     /// Whether the paused causes hold `SeparateKey`, a separate enable found
     /// by the last transaction that synced.
     pub fn separate_key(&self) -> bool {
-        self.paused
+        self.health
+            .paused()
             .iter()
             .any(|cause| matches!(cause, PausedCause::SeparateKey { .. }))
+    }
+
+    /// Causes of a paused sync. Empty if the health is `Ok`.
+    pub fn paused(&self) -> &[PausedCause] {
+        self.health.paused()
+    }
+
+    /// Drop the `PublishFailed` cause, after the staged file is copied. The
+    /// health is `Ok` if no cause is left.
+    pub fn clear_publish_failed(&mut self) {
+        if let Health::Paused { causes } = &mut self.health {
+            causes.retain(|cause| !matches!(cause, PausedCause::PublishFailed { .. }));
+            if causes.is_empty() {
+                self.health = Health::Ok;
+            }
+        }
     }
 
     /// Whether the file `name` of `replica` with content hash `hash` is

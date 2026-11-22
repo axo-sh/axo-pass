@@ -126,7 +126,7 @@ use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
 use crate::secrets::vaults::sync::setup::{FIRST_KEY_ID, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
-use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
+use crate::secrets::vaults::sync::status::SyncStatus;
 #[cfg(test)]
 use crate::secrets::vaults::sync::transport::FixedTransport;
 use crate::secrets::vaults::sync::transport::folder::FolderTransport;
@@ -1529,9 +1529,7 @@ impl VaultWriter {
         }
         sidecar.last_publish = Some(hash);
         sidecar.record_joined(replica, hash);
-        sidecar
-            .paused
-            .retain(|cause| !matches!(cause, PausedCause::PublishFailed { .. }));
+        sidecar.clear_publish_failed();
         sidecar.save(&self.root, id)?;
         log::info!("Copied the staged file {hash} of vault {id} to the synced folder");
         Ok(StagedCopy::Copied)

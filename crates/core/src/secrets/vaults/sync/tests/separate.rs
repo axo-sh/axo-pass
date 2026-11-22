@@ -132,7 +132,10 @@ fn two_macs_that_enable_sync_at_once_show_separate_key_and_converge_after_one_tu
     assert_eq!(a_committed.sync_status, separate(1));
     assert_eq!(b_committed.sync_status, separate(1));
     let a_sidecar = Sidecar::load(&a.root, vault_id);
-    assert_eq!(a_sidecar.paused, [PausedCause::SeparateKey { replicas: 1 }]);
+    assert_eq!(
+        a_sidecar.paused(),
+        [PausedCause::SeparateKey { replicas: 1 }]
+    );
     assert!(a_sidecar.quarantined.is_empty());
     assert!(Sidecar::load(&b.root, vault_id).quarantined.is_empty());
     assert!(saved_vault(&a).get_item("local").is_err());
@@ -175,7 +178,7 @@ fn two_macs_that_enable_sync_at_once_show_separate_key_and_converge_after_one_tu
     // cause of A clears.
     assert_eq!(a_committed.sync_status, Some(SyncStatus::Active));
     assert_eq!(b_committed.sync_status, Some(SyncStatus::Active));
-    assert!(Sidecar::load(&a.root, vault_id).paused.is_empty());
+    assert!(Sidecar::load(&a.root, vault_id).paused().is_empty());
     let (_, a_state) = opened(&a.root, vault_id);
     let (_, b_state) = opened(&b.root, vault_id);
     let view = VaultView::of(&a_state);
@@ -227,7 +230,7 @@ fn other_fingerprint_file_not_counted() {
     let committed = fx.write(|_| Ok(())).unwrap();
 
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
-    assert!(Sidecar::load(&fx.root, fx.id()).paused.is_empty());
+    assert!(Sidecar::load(&fx.root, fx.id()).paused().is_empty());
 }
 
 #[test]
@@ -240,7 +243,7 @@ fn file_under_key_id_keyring_lacks_not_counted() {
 
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
     let sidecar = Sidecar::load(&fx.root, fx.id());
-    assert!(sidecar.paused.is_empty());
+    assert!(sidecar.paused().is_empty());
     assert!(sidecar.quarantined.is_empty());
     assert!(saved_vault(&fx).get_item("waiting").is_err());
 }

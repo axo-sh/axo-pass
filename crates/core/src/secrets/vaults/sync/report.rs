@@ -228,7 +228,7 @@ impl SyncReport {
         report.status = Some(SyncStatus::of_trusted(
             local.stopped_build.as_deref(),
             local.override_build.as_deref(),
-            &sidecar.paused,
+            sidecar.paused(),
         ));
         report.conflicts = view.conflicts().len();
         report.known_macs = Self::known_macs(trusted, view);

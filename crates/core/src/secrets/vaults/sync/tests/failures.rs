@@ -24,7 +24,7 @@ use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock};
 use crate::secrets::vaults::sync::crdt::{ReplicaId, Session, WriteId};
 use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::load::SyncLoad;
-use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::sidecar::{Health, Sidecar};
 use crate::secrets::vaults::sync::state_file::StateFile;
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::sync::view::{ItemView, VaultView};
@@ -75,7 +75,7 @@ fn sidecar(fx: &Fixture) -> Sidecar {
 }
 
 fn paused(fx: &Fixture) -> Vec<PausedCause> {
-    sidecar(fx).paused
+    sidecar(fx).paused().to_vec()
 }
 
 fn apply_failed(fx: &Fixture) -> bool {
@@ -419,13 +419,17 @@ fn paused_causes_of_failures_have_tagged_form_and_earlier_sidecar_parses() {
         causes
     );
 
-    // A sidecar with the causes of 6c.1 parses unchanged.
-    let earlier = r#"{
+    // A sidecar with paused causes parses, and a sidecar with no health is
+    // `Ok`.
+    let paused = r#"{
         "last_publish": null,
         "joined": {},
         "quarantined": [],
-        "paused": [{ "cause": "quarantined", "files": 1 }]
+        "health": { "state": "paused", "causes": [{ "cause": "quarantined", "files": 1 }] }
     }"#;
-    let sidecar: Sidecar = serde_json::from_str(earlier).unwrap();
-    assert_eq!(sidecar.paused, [PausedCause::Quarantined { files: 1 }]);
+    let sidecar: Sidecar = serde_json::from_str(paused).unwrap();
+    assert_eq!(sidecar.paused(), [PausedCause::Quarantined { files: 1 }]);
+    let bare = r#"{ "last_publish": null, "joined": {}, "quarantined": [] }"#;
+    let sidecar: Sidecar = serde_json::from_str(bare).unwrap();
+    assert_eq!(sidecar.health, Health::Ok);
 }

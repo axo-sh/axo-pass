@@ -189,7 +189,7 @@ fn writer_with_app_transports_and_sidecar_with_no_root_writes_staged_file_and_co
     let sidecar = Sidecar::load(&fx.root, fx.id());
     assert_eq!(sidecar.last_publish, None);
     assert_eq!(sidecar.transport, None);
-    assert!(sidecar.paused.is_empty());
+    assert!(sidecar.paused().is_empty());
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn root_that_fails_to_resolve_pauses_sync_with_unreachable_and_save_succeeds() {
         assert_eq!(local.generation, GENERATION + 1);
         assert!(local.staged_hash.is_some());
         let sidecar = Sidecar::load(&fx.root, fx.id());
-        assert_eq!(sidecar.paused, causes);
+        assert_eq!(sidecar.paused(), causes);
         assert_eq!(sidecar.transport, Some(root));
         assert_eq!(sidecar.last_publish, None);
     }

@@ -24,7 +24,7 @@ fn status(committed: &Committed<()>) -> Option<SyncStatus> {
 }
 
 fn paused(fx: &Fixture) -> Vec<PausedCause> {
-    Sidecar::load(&fx.root, fx.id()).paused
+    Sidecar::load(&fx.root, fx.id()).paused().to_vec()
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn quarantined_file_pauses_sync_while_listed_and_its_entry_kept() {
 
     assert_eq!(status(&committed), Some(SyncStatus::Active));
     let sidecar = Sidecar::load(&fx.root, fx.id());
-    assert!(sidecar.paused.is_empty());
+    assert!(sidecar.paused().is_empty());
     assert_eq!(sidecar.quarantined.len(), 1);
 }
 

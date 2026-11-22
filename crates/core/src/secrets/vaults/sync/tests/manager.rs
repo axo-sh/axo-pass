@@ -41,7 +41,7 @@ use crate::secrets::vaults::sync::model::KeyId;
 use crate::secrets::vaults::sync::pairing::PairedVault;
 use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
-use crate::secrets::vaults::sync::sidecar::Sidecar;
+use crate::secrets::vaults::sync::sidecar::{Health, Sidecar};
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::PausedCause;
 use crate::secrets::vaults::sync::sync_log;
@@ -275,7 +275,7 @@ fn only_files_manager_writes_staged_file_copy_and_sidecar_hash_under_both_locks(
     let vault = fs::read(&fx.vault.path).unwrap();
     let sidecar = Sidecar::load(&fx.root, fx.id());
     assert!(matches!(
-        &sidecar.paused[..],
+        sidecar.paused(),
         [PausedCause::PublishFailed { .. }]
     ));
     assert!(published(&transport, &fx).is_empty());
@@ -311,7 +311,7 @@ fn only_files_manager_writes_staged_file_copy_and_sidecar_hash_under_both_locks(
     let mut expected = sidecar;
     expected.last_publish = Some(hash);
     expected.record_joined(REPLICA, hash);
-    expected.paused.clear();
+    expected.health = Health::Ok;
     assert_eq!(Sidecar::load(&fx.root, fx.id()), expected);
     assert_eq!(managed.unlock.transactions(), 0);
 }

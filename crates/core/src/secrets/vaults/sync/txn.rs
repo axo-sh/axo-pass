@@ -67,7 +67,7 @@ use super::rebuild::Rebuild;
 use super::recovery::{RecoveryAdd, RecoveryRecipients};
 use super::repair::{Repair, SyncRequest};
 use super::resolve::HistoryIds;
-use super::sidecar::Sidecar;
+use super::sidecar::{Health, Sidecar};
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
 use super::status::{BUILD_ID, FoundCauses, SyncStatus};
@@ -1167,17 +1167,17 @@ impl SyncTxn {
         self.local.save(root, signer)
     }
 
-    /// Record the paused causes this transaction found in the sidecar, in
-    /// place of those of the last transaction that synced. A cause that was
-    /// not found again clears. A stopped sync found no causes, so the
-    /// sidecar is unchanged.
+    /// Record the health this transaction found in the sidecar, in place of
+    /// the health of the last transaction that synced. A cause that was not
+    /// found again clears. A stopped sync found no causes, so the sidecar is
+    /// unchanged.
     pub(crate) fn settle_status(&mut self) {
         if self.is_stopped() {
             return;
         }
-        let causes = self.found.causes();
-        if self.sidecar.paused != causes {
-            self.sidecar.paused = causes;
+        let health = Health::of_causes(self.found.causes());
+        if self.sidecar.health != health {
+            self.sidecar.health = health;
             self.sidecar_changed = true;
         }
     }
@@ -1187,7 +1187,7 @@ impl SyncTxn {
         SyncStatus::of_trusted(
             self.local.stopped_build.as_deref(),
             self.local.override_build.as_deref(),
-            &self.sidecar.paused,
+            self.sidecar.paused(),
         )
     }
 
