@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use super::model::totp::{self, TotpCode};
 use super::storage::handle::validate_key;
+use super::sync::view::{AskRegister, Conflict, Entity};
 use super::{
     CATEGORY_LOGIN, Error, FieldKind, ItemAutofill, MatchKind, ShortId, VaultHandle,
     VaultItemCredentialOverview, VaultItemOverview, VaultItemSection, Website,
@@ -476,9 +477,20 @@ pub struct LoginWrite<'a> {
 /// Write a login into an unlocked vault: the item when it is missing, the
 /// password credential, the username credential keyed `username`, the role
 /// slots, the websites, and `category: login`. The caller saves the vault.
+///
+/// A writer outside the UI ([`VaultHandle::write_outside_ui`]). It requests
+/// writes to the password value and slot, and to the username value and slot
+/// if a username is given, so each supersedes a conflict even if the value is
+/// unchanged.
 pub fn write_login(vw: &mut VaultHandle, login: LoginWrite) -> Result<(), Error> {
+    vw.write_outside_ui();
     if vw.get_item_overview(login.item_key)?.is_none() {
         vw.add_item(login.item_key, login.title)?;
+    }
+    let item_id = item_id(vw, login.item_key)?;
+    vw.request_write(slot(item_id, AskRegister::Password));
+    if login.username.is_some() {
+        vw.request_write(slot(item_id, AskRegister::Username));
     }
 
     vw.add_secret(
@@ -810,9 +822,13 @@ pub fn add_passkey_login(
 /// - the source goes to the deleted items with the credentials that stayed and
 ///   its own deleted credentials. With neither, it is purged.
 /// - caller is responsible for saving the vault.
+///
+/// A writer outside the UI ([`VaultHandle::write_outside_ui`]), so it is never
+/// refused, and each Ask register it writes supersedes a conflict.
 pub fn merge_items(vw: &mut VaultHandle, source_key: &str, dest_key: &str) -> Result<(), Error> {
     use secrecy::ExposeSecret;
 
+    vw.write_outside_ui();
     if source_key == dest_key {
         return Err(Error::InvalidItemKey(format!(
             "cannot merge {source_key} into itself"
@@ -952,12 +968,14 @@ pub fn is_stored_for(item: &AutofillItem, frame_url: &str) -> bool {
 }
 
 /// Replace the password of a login found by [`find_login_record`], keeping the
-/// credential's title and kind. The caller saves the vault.
+/// credential's title and kind. The caller saves the vault. A writer outside
+/// the UI, which requests a write to the password value.
 pub fn update_login_password(
     vw: &mut VaultHandle,
     item: &AutofillItem,
     password: SecretString,
 ) -> Result<(), Error> {
+    vw.write_outside_ui();
     let (title, kind) = vw
         .get_secret_overview(&item.item_key, &item.password_key)?
         .map(|credential| (credential.title.clone(), credential.kind.clone()))
@@ -965,6 +983,20 @@ pub fn update_login_password(
             Error::InvalidCredentialKey(format!("{}/{}", item.item_key, item.password_key))
         })?;
     vw.add_secret(&item.item_key, &item.password_key, &title, kind, password)
+}
+
+fn item_id(vw: &VaultHandle, item_key: &str) -> Result<Uuid, Error> {
+    vw.get_item_overview(item_key)?
+        .map(|item| item.id)
+        .ok_or_else(|| Error::InvalidItemKey(item_key.to_string()))
+}
+
+/// Role slot register `register` of item `item_id`.
+fn slot(item_id: Uuid, register: AskRegister) -> Conflict {
+    Conflict {
+        entity: Entity::Item(item_id),
+        register,
+    }
 }
 
 fn credential_id(vw: &VaultHandle, item_key: &str, cred_key: &str) -> Result<uuid::Uuid, Error> {

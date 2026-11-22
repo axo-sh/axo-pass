@@ -784,7 +784,9 @@ impl<'a> PasskeyCredentialStore<'a> {
 
 /// Write a passkey record into `target` in an unlocked vault, creating a login
 /// item for the relying party when the target is a new login. Returns the item
-/// key. The caller saves the vault.
+/// key. The caller saves the vault. A writer outside the UI
+/// ([`VaultHandle::write_outside_ui`]), which requests a write to the passkey
+/// value.
 fn store_passkey(
     vw: &mut VaultHandle,
     cred: &Passkey,
@@ -793,6 +795,7 @@ fn store_passkey(
     credential_title: &str,
     target: &PasskeyTarget,
 ) -> Result<String, Error> {
+    vw.write_outside_ui();
     let item_key = match target {
         PasskeyTarget::Item(key) => {
             if vw.get_item_overview(key)?.is_none() {
@@ -886,13 +889,14 @@ pub fn write_record(
 /// the target item already holds the passkey key, that credential is the same
 /// passkey. It then takes the record through [`write_record`], and the source
 /// is removed. A move to the source item changes nothing. The caller saves the
-/// vault. Returns the audit ids of the moved passkey.
+/// vault. Returns the audit ids of the moved passkey. A writer outside the UI.
 pub fn move_within_vault(
     vw: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
     target: &PasskeyTarget,
 ) -> Result<SubjectIds, Error> {
+    vw.write_outside_ui();
     let record = read_record(vw, item_key, credential_key)?;
     let cred = decode(record.value.expose_secret())?;
     let new_key = PasskeyCredentialStore::credential_key(&cred.credential_id);
@@ -924,12 +928,13 @@ pub fn move_within_vault(
 /// kept in the deleted credentials. A copy left there would keep the private
 /// key in this vault, and restoring it would give two passkeys with one
 /// credential id. Fails when the credential is not a passkey. The caller saves
-/// the vault.
+/// the vault. A writer outside the UI.
 pub fn remove_record(
     vw: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
 ) -> Result<(), Error> {
+    vw.write_outside_ui();
     let cred_id = vw
         .get_secret_overview(item_key, credential_key)?
         .filter(|cred| matches!(cred.kind, FieldKind::Passkey))
@@ -943,13 +948,15 @@ pub fn remove_record(
 /// site reported it. The record username, display name, and credential title
 /// all take the new name. The replaced record is not kept as a previous value,
 /// since it differs only in the name, and no history entry is added or purged.
-/// The caller saves the vault.
+/// The caller saves the vault. A writer outside the UI, which requests a
+/// write to the passkey value.
 pub fn rename_account(
     vw: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
     name: &str,
 ) -> Result<(), Error> {
+    vw.write_outside_ui();
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::Passkey("The new account name is empty".to_string()));

@@ -159,13 +159,15 @@ pub(super) fn write_vault_secret(
 }
 
 /// Write the secret of a [`VaultAction::WriteSecret`] into a vault handle.
-/// Returns whether the item was created.
+/// Returns whether the item was created. A writer outside the UI, so a
+/// request from `ap` or the broker supersedes a conflict in the value.
 fn write_secret(
     vh: &mut VaultHandle,
     item_key: &str,
     credential_key: &str,
     payload: WriteSecretPayload,
 ) -> Result<bool, String> {
+    vh.write_outside_ui();
     if let Some(login) = payload.login {
         let created = vh.get_item_overview(item_key).ok().flatten().is_none();
         autofill::write_login(

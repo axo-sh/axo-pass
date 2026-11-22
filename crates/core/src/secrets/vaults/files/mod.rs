@@ -187,6 +187,10 @@ where
 /// blob and key. The replaced record goes to the credential history. Fails
 /// with `InvalidCredentialKey` if the credential is not a file. Returns the
 /// audit ids of the credential.
+///
+/// A writer outside the UI ([`VaultHandle::write_outside_ui`]). The new
+/// record supersedes a conflict in the value, and each record not chosen goes
+/// to the credential history.
 pub fn replace_file<R: Read>(
     writer: &VaultWriter,
     target: &Target,
@@ -198,6 +202,7 @@ pub fn replace_file<R: Read>(
     let (vault_id, staged) = stage(writer, target, input.contents)?;
     let value = staged.record(input.name, input.mime).encode()?;
     writer.write(target, unlock, |vh| {
+        vh.write_outside_ui();
         let title = file_credential(vh, item_key, cred_key)?.title.clone();
         commit_into(writer, vh, vault_id, staged, |vh| {
             vh.add_secret(item_key, cred_key, &title, FieldKind::File, value)?;
