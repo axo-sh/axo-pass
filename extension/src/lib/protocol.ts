@@ -298,6 +298,12 @@ const oneOf = <T extends string>(value: unknown, what: string, allowed: readonly
   return s as T;
 };
 
+const vaultName = (value: unknown, what: string): {vault_name?: string} => {
+  return value === null || value === undefined
+    ? {}
+    : {vault_name: string(value, `${what}.vault_name`)};
+};
+
 const matched = (value: unknown, what: string): MatchedWebsite => {
   const o = object(value, what);
   return {
@@ -313,7 +319,7 @@ const summary = (value: unknown, what: string): LoginSummary => {
     record_id: string(o.record_id, `${what}.record_id`),
     title: string(o.title, `${what}.title`),
     username: nullable(o.username, (v) => string(v, `${what}.username`)),
-    vault_name: nullable(o.vault_name, (v) => string(v, `${what}.vault_name`)),
+    ...vaultName(o.vault_name, what),
     matched: matched(o.matched, `${what}.matched`),
     has_totp: boolean(o.has_totp, `${what}.has_totp`),
   };
@@ -325,7 +331,7 @@ const other = (value: unknown, what: string): OtherLogin => {
     record_id: string(o.record_id, `${what}.record_id`),
     title: string(o.title, `${what}.title`),
     username: nullable(o.username, (v) => string(v, `${what}.username`)),
-    vault_name: nullable(o.vault_name, (v) => string(v, `${what}.vault_name`)),
+    ...vaultName(o.vault_name, what),
     has_totp: boolean(o.has_totp, `${what}.has_totp`),
   };
 };

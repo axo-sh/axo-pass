@@ -493,7 +493,8 @@ document.addEventListener('keydown', (event) => {
   event.preventDefault();
   const at = stops.indexOf(document.activeElement as HTMLElement);
   const step = event.key === 'ArrowDown' ? 1 : -1;
-  const next = at < 0 ? (step > 0 ? 0 : stops.length - 1) : (at + step + stops.length) % stops.length;
+  const next =
+    at < 0 ? (step > 0 ? 0 : stops.length - 1) : (at + step + stops.length) % stops.length;
   stops[next]?.focus();
 });
 
