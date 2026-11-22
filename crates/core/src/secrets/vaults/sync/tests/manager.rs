@@ -34,7 +34,9 @@ use crate::secrets::vaults::model::UnlockedKey;
 use crate::secrets::vaults::storage::txn::{Committed, StagedCopy, Target, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
-use crate::secrets::vaults::sync::manager::{RETRY_INTERVAL, SyncEvents, SyncManager, SyncUnlock};
+use crate::secrets::vaults::sync::manager::{
+    RESCAN_INTERVAL, RETRY_INTERVAL, SyncEvents, SyncManager, SyncUnlock,
+};
 use crate::secrets::vaults::sync::model::KeyId;
 use crate::secrets::vaults::sync::pairing::PairedVault;
 use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
@@ -42,6 +44,7 @@ use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::PausedCause;
+use crate::secrets::vaults::sync::sync_log;
 use crate::secrets::vaults::sync::transport::TransportRoot;
 use crate::secrets::vaults::{Error, VaultCatalog, VaultsManager};
 
@@ -719,4 +722,87 @@ fn dismissed_request_does_not_raise_count_and_request_with_new_id_does() {
     managed.run();
 
     assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
+}
+
+#[test]
+fn rescan_reports_peer_change_with_no_watch_event() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    assert!(managed.events.taken().is_empty());
+
+    put_peer(&fx, &transport, PEER, "joined");
+    managed.manager.advance_clock(RESCAN_INTERVAL.as_secs() - 1);
+    managed.run();
+    assert!(managed.events.taken().is_empty());
+    managed.manager.advance_clock(1);
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Changed(fx.id())]);
+    assert!(fx.catalog.files().locks().is_pending(fx.id()));
+    let logged = sync_log::entries().into_iter().any(|entry| {
+        entry.vault_id == Some(fx.id())
+            && entry.message == "Rescan found a peer change that no watch event reported"
+    });
+    assert!(logged);
+}
+
+#[test]
+fn rescan_with_no_change_reports_nothing() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    for _ in 0..3 {
+        managed.manager.advance_clock(RESCAN_INTERVAL.as_secs());
+        managed.run();
+    }
+
+    assert!(managed.events.taken().is_empty());
+    assert_eq!(managed.unlock.transactions(), 0);
+    assert!(!fx.catalog.files().locks().is_pending(fx.id()));
+}
+
+#[test]
+fn rescan_joins_peer_change_if_unlocked() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    put_peer(&fx, &transport, PEER, "joined");
+    managed.manager.advance_clock(RESCAN_INTERVAL.as_secs());
+    managed.run();
+
+    assert_eq!(managed.unlock.transactions(), 1);
+    assert_eq!(managed.events.taken(), [Event::Synced(fx.id())]);
+    assert!(saved_vault(&fx).get_item("joined").is_ok());
+}
+
+#[test]
+fn rescan_counts_pairing_requests_and_reports_only_new_count() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    set_root(&fx, &folder_root());
+    transport.set_now(Timestamp::now());
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
+
+    managed.manager.advance_clock(RESCAN_INTERVAL.as_secs());
+    managed.run();
+    assert!(managed.events.taken().is_empty());
+
+    transport.put_pairing(request(1), b"{}");
+    managed.manager.advance_clock(RESCAN_INTERVAL.as_secs());
+    managed.run();
+
+    assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 1)]);
+
+    managed.manager.advance_clock(RESCAN_INTERVAL.as_secs());
+    managed.run();
+
+    assert!(managed.events.taken().is_empty());
 }

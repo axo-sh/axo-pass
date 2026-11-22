@@ -76,20 +76,55 @@ impl PairingPrompt {
         dismissed.save(app_root)
     }
 
+    /// Every request listed by `transport`, with its age now, oldest first.
+    /// Reads no request. Lists requests that are dismissed, too old to
+    /// prompt, or too large to read, so the user can delete them.
+    pub fn list(transport: &dyn SyncTransport) -> Result<Vec<(RequestId, SignedDuration)>, Error> {
+        let now = Timestamp::now();
+        let mut requests: Vec<(RequestId, SignedDuration)> = transport
+            .list_pairings()?
+            .into_iter()
+            .map(|entry| {
+                let age = now.duration_since(entry.modified);
+                (entry.id, age.max(SignedDuration::ZERO))
+            })
+            .collect();
+        requests.sort_by_key(|(id, age)| (std::cmp::Reverse(*age), *id));
+        Ok(requests)
+    }
+
+    /// Dismiss the request `id` under `root`, in addition to the ids already
+    /// dismissed. Used after a grant, so the answered request does not prompt
+    /// again.
+    pub fn dismiss_request(
+        root: &TransportRoot,
+        app_root: &Path,
+        id: RequestId,
+    ) -> Result<(), Error> {
+        let mut dismissed = DismissedRequests::load(app_root);
+        let mut requests = dismissed.of(root);
+        requests.insert(id);
+        dismissed.set(root, requests);
+        dismissed.save(app_root)
+    }
+
     /// Request listed by `transport` whose MAC verifies under the pairing
     /// key of `code`, with its computer name.
     ///
     /// Reads every listed request of at most [`MAX_PAIRING_SIZE`], whatever
     /// its modification time or dismissal. A request whose `request_id`
     /// differs from the id of its file name fails, since the MAC covers the
-    /// id of the field. A request that is `Remote`, fails to read or to
-    /// parse, or fails its MAC is skipped and logged without its name.
-    /// `None` if no request verifies.
+    /// id of the field. A request that fails to read or to parse, or fails
+    /// its MAC, is skipped and logged without its name. A request that is
+    /// `Remote` is skipped and its download is requested. `None` if no
+    /// request verifies. If none verifies and a request was `Remote`, fails
+    /// so the caller can ask the user to try again.
     pub fn match_code(
         transport: &dyn SyncTransport,
         code: &PairingCode,
     ) -> Result<Option<PairingRequest>, Error> {
         let key = code.pair_key();
+        let mut downloading = false;
         for entry in transport.list_pairings()? {
             if entry.size > MAX_PAIRING_SIZE {
                 continue;
@@ -97,7 +132,14 @@ impl PairingPrompt {
             let id = entry.id;
             let bytes = match transport.read_pairing(id) {
                 Ok(ReadResult::Local(bytes)) => bytes,
-                Ok(ReadResult::Missing | ReadResult::Remote) => continue,
+                Ok(ReadResult::Remote) => {
+                    downloading = true;
+                    if let Err(e) = transport.request_pairing_download(id) {
+                        log::warn!("Failed to request the download of pairing request {id}: {e}");
+                    }
+                    continue;
+                },
+                Ok(ReadResult::Missing) => continue,
                 Err(e) => {
                     log::warn!("Failed to read pairing request {id}: {e}");
                     continue;
@@ -118,6 +160,11 @@ impl PairingPrompt {
                 log::info!("Pairing request {id} matches the code");
                 return Ok(Some(request));
             }
+        }
+        if downloading {
+            return Err(Error::SyncTransportError(
+                "A pairing request is still downloading. Try again in a moment.".to_string(),
+            ));
         }
         Ok(None)
     }

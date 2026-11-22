@@ -196,8 +196,9 @@ fn pairing_import_with_no_peer_file_local_yet_waits_and_builds_vault_only_after_
     assert!(managed.events.taken().is_empty());
     assert!(!holds_vault(&b, a.id()));
 
-    // The watch of the pairing and the watch of the import both report it.
-    assert_eq!(transport.fire_watch(a.id()), 2);
+    // The pairing ended with the last key, so only the watch of the import
+    // reports it.
+    assert_eq!(transport.fire_watch(a.id()), 1);
     managed.run();
 
     assert_eq!(
@@ -280,7 +281,8 @@ fn finished_pairing_imports_vault_with_earlier_key() {
         let transport = Arc::new(FakeTransport::default());
         let (a, setup) = enabled(&transport);
         let (b, managed, replica) = waiting_import(&transport, &a, &setup);
-        let request_id = transport.list_pairings().unwrap()[0].id;
+        // The request is deleted once every vault has its key.
+        assert!(transport.list_pairings().unwrap().is_empty());
 
         if finish {
             managed.manager.finish_pairing();
@@ -289,7 +291,10 @@ fn finished_pairing_imports_vault_with_earlier_key() {
         }
         managed.run();
 
-        assert!(transport.pairing(request_id).is_none(), "finish {finish}");
+        assert!(
+            transport.list_pairings().unwrap().is_empty(),
+            "finish {finish}"
+        );
         assert!(managed.events.taken().is_empty(), "finish {finish}");
         assert!(!holds_vault(&b, a.id()), "finish {finish}");
 

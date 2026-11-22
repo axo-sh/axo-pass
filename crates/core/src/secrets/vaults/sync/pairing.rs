@@ -178,7 +178,7 @@ impl fmt::Debug for PairKey {
 impl ZeroizeOnDrop for PairKey {}
 
 /// Vault whose sync key the new Mac received by pairing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PairedVault {
     pub vault_id: Uuid,
     /// Replica id of the new Mac in the vault, from the request.
@@ -200,6 +200,56 @@ pub struct PendingPairing {
     request: PairingRequest,
     /// Vaults whose key was accepted.
     accepted: BTreeSet<Uuid>,
+    /// Why each vault without an accepted key still waits, as of the last
+    /// poll.
+    waits: BTreeMap<Uuid, PairWait>,
+}
+
+/// Why the new Mac has not accepted the key of a vault yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PairWait {
+    /// No other replica of the vault has published a key file.
+    NoKeyFile,
+    /// A key file is listed and not downloaded yet.
+    NotDownloaded,
+    /// A listing or read failed, with the error text.
+    Unreachable(String),
+    /// A key file wraps a key for this Mac and it was refused, with the
+    /// reason.
+    Refused(String),
+}
+
+impl std::fmt::Display for PairWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoKeyFile => f.write_str("The other Mac has not shared this vault yet"),
+            Self::NotDownloaded => {
+                f.write_str("Waiting for the key file of the other Mac to download")
+            },
+            Self::Unreachable(error) => write!(f, "Cannot read the synced location: {error}"),
+            Self::Refused(reason) => write!(f, "The key from the other Mac was refused: {reason}"),
+        }
+    }
+}
+
+impl PairWait {
+    /// Rank of the reason, so a poll that meets several keeps the one that
+    /// explains most.
+    fn rank(&self) -> u8 {
+        match self {
+            Self::NoKeyFile => 0,
+            Self::NotDownloaded => 1,
+            Self::Unreachable(_) => 2,
+            Self::Refused(_) => 3,
+        }
+    }
+
+    /// Replace `self` with `other` if `other` ranks higher.
+    fn raise(&mut self, other: Self) {
+        if other.rank() > self.rank() {
+            *self = other;
+        }
+    }
 }
 
 impl PendingPairing {
@@ -258,7 +308,18 @@ impl PendingPairing {
             key,
             request,
             accepted: BTreeSet::new(),
+            waits: BTreeMap::new(),
         })
+    }
+
+    /// Why each vault without an accepted key waits, as of the last poll.
+    pub fn waits(&self) -> &BTreeMap<Uuid, PairWait> {
+        &self.waits
+    }
+
+    /// Whether the key of every vault in the request map was accepted.
+    pub fn complete(&self) -> bool {
+        self.accepted.len() == self.request.replicas.len()
     }
 
     /// Code to show to the user.
@@ -292,9 +353,15 @@ impl PendingPairing {
             if self.accepted.contains(&vault_id) {
                 continue;
             }
-            if let Some(vault) = self.poll_vault(transport, unwrap, vault_id, replica_id) {
-                self.accepted.insert(vault_id);
-                paired.push(vault);
+            match self.poll_vault(transport, unwrap, vault_id, replica_id) {
+                Ok(vault) => {
+                    self.waits.remove(&vault_id);
+                    self.accepted.insert(vault_id);
+                    paired.push(vault);
+                },
+                Err(wait) => {
+                    self.waits.insert(vault_id, wait);
+                },
             }
         }
         paired
@@ -306,28 +373,37 @@ impl PendingPairing {
         transport.delete_pairing(self.request.request_id)
     }
 
-    /// First accepted wrapping to `replica_id` in vault `vault_id`.
+    /// First accepted wrapping to `replica_id` in vault `vault_id`. If there
+    /// is none, the reason the vault waits.
     fn poll_vault(
         &self,
         transport: &dyn SyncTransport,
         unwrap: &impl DeviceUnwrap,
         vault_id: Uuid,
         replica_id: ReplicaId,
-    ) -> Option<PairedVault> {
-        let replicas = transport
-            .list_replicas(vault_id)
-            .inspect_err(|e| log::warn!("Pairing failed to list the replicas of {vault_id}: {e}"))
-            .ok()?;
+    ) -> Result<PairedVault, PairWait> {
+        let replicas = transport.list_replicas(vault_id).map_err(|e| {
+            log::warn!("Pairing failed to list the replicas of {vault_id}: {e}");
+            PairWait::Unreachable(e.to_string())
+        })?;
         let keys = self.request.keys();
+        let mut wait = PairWait::NoKeyFile;
+        let mut remote = false;
         for from_replica in replicas {
             if from_replica == replica_id {
                 continue;
             }
             let bytes = match transport.read(vault_id, from_replica, FileName::Key) {
                 Ok(ReadResult::Local(bytes)) => bytes,
-                Ok(ReadResult::Missing | ReadResult::Remote) => continue,
+                Ok(ReadResult::Remote) => {
+                    remote = true;
+                    wait.raise(PairWait::NotDownloaded);
+                    continue;
+                },
+                Ok(ReadResult::Missing) => continue,
                 Err(e) => {
                     log::warn!("Pairing failed to read a key file of {vault_id}: {e}");
+                    wait.raise(PairWait::Unreachable(e.to_string()));
                     continue;
                 },
             };
@@ -339,11 +415,15 @@ impl PendingPairing {
                 },
             };
             for wrapping in file.devices() {
-                if wrapping.to_replica != replica_id
-                    || !self
-                        .key
-                        .verify_wrapping(wrapping, vault_id, from_replica, &keys)
+                if wrapping.to_replica != replica_id {
+                    continue;
+                }
+                if !self
+                    .key
+                    .verify_wrapping(wrapping, vault_id, from_replica, &keys)
                 {
+                    log::warn!("Pairing refused a wrapping of {vault_id}: its MAC does not verify");
+                    wait.raise(PairWait::Refused("the pairing check failed".to_string()));
                     continue;
                 }
                 match wrapping.unwrap(unwrap) {
@@ -352,7 +432,7 @@ impl PendingPairing {
                             "Pairing received sync key {} of {vault_id}",
                             wrapping.key_id.0
                         );
-                        return Some(PairedVault {
+                        return Ok(PairedVault {
                             vault_id,
                             replica_id,
                             key_id: wrapping.key_id,
@@ -366,10 +446,18 @@ impl PendingPairing {
                             },
                         });
                     },
-                    Err(e) => log::warn!("Pairing refused a wrapping of {vault_id}: {e}"),
+                    Err(e) => {
+                        log::warn!("Pairing refused a wrapping of {vault_id}: {e}");
+                        wait.raise(PairWait::Refused(e.to_string()));
+                    },
                 }
             }
         }
-        None
+        // A key file that is not downloaded is read again in the next poll,
+        // so request its download. The folder tool does not fetch it alone.
+        if remote && let Err(e) = transport.request_download(vault_id) {
+            log::warn!("Pairing failed to request the download of {vault_id}: {e}");
+        }
+        Err(wait)
     }
 }

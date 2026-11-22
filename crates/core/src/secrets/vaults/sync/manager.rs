@@ -27,7 +27,11 @@
 //! make every read run a transaction (D4).
 //!
 //! The start scan and each watch event scan a vault. Events queued together
-//! give one scan of each vault. After each scan the manager copies the staged
+//! give one scan of each vault. A vault with no scan for [`RESCAN_INTERVAL`]
+//! is scanned again, so a change that no watch reported is found. The
+//! pairing requests of each root are counted again at the same interval.
+//! A rescan that finds a change is recorded in the sync log, with whether the
+//! vault had a watch. After each scan the manager copies the staged
 //! file if a publish failed ([`VaultWriter::copy_staged`]). Every
 //! [`RETRY_INTERVAL`] it copies again while the copy fails or is refused, and
 //! watches again a vault with no watch (D13).
@@ -64,13 +68,13 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::crdt::ReplicaId;
-use super::join_sync::{ImportWait, PairingImport};
+use super::join_sync::{ImportWait, PairingImport, WaitReason};
 use super::listing::PeerListing;
 use super::local_state::LocalSyncState;
 use super::pairing::dismissed::DismissedRequests;
 use super::pairing::prompt::PairingPrompt;
 use super::pairing::watcher::{POLL_INTERVAL, PairingWatcher};
-use super::pairing::{PairedVault, PendingPairing};
+use super::pairing::{PairWait, PairedVault, PendingPairing};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::sync_log;
@@ -85,6 +89,11 @@ use crate::secrets::vaults::storage::txn::{Committed, StagedCopy, Target, Unlock
 /// Time between two retries of a staged file copy, and of a watch of a
 /// vault with no watch (D13).
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Time with no scan after which a watched vault is scanned again, and the
+/// pairing requests of each root are counted again. A watch that misses an
+/// event is caught by this scan.
+pub const RESCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Notifications of the `SyncManager` to the app (D21). The UI that reacts
 /// is milestone 10.
@@ -106,6 +115,15 @@ pub trait SyncEvents: Send + Sync {
     /// The pairing import of vault `vault_id` failed with `error`. The user
     /// pairs again (10.3).
     fn import_failed(&self, vault_id: Uuid, error: &Error);
+    /// The import of vault `vault_id` waits for `reason`. Called again only
+    /// if the reason changes.
+    fn import_blocked(&self, _vault_id: Uuid, _reason: &WaitReason) {}
+    /// The key of vault `vault_id` has not arrived, for `reason`. Called
+    /// again only if the reason changes.
+    fn pairing_blocked(&self, _vault_id: Uuid, _reason: &PairWait) {}
+    /// The pairing of the new Mac ended, by its expiry, by the key of every
+    /// vault arriving, or by the user. Imports that wait continue.
+    fn pairing_ended(&self) {}
 }
 
 /// Events that are only logged, until milestone 10 adds the app callback.
@@ -180,6 +198,8 @@ enum Message {
     Pair(Box<PairingStart>),
     /// The user finished the pairing of the new Mac.
     FinishPairing,
+    /// The user asks to run the failed import of this vault again.
+    RetryImport(Uuid),
     /// A watch of the pairing of the new Mac reported a change.
     PairingChanged,
     Shutdown,
@@ -221,6 +241,8 @@ struct Pairing {
     keys: SharedKeys,
     transport: Arc<dyn SyncTransport>,
     import: Option<PairingImport>,
+    /// Wait reasons last reported, by vault id.
+    reported: BTreeMap<Uuid, PairWait>,
 }
 
 /// Import of a paired vault that waits for a state file of the Mac that
@@ -237,7 +259,21 @@ struct PendingImport {
     _watch: Option<WatchHandle>,
     /// Time of the next check with no event.
     next_check: Instant,
+    /// Failed joins since the last retry request.
+    attempts: u32,
+    /// Whether the join failed [`MAX_IMPORT_ATTEMPTS`] times. The import
+    /// then waits for a retry request.
+    failed: bool,
+    /// Reason last reported for the wait.
+    reason: Option<WaitReason>,
 }
+
+/// Joins of an import that fail before it is reported as failed.
+const MAX_IMPORT_ATTEMPTS: u32 = 3;
+
+/// Interval of the check of an import that failed and waits for a retry
+/// request.
+const FAILED_IMPORT_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Watches and reactions of the synced vaults, run on one thread. Clones of
 /// the sender reach the thread from the watches.
@@ -340,6 +376,12 @@ impl SyncManager {
         let _ = self.sender.send(Message::FinishPairing);
     }
 
+    /// Run the failed import of vault `vault_id` again. Does nothing if the
+    /// import did not fail.
+    pub fn retry_import(&self, vault_id: Uuid) {
+        let _ = self.sender.send(Message::RetryImport(vault_id));
+    }
+
     /// End every watch, finish the pairing of the new Mac, end the import
     /// waits, and stop the manager. Waits for a scan, a poll, a transaction,
     /// or an import that runs.
@@ -436,6 +478,9 @@ struct ManagedVault {
     copy_pending: bool,
     /// Time of the next retry of the copy or the watch.
     retry_at: Option<Instant>,
+    /// Time of the next scan with no watch event. `None` for a `leaving`
+    /// vault.
+    rescan_at: Option<Instant>,
 }
 
 /// State of the manager thread.
@@ -453,6 +498,10 @@ struct Worker {
     pairing: Option<Pairing>,
     /// Imports of paired vaults that wait, by vault id.
     imports: BTreeMap<Uuid, PendingImport>,
+    /// Count of the pairing requests last reported, by root.
+    pairing_counts: HashMap<TransportRoot, usize>,
+    /// Time of the next count of the pairing requests with no watch event.
+    pairing_rescan_at: Instant,
     /// Time added to the clock of the retries. Zero outside the tests.
     #[cfg(test)]
     clock_offset: Duration,
@@ -477,6 +526,8 @@ impl Worker {
             roots: HashMap::new(),
             pairing: None,
             imports: BTreeMap::new(),
+            pairing_counts: HashMap::new(),
+            pairing_rescan_at: Instant::now() + RESCAN_INTERVAL,
             #[cfg(test)]
             clock_offset: Duration::ZERO,
         };
@@ -561,8 +612,10 @@ impl Worker {
                 Message::FinishPairing => {
                     if let Some(pairing) = self.pairing.take() {
                         pairing.watcher.finish();
+                        self.events.pairing_ended();
                     }
                 },
+                Message::RetryImport(vault_id) => self.retry_import(vault_id),
                 Message::PairingChanged => pairing_changed = true,
             }
         }
@@ -584,19 +637,23 @@ impl Worker {
             }
         }
         for root in &roots {
-            self.report_pairings(root);
+            self.report_pairings(root, false);
         }
+        self.rescan_pairings(&roots);
         let polled = self.poll_pairing(pairing_changed);
         self.check_imports(&import_changed, polled);
         true
     }
 
-    /// Earliest retry of any vault, the next wake of the pairing, or the
-    /// next check of an import.
+    /// Earliest retry or rescan of any vault, the next count of the pairing
+    /// requests, the next wake of the pairing, or the next check of an
+    /// import.
     fn next_retry(&self) -> Option<Instant> {
         self.vaults
             .values()
-            .filter_map(|vault| vault.retry_at)
+            .flat_map(|vault| [vault.retry_at, vault.rescan_at])
+            .flatten()
+            .chain((!self.roots.is_empty()).then_some(self.pairing_rescan_at))
             .chain(
                 self.pairing
                     .as_ref()
@@ -642,6 +699,7 @@ impl Worker {
             keys,
             transport: start.transport,
             import: start.import,
+            reported: BTreeMap::new(),
         });
     }
 
@@ -658,6 +716,7 @@ impl Worker {
             log::info!("Pairing request expired");
             if let Some(pairing) = self.pairing.take() {
                 pairing.watcher.finish();
+                self.events.pairing_ended();
             }
             return false;
         }
@@ -665,9 +724,22 @@ impl Worker {
             return false;
         }
         let paired = pairing.watcher.poll(now);
+        let waits = pairing.watcher.waits();
+        let changed_waits: Vec<(Uuid, PairWait)> = waits
+            .iter()
+            .filter(|(vault_id, wait)| pairing.reported.get(vault_id) != Some(wait))
+            .map(|(vault_id, wait)| (*vault_id, wait.clone()))
+            .collect();
+        pairing.reported = waits;
+        for (vault_id, wait) in &changed_waits {
+            self.events.pairing_blocked(*vault_id, wait);
+        }
         if paired.is_empty() {
             return true;
         }
+        let Some(pairing) = &self.pairing else {
+            return true;
+        };
         let keys = pairing.keys.clone();
         let transport = pairing.transport.clone();
         let import = pairing.import.clone();
@@ -677,7 +749,35 @@ impl Worker {
                 self.wait_for(vault, import, &keys, &transport, now);
             }
         }
+        // The request is deleted once every vault has its key. The import
+        // waits continue.
+        if self
+            .pairing
+            .as_ref()
+            .is_some_and(|pairing| pairing.watcher.complete())
+            && let Some(pairing) = self.pairing.take()
+        {
+            log::info!("Pairing received the key of every vault");
+            pairing.watcher.finish();
+            self.events.pairing_ended();
+        }
         true
+    }
+
+    /// Run the failed import of vault `vault_id` again.
+    fn retry_import(&mut self, vault_id: Uuid) {
+        let now = self.now();
+        let Some(import) = self.imports.get_mut(&vault_id) else {
+            return;
+        };
+        if !import.failed {
+            return;
+        }
+        import.failed = false;
+        import.attempts = 0;
+        import.reason = None;
+        import.next_check = now;
+        self.events.import_waiting(vault_id);
     }
 
     /// Start the import of the paired vault `vault` as `import` states:
@@ -712,6 +812,9 @@ impl Worker {
                 transport: transport.clone(),
                 _watch: watch,
                 next_check: now,
+                attempts: 0,
+                failed: false,
+                reason: None,
             },
         );
         self.events.import_waiting(vault_id);
@@ -727,7 +830,7 @@ impl Worker {
             .imports
             .iter()
             .filter(|(vault_id, import)| {
-                polled || changed.contains(vault_id) || import.next_check <= now
+                !import.failed && (polled || changed.contains(vault_id) || import.next_check <= now)
             })
             .map(|(vault_id, _)| *vault_id)
             .collect();
@@ -735,33 +838,33 @@ impl Worker {
             let Some(mut import) = self.imports.remove(&vault_id) else {
                 continue;
             };
-            if import.wait.ready(&*import.transport) {
-                self.import(import);
-            } else {
-                import.next_check = now + POLL_INTERVAL;
-                self.imports.insert(vault_id, import);
+            match import.wait.check(&*import.transport) {
+                None => self.import(import, now),
+                Some(reason) => {
+                    if import.reason.as_ref() != Some(&reason) {
+                        self.events.import_blocked(vault_id, &reason);
+                        import.reason = Some(reason);
+                    }
+                    import.next_check = now + POLL_INTERVAL;
+                    self.imports.insert(vault_id, import);
+                },
             }
         }
     }
 
     /// Join the paired vault of `import` with the keys of its pairing, and
-    /// report `vault_imported` or `import_failed`. After an import the
-    /// synced vaults are found again in the next batch, so the vault is
-    /// watched.
-    fn import(&self, import: PendingImport) {
-        let PendingImport {
-            wait,
-            root,
-            name,
-            keys,
-            ..
-        } = import;
-        let vault_id = wait.vault_id();
-        let (join, into) = wait.into_join();
+    /// report `vault_imported`. After an import the synced vaults are found
+    /// again in the next batch, so the vault is watched. A join that fails
+    /// runs again at the next check, up to [`MAX_IMPORT_ATTEMPTS`] times.
+    /// Then the import is reported with `import_failed` and kept until a
+    /// retry request.
+    fn import(&mut self, mut import: PendingImport, now: Instant) {
+        let vault_id = import.wait.vault_id();
+        let (join, into) = import.wait.join();
         let result = {
-            let keys = keys.lock();
+            let keys = import.keys.lock();
             self.catalog
-                .join_sync(&join, into, &root, &name, keys.unlock())
+                .join_sync(&join, into, &import.root, &import.name, keys.unlock())
         };
         match result {
             Ok(committed) => {
@@ -770,8 +873,16 @@ impl Worker {
                 let _ = self.sender.send(Message::Refresh);
             },
             Err(e) => {
+                import.attempts += 1;
                 sync_log::warn(vault_id, "Failed to import by pairing", &e);
-                self.events.import_failed(vault_id, &e);
+                if import.attempts >= MAX_IMPORT_ATTEMPTS {
+                    import.failed = true;
+                    import.next_check = now + FAILED_IMPORT_IDLE;
+                    self.events.import_failed(vault_id, &e);
+                } else {
+                    import.next_check = now + POLL_INTERVAL;
+                }
+                self.imports.insert(vault_id, import);
             },
         }
     }
@@ -806,8 +917,9 @@ impl Worker {
         started
     }
 
-    /// Count the pairing requests of `root` that prompt and report them.
-    fn report_pairings(&self, root: &TransportRoot) {
+    /// Count the pairing requests of `root` that prompt and report them. A
+    /// count from a rescan is reported only if it differs from the last one.
+    fn report_pairings(&mut self, root: &TransportRoot, rescan: bool) {
         let transport = self
             .vaults
             .values()
@@ -817,9 +929,49 @@ impl Worker {
             return;
         };
         let dismissed = DismissedRequests::load(self.files().root()).of(root);
-        match PairingPrompt::pending(&*transport, &dismissed, self.timestamp()) {
-            Ok(count) => self.events.pairing_requests(root, count),
-            Err(e) => log::warn!("Failed to list the pairing requests of {root}: {e}"),
+        let count = match PairingPrompt::pending(&*transport, &dismissed, self.timestamp()) {
+            Ok(count) => count,
+            Err(e) => {
+                sync_log::record(
+                    sync_log::Level::Warn,
+                    None,
+                    "Failed to list the pairing requests",
+                    Some(format!("{root}: {e}")),
+                );
+                return;
+            },
+        };
+        let last = self.pairing_counts.insert(root.clone(), count);
+        if rescan {
+            if last == Some(count) {
+                return;
+            }
+            sync_log::record(
+                sync_log::Level::Info,
+                None,
+                "Rescan found a change in the pairing requests that no watch event reported",
+                Some(format!("{root}: {count} prompt")),
+            );
+        }
+        self.events.pairing_requests(root, count);
+    }
+
+    /// Count the pairing requests of each root with a watch if the count
+    /// with no watch event is due. A root in `counted` was just counted.
+    fn rescan_pairings(&mut self, counted: &[TransportRoot]) {
+        let now = self.now();
+        if self.pairing_rescan_at > now {
+            return;
+        }
+        self.pairing_rescan_at = now + RESCAN_INTERVAL;
+        let roots: Vec<TransportRoot> = self
+            .roots
+            .keys()
+            .filter(|root| !counted.contains(root))
+            .cloned()
+            .collect();
+        for root in roots {
+            self.report_pairings(&root, true);
         }
     }
 
@@ -939,6 +1091,7 @@ impl Worker {
                 reported: BTreeSet::new(),
                 copy_pending: false,
                 retry_at: None,
+                rescan_at: None,
             };
             if !vault.leaving {
                 self.connect(&mut vault);
@@ -972,6 +1125,16 @@ impl Worker {
         vault.watch = transport.watch(id, notify);
         let watched = vault.watch.is_some();
         self.files().locks().set_watched(id, watched);
+        if watched {
+            sync_log::info(id, "Watch started");
+        } else {
+            sync_log::record(
+                sync_log::Level::Warn,
+                Some(id),
+                "Failed to start the watch",
+                None,
+            );
+        }
         watched
     }
 
@@ -1042,25 +1205,41 @@ impl Worker {
         true
     }
 
-    /// Retry each vault whose retry is due: watch again a vault with no
-    /// watch, and scan it if the watch starts, and copy a staged file whose
-    /// copy failed. A `leaving` vault is never watched, and copies only.
+    /// Retry each vault whose retry or rescan is due: watch again a vault
+    /// with no watch, scan it if the watch starts or the rescan is due, and
+    /// copy a staged file whose copy failed. A `leaving` vault is never
+    /// watched or rescanned, and copies only.
     fn retry_due(&mut self) {
         let now = self.now();
         let due: Vec<Uuid> = self
             .vaults
             .values()
-            .filter(|vault| vault.retry_at.is_some_and(|at| at <= now))
+            .filter(|vault| {
+                vault.retry_at.is_some_and(|at| at <= now)
+                    || vault.rescan_at.is_some_and(|at| at <= now)
+            })
             .map(|vault| vault.id)
             .collect();
         for vault_id in due {
             let Some(mut vault) = self.vaults.remove(&vault_id) else {
                 continue;
             };
+            let rescan = vault.rescan_at.is_some_and(|at| at <= now);
             vault.retry_at = None;
+            vault.rescan_at = None;
             let watched = !vault.leaving && vault.watch.is_none() && self.connect(&mut vault);
-            if watched && vault.changes(self.files()) {
+            if (watched || rescan) && vault.changes(self.files()) {
+                let message = if watched {
+                    "Scan after the watch started again found a peer change"
+                } else if vault.watch.is_some() {
+                    "Rescan found a peer change that no watch event reported"
+                } else {
+                    "Rescan found a peer change and the vault has no watch"
+                };
+                sync_log::info(vault_id, message);
                 self.react(&mut vault);
+            } else if rescan {
+                log::debug!("Rescan of vault {vault_id} found no peer change");
             }
             let kept = if watched || vault.copy_pending {
                 self.copy(&mut vault, now)
@@ -1077,10 +1256,12 @@ impl Worker {
 
 impl ManagedVault {
     /// Schedule the next retry after `now` if a copy is pending, or if the
-    /// vault has no watch and is not `leaving`.
+    /// vault has no watch and is not `leaving`. Schedule the next rescan
+    /// unless the vault is `leaving`.
     fn schedule(&mut self, now: Instant) {
         let unwatched = self.watch.is_none() && !self.leaving;
         self.retry_at = (unwatched || self.copy_pending).then(|| now + RETRY_INTERVAL);
+        self.rescan_at = (!self.leaving).then(|| now + RESCAN_INTERVAL);
     }
 
     /// Whether the listing finds a local peer state file not reported
@@ -1113,6 +1294,12 @@ impl ManagedVault {
                 Ok(true) => {
                     self.reported.insert(*file);
                     found = true;
+                    sync_log::record(
+                        sync_log::Level::Info,
+                        Some(id),
+                        "Peer state file found",
+                        Some(format!("{} {hash}", replica.0)),
+                    );
                 },
                 Ok(false) => remote = true,
                 Err(e) => {
@@ -1122,8 +1309,11 @@ impl ManagedVault {
             }
         }
         self.reported.retain(|file| changed.contains(file));
-        if remote && let Err(e) = transport.request_download(id) {
-            sync_log::warn(id, "Failed to request the download", &e);
+        if remote {
+            sync_log::info(id, "Peer state file is not downloaded, download requested");
+            if let Err(e) = transport.request_download(id) {
+                sync_log::warn(id, "Failed to request the download", &e);
+            }
         }
         found
     }

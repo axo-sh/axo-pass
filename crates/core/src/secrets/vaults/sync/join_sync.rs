@@ -122,6 +122,32 @@ impl PairingImport {
     }
 }
 
+/// Why the import of a paired vault still waits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WaitReason {
+    /// A state file of the Mac that paired is listed and not downloaded yet.
+    NotDownloaded,
+    /// The Mac that paired has published no state file.
+    NoStateFile,
+    /// State files are local and none decodes under the received key.
+    Undecodable,
+    /// The listing or a read failed, with the error text.
+    Unreachable(String),
+}
+
+impl std::fmt::Display for WaitReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotDownloaded => f.write_str("Files of the other Mac are not downloaded yet"),
+            Self::NoStateFile => f.write_str("The other Mac has not published this vault yet"),
+            Self::Undecodable => {
+                f.write_str("Files of the other Mac do not open with the received key")
+            },
+            Self::Unreachable(error) => write!(f, "Cannot read the synced location: {error}"),
+        }
+    }
+}
+
 /// Paired vault whose import waits for a state file of the Mac that paired
 /// (D6 of doc 18, C11).
 #[derive(Debug)]
@@ -148,8 +174,8 @@ impl ImportWait {
         self.vault.vault_id
     }
 
-    /// Whether a state file of the Mac that paired is local and decodes
-    /// under the received key.
+    /// `None` if a state file of the Mac that paired is local and decodes
+    /// under the received key. Otherwise the reason the wait holds.
     ///
     /// Each state file of the replica of the Mac that paired is checked with
     /// `is_local`, then read in full and decoded with `StateFile::decode`,
@@ -157,17 +183,19 @@ impl ImportWait {
     /// or one under another key, does not end the wait. A file that is not
     /// local requests the download of the vault. A listing or read that
     /// fails is logged and ends nothing.
-    pub fn ready(&self, transport: &dyn SyncTransport) -> bool {
+    pub fn check(&self, transport: &dyn SyncTransport) -> Option<WaitReason> {
         let vault_id = self.vault.vault_id;
         let peer = self.vault.peer;
         let hashes = match transport.list_states(vault_id, peer) {
             Ok(hashes) => hashes,
             Err(e) => {
                 log::warn!("Import of vault {vault_id} failed to list the paired Mac's files: {e}");
-                return false;
+                return Some(WaitReason::Unreachable(e.to_string()));
             },
         };
         let mut remote = false;
+        let mut undecodable = false;
+        let mut failure: Option<String> = None;
         let mut ready = false;
         for hash in hashes {
             let name = FileName::State(hash);
@@ -179,6 +207,7 @@ impl ImportWait {
                 },
                 Err(e) => {
                     log::warn!("Import of vault {vault_id} failed to check state file {hash}: {e}");
+                    failure = Some(e.to_string());
                     continue;
                 },
             }
@@ -191,6 +220,7 @@ impl ImportWait {
                 Ok(ReadResult::Missing) => continue,
                 Err(e) => {
                     log::warn!("Import of vault {vault_id} failed to read state file {hash}: {e}");
+                    failure = Some(e.to_string());
                     continue;
                 },
             };
@@ -204,21 +234,33 @@ impl ImportWait {
                     ready = true;
                     break;
                 },
-                Err(e) => log::info!("Import of vault {vault_id} skips state file {hash}: {e}"),
+                Err(e) => {
+                    log::info!("Import of vault {vault_id} skips state file {hash}: {e}");
+                    undecodable = true;
+                },
             }
         }
-        if !ready
-            && remote
-            && let Err(e) = transport.request_download(vault_id)
-        {
+        if ready {
+            return None;
+        }
+        if remote && let Err(e) = transport.request_download(vault_id) {
             log::warn!("Failed to request the download of vault {vault_id}: {e}");
         }
-        ready
+        Some(if remote {
+            WaitReason::NotDownloaded
+        } else if let Some(failure) = failure {
+            WaitReason::Unreachable(failure)
+        } else if undecodable {
+            WaitReason::Undecodable
+        } else {
+            WaitReason::NoStateFile
+        })
     }
 
-    /// Key and vault of the join that ends the wait.
-    pub fn into_join(self) -> (JoinKey, JoinInto) {
-        (JoinKey::paired(self.vault), self.into)
+    /// Key and vault of the join that ends the wait. The wait stays intact,
+    /// so a failed join can run again.
+    pub fn join(&self) -> (JoinKey, JoinInto) {
+        (JoinKey::paired(self.vault.clone()), self.into.clone())
     }
 }
 

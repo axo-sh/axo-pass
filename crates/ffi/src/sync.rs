@@ -14,15 +14,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use axo_pass_core::core::auth::AuthContext;
+use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::vaults::storage::txn::{Disabled, Target, Unlock};
-use axo_pass_core::secrets::vaults::sync::join_sync::JoinInto;
+use axo_pass_core::secrets::vaults::sync::join_sync::{JoinInto, WaitReason};
 use axo_pass_core::secrets::vaults::sync::load::{SignatureFailure, SyncLoad};
 use axo_pass_core::secrets::vaults::sync::manager::{LogEvents, SyncEvents};
 use axo_pass_core::secrets::vaults::sync::model::ItemId;
 use axo_pass_core::secrets::vaults::sync::pairing::grant::GrantOutcome;
 use axo_pass_core::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use axo_pass_core::secrets::vaults::sync::pairing::request::PairingRequest;
-use axo_pass_core::secrets::vaults::sync::pairing::{PairedVault, PairingCode};
+use axo_pass_core::secrets::vaults::sync::pairing::{PairWait, PairedVault, PairingCode};
 use axo_pass_core::secrets::vaults::sync::recovery::RecoveryKit;
 use axo_pass_core::secrets::vaults::sync::recovery::import::{RecoveryCheck, RecoveryImport};
 use axo_pass_core::secrets::vaults::sync::repair::SyncOverride;
@@ -32,9 +33,9 @@ use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncS
 use axo_pass_core::secrets::vaults::sync::sync_log::{
     self, Entry as SyncLogEntry, Level as SyncLogLevel,
 };
-use axo_pass_core::secrets::vaults::sync::transport::TransportRoot;
 use axo_pass_core::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use axo_pass_core::secrets::vaults::sync::transport::s3::{S3Config, test_connection};
+use axo_pass_core::secrets::vaults::sync::transport::{RequestId, TransportRoot};
 use axo_pass_core::secrets::vaults::{
     Error as VaultError, KeyState, MissingVault, MovedVault, Resigned, ShortId, SyncedVault,
     VaultCatalog, VaultsManager,
@@ -65,6 +66,15 @@ pub trait SyncEventsDelegate: Send + Sync {
     fn vault_imported(&self, vault_id: String, vault_key: String);
     /// The pairing import of the vault failed. The user pairs again.
     fn import_failed(&self, vault_id: String, message: String);
+    /// The import of the vault waits for the reason in `message`. Sent again
+    /// only if the reason changes.
+    fn import_blocked(&self, vault_id: String, message: String);
+    /// The key of the vault has not arrived, for the reason in `message`.
+    /// Sent again only if the reason changes.
+    fn pairing_blocked(&self, vault_id: String, message: String);
+    /// The pairing ended: it expired, every vault received its key, or the
+    /// user finished it. Imports that wait continue.
+    fn pairing_ended(&self);
 }
 
 /// Sync events of the process (D12). The sync manager holds them from its
@@ -159,6 +169,21 @@ impl SyncEvents for ForwardEvents {
     fn import_failed(&self, vault_id: Uuid, error: &VaultError) {
         self.log.import_failed(vault_id, error);
         self.forward(|d| d.import_failed(ShortId::encode_uuid(vault_id), error.to_string()));
+    }
+
+    fn import_blocked(&self, vault_id: Uuid, reason: &WaitReason) {
+        log::info!("Import of vault {vault_id} waits: {reason}");
+        self.forward(|d| d.import_blocked(ShortId::encode_uuid(vault_id), reason.to_string()));
+    }
+
+    fn pairing_blocked(&self, vault_id: Uuid, reason: &PairWait) {
+        log::info!("Pairing waits for the key of vault {vault_id}: {reason}");
+        self.forward(|d| d.pairing_blocked(ShortId::encode_uuid(vault_id), reason.to_string()));
+    }
+
+    fn pairing_ended(&self) {
+        log::info!("Pairing ended");
+        self.forward(|d| d.pairing_ended());
     }
 }
 
@@ -847,6 +872,15 @@ impl From<GrantOutcome> for GrantOutcomeInfo {
     }
 }
 
+/// Pairing request in the synced folder. The request is not read, so it has
+/// no computer name.
+#[derive(uniffi::Record)]
+pub struct PairingRequestInfo {
+    pub request_id: String,
+    /// Seconds since the file changed.
+    pub age_seconds: u64,
+}
+
 /// Grant outcome of one picked vault.
 #[derive(uniffi::Record)]
 pub struct PairingGrantInfo {
@@ -865,11 +899,17 @@ static PAIRING_RUNS: AtomicU64 = AtomicU64::new(0);
 pub struct PairingHandle {
     code: SecretString,
     vault_ids: Vec<String>,
+    request_id: String,
     run: u64,
 }
 
 #[uniffi::export]
 impl PairingHandle {
+    /// Id of the pairing request of this Mac in the synced folder.
+    pub fn request_id(&self) -> String {
+        self.request_id.clone()
+    }
+
     /// Code to type on the unlocked Mac, as `XXXX-XXXX-XXXX-XXXX`.
     pub fn code(&self) -> String {
         self.code.expose_secret().to_string()
@@ -1142,6 +1182,7 @@ impl AxoPass {
                     .copied()
                     .map(ShortId::encode_uuid)
                     .collect(),
+                request_id: pending.request().request_id.to_string(),
                 run: PAIRING_RUNS.fetch_add(1, Ordering::SeqCst) + 1,
             };
             sync.pair(pending, transport, Box::new(key), Some(import));
@@ -1219,9 +1260,30 @@ impl AxoPass {
                     Ok((vault_id, target))
                 })
                 .collect::<Result<Vec<_>, FfiError>>()?;
-            Ok(store
-                .files()
-                .grant_pairings(&picks, |_| Unlock::App, &request, &code, &root)
+            let outcomes =
+                store
+                    .files()
+                    .grant_pairings(&picks, |_| Unlock::App, &request, &code, &root);
+            // An expired app unlock fails the call, so the app locks.
+            if outcomes.iter().any(|(_, outcome)| {
+                matches!(
+                    outcome,
+                    GrantOutcome::Failed(
+                        VaultError::KeyRetrievalFailed(KeychainError::AuthenticationExpired)
+                            | VaultError::VaultInvalidAuth(KeychainError::AuthenticationExpired)
+                    )
+                )
+            }) {
+                return Err(FfiError::AuthExpired);
+            }
+            // A granted request is answered, so it does not prompt again.
+            if outcomes
+                .iter()
+                .any(|(_, outcome)| matches!(outcome, GrantOutcome::Granted(_)))
+            {
+                PairingPrompt::dismiss_request(&root, store.files().root(), request.request_id)?;
+            }
+            Ok(outcomes
                 .into_iter()
                 .map(|(vault_id, outcome)| PairingGrantInfo {
                     vault_id: ShortId::encode_uuid(vault_id),
@@ -1230,6 +1292,55 @@ impl AxoPass {
                 .collect())
         })
         .await
+    }
+
+    /// Pairing requests under `root`, oldest first, with their age. Lists
+    /// every request in the folder, including dismissed and expired ones.
+    /// Reads no request, so no computer name is shown.
+    pub async fn pairing_request_list(
+        &self,
+        root: SyncRootInfo,
+    ) -> Result<Vec<PairingRequestInfo>, FfiError> {
+        let store = self.store()?;
+        Self::run_blocking(move || {
+            let root: TransportRoot = root.into();
+            let transport = SyncSetup::transport(store.files(), &root)?;
+            Ok(PairingPrompt::list(&*transport)?
+                .into_iter()
+                .map(|(id, age)| PairingRequestInfo {
+                    request_id: id.to_string(),
+                    age_seconds: age.as_secs().unsigned_abs(),
+                })
+                .collect())
+        })
+        .await
+    }
+
+    /// Delete the pairing request `request_id` under `root`. A running
+    /// pairing of this Mac is cancelled with its handle, not here.
+    pub async fn pairing_request_delete(
+        &self,
+        root: SyncRootInfo,
+        request_id: String,
+    ) -> Result<(), FfiError> {
+        let store = self.store()?;
+        Self::run_blocking(move || {
+            let root: TransportRoot = root.into();
+            let id =
+                RequestId(Uuid::try_parse(&request_id).map_err(|_| {
+                    FfiError::InvalidInput(format!("Invalid request id {request_id}"))
+                })?);
+            let transport = SyncSetup::transport(store.files(), &root)?;
+            Ok(transport.delete_pairing(id)?)
+        })
+        .await
+    }
+
+    /// Run the failed pairing import of the vault again. Does nothing if the
+    /// import did not fail.
+    pub fn pairing_retry_import(&self, vault_id: String) -> Result<(), FfiError> {
+        Self::sync_manager()?.retry_import(parse_id(&vault_id)?);
+        Ok(())
     }
 
     /// Dismiss the current pairing requests under `root`. Only a request

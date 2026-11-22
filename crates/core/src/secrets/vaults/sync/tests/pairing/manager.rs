@@ -74,8 +74,8 @@ fn late_wrapping_accepted_on_next_event() {
 
     assert_eq!(managed.events.taken(), [Event::Paired(vault(2), key)]);
     assert_eq!(calls.load(Ordering::SeqCst), 2, "one unwrap per vault");
-    // The request stays until the user finishes.
-    assert!(transport.pairing(request_id).is_some());
+    // The request is deleted once every vault has its key.
+    assert!(transport.pairing(request_id).is_none());
 }
 
 #[test]

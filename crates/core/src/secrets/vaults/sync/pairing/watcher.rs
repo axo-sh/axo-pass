@@ -19,13 +19,14 @@
 //! context lapsed, that unwrap prompts on the `SyncManager` thread.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::{PairedVault, PendingPairing};
+use super::{PairWait, PairedVault, PendingPairing};
 use crate::secrets::vaults::sync::transport::{SyncTransport, WatchHandle};
 use crate::secrets::vaults::sync::wrapping::DeviceUnwrap;
 
@@ -101,6 +102,19 @@ impl PairingWatcher {
             return Vec::new();
         };
         pending.poll(&*self.transport, &self.unwrap)
+    }
+
+    /// Why each vault without an accepted key waits, as of the last poll.
+    pub fn waits(&self) -> BTreeMap<Uuid, PairWait> {
+        self.pending
+            .as_ref()
+            .map(|pending| pending.waits().clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether the key of every vault of the request was accepted.
+    pub fn complete(&self) -> bool {
+        self.pending.as_ref().is_some_and(PendingPairing::complete)
     }
 
     /// End the watches, delete the request, and drop the code.
