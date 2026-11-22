@@ -24,8 +24,14 @@ export type View =
       matches: LoginSummary[];
       /** `null` until the user unlocks for the full list. */
       others: OtherLogin[] | null;
+      /** The listing may be out of date until the next unlock. */
+      pendingChanges: boolean;
     }
   | {kind: 'error'; message: string};
+
+/** Notice for a locked listing that does not hold the changes of other devices yet. */
+export const PENDING_CHANGES_NOTICE =
+  'One or more vaults have unsynced changes from other devices. Unlock Axo Pass to sync them.';
 
 /** View for a listing reply from the background script. */
 export const viewForList = (reply: PopupListReply): View => {
@@ -45,10 +51,22 @@ export const viewForList = (reply: PopupListReply): View => {
     case 'locked_logins':
       // Nothing is indexed until the first unlock after the app starts.
       return result.indexed
-        ? {kind: 'logins', target, matches: result.logins, others: null}
+        ? {
+            kind: 'logins',
+            target,
+            matches: result.logins,
+            others: null,
+            pendingChanges: result.pending_changes === true,
+          }
         : {kind: 'locked', target};
     case 'logins':
-      return {kind: 'logins', target, matches: result.logins, others: result.others};
+      return {
+        kind: 'logins',
+        target,
+        matches: result.logins,
+        others: result.others,
+        pendingChanges: false,
+      };
     case 'cancelled':
       return {kind: 'cancelled', target};
     case 'failed':
@@ -84,7 +102,9 @@ const noteFor = (result: HostResult): string | null => {
     case 'browser_not_verified':
       return 'Axo Pass could not verify this browser, so finding the existing login asks for your approval.';
     case 'locked_logins':
-      return 'Axo Pass is locked, so finding the existing login asks you to unlock.';
+      return result.pending_changes
+        ? `Axo Pass is locked, so finding the existing login asks you to unlock. ${PENDING_CHANGES_NOTICE}`
+        : 'Axo Pass is locked, so finding the existing login asks you to unlock.';
     case 'cancelled':
       return null;
     case 'version_mismatch':

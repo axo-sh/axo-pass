@@ -12,7 +12,14 @@ import type {
 } from '@/lib/messages';
 import type {LoginSummary, OtherLogin} from '@/lib/protocol';
 import type {SaveView, View} from '@/popup/state';
-import {captureDetail, filterLogins, saveHeading, viewForCapture, viewForList} from '@/popup/state';
+import {
+  captureDetail,
+  filterLogins,
+  PENDING_CHANGES_NOTICE,
+  saveHeading,
+  viewForCapture,
+  viewForList,
+} from '@/popup/state';
 
 // The popup asks the background script for everything, so a fill or a save
 // continues if the popup closes while the app shows its prompt. Captured
@@ -439,6 +446,9 @@ const render = (view: View | null, loading = 'Loading…'): void => {
       );
       return;
     case 'logins': {
+      if (view.pendingChanges) {
+        root.append(card({tone: 'warn', icon: 'sync', title: PENDING_CHANGES_NOTICE}));
+      }
       root.append(
         view.matches.length
           ? loginList(view.target, view.matches, false)

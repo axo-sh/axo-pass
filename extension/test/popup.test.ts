@@ -43,6 +43,17 @@ describe('popup states', () => {
     expect(locked.kind === 'logins' && locked.others).toBeNull();
   });
 
+  it('notices pending changes of a locked listing only', () => {
+    const pending = (result: HostResult) => {
+      const listed = viewForList({state: 'host', target: TARGET, result});
+      return listed.kind === 'logins' && listed.pendingChanges;
+    };
+    const locked = {status: 'locked_logins' as const, logins: [], indexed: true};
+    expect(pending(locked)).toBe(false);
+    expect(pending({...locked, pending_changes: true})).toBe(true);
+    expect(pending({status: 'logins', logins: [], others: []})).toBe(false);
+  });
+
   it('filters logins by title or username, ignoring case', () => {
     const login = (title: string, username: string | null): OtherLogin => {
       return {record_id: title, title, username, has_totp: false};

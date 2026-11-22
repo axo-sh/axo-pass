@@ -202,7 +202,13 @@ export interface TotpCode {
 /** Replies from the host: broker responses and the host's own statuses. */
 export type HostResponse =
   | {status: 'logins'; logins: LoginSummary[]; others: OtherLogin[]}
-  | {status: 'locked_logins'; logins: LoginSummary[]; indexed: boolean}
+  | {
+      status: 'locked_logins';
+      logins: LoginSummary[];
+      indexed: boolean;
+      /** A vault has peer changes that the next unlock applies. */
+      pending_changes?: boolean;
+    }
   | {status: 'login_fill'; username: string | null; password: string}
   | {status: 'totp_code'; code: TotpCode | null}
   | {status: 'generated_password'; password: string}
@@ -356,6 +362,10 @@ export const decodeResponse = (value: unknown): HostResponse => {
         status,
         logins: array(o.logins, 'logins', summary),
         indexed: boolean(o.indexed, 'indexed'),
+        // The broker leaves out false.
+        ...(o.pending_changes === undefined
+          ? {}
+          : {pending_changes: boolean(o.pending_changes, 'pending_changes')}),
       };
     case 'login_fill':
       return {

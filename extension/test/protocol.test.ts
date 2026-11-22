@@ -115,6 +115,15 @@ describe('response fixtures', () => {
     });
   });
 
+  it('reads pending changes of a locked listing', () => {
+    const locked = {status: 'locked_logins', logins: [], indexed: true};
+    expect(decodeResponse({...locked, pending_changes: true})).toEqual({
+      ...locked,
+      pending_changes: true,
+    });
+    expect(() => decodeResponse({...locked, pending_changes: 'yes'})).toThrow(ProtocolError);
+  });
+
   it('refuses unknown statuses and fields of the wrong type', () => {
     expect(() => decodeResponse({status: 'vault_secret', value: 'x'})).toThrow(ProtocolError);
     expect(() => decodeResponse({status: 'login_fill', username: null})).toThrow(ProtocolError);
