@@ -25,7 +25,7 @@ use crate::secrets::vaults::sync::transport::s3::client::{
 };
 use crate::secrets::vaults::sync::transport::s3::layout::KeyLayout;
 use crate::secrets::vaults::sync::transport::s3::{
-    DEFAULT_POLL_INTERVAL, S3Transport, test_connection_with,
+    DEFAULT_PAIRING_POLL_INTERVAL, DEFAULT_POLL_INTERVAL, S3Transport, test_connection_with,
 };
 use crate::secrets::vaults::sync::transport::{
     FileName, MAX_PAIRING_SIZE, ReadResult, SyncTransport, TransportRoot,
@@ -417,13 +417,19 @@ fn blobs_directory_not_listed_as_replica() {
 }
 
 #[test]
-fn poll_interval_defaults_to_60_seconds_and_is_set_with_minimum() {
+fn poll_intervals_default_and_are_set_with_minimum() {
     let transport = S3Transport::new(Arc::new(FakeS3::default()), "");
-    assert_eq!(DEFAULT_POLL_INTERVAL, Duration::from_secs(60));
+    assert_eq!(DEFAULT_POLL_INTERVAL, Duration::from_secs(30));
+    assert_eq!(DEFAULT_PAIRING_POLL_INTERVAL, Duration::from_secs(5));
     assert_eq!(transport.poll_interval(), DEFAULT_POLL_INTERVAL);
+    assert_eq!(
+        transport.pairing_poll_interval(),
+        DEFAULT_PAIRING_POLL_INTERVAL
+    );
 
     let transport = transport.with_poll_interval(Duration::from_secs(5));
     assert_eq!(transport.poll_interval(), Duration::from_secs(5));
+    assert_eq!(transport.pairing_poll_interval(), Duration::from_secs(5));
     let transport = transport.with_poll_interval(Duration::ZERO);
     assert_eq!(transport.poll_interval(), Duration::from_secs(1));
 }

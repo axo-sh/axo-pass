@@ -4,19 +4,19 @@
 //! Cloudflare R2, Backblaze B2, or MinIO. The layout is in [`layout`].
 //!
 //! Every object is untrusted. Only the exact names of [`FileName`],
-//! `meta.json`, [`FileHash`], and [`RequestId`] are listed or read, and only
-//! directories named by the exact short id of a UUID are listed as vaults and
-//! replicas. A read returns the object or `Missing`, never `Remote`, so
+//! `meta.json`, [`FileHash`], and [`RequestId`] are listed or read. Only
+//! directories with the exact short id of a UUID are listed as vaults and
+//! replicas. A read returns the object or `Missing`, never `Remote`. Therefore
 //! `request_download` and `request_blob_download` do nothing.
 //!
 //! Each write is a whole-object `PutObject`. The design needs no conditional
 //! writes, locking, or ordering. A state file is named by its content hash,
-//! so a second write of a name holds the same bytes.
+//! so a second write of a name has the same bytes.
 //!
 //! List-after-write consistency is not assumed. AWS S3 is strongly
-//! consistent, and R2, B2, and MinIO are unverified. No call relies on a
-//! listing that follows a write in the same process, and a watch lists again
-//! at each interval, so a late entry delays sync and does not lose it.
+//! consistent. R2, B2, and MinIO are unverified. No call depends on a listing
+//! that follows a write in the same process. A watch lists again at each
+//! interval, so a late entry delays sync and does not omit it.
 
 pub mod client;
 pub mod config;
@@ -43,8 +43,15 @@ use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::state_file::StateHash;
 
-/// Interval of a watch if none is set.
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// Interval of a vault watch if none is set. Each poll is one LIST request
+/// per page on every device. The user cannot change it yet. Watches poll
+/// at the same interval while the app is in the background, where a slower
+/// interval would cost less.
+pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Interval of the pairing watch if none is set. It is shorter than the
+/// vault interval, so the unlocked device sees a pairing request quickly.
+pub const DEFAULT_PAIRING_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Shortest interval of a watch.
 const MIN_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -52,8 +59,8 @@ const MIN_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Object of a directory listing, with its name in the directory.
 type NamedObject = (String, ObjectInfo);
 
-/// Entries of a directory listing: the objects, and the names of the
-/// directories.
+/// Entries of a directory listing. Contains the objects and the directory
+/// names.
 struct DirEntries {
     objects: Vec<ObjectInfo>,
     dirs: Vec<String>,
@@ -66,6 +73,7 @@ pub struct S3Transport {
     client: Arc<dyn S3Client>,
     layout: KeyLayout,
     poll_interval: Duration,
+    pairing_poll_interval: Duration,
 }
 
 impl S3Transport {
@@ -81,18 +89,26 @@ impl S3Transport {
             client,
             layout: KeyLayout::new(prefix),
             poll_interval: DEFAULT_POLL_INTERVAL,
+            pairing_poll_interval: DEFAULT_PAIRING_POLL_INTERVAL,
         }
     }
 
-    /// Set the interval of the watches started later. At least one second.
+    /// Set the interval of the vault and pairing watches started later. At
+    /// least one second.
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval.max(MIN_POLL_INTERVAL);
+        self.pairing_poll_interval = self.poll_interval;
         self
     }
 
-    /// Interval of the watches.
+    /// Interval of the vault watches.
     pub fn poll_interval(&self) -> Duration {
         self.poll_interval
+    }
+
+    /// Interval of the pairing watch.
+    pub fn pairing_poll_interval(&self) -> Duration {
+        self.pairing_poll_interval
     }
 
     /// Every page of a listing, in key order. A page that repeats its own
@@ -165,18 +181,19 @@ impl S3Transport {
         Ok(self.client.head(key)?.is_some())
     }
 
-    /// Watch of the objects under `dir`. The listing of each interval is
-    /// compared with the last one.
+    /// Watch of the objects under `dir`, listed every `interval`. The listing
+    /// of each interval is compared with the last one.
     fn watch_dir(
         &self,
         vault_id: Option<Uuid>,
         dir: String,
+        interval: Duration,
         notify: Box<dyn Fn() + Send>,
     ) -> Option<WatchHandle> {
         let client = self.client.clone();
         PollWatch::start(
             vault_id,
-            self.poll_interval,
+            interval,
             move || Ok(Self::list_all(client.as_ref(), &dir, false)?.objects),
             notify,
         )
@@ -256,11 +273,22 @@ impl SyncTransport for S3Transport {
         Ok(())
     }
 
-    /// Poll the vault directory at the poll interval and call `notify` if
-    /// its listing changes. `notify` is also called after the first listing,
-    /// so a watch started at unlock polls at unlock.
+    /// Poll the vault directory at the vault poll interval and call `notify`
+    /// if its listing changes. `notify` is also called after the first
+    /// listing, so a watch started at unlock polls at unlock.
+    ///
+    /// The listing is recursive, so it includes the blobs under `blobs/` of
+    /// the vault. The watch does not need them, since a blob is read by its
+    /// key only when a state file references it. A vault with more than 1,000
+    /// objects costs one LIST request per page at each poll. A layout with the
+    /// blobs outside the vault prefix would limit each poll to one request.
     fn watch(&self, vault_id: Uuid, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.watch_dir(Some(vault_id), self.layout.vault_dir(vault_id), notify)
+        self.watch_dir(
+            Some(vault_id),
+            self.layout.vault_dir(vault_id),
+            self.poll_interval,
+            notify,
+        )
     }
 
     fn list_pairings(&self) -> Result<Vec<PairingEntry>, Error> {
@@ -293,10 +321,15 @@ impl SyncTransport for S3Transport {
         self.client.delete(&self.layout.pairing(request))
     }
 
-    /// Poll `pairing/` at the poll interval and call `notify` if its listing
-    /// changes.
+    /// Poll `pairing/` at the pairing poll interval and call `notify` if its
+    /// listing changes.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.watch_dir(None, self.layout.pairing_dir(), notify)
+        self.watch_dir(
+            None,
+            self.layout.pairing_dir(),
+            self.pairing_poll_interval,
+            notify,
+        )
     }
 
     fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error> {
@@ -322,8 +355,8 @@ impl SyncTransport for S3Transport {
     }
 
     /// Write a blob with a new name. A blob that exists under the name is
-    /// kept. The check and the write are not atomic, and a second writer of
-    /// the name writes the same bytes.
+    /// not overwritten. The check and the write are not atomic, and a second
+    /// writer of the name writes the same bytes.
     fn write_blob(&self, vault_id: Uuid, blob: FileHash, data: &[u8]) -> Result<(), Error> {
         let key = self.layout.blob(vault_id, blob);
         if self.exists(&key)? {
