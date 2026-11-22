@@ -12,7 +12,7 @@
 //! events fired by `FakeTransport::fire_pairing_watch`. The pairing watcher
 //! of the new Mac is tested in `sync/tests/pairing.rs`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -441,6 +441,66 @@ fn peer_change_before_start_sets_flag() {
     assert_eq!(save_count(&fx), saves);
     assert!(transport.download_requests().is_empty());
     assert!(saved_vault(&fx).get_item("joined").is_err());
+}
+
+#[test]
+fn pending_changes_reported_until_read_joins() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let reader = Reader::of(&fx);
+    let managed = Managed::start(&fx, false);
+    managed.run();
+    assert!(!fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+
+    put_peer(&fx, &transport, PEER, "joined");
+    assert_eq!(transport.fire_watch(fx.id()), 1);
+    managed.run();
+    assert!(fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+
+    reader.read().unwrap();
+    assert!(!fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+}
+
+#[test]
+fn pending_changes_found_by_start_scan() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    put_peer(&fx, &transport, PEER, "joined");
+    assert!(!fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+
+    Managed::start(&fx, false).run();
+
+    assert!(fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+}
+
+#[test]
+fn pending_changes_skip_excluded_vault() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    put_peer(&fx, &transport, PEER, "joined");
+    Managed::start(&fx, false).run();
+
+    let excluded = BTreeSet::from([fx.vault.key.clone()]);
+
+    assert!(!fx.catalog.has_pending_peer_changes(&excluded));
+    assert!(fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+}
+
+#[test]
+fn pending_changes_cleared_by_disable() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    put_peer(&fx, &transport, PEER, "joined");
+    Managed::start(&fx, false).run();
+    assert!(fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
+
+    let key = || fx.vault.unlocked_key().unwrap();
+    fx.catalog
+        .files()
+        .disable_sync(&Target::of(&fx.vault), Unlock::Test(&key))
+        .unwrap();
+
+    assert!(!fx.catalog.has_pending_peer_changes(&BTreeSet::new()));
 }
 
 #[test]

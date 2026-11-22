@@ -97,6 +97,15 @@ impl VaultLocks {
         self.get(id).is_some_and(|entry| entry.is_pending())
     }
 
+    /// Ids of the vaults whose pending flag is set.
+    pub fn pending_ids(&self) -> Vec<Uuid> {
+        self.entries()
+            .iter()
+            .filter(|(_, entry)| entry.is_pending())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     /// Pending epoch of vault `id`. Zero if the vault has no lock entry.
     pub fn pending_epoch(&self, id: Uuid) -> u64 {
         self.get(id).map_or(0, |entry| entry.pending_epoch())

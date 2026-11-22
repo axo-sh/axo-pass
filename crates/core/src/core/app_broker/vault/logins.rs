@@ -401,10 +401,13 @@ pub(super) fn update_login_password(
 /// The accounts for `page` from the login index, for a client that may list
 /// without a prompt. `indexed` is false when nothing has been indexed since the
 /// app started, so the client knows to ask with a prompt instead.
+/// `pending_changes` reports peer changes in `vaults` that the index does not
+/// hold yet.
 pub(in super::super) fn list_logins_locked(
     prompt: &VaultAccessPrompt,
     actor: &Actor,
     index: &LoginIndex,
+    vaults: &VaultCatalog,
 ) -> WireResponse {
     let VaultAction::ListLogins { page, .. } = &prompt.action else {
         return WireResponse::Failed {
@@ -415,6 +418,7 @@ pub(in super::super) fn list_logins_locked(
     let response = WireResponse::LockedLogins {
         indexed: found.is_some(),
         logins: found.unwrap_or_default(),
+        pending_changes: vaults.has_pending_peer_changes(&autofill_excluded_vaults()),
     };
     record_locked_listing(prompt, actor, &response);
     response

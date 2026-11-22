@@ -360,7 +360,10 @@ pub(super) fn record_locked_listing(
     .detail("login_request", "list_locked");
     event = login_page_details(event, page);
     event = client_details(event, &prompt.client);
-    if let WireResponse::LockedLogins { logins, indexed } = response {
+    if let WireResponse::LockedLogins {
+        logins, indexed, ..
+    } = response
+    {
         event = event
             .detail("item_count", logins.len().to_string())
             .detail("indexed", indexed.to_string());

@@ -1786,6 +1786,9 @@ impl VaultWriter {
         // No write id of this replica is minted after a disable.
         locked.state.end_actor();
         let changed = result?;
+        // A vault that no longer syncs joins no peer change, so a flag set
+        // before the disable would never clear.
+        vault_lock.clear_pending(vault_lock.pending_epoch());
         if matches!(disabled, Disabled::Deleted | Disabled::DirectoryDeleted) {
             self.delete_sync_files(id)?;
         }

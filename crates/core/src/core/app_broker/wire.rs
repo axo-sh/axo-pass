@@ -709,10 +709,14 @@ pub(super) enum WireResponse {
     },
     /// The logins in the app's index that match a page. `indexed` is false when
     /// the app has not indexed since it started, so an empty list means "ask
-    /// again with a prompt" rather than "no logins".
+    /// again with a prompt" rather than "no logins". `pending_changes` is true
+    /// if a vault outside the AutoFill exclusions has peer changes that the
+    /// next unlock applies, so the index may be out of date.
     LockedLogins {
         logins: Vec<LoginSummary>,
         indexed: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pending_changes: bool,
     },
     /// The record id of the login a save created.
     LoginSaved {

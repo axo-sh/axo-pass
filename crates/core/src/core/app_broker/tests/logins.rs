@@ -94,7 +94,7 @@ async fn locked_listing_answers_from_index_without_prompt() {
         // Nothing is indexed before the app's first unlock.
         let response: WireResponse = broker.request_parsed(&line);
         assert!(
-            matches!(&response, WireResponse::LockedLogins { logins, indexed: false } if logins.is_empty()),
+            matches!(&response, WireResponse::LockedLogins { logins, indexed: false, .. } if logins.is_empty()),
             "{scope:?}"
         );
 
@@ -102,16 +102,54 @@ async fn locked_listing_answers_from_index_without_prompt() {
             .logins
             .replace(vec![item("a", "example.com"), item("b", "other.com")]);
         let response: WireResponse = broker.request_parsed(&line);
-        let WireResponse::LockedLogins { logins, indexed } = response else {
+        let WireResponse::LockedLogins {
+            logins,
+            indexed,
+            pending_changes,
+        } = response
+        else {
             panic!("{scope:?}: unexpected response");
         };
         assert!(indexed);
+        assert!(!pending_changes);
         assert_eq!(logins.len(), 1, "{scope:?} listed a login for another site");
         assert_eq!(logins[0].record_id, "a");
 
         assert!(broker.authorizer.vault_prompts.lock().unwrap().is_empty());
         assert!(broker.authorizer.peers.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn locked_logins_pending_changes_omitted_if_false() {
+    let json = |pending_changes| {
+        serde_json::to_value(WireResponse::LockedLogins {
+            logins: Vec::new(),
+            indexed: true,
+            pending_changes,
+        })
+        .unwrap()
+    };
+
+    assert_eq!(
+        json(false),
+        serde_json::json!({"status": "locked_logins", "logins": [], "indexed": true})
+    );
+    assert_eq!(
+        json(true),
+        serde_json::json!({
+            "status": "locked_logins", "logins": [], "indexed": true, "pending_changes": true
+        })
+    );
+    let old: WireResponse =
+        serde_json::from_str(r#"{"status":"locked_logins","logins":[],"indexed":true}"#).unwrap();
+    assert!(matches!(
+        old,
+        WireResponse::LockedLogins {
+            pending_changes: false,
+            ..
+        }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

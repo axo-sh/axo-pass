@@ -307,6 +307,19 @@ impl VaultCatalog {
         self.scan().vaults
     }
 
+    /// Whether a vault whose key is not in `excluded` has a peer change that
+    /// waits for the next read to join it. Reads no vault file if no pending
+    /// flag is set.
+    pub fn has_pending_peer_changes(&self, excluded: &BTreeSet<String>) -> bool {
+        let locks = self.files.locks();
+        if locks.pending_ids().is_empty() {
+            return false;
+        }
+        self.read_all()
+            .iter()
+            .any(|(id, vh)| locks.is_pending(*id) && !excluded.contains(&vh.key))
+    }
+
     /// Scan the vault files. Every vault by key, locked, the vault ids held by
     /// more than one file, the vault keys claimed by more than one file, and
     /// the local sync states with no vault file. The key of each vault is
