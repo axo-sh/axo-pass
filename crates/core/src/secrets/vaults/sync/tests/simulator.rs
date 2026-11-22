@@ -26,6 +26,7 @@ use secrecy::SecretString;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use super::as_writer;
 use super::load::{GENERATION, body, device_key, state_of};
 use super::state_file::keyring;
 use super::transport::FakeTransport;
@@ -39,6 +40,7 @@ use crate::secrets::vaults::storage::handle::normalized_key;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock, VaultWriter};
 use crate::secrets::vaults::sync::crdt::{Ask, CausalContext, MvRegister, ReplicaId, WriteId};
 use crate::secrets::vaults::sync::diff::LocalEdits;
+use crate::secrets::vaults::sync::edit_check::{ResolvePick, SyncReads};
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
@@ -219,10 +221,23 @@ impl Mac {
 
     /// Run `f` in a transaction on the vault.
     fn write(&self, f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>) -> Committed<()> {
+        self.try_write(f).unwrap()
+    }
+
+    /// Run `f` in a transaction on the vault, and return its error.
+    fn try_write(
+        &self,
+        f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
+    ) -> Result<Committed<()>, Error> {
         let key = || self.vault.unlocked_key().unwrap();
         self.writer
             .write(&Target::of(&self.vault), Unlock::Test(&key), f)
-            .unwrap()
+    }
+
+    /// Write ids of the Ask registers of the saved state, as the UI reads
+    /// them with the vault.
+    pub(super) fn reads(&self) -> SyncReads {
+        SyncReads::of(&self.state())
     }
 
     /// Body of the saved sync state.
@@ -421,17 +436,30 @@ impl Sim {
     /// context did not move past its last published file, or does not
     /// publish when it did.
     fn transaction(&mut self, n: usize, edit: Option<&Edit>) -> bool {
-        self.transaction_with(n, edit.map(|edit| |vh: &mut VaultHandle| edit.apply(vh)))
+        self.transaction_with(n, edit.map(|edit| as_writer(|vh| edit.apply(vh))))
     }
 
-    /// Transaction of Mac `n` that runs `f`, with the checks of
-    /// [`Self::transaction`]. Returns whether the Mac published.
+    /// Transaction of Mac `n` that runs `f` as a writer outside the UI, with
+    /// the checks of [`Self::transaction`]. Returns whether the Mac
+    /// published.
     pub(super) fn write(
         &mut self,
         n: usize,
         f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
     ) -> bool {
-        self.transaction_with(n, Some(f))
+        self.transaction_with(n, Some(as_writer(f)))
+    }
+
+    /// Transaction of Mac `n` that runs `f` with the edit check `f` declares,
+    /// such as the reads of an edit from the UI. Returns whether the Mac
+    /// published, or the error of the transaction. A refused edit mints
+    /// nothing, and the checks of [`Self::transaction`] still hold.
+    pub(super) fn write_ui(
+        &mut self,
+        n: usize,
+        f: impl FnOnce(&mut VaultHandle) -> Result<(), Error>,
+    ) -> Result<bool, Error> {
+        self.try_transaction(n, Some(f))
     }
 
     /// [`Self::transaction`] with `edit` as a vault mutation.
@@ -440,19 +468,56 @@ impl Sim {
         n: usize,
         edit: Option<impl FnOnce(&mut VaultHandle) -> Result<(), Error>>,
     ) -> bool {
+        self.try_transaction(n, edit).unwrap()
+    }
+
+    /// [`Self::transaction_with`] that returns the error of the transaction.
+    fn try_transaction(
+        &mut self,
+        n: usize,
+        edit: Option<impl FnOnce(&mut VaultHandle) -> Result<(), Error>>,
+    ) -> Result<bool, Error> {
+        let allowed = usize::from(edit.is_some());
+        self.checked(n, allowed, |mac| {
+            mac.try_write(|vh| edit.map_or(Ok(()), |edit| edit(vh)))
+        })
+    }
+
+    /// Resolve request `pick` on Mac `n`, with the checks of
+    /// [`Self::transaction`]. Returns whether the Mac published, or the error
+    /// of the transaction.
+    pub(super) fn resolve(&mut self, n: usize, pick: ResolvePick) -> Result<bool, Error> {
+        self.checked(n, 1, |mac| {
+            let key = || mac.vault.unlocked_key().unwrap();
+            mac.writer
+                .resolve_conflict(&Target::of(&mac.vault), Unlock::Test(&key), pick)
+        })
+    }
+
+    /// Transaction `run` of Mac `n`, which may mint `allowed` write ids, with
+    /// the checks of [`Self::transaction`].
+    fn checked(
+        &mut self,
+        n: usize,
+        mut allowed: usize,
+        run: impl FnOnce(&Mac) -> Result<Committed<()>, Error>,
+    ) -> Result<bool, Error> {
         let mac = &self.macs[n];
         let before = mac.state();
         let writes = mac.transport.writes();
-        let allowed = usize::from(edit.is_some());
 
-        let committed = mac.write(|vh| edit.map_or(Ok(()), |edit| edit(vh)));
+        let result = run(mac);
 
-        // The guard finds no drift, so sync stays active.
-        assert_eq!(
-            committed.sync_status,
-            Some(SyncStatus::Active),
-            "Mac {n} sync is not active"
-        );
+        // The guard finds no drift, so sync stays active. A refused edit
+        // mints nothing.
+        match &result {
+            Ok(committed) => assert_eq!(
+                committed.sync_status,
+                Some(SyncStatus::Active),
+                "Mac {n} sync is not active"
+            ),
+            Err(_) => allowed = 0,
+        }
         let after = mac.state();
         let edits = LocalEdits::find(&after, &mac.saved_vault(), mac.replica).unwrap();
         assert!(
@@ -482,7 +547,7 @@ impl Sim {
             self.observed.insert(id, after.context.clone());
         }
         self.collect(n);
-        published
+        result.map(|_| published)
     }
 
     /// Give every Mac every latest file and run a transaction with no edit on

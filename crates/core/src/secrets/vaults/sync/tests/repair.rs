@@ -16,7 +16,7 @@ use super::txn::{
     add_item_counting, new_write_ids, saved, saved_vault, state_file, synced, two_keys, under_key_2,
 };
 use super::view::{State, edited};
-use super::{NOW, id};
+use super::{NOW, as_writer, id};
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::model::Vault;
@@ -144,14 +144,14 @@ impl Merge {
             Self::NewerVault => {
                 let backup = fs::read_to_string(fx.state_path()).unwrap();
                 transport.set_unavailable(true);
-                fx.write(edits).unwrap();
+                fx.write(as_writer(edits)).unwrap();
                 transport.set_unavailable(false);
                 fx.put_text(&backup);
                 assert!(matches!(fx.write_case(), SyncLoad::NewerVault { .. }));
             },
             Self::NewBuild => {
                 set_header(fx, |local| local.stopped_build = Some(BUILD_ID.to_string()));
-                assert_eq!(fx.write(edits).unwrap().sync_status, stopped());
+                assert_eq!(fx.write(as_writer(edits)).unwrap().sync_status, stopped());
                 on_new_build(fx);
             },
         }
@@ -239,7 +239,7 @@ fn at_v_greater_than_s_unpublished_edit_is_conflict_and_peer_change_after_backup
 
     // An unpublished local edit of `item`.
     transport.set_unavailable(true);
-    fx.write(|vh| vh.add_item("item", "Local").map(|_| ()))
+    fx.write(as_writer(|vh| vh.add_item("item", "Local").map(|_| ())))
         .unwrap();
     transport.set_unavailable(false);
     // A peer changes `other` after the backup.

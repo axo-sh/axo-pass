@@ -1,6 +1,7 @@
 use uuid::Uuid;
 
 use super::crdt::{ReplicaId, Session};
+use crate::secrets::vaults::{Error, VaultHandle};
 
 mod apply;
 mod audit_events;
@@ -61,4 +62,15 @@ fn session(n: u128) -> Session {
 /// Entry id `n`.
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
+}
+
+/// `edit` declared as a writer outside the UI, so a write to an Ask register
+/// is not refused (`sync/edit_check.rs`).
+fn as_writer<R>(
+    edit: impl FnOnce(&mut VaultHandle) -> Result<R, Error>,
+) -> impl FnOnce(&mut VaultHandle) -> Result<R, Error> {
+    move |vh| {
+        vh.write_outside_ui();
+        edit(vh)
+    }
 }

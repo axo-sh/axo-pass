@@ -18,7 +18,7 @@ use crate::secrets::vaults::sync::sidecar::{Health, Sidecar};
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 
 /// Recorded events of `action`, newest first.
-fn events(action: Action) -> Vec<AuditEvent> {
+pub(super) fn events(action: Action) -> Vec<AuditEvent> {
     let filter = AuditFilter {
         actions: vec![action],
         ..AuditFilter::default()
