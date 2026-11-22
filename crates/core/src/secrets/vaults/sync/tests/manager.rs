@@ -676,6 +676,8 @@ fn new_pairing_request_reaches_app() {
     managed.run();
 
     assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 1)]);
+    // The request is downloaded before the user types its code.
+    assert_eq!(transport.pairing_download_requests(), [request(1)]);
 
     // A burst of events gives one count.
     transport.put_pairing(request(2), b"{}");
@@ -708,6 +710,8 @@ fn dismissed_request_does_not_raise_count_and_request_with_new_id_does() {
     managed.run();
 
     assert_eq!(managed.events.taken(), [Event::Pairings(folder_root(), 0)]);
+    // A dismissed request is not downloaded again.
+    assert_eq!(transport.pairing_download_requests(), [request(1)]);
 
     transport.put_pairing(request(2), b"{}");
     transport.fire_pairing_watch();

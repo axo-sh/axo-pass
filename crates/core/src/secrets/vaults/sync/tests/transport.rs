@@ -114,6 +114,8 @@ struct FakeFolder {
     pairing_writes: usize,
     /// Vaults of the `request_download` calls, in call order.
     downloads: Vec<Uuid>,
+    /// Requests of the `request_pairing_download` calls, in call order.
+    pairing_downloads: Vec<RequestId>,
     watches: Vec<FakeWatch>,
     next_watch: u64,
     read_hook: Option<ReadHook>,
@@ -256,6 +258,11 @@ impl FakeTransport {
     /// Vaults of the `request_download` calls, in call order.
     pub(super) fn download_requests(&self) -> Vec<Uuid> {
         self.folder().downloads.clone()
+    }
+
+    /// Requests of the `request_pairing_download` calls, in call order.
+    pub(super) fn pairing_download_requests(&self) -> Vec<RequestId> {
+        self.folder().pairing_downloads.clone()
     }
 
     /// Put `bytes` as `meta.json` of the directory of vault `vault_id`.
@@ -624,6 +631,13 @@ impl SyncTransport for FakeTransport {
             folder.pairing_reads += 1;
         }
         Ok(result)
+    }
+
+    fn request_pairing_download(&self, request: RequestId) -> Result<(), Error> {
+        let mut folder = self.folder();
+        Self::check_available(&folder)?;
+        folder.pairing_downloads.push(request);
+        Ok(())
     }
 
     fn write_pairing(&self, request: RequestId, data: &[u8]) -> Result<(), Error> {

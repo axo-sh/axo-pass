@@ -43,11 +43,21 @@ impl PairingPrompt {
         dismissed: &BTreeSet<RequestId>,
         now: Timestamp,
     ) -> Result<usize, Error> {
+        Ok(Self::prompting(transport, dismissed, now)?.len())
+    }
+
+    /// Ids of the requests that [`Self::pending`] counts.
+    pub fn prompting(
+        transport: &dyn SyncTransport,
+        dismissed: &BTreeSet<RequestId>,
+        now: Timestamp,
+    ) -> Result<Vec<RequestId>, Error> {
         Ok(transport
             .list_pairings()?
             .iter()
             .filter(|entry| Self::prompts(entry, dismissed, now))
-            .count())
+            .map(|entry| entry.id)
+            .collect())
     }
 
     /// Whether `entry` prompts at `now`.

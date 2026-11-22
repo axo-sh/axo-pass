@@ -39,7 +39,8 @@
 //! Pairing (9.5). The manager watches the pairing directory of each root of
 //! the synced vaults, one watch per root. The watch start and each event
 //! count the requests that prompt ([`PairingPrompt::pending`]), with the
-//! dismissed ids of the root, and report `pairing_requests`. On the new Mac
+//! dismissed ids of the root, request their download, and report
+//! `pairing_requests`. On the new Mac
 //! the manager runs the [`PairingWatcher`] that [`SyncManager::pair`] hands
 //! it, until [`SyncManager::finish_pairing`], the expiry, or the shutdown.
 //! The manager writes no pairing request. The watcher deletes its own.
@@ -919,6 +920,8 @@ impl Worker {
 
     /// Count the pairing requests of `root` that prompt and report them. A
     /// count from a rescan is reported only if it differs from the last one.
+    /// The download of each request that prompts is requested, so it is local
+    /// by the time the user types its code.
     fn report_pairings(&mut self, root: &TransportRoot, rescan: bool) {
         let transport = self
             .vaults
@@ -929,8 +932,8 @@ impl Worker {
             return;
         };
         let dismissed = DismissedRequests::load(self.files().root()).of(root);
-        let count = match PairingPrompt::pending(&*transport, &dismissed, self.timestamp()) {
-            Ok(count) => count,
+        let prompting = match PairingPrompt::prompting(&*transport, &dismissed, self.timestamp()) {
+            Ok(prompting) => prompting,
             Err(e) => {
                 sync_log::record(
                     sync_log::Level::Warn,
@@ -941,6 +944,17 @@ impl Worker {
                 return;
             },
         };
+        for id in &prompting {
+            if let Err(e) = transport.request_pairing_download(*id) {
+                sync_log::record(
+                    sync_log::Level::Warn,
+                    None,
+                    "Failed to request the download of a pairing request",
+                    Some(format!("{root}: {id}: {e}")),
+                );
+            }
+        }
+        let count = prompting.len();
         let last = self.pairing_counts.insert(root.clone(), count);
         if rescan {
             if last == Some(count) {
