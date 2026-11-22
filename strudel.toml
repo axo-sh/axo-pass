@@ -72,3 +72,6 @@ bundle_id                  = "com.breakfastlabs.frittata.AutoFill"
 entitlements_json_path     = "app/misc/autofill-entitlements.json"
 info_json_path             = "app/misc/autofill-info.json"
 provisioning_profile       = "app/misc/com.breakfastlabs.frittata.AutoFill.provisionprofile"
+
+[dmg]
+icon_text_size = 14
