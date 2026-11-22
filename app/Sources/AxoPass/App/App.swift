@@ -206,6 +206,12 @@ private struct GeneratePasswordMenuItem: View {
       Button("Reset First Run") { Preferences.hasCompletedFirstRun = false }
       Button("Reset Setup Checklist") { issues.restoreSetupSteps() }
       Button("Reset All Dismissed Issues") { issues.restoreAll() }
+      Divider()
+      Menu("Reset App State") {
+        ForEach(DevReset.Kind.allCases, id: \.self) { kind in
+          Button(kind.title + "…") { DevReset.run(kind) }
+        }
+      }
     }
   }
 #endif

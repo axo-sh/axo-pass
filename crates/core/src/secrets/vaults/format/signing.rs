@@ -15,6 +15,8 @@ use std::sync::RwLock;
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 
+use crate::secrets::keychain::errors::KeychainError;
+use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::errors::Error;
 
 /// Keychain label of the per-Mac signing key.
@@ -53,6 +55,16 @@ impl VerifyingKeyCache {
     /// Drop the cached key.
     pub(crate) fn clear(&self) {
         *self.0.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+impl KeychainSigner {
+    /// Delete `device-signing-key` and the cached public key. A missing key is
+    /// not an error.
+    pub(crate) fn delete_key() -> Result<(), KeychainError> {
+        let deleted = ManagedKey::delete_by_label(DEVICE_SIGNING_KEY_LABEL);
+        DEVICE_VERIFYING_KEY.clear();
+        deleted
     }
 }
 

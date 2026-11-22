@@ -100,6 +100,13 @@ impl AppConfig {
         }
     }
 
+    /// Replace [`APP_CONFIG`] and the config file with the default config.
+    pub fn reset() -> Result<(), io::Error> {
+        let mut config = APP_CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+        *config = Self::default();
+        config.save()
+    }
+
     /// Save the config atomically. An interrupted save leaves the previous
     /// file, since a truncated file makes [`APP_CONFIG`] fail at launch.
     pub fn save(&self) -> Result<(), io::Error> {

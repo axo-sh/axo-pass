@@ -67,6 +67,18 @@ final class AgentService {
     try await core.stopSshAgent()
   }
 
+  /// Stop the agent for good before an erase. Unregisters the launchd service,
+  /// which ends an agent that launchd runs and keeps launchd from restarting
+  /// it, then stops a detached agent. Failures are ignored, since an agent that
+  /// is not running is the goal.
+  func shutDownForErase() async {
+    if isRegistered {
+      try? await service.unregister()
+    }
+    refreshStatus()
+    try? await stop()
+  }
+
   /// Turn "start on login" on or off. On registers the service, which starts
   /// the agent now if the user has allowed the item. Off unregisters it; a
   /// running agent is kept alive as a detached one.

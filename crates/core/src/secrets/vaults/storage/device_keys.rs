@@ -27,6 +27,9 @@ use crate::secrets::vaults::sync::pairing::dismissed::DismissedRequests;
 /// Name of the vaults directory under the app data directory.
 pub(super) const VAULTS_DIR: &str = "vaults";
 
+/// Keychain label of the vault encryption key.
+pub(super) const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
+
 #[cfg(test)]
 mod tests;
 

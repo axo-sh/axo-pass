@@ -117,6 +117,11 @@ fn item() -> PlainItem {
     PlainItem::new(SERVICE, ACCOUNT)
 }
 
+/// Delete every grant, for every key.
+pub fn delete_all() -> Result<(), KeychainError> {
+    item().delete()
+}
+
 /// Every grant, for every key.
 pub fn load() -> Result<Vec<AppGrant>, KeychainError> {
     match item().read()? {

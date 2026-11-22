@@ -574,9 +574,7 @@ impl SyncTransport for FakeTransport {
         self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
-        folder
-            .files
-            .remove(&(vault_id, replica, name.file_name()));
+        folder.files.remove(&(vault_id, replica, name.file_name()));
         Ok(())
     }
 

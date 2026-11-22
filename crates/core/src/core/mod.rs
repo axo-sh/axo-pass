@@ -13,4 +13,6 @@ mod objc_helpers;
 pub mod protected_settings;
 pub mod provenance;
 pub mod read_input;
+#[cfg(feature = "desktop")]
+pub mod reset;
 pub mod updates;

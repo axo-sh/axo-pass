@@ -40,6 +40,10 @@ pub mod managed_key {
             Err(KeychainError::Unsupported)
         }
 
+        pub fn delete_by_label(_label: &str) -> Result<(), KeychainError> {
+            Err(KeychainError::Unsupported)
+        }
+
         /// ECIES ciphertext of `plaintext` to the uncompressed SEC1 point
         /// `public_sec1`. Needs no key, so it does not use a key store.
         pub fn encrypt_to(public_sec1: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, KeychainError> {
@@ -114,6 +118,10 @@ pub mod managed_key {
         }
 
         pub fn list() -> Result<Vec<ManagedSshKey>, anyhow::Error> {
+            Err(KeychainError::Unsupported.into())
+        }
+
+        pub fn delete_all() -> Result<(), anyhow::Error> {
             Err(KeychainError::Unsupported.into())
         }
 
@@ -233,6 +241,10 @@ pub mod generic_password {
 
         pub fn delete(&self) -> anyhow::Result<()> {
             Err(KeychainError::Unsupported.into())
+        }
+
+        pub fn delete_all() -> Result<(), KeychainError> {
+            Err(KeychainError::Unsupported)
         }
 
         pub fn list() -> Result<Vec<PasswordEntry>, KeychainError> {

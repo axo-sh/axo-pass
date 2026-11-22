@@ -14,11 +14,11 @@ use objc2_core_foundation::{
 };
 use objc2_local_authentication::LAContext;
 use objc2_security::{
-    SecItemDelete, SecKey, kSecAttrAccessControl, kSecAttrApplicationLabel, kSecAttrApplicationTag,
-    kSecAttrIsPermanent, kSecAttrKeyClass, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom,
-    kSecAttrLabel, kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey,
-    kSecMatchItemList, kSecPrivateKeyAttrs, kSecPublicKeyAttrs, kSecUseAuthenticationContext,
-    kSecUseDataProtectionKeychain,
+    SecItemDelete, SecKey, errSecItemNotFound, errSecSuccess, kSecAttrAccessControl,
+    kSecAttrApplicationLabel, kSecAttrApplicationTag, kSecAttrIsPermanent, kSecAttrKeyClass,
+    kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel, kSecAttrTokenID,
+    kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey, kSecMatchItemList, kSecPrivateKeyAttrs,
+    kSecPublicKeyAttrs, kSecUseAuthenticationContext, kSecUseDataProtectionKeychain,
 };
 pub use query::ManagedKeyQuery;
 pub use shared::KeyClass;
@@ -242,6 +242,18 @@ impl ManagedKey {
                 ));
             };
             Ok(pub_key_ext.as_bytes_unchecked().to_vec())
+        }
+    }
+
+    /// Delete every key with `label`. A missing key is not an error. Needs no
+    /// authentication, so it also deletes a key gated by authentication.
+    pub fn delete_by_label(label: &str) -> Result<(), KeychainError> {
+        let query = Self::common_attrs(Some(label.to_string()));
+        let status = unsafe { SecItemDelete(query.as_opaque()) };
+        if status == errSecSuccess || status == errSecItemNotFound {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("keychain delete of {label} failed: {status}").into())
         }
     }
 

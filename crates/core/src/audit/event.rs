@@ -434,6 +434,10 @@ pub enum Action {
     VaultUnreadableMoved,
     #[serde(rename = "vault.resigned")]
     VaultResigned,
+    #[serde(rename = "vault.settings_reset")]
+    VaultSettingsReset,
+    #[serde(rename = "vault.mac_erased")]
+    VaultMacErased,
 
     #[serde(rename = "item.listed")]
     ItemListed,
@@ -549,6 +553,8 @@ impl Action {
             Action::VaultVersionsErased => "vault.versions_erased",
             Action::VaultUnreadableMoved => "vault.unreadable_moved",
             Action::VaultResigned => "vault.resigned",
+            Action::VaultSettingsReset => "vault.settings_reset",
+            Action::VaultMacErased => "vault.mac_erased",
             Action::ItemListed => "item.listed",
             Action::ItemCreated => "item.created",
             Action::ItemUpdated => "item.updated",
@@ -588,7 +594,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 70] = [
+    pub const ALL: [Action; 72] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -625,6 +631,8 @@ impl Action {
         Action::VaultVersionsErased,
         Action::VaultUnreadableMoved,
         Action::VaultResigned,
+        Action::VaultSettingsReset,
+        Action::VaultMacErased,
         Action::ItemListed,
         Action::ItemCreated,
         Action::ItemUpdated,
@@ -719,6 +727,12 @@ impl Action {
             Action::VaultResigned => {
                 "Signed every vault file and retained version again with a new device signing key, after the old key was lost."
             },
+            Action::VaultSettingsReset => {
+                "Reset the settings of the app, and deleted its protected settings, browser grants, and SSH app grants."
+            },
+            Action::VaultMacErased => {
+                "Erased this Mac: deleted its vault files, device keys, Secure Enclave SSH keys, keychain passphrases, S3 credentials, grants, and settings, and reset the app configuration."
+            },
             Action::ItemListed => {
                 "Listed the items in a vault, or the logins for a site. No values are read."
             },
@@ -812,7 +826,9 @@ impl Action {
             | Action::VaultVersionRestored
             | Action::VaultVersionsErased
             | Action::VaultUnreadableMoved
-            | Action::VaultResigned => Category::Vault,
+            | Action::VaultResigned
+            | Action::VaultSettingsReset
+            | Action::VaultMacErased => Category::Vault,
             Action::ItemListed
             | Action::ItemCreated
             | Action::ItemUpdated
@@ -892,6 +908,8 @@ impl Action {
             | Action::VaultVersionsErased
             | Action::VaultUnreadableMoved
             | Action::VaultResigned
+            | Action::VaultSettingsReset
+            | Action::VaultMacErased
             | Action::ItemCreated
             | Action::ItemUpdated
             | Action::ItemDeleted

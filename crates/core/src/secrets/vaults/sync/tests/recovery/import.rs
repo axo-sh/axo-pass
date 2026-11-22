@@ -60,12 +60,7 @@ fn import_waits_for_remote_peer_state_files() {
     for n in [2, 3] {
         let bytes = state_file_under(vault_id, replica(n), &state, KeyId(1), &key());
         let hash = StateHash::of(&bytes);
-        transport.put_remote_with(
-            vault_id,
-            replica(n),
-            &StateFile::name(hash),
-            &bytes,
-        );
+        transport.put_remote_with(vault_id, replica(n), &StateFile::name(hash), &bytes);
     }
 
     let waiting = vec![

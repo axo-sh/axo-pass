@@ -124,12 +124,7 @@ fn peer_file_that_is_remote_at_join_requested_and_joined_by_later_transaction() 
     else {
         panic!("published state file is not local");
     };
-    transport.put_remote_with(
-        a.id(),
-        a_replica,
-        &StateFile::name(published),
-        &bytes,
-    );
+    transport.put_remote_with(a.id(), a_replica, &StateFile::name(published), &bytes);
     let b = Mac::new(transport.clone());
 
     let committed = b

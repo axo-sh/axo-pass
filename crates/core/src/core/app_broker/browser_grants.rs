@@ -73,6 +73,11 @@ fn item() -> PlainItem {
     PlainItem::new(SERVICE, ACCOUNT)
 }
 
+/// Delete every grant.
+pub fn delete_all() -> Result<(), KeychainError> {
+    item().delete()
+}
+
 /// Every grant, including expired ones.
 pub fn load() -> Result<Vec<BrowserGrant>, KeychainError> {
     match item().read()? {

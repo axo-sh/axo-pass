@@ -137,6 +137,10 @@ private struct GeneralSettingsView: View {
   private var quitBehavior = Preferences.defaultQuitBehavior
   @State private var audit = AuditSettingsModel()
   @State private var confirmingClear = false
+  @Environment(VaultsModel.self) private var model
+  @State private var reset = ResetModel()
+  @State private var confirmingSettingsReset = false
+  @State private var showingErase = false
 
   var body: some View {
     SettingsForm {
@@ -244,6 +248,43 @@ private struct GeneralSettingsView: View {
             .captionStyle()
         }
       }
+
+      SettingsDivider()
+
+      SettingsRow("Reset:") {
+        HStack(spacing: 8) {
+          Button("Reset Settings…") { confirmingSettingsReset = true }
+          Button("Erase This Mac…") { showingErase = true }
+        }
+        .disabled(reset.isWorking)
+        Text(
+          """
+          Reset Settings restores all app settings and revokes approvals. Erase This Mac also \
+          deletes the vaults and keys on this Mac. Authentication is required.
+          """
+        )
+        .captionStyle()
+        if !showingErase, let error = reset.error {
+          Text(error)
+            .foregroundStyle(.red)
+            .captionStyle()
+        }
+      }
+    }
+    .confirmationDialog(
+      "Reset settings?", isPresented: $confirmingSettingsReset, titleVisibility: .visible
+    ) {
+      Button("Reset Settings", role: .destructive) {
+        Task { await reset.run(.settings, core: model.core) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "Revert settings to defaults, and revoke existing app approvals. Vaults, keys, and sync are kept the same. Axo Pass will quit after reset."
+      )
+    }
+    .sheet(isPresented: $showingErase) {
+      EraseThisMacSheet(reset: reset)
     }
     .confirmationDialog(
       "Clear details from existing entries?", isPresented: $confirmingClear,

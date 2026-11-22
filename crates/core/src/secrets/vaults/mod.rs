@@ -28,5 +28,6 @@ pub use storage::catalog::{
 pub use storage::device_keys::KeyState;
 pub use storage::handle::{DEFAULT_VAULT, ExportProgress, VaultHandle};
 pub use storage::manager::VaultsManager;
+pub use storage::reset::{delete_device_keys, delete_signing_key, erase_vault_files};
 pub use storage::resign::Resigned;
 pub use storage::unreadable::{MovedFiles, MovedVault, SyncedVault};

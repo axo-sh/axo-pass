@@ -223,6 +223,25 @@ impl ManagedSshKey {
         }
         Ok(out)
     }
+
+    /// Delete every SSH key and its public key file. Needs no authentication.
+    /// Grants are left to the caller.
+    pub fn delete_all() -> Result<(), anyhow::Error> {
+        for key in Self::list()? {
+            let label = key.label();
+            ManagedKey::delete_by_label(&label)
+                .with_context(|| format!("failed to delete {label}"))?;
+            let pubkey_path = key.pubkey_path()?;
+            match fs::remove_file(&pubkey_path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(e)
+                        .with_context(|| format!("failed to delete {}", pubkey_path.display()));
+                },
+                _ => {},
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Key id of an SSH key label. Other managed keys, such as

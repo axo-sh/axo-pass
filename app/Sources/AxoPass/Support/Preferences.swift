@@ -111,6 +111,29 @@ enum Preferences {
     UserDefaults.standard.string(forKey: Key.paletteHotKey).flatMap(HotKey.init(rawValue:))
   }
 
+  /// Remove every stored value, including the first-run state and the synced
+  /// location. Erase This Mac calls this, then quits.
+  static func resetAll() {
+    guard let domain = Bundle.main.bundleIdentifier else { return }
+    UserDefaults.standard.removePersistentDomain(forName: domain)
+  }
+
+  /// Values that Reset Settings keeps. Sync and first run depend on vaults and
+  /// keys, which that reset does not change.
+  private static let keptBySettingsReset: Set<String> = [
+    Key.syncFolder, Key.syncS3, Key.hasCompletedFirstRun,
+  ]
+
+  /// Remove stored values except `keptBySettingsReset`. Reset Settings calls
+  /// this, then quits.
+  static func resetSettings() {
+    guard let domain = Bundle.main.bundleIdentifier,
+      let stored = UserDefaults.standard.persistentDomain(forName: domain)
+    else { return }
+    let kept = stored.filter { keptBySettingsReset.contains($0.key) }
+    UserDefaults.standard.setPersistentDomain(kept, forName: domain)
+  }
+
   static func label(forAutoLockMinutes minutes: Int) -> String {
     switch minutes {
     case 0: return "Never"

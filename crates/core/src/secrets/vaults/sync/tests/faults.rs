@@ -286,8 +286,5 @@ fn newer_own_state_file_that_is_remote_at_publish_kept_joined_once_local_and_del
     assert!(vault.get_item("item").is_ok());
     let second = last_publish(&fx).unwrap();
     assert_ne!(second, first);
-    assert_eq!(
-        transport.names(fx.id(), REPLICA),
-        [StateFile::name(second)]
-    );
+    assert_eq!(transport.names(fx.id(), REPLICA), [StateFile::name(second)]);
 }

@@ -1,6 +1,6 @@
 //! Device keys in the macOS keychain.
 
-use super::{DeviceKeys, KeyProbe, KeychainKeys};
+use super::{DeviceKeys, KeyProbe, KeychainKeys, VAULT_ENCRYPTION_KEY_LABEL};
 use crate::core::auth::{AuthContext, AuthMethod, probe_shared_context, run_on_auth_thread};
 use crate::core::provenance::Provenance;
 use crate::secrets::keychain::errors::KeychainError;
@@ -9,9 +9,6 @@ use crate::secrets::keychain::managed_key::{KeyClass, KeyPolicy, ManagedKey, Man
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::signing::{KeychainSigner, VaultSigner};
 use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
-
-/// Keychain label of the vault encryption key.
-const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 
 /// Query the vault encryption key on the shared context with interaction not
 /// allowed. A key gated by authentication fails the inner result with

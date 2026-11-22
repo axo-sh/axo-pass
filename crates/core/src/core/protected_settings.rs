@@ -39,6 +39,11 @@ fn item() -> PlainItem {
     PlainItem::new(SERVICE, ACCOUNT)
 }
 
+/// Delete the stored settings, which restores the defaults.
+pub fn delete_stored() -> Result<(), KeychainError> {
+    item().delete()
+}
+
 impl ProtectedSettings {
     /// The settings as seen by this process. The app reads the keychain. Any
     /// other process asks the app, and gets the defaults if the app does not

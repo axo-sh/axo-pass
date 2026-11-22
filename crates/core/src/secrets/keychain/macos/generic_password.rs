@@ -9,9 +9,9 @@ use objc2::rc::Retained;
 use objc2_core_foundation::{CFBoolean, CFData, CFMutableDictionary, CFString, CFType};
 use objc2_local_authentication::LAAccessControlOperation;
 use objc2_security::{
-    SecItemAdd, SecItemDelete, errSecSuccess, kSecAttrAccessControl, kSecAttrAccount,
-    kSecAttrService, kSecClass, kSecClassGenericPassword, kSecUseDataProtectionKeychain,
-    kSecValueData,
+    SecItemAdd, SecItemDelete, errSecItemNotFound, errSecSuccess, kSecAttrAccessControl,
+    kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword,
+    kSecUseDataProtectionKeychain, kSecValueData,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,18 @@ impl PasswordEntry {
             log::debug!("Deleted key status: {}", status);
         }
         Ok(())
+    }
+
+    /// Delete every entry of the service, including GPG, SSH, and age
+    /// passphrases. Needs no authentication. No entries is not an error.
+    pub fn delete_all() -> Result<(), KeychainError> {
+        let query = Self::common_attrs(None);
+        let status = unsafe { SecItemDelete(query.as_opaque()) };
+        if status == errSecSuccess || status == errSecItemNotFound {
+            Ok(())
+        } else {
+            Err(anyhow!("keychain delete of passwords failed: {status}").into())
+        }
     }
 }
 
