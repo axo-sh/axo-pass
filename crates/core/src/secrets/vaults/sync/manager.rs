@@ -31,7 +31,10 @@
 //! is scanned again, so a change that no watch reported is found. The
 //! pairing requests of each root are counted again at the same interval.
 //! A rescan that finds a change is recorded in the sync log, with whether the
-//! vault had a watch. After each scan the manager copies the staged
+//! vault had a watch. A scan after a watch event that finds a change is
+//! recorded too. The watch records the signal of each event, so the log shows
+//! which signal reported a change and which change no signal reported. After
+//! each scan the manager copies the staged
 //! file if a publish failed ([`VaultWriter::copy_staged`]). Every
 //! [`RETRY_INTERVAL`] it copies again while the copy fails or is refused, and
 //! watches again a vault with no watch (D13).
@@ -591,6 +594,7 @@ impl Worker {
         let mut shutdown = false;
         let mut refresh = false;
         let mut changed = BTreeSet::new();
+        let mut refreshed = BTreeSet::new();
         let mut import_changed = BTreeSet::new();
         let mut roots: Vec<TransportRoot> = Vec::new();
         let mut pairing_changed = false;
@@ -624,12 +628,10 @@ impl Worker {
             return false;
         }
         if refresh {
-            for vault_id in self.refresh() {
-                changed.insert(vault_id);
-            }
+            refreshed.extend(self.refresh());
         }
-        for vault_id in changed {
-            self.scan(vault_id);
+        for &vault_id in changed.union(&refreshed) {
+            self.scan(vault_id, changed.contains(&vault_id));
         }
         self.retry_due();
         for root in self.watch_roots() {
@@ -1154,13 +1156,17 @@ impl Worker {
 
     /// Scan vault `vault_id` for peer changes and react to them, then copy
     /// its staged file if a publish failed. A `leaving` vault has no
-    /// transport, so its scan only copies.
-    fn scan(&mut self, vault_id: Uuid) {
+    /// transport, so its scan only copies. A change found after a watch
+    /// event, as `after_event` states, is recorded in the sync log.
+    fn scan(&mut self, vault_id: Uuid, after_event: bool) {
         let now = self.now();
         let Some(mut vault) = self.vaults.remove(&vault_id) else {
             return;
         };
         if vault.changes(self.files()) {
+            if after_event {
+                sync_log::info(vault_id, "Watch event found a peer change");
+            }
             self.react(&mut vault);
         }
         if self.copy(&mut vault, now) {

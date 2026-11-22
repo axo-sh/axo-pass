@@ -409,6 +409,23 @@ fn watch_event_for_peer_change_while_vault_is_locked_sets_flag() {
 }
 
 #[test]
+fn watch_event_logs_found_peer_change() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, false);
+    managed.run();
+
+    put_peer(&fx, &transport, PEER, "joined");
+    assert_eq!(transport.fire_watch(fx.id()), 1);
+    managed.run();
+
+    let logged = sync_log::entries().into_iter().any(|entry| {
+        entry.vault_id == Some(fx.id()) && entry.message == "Watch event found a peer change"
+    });
+    assert!(logged);
+}
+
+#[test]
 fn peer_change_before_start_sets_flag() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
