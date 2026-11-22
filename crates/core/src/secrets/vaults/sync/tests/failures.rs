@@ -359,7 +359,7 @@ fn while_peer_file_has_newer_format_local_edits_recorded_other_peers_join_and_re
 
     // After the update, the newer file joins. The same state in this format
     // stands for the file as a build that reads the newer format sees it.
-    transport.remove(fx.id(), PEER, &StateFile::name(fx.id(), newer_hash));
+    transport.remove(fx.id(), PEER, &StateFile::name(newer_hash));
     transport.put_state(fx.id(), PEER, &state_file(&fx, PEER, &peer));
 
     fixed_build(&fx);

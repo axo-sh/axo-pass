@@ -137,7 +137,7 @@ impl FakeTransport {
     /// the hash of its bytes. Returns the hash.
     pub(super) fn put_state(&self, vault_id: Uuid, replica: ReplicaId, bytes: &[u8]) -> StateHash {
         let hash = StateHash::of(bytes);
-        self.put(vault_id, replica, &StateFile::name(vault_id, hash), bytes);
+        self.put(vault_id, replica, &StateFile::name(hash), bytes);
         hash
     }
 
@@ -496,7 +496,7 @@ impl SyncTransport for FakeTransport {
             .files
             .keys()
             .filter(|(v, r, _)| *v == vault_id && *r == replica)
-            .filter_map(|(_, _, name)| FileName::parse_state(vault_id, name))
+            .filter_map(|(_, _, name)| FileName::parse_state(name))
             .collect())
     }
 
@@ -508,7 +508,7 @@ impl SyncTransport for FakeTransport {
     ) -> Result<ReadResult, Error> {
         let mut folder = self.folder();
         Self::check_available(&folder)?;
-        let key = (vault_id, replica, name.file_name(vault_id));
+        let key = (vault_id, replica, name.file_name());
         let result = match folder.files.get(&key) {
             None => ReadResult::Missing,
             Some(FakeFile::Remote(_)) => ReadResult::Remote,
@@ -531,7 +531,7 @@ impl SyncTransport for FakeTransport {
     fn is_local(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> Result<bool, Error> {
         let folder = self.folder();
         Self::check_available(&folder)?;
-        let key = (vault_id, replica, name.file_name(vault_id));
+        let key = (vault_id, replica, name.file_name());
         Ok(matches!(folder.files.get(&key), Some(FakeFile::Local(_))))
     }
 
@@ -563,7 +563,7 @@ impl SyncTransport for FakeTransport {
         self.run_write_hook(vault_id);
         let mut folder = self.folder();
         Self::check_writable(&folder)?;
-        let key = (vault_id, replica, name.file_name(vault_id));
+        let key = (vault_id, replica, name.file_name());
         folder.write_log.push(key.2.clone());
         folder.files.insert(key, FakeFile::Local(data.to_vec()));
         folder.writes += 1;
@@ -576,7 +576,7 @@ impl SyncTransport for FakeTransport {
         Self::check_writable(&folder)?;
         folder
             .files
-            .remove(&(vault_id, replica, name.file_name(vault_id)));
+            .remove(&(vault_id, replica, name.file_name()));
         Ok(())
     }
 
@@ -769,7 +769,7 @@ pub(super) trait SyncedFolder {
     /// the hash of its bytes. Returns the hash.
     fn put_state(&self, vault_id: Uuid, replica: ReplicaId, bytes: &[u8]) -> StateHash {
         let hash = StateHash::of(bytes);
-        self.put(vault_id, replica, &StateFile::name(vault_id, hash), bytes);
+        self.put(vault_id, replica, &StateFile::name(hash), bytes);
         hash
     }
 }
@@ -822,11 +822,10 @@ impl SyncedFolder for FakeTransport {
 pub(super) fn reads_only_exact_state_file_names(folder: &dyn SyncedFolder) {
     let transport = folder.transport();
     let hash = folder.put_state(VAULT, WRITER, b"state");
-    let name = StateFile::name(VAULT, hash);
-    // Conflict copies in iCloud, Dropbox, and Syncthing naming, another
-    // vault id, and an uppercase hash.
+    let name = StateFile::name(hash);
+    // Conflict copies in iCloud, Dropbox, and Syncthing naming, and an
+    // uppercase hash.
     let stem = name.strip_suffix(".apstate").unwrap();
-    let other_vault = StateFile::name(Uuid::from_u128(0x200), hash);
     let upper = format!(
         "{}.{}.apstate",
         stem.split('.').next().unwrap(),
@@ -837,7 +836,6 @@ pub(super) fn reads_only_exact_state_file_names(folder: &dyn SyncedFolder) {
         format!("{stem} (conflicted copy).apstate"),
         format!("{stem}.sync-conflict-20261103-120000-ABCDEFG.apstate"),
         format!("{name}.tmp"),
-        other_vault,
         upper,
     ] {
         folder.put(VAULT, WRITER, &planted, b"planted");
@@ -862,7 +860,7 @@ pub(super) fn reads_only_exact_state_file_names(folder: &dyn SyncedFolder) {
 pub(super) fn returns_remote_for_file_not_yet_local(folder: &dyn SyncedFolder) {
     let transport = folder.transport();
     let hash = StateHash::of(b"state");
-    folder.put_not_local(VAULT, WRITER, &StateFile::name(VAULT, hash), None);
+    folder.put_not_local(VAULT, WRITER, &StateFile::name(hash), None);
 
     assert_eq!(transport.list_states(VAULT, WRITER).unwrap(), vec![hash]);
     assert_eq!(
@@ -880,7 +878,7 @@ pub(super) fn tells_local_file_from_one_not_local_or_missing_without_read(
     let transport = folder.transport();
     let local = folder.put_state(VAULT, WRITER, b"local");
     let remote = StateHash::of(b"remote");
-    folder.put_not_local(VAULT, WRITER, &StateFile::name(VAULT, remote), None);
+    folder.put_not_local(VAULT, WRITER, &StateFile::name(remote), None);
 
     let is_local = |hash| {
         transport
@@ -906,7 +904,7 @@ pub(super) fn writes_and_deletes_own_files_and_fails_while_unavailable(folder: &
     let name = FileName::State(hash);
     transport.write_own(VAULT, WRITER, name, b"state").unwrap();
     assert_eq!(transport.list_replicas(VAULT).unwrap(), vec![WRITER]);
-    assert_eq!(folder.names(VAULT, WRITER), vec![name.file_name(VAULT)]);
+    assert_eq!(folder.names(VAULT, WRITER), vec![name.file_name()]);
 
     folder.set_failing_writes(true);
     assert!(transport.delete_own(VAULT, WRITER, name).is_err());
@@ -979,9 +977,9 @@ pub(super) fn deletes_replica_directory_and_leaves_others(folder: &dyn SyncedFol
 pub(super) fn records_download_requests_and_makes_remote_files_local(folder: &dyn SyncedFolder) {
     let transport = folder.transport();
     let hash = StateHash::of(b"state");
-    let name = StateFile::name(VAULT, hash);
+    let name = StateFile::name(hash);
     folder.put_not_local(VAULT, WRITER, &name, Some(b"state"));
-    let pending = StateFile::name(VAULT, StateHash::of(b"pending"));
+    let pending = StateFile::name(StateHash::of(b"pending"));
     folder.put_not_local(VAULT, WRITER, &pending, None);
 
     transport.request_download(VAULT).unwrap();

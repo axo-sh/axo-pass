@@ -127,7 +127,7 @@ fn peer_file_that_is_remote_at_join_requested_and_joined_by_later_transaction() 
     transport.put_remote_with(
         a.id(),
         a_replica,
-        &StateFile::name(a.id(), published),
+        &StateFile::name(published),
         &bytes,
     );
     let b = Mac::new(transport.clone());
@@ -214,7 +214,7 @@ fn join_through_folder_transport_with_plain_io_writes_own_state_file_and_key_jso
         .join(ShortId::encode_uuid(a.id()))
         .join(ShortId::encode_uuid(join.replica_id().0));
     let mut names = vec![
-        StateFile::name(a.id(), sidecar.last_publish.unwrap()),
+        StateFile::name(sidecar.last_publish.unwrap()),
         "key.json".to_string(),
     ];
     names.sort();

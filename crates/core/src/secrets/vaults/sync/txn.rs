@@ -1112,7 +1112,7 @@ impl SyncTxn {
         {
             let name = FileName::State(file.hash);
             if let Err(e) = transport.delete_own(vault_id, replica, name) {
-                let name = name.file_name(vault_id);
+                let name = name.file_name();
                 log::warn!("Failed to delete own state file {name} of vault {vault_id}: {e}");
             }
         }

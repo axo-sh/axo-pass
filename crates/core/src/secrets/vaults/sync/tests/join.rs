@@ -145,10 +145,10 @@ fn invalid_peer_file_quarantined() {
     let other_vault =
         StateFile::encode(&padded, Uuid::from_u128(0x200), PEER, KeyId(1), &key()).unwrap();
     let other_replica = state_file(&fx, OTHER_PEER, &peer);
-    let mismatch = StateFile::name(fx.id(), StateHash::of(b"other bytes"));
+    let mismatch = StateFile::name(StateHash::of(b"other bytes"));
     let mut planted = vec![(mismatch, good.clone())];
     for bytes in [undecryptable, other_vault, other_replica] {
-        planted.push((StateFile::name(fx.id(), StateHash::of(&bytes)), bytes));
+        planted.push((StateFile::name(StateHash::of(&bytes)), bytes));
     }
     for (name, bytes) in &planted {
         transport.put(fx.id(), PEER, name, bytes);
@@ -187,7 +187,7 @@ fn torn_peer_file_quarantined_and_good_later_file_joins() {
     let fx = synced(&transport);
     let good = state_file(&fx, PEER, &peer_state(&fx, PEER, "joined"));
     let hash = StateHash::of(&good);
-    let name = StateFile::name(fx.id(), hash);
+    let name = StateFile::name(hash);
     let torn = &good[..good.len() / 2];
     transport.put(fx.id(), PEER, &name, torn);
 
@@ -223,7 +223,7 @@ fn refused_state_retried_in_next_transaction_and_quarantined_state_not() {
     forged.actors.get_mut(&actor).unwrap().started_at += 1;
     let forged_bytes = state_file(&fx, OTHER_PEER, &forged);
     let forged_hash = transport.put_state(fx.id(), OTHER_PEER, &forged_bytes);
-    let forged_name = StateFile::name(fx.id(), forged_hash);
+    let forged_name = StateFile::name(forged_hash);
 
     fx.write(|_| Ok(())).unwrap();
 
@@ -294,7 +294,7 @@ fn remote_peer_file_not_joined_and_not_quarantined() {
     let fx = synced(&transport);
     let bytes = state_file(&fx, PEER, &peer_state(&fx, PEER, "joined"));
     let hash = StateHash::of(&bytes);
-    let name = StateFile::name(fx.id(), hash);
+    let name = StateFile::name(hash);
     transport.put_remote(fx.id(), PEER, &name);
 
     fx.add_item().unwrap();

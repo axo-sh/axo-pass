@@ -3,7 +3,7 @@
 //! ```text
 //! {prefix}/vaults/{vault}/meta.json
 //! {prefix}/vaults/{vault}/{replica}/key.json
-//! {prefix}/vaults/{vault}/{replica}/{vault}.{hash}.apstate
+//! {prefix}/vaults/{vault}/{replica}/{hash}.apstate
 //! {prefix}/vaults/{vault}/blobs/{blob}
 //! {prefix}/pairing/{request}.json
 //! ```
@@ -81,7 +81,7 @@ impl KeyLayout {
         format!(
             "{}{}",
             self.replica_dir(vault_id, replica),
-            name.file_name(vault_id)
+            name.file_name()
         )
     }
 
@@ -148,7 +148,7 @@ mod tests {
             layout.file(VAULT, REPLICA, FileName::State(hash)),
             format!(
                 "team/ap/vaults/{vault}/{replica}/{}",
-                FileName::State(hash).file_name(VAULT)
+                FileName::State(hash).file_name()
             )
         );
         assert_eq!(

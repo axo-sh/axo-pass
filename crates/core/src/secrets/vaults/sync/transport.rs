@@ -27,7 +27,6 @@ use super::crdt::ReplicaId;
 use super::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
-use crate::secrets::vaults::format::short_id::ShortId;
 
 /// Storage of the synced folder. Each replica writes only its own directory.
 pub trait SyncTransport: fmt::Debug + Send + Sync {
@@ -118,26 +117,23 @@ pub enum ReadResult {
 pub enum FileName {
     /// `key.json` of a replica directory.
     Key,
-    /// `{vault_id}.{hash}.apstate` of a replica directory, with the short id
-    /// of the vault directory.
+    /// `{hash}.apstate` of a replica directory.
     State(StateHash),
 }
 
 impl FileName {
-    /// Name of this file in a directory of vault `vault_id`.
-    pub fn file_name(&self, vault_id: Uuid) -> String {
+    /// Name of this file in a replica directory.
+    pub fn file_name(&self) -> String {
         match self {
             Self::Key => "key.json".to_string(),
-            Self::State(hash) => StateFile::name(vault_id, *hash),
+            Self::State(hash) => StateFile::name(*hash),
         }
     }
 
-    /// Hash of the state file named `name` in a directory of vault
-    /// `vault_id`. `None` unless the name is the short vault id, a
-    /// 64-character lowercase hex hash, and `.apstate`, each exactly.
-    pub fn parse_state(vault_id: Uuid, name: &str) -> Option<StateHash> {
-        let rest = name.strip_prefix(&ShortId::encode_uuid(vault_id))?;
-        let hash = rest.strip_prefix('.')?.strip_suffix(".apstate")?;
+    /// Hash of the state file named `name`. `None` unless the name is a
+    /// 64-character lowercase hex hash and `.apstate`, each exactly.
+    pub fn parse_state(name: &str) -> Option<StateHash> {
+        let hash = name.strip_suffix(".apstate")?;
         StateHash::parse(hash)
     }
 }

@@ -48,7 +48,7 @@ impl PeerListing {
                 listed
                     .into_iter()
                     .filter(|hash| {
-                        let name = FileName::State(*hash).file_name(vault_id);
+                        let name = FileName::State(*hash).file_name();
                         !sidecar.is_joined(replica, *hash)
                             && !sidecar.is_quarantined(replica, &name, *hash)
                     })

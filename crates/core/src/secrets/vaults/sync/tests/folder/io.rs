@@ -247,7 +247,7 @@ fn write_leaves_no_file_in_synced_folder_other_than_target() {
             format!("{vault}/meta.json"),
             replica.clone(),
             format!("{replica}/key.json"),
-            format!("{replica}/{}", StateFile::name(VAULT, hash)),
+            format!("{replica}/{}", StateFile::name(hash)),
         ];
         expected.sort();
         assert_eq!(folder.tree(), expected);

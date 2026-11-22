@@ -162,7 +162,7 @@ fn report_counts_conflicts_lists_quarantined_files_with_their_macs_and_known_mac
     let b_replica = b_join.replica_id();
     let padded = PaddedBody::of(&State::default()).unwrap();
     let mut torn = StateFile::encode(&padded, a.id(), b_replica, KeyId(1), setup.key()).unwrap();
-    let name = StateFile::name(a.id(), StateHash::of(&torn));
+    let name = StateFile::name(StateHash::of(&torn));
     torn.truncate(torn.len() - 1);
     transport.put(a.id(), b_replica, &name, &torn);
     a.write(|_| Ok(())).unwrap();

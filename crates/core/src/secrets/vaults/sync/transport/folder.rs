@@ -4,7 +4,7 @@
 //! OneDrive, Google Drive, or Syncthing folder, or a network share. Its
 //! layout is `{root}/{short_vault_id}/meta.json`,
 //! `{root}/{short_vault_id}/{short_replica_id}/key.json` and
-//! `{vault_id}.{hash}.apstate`, `{root}/{short_vault_id}/blobs/{blob}`, and
+//! `{hash}.apstate`, `{root}/{short_vault_id}/blobs/{blob}`, and
 //! `{root}/pairing/{request_id}.json`.
 //!
 //! Every file in the folder is untrusted. Only directories named by the exact
@@ -90,8 +90,7 @@ impl FolderTransport {
     }
 
     fn file_path(&self, vault_id: Uuid, replica: ReplicaId, name: FileName) -> PathBuf {
-        self.replica_dir(vault_id, replica)
-            .join(name.file_name(vault_id))
+        self.replica_dir(vault_id, replica).join(name.file_name())
     }
 
     fn meta_path(&self, vault_id: Uuid) -> PathBuf {
@@ -253,7 +252,7 @@ impl SyncTransport for FolderTransport {
         self.check_root()?;
         let mut hashes: Vec<StateHash> = Self::file_names(&self.replica_dir(vault_id, replica))?
             .iter()
-            .filter_map(|name| FileName::parse_state(vault_id, name))
+            .filter_map(|name| FileName::parse_state(name))
             .collect();
         hashes.sort();
         Ok(hashes)

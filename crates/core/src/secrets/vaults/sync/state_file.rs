@@ -4,8 +4,7 @@
 //! `u32`, the JSON header, and the AES-256-GCM ciphertext of the padded body.
 //! The padded body is built by [`padded::PaddedBody`]. The decrypted body is
 //! the CBOR encoding of the sync state, built by [`body::StateBody`]. A state
-//! file is named `{vault_id}.{hash}.apstate`, with the short vault id and the
-//! SHA-256 of the file bytes.
+//! file is named `{hash}.apstate`, with the SHA-256 of the file bytes.
 
 pub mod body;
 pub mod padded;
@@ -24,7 +23,6 @@ use super::crdt::{CausalState, ReplicaId};
 use super::keys::{KeyFingerprint, SyncKey, SyncKeyring};
 use super::model::{ByteString, KeyId, SYNC_FORMAT_VERSION, SyncState};
 use crate::secrets::vaults::errors::Error;
-use crate::secrets::vaults::format::short_id::ShortId;
 
 /// First bytes of every state file.
 const MAGIC: &[u8; 4] = b"APST";
@@ -207,10 +205,9 @@ impl StateFile {
         Ok([MAGIC, &header_len[..], &header_json, &ciphertext].concat())
     }
 
-    /// File name of the state file with hash `hash` of vault `vault_id`.
-    pub fn name(vault_id: Uuid, hash: StateHash) -> String {
-        let vault_id = ShortId::encode_uuid(vault_id);
-        format!("{vault_id}.{hash}.apstate")
+    /// File name of the state file with hash `hash`.
+    pub fn name(hash: StateHash) -> String {
+        format!("{hash}.apstate")
     }
 
     /// Header and sync state of the state file `bytes`, read under `source`

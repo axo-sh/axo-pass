@@ -103,7 +103,7 @@ impl StateJoin<'_> {
         }
         let vault_id = self.vault_id;
         let name = FileName::State(hash);
-        let file_name = name.file_name(vault_id);
+        let file_name = name.file_name();
         let bytes = match transport.read(vault_id, replica, name) {
             Ok(ReadResult::Local(bytes)) => bytes,
             Ok(ReadResult::Remote) => return FileJoin::Remote,

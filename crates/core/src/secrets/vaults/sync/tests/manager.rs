@@ -469,7 +469,7 @@ fn unlock_with_peer_files_not_yet_downloaded_joins_rest_by_transaction_if_unlock
         let fx = synced(&transport);
         let remote = peer_state(&fx, OTHER_PEER, "remote");
         let bytes = state_file(&fx, OTHER_PEER, &remote);
-        let name = StateFile::name(fx.id(), StateHash::of(&bytes));
+        let name = StateFile::name(StateHash::of(&bytes));
         transport.put_remote_with(fx.id(), OTHER_PEER, &name, &bytes);
         let locks = fx.catalog.files().locks();
         let managed = Managed::start(&fx, unlocked);

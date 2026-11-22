@@ -372,7 +372,7 @@ impl Sim {
                     .collect();
                 for hash in mac.transport.list_states(self.vault_id, replica).unwrap() {
                     if !present.contains(&hash) {
-                        let name = StateFile::name(self.vault_id, hash);
+                        let name = StateFile::name(hash);
                         mac.transport.remove(self.vault_id, replica, &name);
                     }
                 }

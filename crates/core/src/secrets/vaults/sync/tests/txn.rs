@@ -291,7 +291,7 @@ fn own_file_joined_once_and_sidecar_that_fails_to_parse_causes_extra_join_only()
     assert!(!committed.changed);
     assert_eq!(fx.on_disk(), before);
     assert!(Sidecar::load(&fx.root, fx.id()).is_joined(REPLICA, published));
-    let name = StateFile::name(fx.id(), hash);
+    let name = StateFile::name(hash);
     assert!(!transport.names(fx.id(), REPLICA).contains(&name));
 }
 
@@ -302,12 +302,12 @@ fn own_file_that_is_remote_damaged_or_unreachable_not_joined_and_edit_saved() {
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));
     let bytes = own_file(&fx, &own);
     let remote = StateHash::of(&bytes);
-    transport.put_remote(fx.id(), REPLICA, &StateFile::name(fx.id(), remote));
+    transport.put_remote(fx.id(), REPLICA, &StateFile::name(remote));
     let mut torn = own_file(&fx, &own);
     torn.truncate(torn.len() - 1);
     // Named by the hash of the full file, so the bytes do not match it.
     let damaged = StateHash::of(&own_file(&fx, &own));
-    let damaged_name = StateFile::name(fx.id(), damaged);
+    let damaged_name = StateFile::name(damaged);
     transport.put(fx.id(), REPLICA, &damaged_name, &torn);
 
     fx.add_item().unwrap();

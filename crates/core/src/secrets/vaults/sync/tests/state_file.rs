@@ -14,7 +14,6 @@ use zeroize::Zeroizing;
 use super::view::State;
 use super::{NOW, id, session};
 use crate::secrets::vaults::autofill::item::{MatchKind, Role};
-use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::model::fields::FieldKind;
 use crate::secrets::vaults::model::history::HistoryKind;
 use crate::secrets::vaults::passkey::signals::{SignalEntry, UnknownEntry};
@@ -233,8 +232,8 @@ fn state_file_round_trips_and_named_by_hash_of_its_bytes() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let expected = format!("{}.{hex}.apstate", ShortId::encode_uuid(VAULT));
-    assert_eq!(StateFile::name(VAULT, StateHash::of(&bytes)), expected);
+    let expected = format!("{hex}.apstate");
+    assert_eq!(StateFile::name(StateHash::of(&bytes)), expected);
     assert_eq!(StateHash::of(&bytes).to_string(), hex);
     assert_eq!(StateHash::parse(&hex), Some(StateHash::of(&bytes)));
 }

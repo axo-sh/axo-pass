@@ -106,7 +106,7 @@ fn directory_that_lacks_file_of_last_publish_republishes_and_remote_own_file_cou
     // then counts as present.
     fx.write(|_| Ok(())).unwrap();
     assert_eq!(saved(&fx).0.staged_hash, None);
-    let name = StateFile::name(fx.id(), second);
+    let name = StateFile::name(second);
     transport.put_remote(fx.id(), REPLICA, &name);
     let writes = transport.writes();
     let before = fx.on_disk();
@@ -341,18 +341,18 @@ fn publish_never_overwrites_file_and_deletes_only_older_own_files_that_were_join
     let fx = synced(&transport);
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));
     let joined = transport.put_state(fx.id(), REPLICA, &own_file(&fx, &own));
-    let remote = StateFile::name(fx.id(), StateHash::of(b"remote"));
+    let remote = StateFile::name(StateHash::of(b"remote"));
     transport.put_remote(fx.id(), REPLICA, &remote);
-    let damaged = StateFile::name(fx.id(), StateHash::of(b"damaged"));
+    let damaged = StateFile::name(StateHash::of(b"damaged"));
     transport.put(fx.id(), REPLICA, &damaged, b"torn");
 
     fx.add_item().unwrap();
 
     let hash = last_publish(&fx).unwrap();
-    let mut names = vec![StateFile::name(fx.id(), hash), remote, damaged];
+    let mut names = vec![StateFile::name(hash), remote, damaged];
     names.sort();
     assert_eq!(transport.names(fx.id(), REPLICA), names);
-    assert!(!names.contains(&StateFile::name(fx.id(), joined)));
+    assert!(!names.contains(&StateFile::name(joined)));
 
     // With the sidecar lost, the next transaction joins the file it just
     // published, and copies the same staged file. The file is listed under

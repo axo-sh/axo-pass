@@ -218,7 +218,7 @@ fn setup_with_files_uploads_blobs_first() {
     let held: Vec<FileHash> = held.into_iter().collect();
     assert_eq!(transport.blob_names(fx.id()), held);
     for blob in held {
-        assert_uploaded_before(&transport, fx.id(), blob, hash);
+        assert_uploaded_before(&transport, blob, hash);
     }
 }
 
@@ -248,7 +248,7 @@ fn join_with_files_uploads_blobs() {
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
     let hash = Sidecar::load(&b.root, a.id()).last_publish.unwrap();
     assert_eq!(transport.blob_names(a.id()), vec![blob]);
-    assert_uploaded_before(&transport, a.id(), blob, hash);
+    assert_uploaded_before(&transport, blob, hash);
 
     // Mac A applies the join, and reads the file with a fetch.
     let committed = a.write(|_| Ok(())).unwrap();

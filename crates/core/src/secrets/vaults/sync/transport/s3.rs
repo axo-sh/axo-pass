@@ -197,7 +197,7 @@ impl SyncTransport for S3Transport {
         let (objects, _) = self.list_dir(&self.layout.replica_dir(vault_id, replica))?;
         let mut hashes: Vec<StateHash> = objects
             .iter()
-            .filter_map(|(name, _)| FileName::parse_state(vault_id, name))
+            .filter_map(|(name, _)| FileName::parse_state(name))
             .collect();
         hashes.sort();
         Ok(hashes)

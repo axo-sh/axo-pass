@@ -268,7 +268,7 @@ fn pending_file_that_is_still_remote_does_not_delay_read() {
     locks.set_watched(fx.id(), true);
     let peer = peer_state(&fx, PEER, "joined");
     let bytes = state_file(&fx, PEER, &peer);
-    let name = StateFile::name(fx.id(), StateHash::of(&bytes));
+    let name = StateFile::name(StateHash::of(&bytes));
     transport.put_remote_with(fx.id(), PEER, &name, &bytes);
     locks.set_pending(fx.id());
 

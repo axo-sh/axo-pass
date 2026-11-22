@@ -166,7 +166,7 @@ fn objects_written_under_layout_keys() {
         format!("{PREFIX}/vaults/{vault}/{replica}/key.json"),
         format!(
             "{PREFIX}/vaults/{vault}/{replica}/{}",
-            StateFile::name(VAULT, hash)
+            StateFile::name(hash)
         ),
     ];
     expected.sort();

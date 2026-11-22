@@ -93,7 +93,7 @@ fn published(root: &Path, fx: &Fixture) -> Vec<StateHash> {
         .unwrap()
         .filter_map(|entry| {
             let name = entry.unwrap().file_name().into_string().unwrap();
-            FileName::parse_state(fx.id(), &name)
+            FileName::parse_state(&name)
         })
         .collect();
     hashes.sort();
@@ -121,7 +121,7 @@ fn transaction_through_folder_transport_copies_staged_file_and_next_moves_staged
     let path = root
         .join(ShortId::encode_uuid(fx.id()))
         .join(ShortId::encode_uuid(REPLICA.0))
-        .join(StateFile::name(fx.id(), hash));
+        .join(StateFile::name(hash));
     assert_eq!(fs::read(path).unwrap(), staged);
 
     fx.write(|_| Ok(())).unwrap();

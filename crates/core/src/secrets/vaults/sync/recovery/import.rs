@@ -95,7 +95,7 @@ impl RecoveryImport {
                             local.push((*replica, hash, bytes));
                         },
                         Err(e) => {
-                            let name = StateFile::name(vault_id, hash);
+                            let name = StateFile::name(hash);
                             log::warn!("Age import ignores state file {name}: {e}");
                         },
                     },

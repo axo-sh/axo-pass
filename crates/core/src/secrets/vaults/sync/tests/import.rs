@@ -86,7 +86,7 @@ fn state_files(
 /// holding their bytes until the download completes.
 fn make_remote(transport: &FakeTransport, vault_id: Uuid, replica: ReplicaId) {
     for (hash, bytes) in state_files(transport, vault_id, replica) {
-        transport.put_remote_with(vault_id, replica, &StateFile::name(vault_id, hash), &bytes);
+        transport.put_remote_with(vault_id, replica, &StateFile::name(hash), &bytes);
     }
 }
 
@@ -232,7 +232,7 @@ fn torn_state_file_of_paired_mac_does_not_end_wait_and_good_later_file_does() {
     let files = state_files(&transport, a.id(), setup.replica_id());
     assert_eq!(files.len(), 1);
     let (hash, bytes) = &files[0];
-    let name = StateFile::name(a.id(), *hash);
+    let name = StateFile::name(*hash);
     // A folder sync tool shows the first half of the file as local.
     transport.put(a.id(), setup.replica_id(), &name, &bytes[..bytes.len() / 2]);
     let b = Mac::new(transport.clone());

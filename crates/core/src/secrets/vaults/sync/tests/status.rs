@@ -139,7 +139,7 @@ fn quarantined_file_pauses_sync_while_listed_and_its_entry_kept() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);
     let mut torn = state_file(&fx, PEER, &body(PEER, &[device_key()]));
-    let name = StateFile::name(fx.id(), StateHash::of(&torn));
+    let name = StateFile::name(StateHash::of(&torn));
     torn.truncate(torn.len() - 1);
     transport.put(fx.id(), PEER, &name, &torn);
 

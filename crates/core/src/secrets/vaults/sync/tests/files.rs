@@ -133,13 +133,8 @@ fn status(uploads_pending: usize, missing_locally: usize) -> BlobStatus {
 }
 
 /// Assert that the write log of `transport` holds one upload of `blob`,
-/// written before the state file `hash` of vault `vault_id`.
-fn assert_uploaded_before(
-    transport: &FakeTransport,
-    vault_id: uuid::Uuid,
-    blob: FileHash,
-    hash: StateHash,
-) {
+/// written before the state file `hash`.
+fn assert_uploaded_before(transport: &FakeTransport, blob: FileHash, hash: StateHash) {
     let log = transport.write_log();
     let blob_name = format!("blobs/{blob}");
     let uploads: Vec<usize> = log
@@ -149,7 +144,7 @@ fn assert_uploaded_before(
         .map(|(i, _)| i)
         .collect();
     assert_eq!(uploads.len(), 1, "{log:?}");
-    let state_name = StateFile::name(vault_id, hash);
+    let state_name = StateFile::name(hash);
     let state = log.iter().position(|name| *name == state_name).unwrap();
     assert!(uploads[0] < state, "{log:?}");
 }

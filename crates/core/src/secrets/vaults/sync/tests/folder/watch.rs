@@ -46,7 +46,7 @@ fn folder_transport_watch_fires_on_write_and_ends_on_drop() {
         folder.put(
             VAULT,
             peer,
-            &StateFile::name(VAULT, StateHash::of(b"peer")),
+            &StateFile::name(StateHash::of(b"peer")),
             b"peer",
         );
         calls.recv_timeout(WATCH_WAIT).unwrap();
@@ -72,7 +72,7 @@ fn state_file_written_into_peer_directory_calls_watch_and_write_in_other_vault_d
     folder.put(
         other,
         peer,
-        &StateFile::name(other, StateHash::of(b"other")),
+        &StateFile::name(StateHash::of(b"other")),
         b"other",
     );
     other_calls.recv_timeout(WATCH_WAIT).unwrap();
@@ -81,7 +81,7 @@ fn state_file_written_into_peer_directory_calls_watch_and_write_in_other_vault_d
     folder.put(
         VAULT,
         peer,
-        &StateFile::name(VAULT, StateHash::of(b"peer")),
+        &StateFile::name(StateHash::of(b"peer")),
         b"peer",
     );
     let first = calls.recv_timeout(WATCH_WAIT).unwrap();
@@ -123,7 +123,7 @@ fn after_watch_handle_drops_no_call_follows() {
     folder.put(
         VAULT,
         peer,
-        &StateFile::name(VAULT, StateHash::of(b"peer")),
+        &StateFile::name(StateHash::of(b"peer")),
         b"peer",
     );
     live_calls.recv_timeout(WATCH_WAIT).unwrap();
@@ -160,7 +160,7 @@ fn watch_of_root_reached_through_symlink_calls_notify() {
     folder.put(
         VAULT,
         peer,
-        &StateFile::name(VAULT, StateHash::of(b"peer")),
+        &StateFile::name(StateHash::of(b"peer")),
         b"peer",
     );
     calls.recv_timeout(WATCH_WAIT).unwrap();

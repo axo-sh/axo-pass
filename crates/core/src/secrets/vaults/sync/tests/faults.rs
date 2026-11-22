@@ -142,7 +142,7 @@ fn unlock_with_peer_files_not_yet_downloaded_joins_local_files_completes_and_req
     let remote = peer_state(&fx, OTHER_PEER, "remote");
     let bytes = state_file(&fx, OTHER_PEER, &remote);
     let hash = StateHash::of(&bytes);
-    let name = StateFile::name(fx.id(), hash);
+    let name = StateFile::name(hash);
     transport.put_remote_with(fx.id(), OTHER_PEER, &name, &bytes);
 
     let committed = fx.write(|_| Ok(())).unwrap();
@@ -175,9 +175,9 @@ fn transaction_that_lists_remote_file_requests_one_download_and_one_with_none_re
     assert!(transport.download_requests().is_empty());
 
     // An own file and a peer file that are not local give one request.
-    let own = StateFile::name(fx.id(), StateHash::of(b"own"));
+    let own = StateFile::name(StateHash::of(b"own"));
     transport.put_remote(fx.id(), REPLICA, &own);
-    let peer = StateFile::name(fx.id(), StateHash::of(b"peer"));
+    let peer = StateFile::name(StateHash::of(b"peer"));
     transport.put_remote(fx.id(), OTHER_PEER, &peer);
 
     fx.write(|_| Ok(())).unwrap();
@@ -262,7 +262,7 @@ fn newer_own_state_file_that_is_remote_at_publish_kept_joined_once_local_and_del
     let fx = synced(&transport);
     let own = own_state(&fx, &joined_vault(), &mut Session::new(REPLICA));
     let bytes = own_file(&fx, &own);
-    let remote = StateFile::name(fx.id(), StateHash::of(&bytes));
+    let remote = StateFile::name(StateHash::of(&bytes));
     transport.put_remote_with(fx.id(), REPLICA, &remote, &bytes);
 
     fx.add_item().unwrap();
@@ -270,7 +270,7 @@ fn newer_own_state_file_that_is_remote_at_publish_kept_joined_once_local_and_del
     // The publish keeps the own file that is not local, and its download is
     // requested.
     let first = last_publish(&fx).unwrap();
-    let mut names = vec![StateFile::name(fx.id(), first), remote.clone()];
+    let mut names = vec![StateFile::name(first), remote.clone()];
     names.sort();
     assert_eq!(transport.names(fx.id(), REPLICA), names);
     assert_eq!(transport.download_requests(), [fx.id()]);
@@ -288,6 +288,6 @@ fn newer_own_state_file_that_is_remote_at_publish_kept_joined_once_local_and_del
     assert_ne!(second, first);
     assert_eq!(
         transport.names(fx.id(), REPLICA),
-        [StateFile::name(fx.id(), second)]
+        [StateFile::name(second)]
     );
 }

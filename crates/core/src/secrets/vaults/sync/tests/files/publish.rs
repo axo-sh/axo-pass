@@ -34,7 +34,7 @@ fn blob_uploaded_before_referencing_state_file() {
     assert_eq!(committed.sync_status, Some(SyncStatus::Active));
     let blob = record(&on_disk(&fx.vault), "doc").blob;
     let hash = last_publish(&fx).unwrap();
-    assert_uploaded_before(&transport, fx.id(), blob, hash);
+    assert_uploaded_before(&transport, blob, hash);
     let state = decode(&transport, &fx, hash);
     assert!(blobs::referenced(&state.store).contains(&blob));
     // The blob is copied as the local store holds it.
@@ -80,7 +80,7 @@ fn failed_upload_pauses_sync_until_next_transaction() {
     assert_eq!(saved(&fx).0.staged_hash, Some(hash));
     assert_eq!(published(&transport, &fx), vec![hash]);
     assert_eq!(transport.blob_names(fx.id()), vec![blob]);
-    assert_uploaded_before(&transport, fx.id(), blob, hash);
+    assert_uploaded_before(&transport, blob, hash);
     assert_eq!(report(fx.catalog.files(), &fx.vault).blobs, status(0, 0));
 }
 
@@ -105,7 +105,7 @@ fn copy_staged_uploads_blob_of_failed_publish() {
     assert!(matches!(copy, StagedCopy::Copied), "{copy:?}");
     assert_eq!(last_publish(&fx), Some(staged));
     assert!(published(&transport, &fx).contains(&staged));
-    assert_uploaded_before(&transport, fx.id(), blob, staged);
+    assert_uploaded_before(&transport, blob, staged);
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn blob_listed_in_folder_not_uploaded_again() {
     assert!(matches!(copy, StagedCopy::Copied), "{copy:?}");
     assert_eq!(
         transport.write_log()[log.len()..],
-        [StateFile::name(fx.id(), staged)]
+        [StateFile::name(staged)]
     );
     assert_eq!(uploads(&transport), 1);
 }

@@ -63,7 +63,7 @@ fn import_waits_for_remote_peer_state_files() {
         transport.put_remote_with(
             vault_id,
             replica(n),
-            &StateFile::name(vault_id, hash),
+            &StateFile::name(hash),
             &bytes,
         );
     }
@@ -101,7 +101,7 @@ fn remote_state_file_requested_for_download() {
     let state = body(replica(1), &[device_key()]);
     let bytes = state_file_under(vault_id, replica(1), &state, KeyId(1), &key());
     let hash = StateHash::of(&bytes);
-    transport.put_remote(vault_id, replica(1), &StateFile::name(vault_id, hash));
+    transport.put_remote(vault_id, replica(1), &StateFile::name(hash));
 
     assert!(matches!(
         RecoveryImport::check(&kit, &transport).unwrap(),

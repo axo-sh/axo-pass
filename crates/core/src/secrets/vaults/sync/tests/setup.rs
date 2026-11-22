@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use tempfile::TempDir;
-use uuid::Uuid;
 
 use super::load::{
     Fixture, GENERATION, REPLICA, assert_nothing_written, device_key, state, sync_files,
@@ -110,8 +109,8 @@ fn websites(urls: &[(&str, MatchKind)]) -> ItemAutofill {
 /// Names of the replica directory of vault `vault_id` after a publish of
 /// the state file with hash `published`, in order: the state file and
 /// `key.json`.
-fn published_names(vault_id: Uuid, published: StateHash) -> Vec<String> {
-    let mut names = vec![StateFile::name(vault_id, published), "key.json".to_string()];
+fn published_names(published: StateHash) -> Vec<String> {
+    let mut names = vec![StateFile::name(published), "key.json".to_string()];
     names.sort();
     names
 }
@@ -151,7 +150,7 @@ fn enable_writes_meta_key_json_with_one_age_wrapping_and_one_state_file_at_gener
     let published = sidecar.last_publish.unwrap();
     let mut names = transport.names(fx.id(), replica);
     names.sort();
-    assert_eq!(names, published_names(fx.id(), published));
+    assert_eq!(names, published_names(published));
 
     let (local, _) = opened(&fx);
     assert_eq!(local.generation, 1);
@@ -566,7 +565,7 @@ fn setup_through_folder_transport_with_plain_io_writes_meta_key_json_and_one_sta
         .unwrap();
     assert_eq!(
         Folder::names(&folder.vault_dir().join(&replica)),
-        published_names(folder.fx.id(), published)
+        published_names(published)
     );
     assert_eq!(
         Sidecar::load(&folder.fx.root, folder.fx.id()).transport,
