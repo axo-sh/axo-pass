@@ -29,6 +29,11 @@ struct TodayPane: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
         header
+        if issues.showsChecklist {
+          TodaySectionHeader(
+            "Get started", detail: "\(checklist.done.count) of \(checklist.total) done")
+          checklistCard(checklist)
+        }
         let checks = statusChecks
         if !checks.isEmpty || !counted.isEmpty {
           TodaySectionHeader("Status")
@@ -39,11 +44,6 @@ struct TodayPane: View {
           if !counted.isEmpty {
             issueCard(counted)
           }
-        }
-        if issues.showsChecklist {
-          TodaySectionHeader(
-            "Get started", detail: "\(checklist.done.count) of \(checklist.total) done")
-          checklistCard(checklist)
         }
         if !dismissed.isEmpty {
           TodaySectionHeader("Dismissed")

@@ -234,7 +234,10 @@ final class VaultsModel {
       itemCache = itemCache.filter { keys.contains($0.key) }
       folderCache = folderCache.filter { keys.contains($0.key) }
       itemLoadFailures = itemLoadFailures.filter { keys.contains($0.key) }
-      if case .vault(let key) = sidebarSelection, key != allSecretsKey, !keys.contains(key) {
+      if case .vault(let key) = sidebarSelection, key == allSecretsKey, vaults.count == 1 {
+        // The All Secrets row is hidden with one vault.
+        selectSidebarDestination(.vault(vaults[0].key))
+      } else if case .vault(let key) = sidebarSelection, key != allSecretsKey, !keys.contains(key) {
         selectSidebarDestination(vaults.first.map { .vault($0.key) })
       } else if sidebarSelection == nil {
         selectSidebarDestination(.today)

@@ -254,14 +254,19 @@ struct VaultsSidebar: View {
     }
   }
 
+  /// All Secrets row. Hidden with fewer than two vaults, since it would list
+  /// the same items as the only vault.
+  @ViewBuilder
   private var allSecretsRow: some View {
-    Label {
-      Text("All Secrets")
-    } icon: {
-      Image(systemName: "square.stack.3d.up.fill")
+    if model.vaults.count > 1 {
+      Label {
+        Text("All Secrets")
+      } icon: {
+        Image(systemName: "square.stack.3d.up.fill")
+      }
+      .tint(.secondary)
+      .tag(SidebarDestination.vault(allSecretsKey))
     }
-    .tint(.secondary)
-    .tag(SidebarDestination.vault(allSecretsKey))
   }
 
   /// Vaults listed while the list is collapsed. The selected vault is always
