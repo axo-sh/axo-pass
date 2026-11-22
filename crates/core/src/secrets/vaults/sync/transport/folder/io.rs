@@ -64,13 +64,13 @@ pub trait FolderIo: fmt::Debug + Send + Sync {
     /// missing path is not an error. A symlink is deleted, not its target.
     fn delete(&self, path: &Path) -> io::Result<()>;
     /// Start a download of each file of `paths`. Does not wait. `done` runs
-    /// once, on any thread, when the download ended without an error. It does
-    /// not run for a download that failed.
+    /// once, on any thread, when the download ends, with whether it
+    /// succeeded.
     fn download(&self, paths: Vec<PathBuf>, done: DownloadDone);
 }
 
-/// Callback of the end of a download.
-pub type DownloadDone = Box<dyn FnOnce() + Send>;
+/// Callback of the end of a download, with whether it succeeded.
+pub type DownloadDone = Box<dyn FnOnce(bool) + Send>;
 
 /// Status of the file at `path` from its metadata. A dataless file is
 /// `Remote`.
@@ -232,10 +232,20 @@ impl PlainIo {
     /// End each download that did not end, as a provider does. Returns the
     /// count.
     pub fn finish_downloads(&self) -> usize {
+        self.end_downloads(true)
+    }
+
+    /// Fail each download that did not end, as a provider that cannot reach
+    /// the files. Returns the count.
+    pub fn fail_downloads(&self) -> usize {
+        self.end_downloads(false)
+    }
+
+    fn end_downloads(&self, succeeded: bool) -> usize {
         let done = std::mem::take(&mut self.hooks().done).0;
         let count = done.len();
         for done in done {
-            done();
+            done(succeeded);
         }
         count
     }

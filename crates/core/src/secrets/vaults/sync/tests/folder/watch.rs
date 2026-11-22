@@ -1,3 +1,4 @@
+#[cfg(macos)]
 use objc2_core_services::{
     kFSEventStreamEventFlagItemCreated, kFSEventStreamEventFlagItemIsFile,
     kFSEventStreamEventFlagItemModified, kFSEventStreamEventFlagKernelDropped,
@@ -7,7 +8,11 @@ use objc2_core_services::{
 
 use super::*;
 use crate::secrets::vaults::sync::sync_log;
-use crate::secrets::vaults::sync::transport::folder::watch::metadata::MetadataWatch;
+#[cfg(macos)]
+use crate::secrets::vaults::sync::transport::folder::watch::FolderWatch;
+use crate::secrets::vaults::sync::transport::folder::watch::matches;
+#[cfg(macos)]
+use crate::secrets::vaults::sync::transport::folder::watch::{Changes, metadata::MetadataWatch};
 
 /// Longest wait for a watch call. FSEvents delivers after a latency of one
 /// second.
@@ -178,27 +183,25 @@ fn watch_of_root_reached_through_symlink_calls_notify() {
 #[test]
 fn watch_matches_paths_under_directory_and_its_ancestors() {
     let dir = Path::new("/private/var/root/vault");
-    assert!(FolderWatch::matches(dir, dir));
-    assert!(FolderWatch::matches(
+    assert!(matches(dir, dir));
+    assert!(matches(
         dir,
         Path::new("/private/var/root/vault/replica/key.json")
     ));
-    assert!(FolderWatch::matches(dir, Path::new("/private/var/root")));
-    assert!(!FolderWatch::matches(
+    assert!(matches(dir, Path::new("/private/var/root")));
+    assert!(!matches(
         dir,
         Path::new("/private/var/root/vault2/key.json")
     ));
-    assert!(!FolderWatch::matches(
+    assert!(!matches(
         dir,
         Path::new("/private/var/root/pairing/request.json")
     ));
-    assert!(!FolderWatch::matches(
-        dir,
-        Path::new("/var/root/vault/key.json")
-    ));
+    assert!(!matches(dir, Path::new("/var/root/vault/key.json")));
 }
 
 #[test]
+#[cfg(macos)]
 fn lost_event_flags_make_watch_scan() {
     for flags in [
         kFSEventStreamEventFlagMustScanSubDirs,
@@ -286,61 +289,120 @@ fn download_finished_after_watch_drop_calls_nothing() {
     assert_eq!(folder.plain_io().finish_downloads(), 1);
 }
 
-/// Watch the folder in `AXO_SPIKE_DIR` for 60 seconds and print the sync log.
-/// Run it against an iCloud Drive folder, then add or change a file in the
-/// folder from another Mac, to see which signals report it.
-///
-/// `AXO_SPIKE_DIR=/path cargo test -p axo-pass-core --lib spike_watch --
-/// --ignored --nocapture`
 #[test]
-#[ignore = "needs a folder in AXO_SPIKE_DIR and a change from another device"]
-fn spike_watch() {
-    let dir = PathBuf::from(std::env::var("AXO_SPIKE_DIR").unwrap());
-    let transport = FolderTransport::new(&dir, Arc::new(CoordinatedIo));
-    let (sender, calls) = mpsc::channel();
-    let _watches: Vec<_> = transport
-        .list_vaults()
-        .unwrap()
-        .into_iter()
-        .map(|vault_id| {
-            let sender = sender.clone();
-            let notify = Box::new(move || {
-                let _ = sender.send(vault_id);
-            });
-            transport.watch(vault_id, notify).unwrap()
-        })
-        .collect();
-    println!("watching {} vaults", _watches.len());
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(60) {
-        if let Ok(vault_id) = calls.recv_timeout(Duration::from_secs(1)) {
-            println!(
-                "{:>5.1}s watch call, vault {vault_id}",
-                start.elapsed().as_secs_f32()
-            );
+#[cfg(macos)]
+fn metadata_query_starts_and_ends_on_drop() {
+    let folder = Folder::plain();
+    let root = fs::canonicalize(&folder.root).unwrap();
+    let (sender, calls) = mpsc::channel::<Changes>();
+    let watch = MetadataWatch::start(
+        &root,
+        Box::new(move |changes| {
+            let _ = sender.send(changes);
+        }),
+    )
+    .unwrap();
+
+    let dropped = Instant::now();
+    drop(watch);
+
+    // A stop that came before the run loop ran ends the thread within the
+    // keep-alive timeout.
+    assert!(dropped.elapsed() < Duration::from_secs(10));
+    loop {
+        match calls.try_recv() {
+            Ok(_) => continue,
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => panic!("query callback is still held"),
         }
-    }
-    for entry in sync_log::entries() {
-        println!("{:?} {} x{}", entry.level, entry.message, entry.count);
     }
 }
 
 #[test]
-fn metadata_query_gathers_folder_and_ends_on_drop() {
+fn signals_run_while_any_watch_of_root_is_live() {
     let folder = Folder::plain();
+    assert!(!folder.transport.watching());
+
+    let vault = folder.transport.watch(VAULT, Box::new(|| {})).unwrap();
+    let pairings = folder.transport.watch_pairings(Box::new(|| {})).unwrap();
+    assert!(folder.transport.watching());
+
+    drop(vault);
+    assert!(folder.transport.watching());
+    drop(pairings);
+    assert!(!folder.transport.watching());
+
+    // A new watch starts the signals again.
     let (notify, calls) = watch_calls();
-    let watch = MetadataWatch::start(
-        &folder.root,
-        Path::new(&ShortId::encode_uuid(VAULT)),
-        Some(VAULT),
-        notify,
-    )
-    .unwrap();
+    let _watch = folder.transport.watch(VAULT, notify).unwrap();
+    assert!(folder.transport.watching());
+    let peer = ReplicaId(Uuid::from_u128(2));
+    folder.put(
+        VAULT,
+        peer,
+        &StateFile::name(StateHash::of(b"peer")),
+        b"peer",
+    );
+    calls.recv_timeout(WATCH_WAIT).unwrap();
+}
 
-    // The gather of a folder ends with the first call, whether or not
-    // Spotlight indexes the folder.
-    calls.recv_timeout(Duration::from_secs(15)).unwrap();
+/// Wait until `io` has `count` download calls.
+fn wait_for_downloads(io: &PlainIo, count: usize) {
+    let start = Instant::now();
+    while io.downloads().len() < count {
+        assert!(start.elapsed() < WATCH_WAIT, "{count} downloads");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 
-    drop(watch);
-    assert_callback_dropped(&calls);
+#[test]
+fn failed_download_retried_and_calls_watch_when_it_ends() {
+    let folder = Folder::plain();
+    let peer = ReplicaId(Uuid::from_u128(2));
+    folder.put_not_local(VAULT, peer, &StateFile::name(StateHash::of(b"peer")), None);
+    let (notify, calls) = watch_calls();
+    let _watch = folder.transport.watch(VAULT, notify).unwrap();
+    settle(&[&calls]);
+
+    folder.transport.request_download(VAULT).unwrap();
+    assert_eq!(folder.plain_io().fail_downloads(), 1);
+    assert!(calls.try_recv().is_err());
+
+    wait_for_downloads(folder.plain_io(), 2);
+    assert_eq!(folder.plain_io().finish_downloads(), 1);
+
+    calls.try_recv().unwrap();
+}
+
+#[test]
+fn download_retries_stop_after_last_delay() {
+    let folder = Folder::plain();
+    let peer = ReplicaId(Uuid::from_u128(2));
+    folder.put_not_local(VAULT, peer, &StateFile::name(StateHash::of(b"peer")), None);
+
+    folder.transport.request_download(VAULT).unwrap();
+    for count in 2..=4 {
+        assert_eq!(folder.plain_io().fail_downloads(), 1);
+        wait_for_downloads(folder.plain_io(), count);
+    }
+    assert_eq!(folder.plain_io().fail_downloads(), 1);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(folder.plain_io().downloads().len(), 4);
+}
+
+#[test]
+fn file_made_local_before_retry_is_not_downloaded_again() {
+    let folder = Folder::plain();
+    let peer = ReplicaId(Uuid::from_u128(2));
+    let name = StateFile::name(StateHash::of(b"peer"));
+    folder.put_not_local(VAULT, peer, &name, None);
+
+    folder.transport.request_download(VAULT).unwrap();
+    let path = folder.replica_dir(VAULT, peer).join(&name);
+    folder.plain_io().set_remote(&path, false);
+    assert_eq!(folder.plain_io().fail_downloads(), 1);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(folder.plain_io().downloads().len(), 1);
 }

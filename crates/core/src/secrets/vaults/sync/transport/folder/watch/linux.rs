@@ -1,16 +1,15 @@
 //! inotify watch of the folder transport.
 //!
 //! A [`FolderWatch`] watches the root recursively through the `notify` crate
-//! and calls `notify` for events under one directory of it. The root is
-//! watched, not the directory, so a directory created later is covered.
-//! inotify reports writes of every process, including writes that use no
-//! coordination, such as Syncthing writes.
+//! and calls `notify` with the changed paths of each batch. The whole root is
+//! watched, so a directory created later is covered. inotify reports writes
+//! of every process, including writes that use no coordination, such as
+//! Syncthing writes.
 //!
-//! inotify reports paths below the path it was given, so the root is
-//! resolved before the watch starts. A root reached through a symlink
-//! matches its events.
+//! inotify reports paths below the path it was given, so the caller passes
+//! the real path of the root. A root reached through a symlink then matches
+//! its events.
 
-use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -20,7 +19,7 @@ use std::time::{Duration, Instant};
 use notify::event::{AccessKind, AccessMode};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-use crate::secrets::vaults::sync::transport::WatchHandle;
+use super::Changes;
 
 /// Time that events are gathered before `notify` is called, as the latency
 /// of the FSEvents stream on macOS.
@@ -43,22 +42,16 @@ pub struct FolderWatch {
 }
 
 impl FolderWatch {
-    /// Watch of `root` that calls `notify` for each batch of events under
-    /// `{root}/{dir}`, or under an ancestor of it, such as a change of the
-    /// root itself, or a batch that inotify could not report by path, such
-    /// as an overflow of its queue. `None` if the root is missing or is not
-    /// a folder, or the watch fails to start.
+    /// Watch of the real root `root` that calls `notify` with the paths of
+    /// each batch of events, or with [`Changes::Unknown`] if inotify could
+    /// not report them by path, such as after an overflow of its queue.
+    /// `None` if the watch fails to start.
     ///
     /// At most one call is made per second. Calls never overlap.
     ///
-    /// The handle must not drop inside `notify`, since drop waits for the
+    /// The watch must not drop inside `notify`, since drop waits for the
     /// thread that makes the call.
-    pub fn start(root: &Path, dir: &Path, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        let root = fs::canonicalize(root).ok()?;
-        if !root.is_dir() {
-            return None;
-        }
-        let dir = root.join(dir);
+    pub fn start(root: &Path, notify: Box<dyn Fn(Changes) + Send>) -> Option<Self> {
         let (sender, receiver) = mpsc::channel();
         let events = sender.clone();
         let mut watcher = match notify::recommended_watcher(move |event| {
@@ -74,13 +67,14 @@ impl FolderWatch {
                 return None;
             },
         };
-        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
+        if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
             log::warn!("Failed to watch {}: {e}", root.display());
             return None;
         }
+        let name = root.to_path_buf();
         let thread = thread::Builder::new()
             .name("folder-watch".into())
-            .spawn(move || Self::run(&dir, &receiver, &notify));
+            .spawn(move || Self::run(&name, &receiver, &notify));
         let thread = match thread {
             Ok(thread) => thread,
             Err(e) => {
@@ -91,26 +85,19 @@ impl FolderWatch {
                 return None;
             },
         };
-        let watch = Self {
+        Some(Self {
             watcher: Some(watcher),
             stop: sender,
             thread: Some(thread),
-        };
-        Some(WatchHandle::new(move || drop(watch)))
+        })
     }
 
-    /// Whether an event at `path` reports a change under `dir`: the path is
-    /// `dir`, a path under it, or an ancestor of it.
-    pub fn matches(dir: &Path, path: &Path) -> bool {
-        path.starts_with(dir) || dir.starts_with(path)
-    }
-
-    /// Whether `event` reports a change under `dir`. An error and an event
-    /// with no path report a change that is not known by path, such as an
-    /// overflow of the inotify queue.
-    fn relevant(dir: &Path, event: &notify::Result<Event>) -> bool {
+    /// Changes that `event` reports. `None` for a read, which is not a
+    /// change. An error and an event with no path report changes that are
+    /// not known by path, such as an overflow of the inotify queue.
+    fn changes(event: &notify::Result<Event>) -> Option<Changes> {
         let Ok(event) = event else {
-            return true;
+            return Some(Changes::Unknown);
         };
         // Our own reads open and close files, and would call `notify` again.
         let reads = match event.kind {
@@ -119,38 +106,59 @@ impl FolderWatch {
             _ => false,
         };
         if reads {
-            return false;
+            return None;
         }
-        event.need_rescan()
-            || event.paths.is_empty()
-            || event.paths.iter().any(|path| Self::matches(dir, path))
+        if event.need_rescan() || event.paths.is_empty() {
+            return Some(Changes::Unknown);
+        }
+        Some(Changes::Paths(event.paths.clone()))
     }
 
-    /// Body of the thread. Waits for a relevant event, gathers events for
-    /// [`LATENCY`], and calls `notify` once. Ends on `Stop`, or when the
-    /// channel closes.
-    fn run(dir: &Path, receiver: &Receiver<Message>, notify: &dyn Fn()) {
+    /// Add the changes of `event` to `batch`. Unknown changes absorb any
+    /// paths.
+    fn gather(batch: &mut Option<Changes>, event: &notify::Result<Event>) {
+        let Some(changes) = Self::changes(event) else {
+            return;
+        };
+        if let Err(e) = event {
+            log::warn!("Folder watch reported an error: {e}");
+        }
+        *batch = match (batch.take(), changes) {
+            (Some(Changes::Paths(mut paths)), Changes::Paths(more)) => {
+                paths.extend(more);
+                Some(Changes::Paths(paths))
+            },
+            (None, changes) => Some(changes),
+            _ => Some(Changes::Unknown),
+        };
+    }
+
+    /// Body of the thread. Waits for an event that reports a change, gathers
+    /// events for [`LATENCY`], and calls `notify` once. Ends on `Stop`, or
+    /// when the channel closes.
+    fn run(root: &Path, receiver: &Receiver<Message>, notify: &dyn Fn(Changes)) {
         loop {
-            match receiver.recv() {
-                Ok(Message::Event(event)) if Self::relevant(dir, &event) => {
-                    if let Err(e) = &event {
-                        log::warn!("Watch of {} reported an error: {e}", dir.display());
-                    }
-                },
-                Ok(Message::Event(_)) => continue,
-                Ok(Message::Stop) | Err(_) => return,
+            let mut batch = None;
+            while batch.is_none() {
+                match receiver.recv() {
+                    Ok(Message::Event(event)) => Self::gather(&mut batch, &event),
+                    Ok(Message::Stop) | Err(_) => return,
+                }
             }
             let deadline = Instant::now() + LATENCY;
             loop {
                 let wait = deadline.saturating_duration_since(Instant::now());
                 match receiver.recv_timeout(wait) {
-                    Ok(Message::Event(_)) => {},
+                    Ok(Message::Event(event)) => Self::gather(&mut batch, &event),
                     Ok(Message::Stop) | Err(RecvTimeoutError::Disconnected) => return,
                     Err(RecvTimeoutError::Timeout) => break,
                 }
             }
-            if catch_unwind(AssertUnwindSafe(notify)).is_err() {
-                log::error!("Watch callback of {} panicked", dir.display());
+            let Some(changes) = batch else {
+                continue;
+            };
+            if catch_unwind(AssertUnwindSafe(|| notify(changes))).is_err() {
+                log::error!("Watch callback of {} panicked", root.display());
             }
         }
     }
@@ -186,52 +194,59 @@ mod tests {
         Ok(event)
     }
 
+    fn paths(paths: &[&str]) -> Option<Changes> {
+        Some(Changes::Paths(paths.iter().map(PathBuf::from).collect()))
+    }
+
     #[test]
-    fn events_with_paths_outside_dir_or_without_paths_or_that_read_are_filtered() {
-        let dir = Path::new("/root/vault");
+    fn events_report_paths_or_unknown_and_reads_report_nothing() {
         let create = EventKind::Create(CreateKind::File);
-        assert!(FolderWatch::relevant(
-            dir,
-            &event(create, &["/root/vault/a/key.json"])
-        ));
-        assert!(FolderWatch::relevant(dir, &event(create, &["/root/vault"])));
-        assert!(FolderWatch::relevant(dir, &event(create, &["/root"])));
-        assert!(!FolderWatch::relevant(
-            dir,
-            &event(create, &["/root/pairing/a.json"])
-        ));
+        assert_eq!(
+            FolderWatch::changes(&event(create, &["/root/vault/a/key.json"])),
+            paths(&["/root/vault/a/key.json"])
+        );
         // A rename reports both paths.
         let rename = EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both));
-        assert!(FolderWatch::relevant(
-            dir,
-            &event(rename, &["/root/pairing/a", "/root/vault/b"])
-        ));
+        assert_eq!(
+            FolderWatch::changes(&event(rename, &["/root/pairing/a", "/root/vault/b"])),
+            paths(&["/root/pairing/a", "/root/vault/b"])
+        );
         // No path, or an overflow.
-        assert!(FolderWatch::relevant(dir, &event(create, &[])));
+        assert_eq!(
+            FolderWatch::changes(&event(create, &[])),
+            Some(Changes::Unknown)
+        );
         let overflow = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
-        assert!(FolderWatch::relevant(
-            dir,
-            &Ok(overflow.add_path("/elsewhere".into()))
-        ));
-        assert!(FolderWatch::relevant(
-            dir,
-            &Err(notify::Error::generic("overflow"))
-        ));
+        assert_eq!(
+            FolderWatch::changes(&Ok(overflow.add_path("/elsewhere".into()))),
+            Some(Changes::Unknown)
+        );
+        assert_eq!(
+            FolderWatch::changes(&Err(notify::Error::generic("overflow"))),
+            Some(Changes::Unknown)
+        );
         // Opening and reading a file is not a change. Closing a written one is.
         let open = EventKind::Access(AccessKind::Open(AccessMode::Any));
         let read = EventKind::Access(AccessKind::Close(AccessMode::Read));
         let written = EventKind::Access(AccessKind::Close(AccessMode::Write));
-        assert!(!FolderWatch::relevant(
-            dir,
-            &event(open, &["/root/vault/a"])
-        ));
-        assert!(!FolderWatch::relevant(
-            dir,
-            &event(read, &["/root/vault/a"])
-        ));
-        assert!(FolderWatch::relevant(
-            dir,
-            &event(written, &["/root/vault/a"])
-        ));
+        assert_eq!(FolderWatch::changes(&event(open, &["/root/vault/a"])), None);
+        assert_eq!(FolderWatch::changes(&event(read, &["/root/vault/a"])), None);
+        assert_eq!(
+            FolderWatch::changes(&event(written, &["/root/vault/a"])),
+            paths(&["/root/vault/a"])
+        );
+    }
+
+    #[test]
+    fn batch_joins_paths_and_unknown_absorbs_them() {
+        let create = EventKind::Create(CreateKind::File);
+        let mut batch = None;
+        FolderWatch::gather(&mut batch, &event(create, &["/root/a"]));
+        FolderWatch::gather(&mut batch, &event(create, &["/root/b"]));
+        assert_eq!(batch, paths(&["/root/a", "/root/b"]));
+
+        FolderWatch::gather(&mut batch, &event(create, &[]));
+        FolderWatch::gather(&mut batch, &event(create, &["/root/c"]));
+        assert_eq!(batch, Some(Changes::Unknown));
     }
 }

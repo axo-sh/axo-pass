@@ -30,7 +30,6 @@ use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::sync::transport::folder::FolderTransport;
 use crate::secrets::vaults::sync::transport::folder::io::{CoordinatedIo, FolderIo, PlainIo};
-use crate::secrets::vaults::sync::transport::folder::watch::FolderWatch;
 use crate::secrets::vaults::sync::transport::{
     FileName, MAX_PAIRING_SIZE, PairingEntry, ReadResult, RequestId, SyncTransport, SyncTransports,
     TransportRoot,

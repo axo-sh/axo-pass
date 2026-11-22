@@ -237,19 +237,23 @@ impl FolderIo for CoordinatedIo {
             let accessor = RcBlock::new(move |error: *mut NSError| {
                 let _ = &held;
                 // SAFETY: the error is null or valid for the call.
-                match unsafe { error.as_ref() } {
-                    Some(error) => sync_log::record(
-                        Level::Warn,
-                        None,
-                        "Failed to download files",
-                        Some(format!("{count} files: {}", error.localizedDescription())),
-                    ),
+                let succeeded = match unsafe { error.as_ref() } {
+                    Some(error) => {
+                        sync_log::record(
+                            Level::Warn,
+                            None,
+                            "Failed to download files",
+                            Some(format!("{count} files: {}", error.localizedDescription())),
+                        );
+                        false
+                    },
                     None => {
                         log::debug!("Downloaded {count} files");
-                        if let Some(done) = done.take() {
-                            done();
-                        }
+                        true
                     },
+                };
+                if let Some(done) = done.take() {
+                    done(succeeded);
                 }
             });
             // SAFETY: the accessor is a heap block that holds what it uses.

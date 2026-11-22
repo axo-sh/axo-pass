@@ -73,7 +73,7 @@ objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-core-services = {version = "0.3.2", default-features = false, features = ["std", "dispatch2", "objc2", "FSEvents"]}
-objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSMetadata", "NSNotification", "NSOperation", "NSPathUtilities", "NSPredicate", "NSString", "NSTimer", "NSURL", "NSValue"]}
+objc2-foundation = {version = "0.3.2", features = ["block2", "NSArray", "NSDictionary", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSMetadata", "NSNotification", "NSOperation", "NSPathUtilities", "NSPredicate", "NSString", "NSTimer", "NSURL", "NSValue"]}
 objc2-local-authentication = "0.3.2"
 objc2-security = "0.3.2"
 

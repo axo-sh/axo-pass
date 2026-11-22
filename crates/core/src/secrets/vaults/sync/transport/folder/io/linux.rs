@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(io.status(&path).unwrap(), FileStatus::Local);
         assert_eq!(io.read(&path, 10).unwrap(), b"data");
         assert!(io.read(&path, 3).is_err());
-        io.download(vec![path.clone()], Box::new(|| {}));
+        io.download(vec![path.clone()], Box::new(|_| {}));
         io.delete(&path).unwrap();
         io.delete(&path).unwrap();
         assert_eq!(io.status(&path).unwrap(), FileStatus::Missing);

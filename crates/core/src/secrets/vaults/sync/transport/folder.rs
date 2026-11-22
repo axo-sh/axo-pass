@@ -22,15 +22,15 @@ pub mod watch;
 
 use std::fs::{self, FileType};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
+use std::thread;
+use std::time::Duration;
 
 use jiff::Timestamp;
 use uuid::Uuid;
 
 use self::io::{FileStatus, FolderIo, WriteMode};
-#[cfg(macos)]
-use self::watch::metadata::MetadataWatch;
-use self::watch::{FolderWatch, SharedNotify, Source};
+use self::watch::{RootWatch, Scope, Source};
 use super::{
     FileName, MAX_PAIRING_SIZE, PairingEntry, ReadResult, RequestId, SyncTransport, WatchHandle,
 };
@@ -39,6 +39,7 @@ use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::format::short_id::ShortId;
 use crate::secrets::vaults::sync::crdt::ReplicaId;
 use crate::secrets::vaults::sync::state_file::StateHash;
+use crate::secrets::vaults::sync::sync_log::{self, Level};
 
 /// Name of the file of the vault format in each vault directory.
 const META_FILE: &str = "meta.json";
@@ -49,44 +50,16 @@ const PAIRING_DIR: &str = "pairing";
 /// Directory of the file blobs in each vault directory.
 const BLOB_DIR: &str = "blobs";
 
-/// Changes that a watch reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scope {
-    /// Files under the directory of a vault.
-    Vault(Uuid),
-    /// Files under `pairing/`.
-    Pairings,
-}
-
-/// Callbacks of the live watches of a transport, to call when a download that
-/// the transport requested ends. A watch that ended is dropped from the list
-/// at the next call.
-#[derive(Debug, Default)]
-struct Listeners(Mutex<Vec<(Scope, Weak<SharedNotify>)>>);
-
-impl Listeners {
-    fn add(&self, scope: Scope, notify: &Arc<SharedNotify>) {
-        let mut listeners = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        listeners.retain(|(_, notify)| notify.strong_count() > 0);
-        listeners.push((scope, Arc::downgrade(notify)));
-    }
-
-    /// Call the watches of `scope` with `source`.
-    fn call(&self, scope: Scope, source: Source) {
-        let live: Vec<Arc<SharedNotify>> = {
-            let mut listeners = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            listeners.retain(|(_, notify)| notify.strong_count() > 0);
-            listeners
-                .iter()
-                .filter(|(listed, _)| *listed == scope)
-                .filter_map(|(_, notify)| notify.upgrade())
-                .collect()
-        };
-        for notify in live {
-            notify.call(source);
-        }
-    }
-}
+/// Delays before each retry of a download that failed. A download that fails
+/// after the last retry is left to the next scan.
+#[cfg(not(test))]
+const DOWNLOAD_RETRIES: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
+#[cfg(test)]
+const DOWNLOAD_RETRIES: [Duration; 3] = [Duration::from_millis(10); 3];
 
 /// Transport of a folder the user picked. Files are read and written through
 /// a [`FolderIo`].
@@ -94,66 +67,98 @@ impl Listeners {
 pub struct FolderTransport {
     root: PathBuf,
     io: Arc<dyn FolderIo>,
-    listeners: Arc<Listeners>,
+    watch: Arc<RootWatch>,
 }
 
 impl FolderTransport {
     /// Transport of the folder `root`, with file access `io`.
     pub fn new(root: impl Into<PathBuf>, io: Arc<dyn FolderIo>) -> Self {
+        let root = root.into();
         Self {
-            root: root.into(),
+            watch: RootWatch::new(root.clone()),
+            root,
             io,
-            listeners: Arc::default(),
         }
     }
 
     /// Start the download of `paths`. The watches of `scope` are called when
-    /// it ends.
+    /// it ends. A download that fails is retried after each delay of
+    /// [`DOWNLOAD_RETRIES`], for the files that are still not local.
     fn download(&self, scope: Scope, paths: Vec<PathBuf>) {
-        let listeners = self.listeners.clone();
-        self.io.download(
+        Self::start_download(
+            self.io.clone(),
+            Arc::downgrade(&self.watch),
+            scope,
             paths,
-            Box::new(move || listeners.call(scope, Source::Download)),
+            0,
         );
     }
 
-    /// Watch the directory `dir` of the root with each signal of the
-    /// platform, and call `notify` for each report of a signal. `vault_id`
-    /// is the vault of the sync log entries. `None` if the file watch cannot
-    /// start. A signal that cannot start is logged and left out.
-    fn start_watch(
-        &self,
+    /// Download `paths` as try `attempt` of [`Self::download`].
+    fn start_download(
+        io: Arc<dyn FolderIo>,
+        watch: Weak<RootWatch>,
         scope: Scope,
-        vault_id: Option<Uuid>,
-        dir: &Path,
-        notify: Box<dyn Fn() + Send>,
-    ) -> Option<WatchHandle> {
-        let shared = SharedNotify::new(vault_id, notify);
-        let files = {
-            let shared = shared.clone();
-            FolderWatch::start(
-                &self.root,
-                dir,
-                Box::new(move || shared.call(Source::Files)),
-            )
-        }?;
-        #[cfg(macos)]
-        let query = {
-            let shared = shared.clone();
-            MetadataWatch::start(
-                &self.root,
-                dir,
-                vault_id,
-                Box::new(move || shared.call(Source::MetadataQuery)),
-            )
-        };
-        self.listeners.add(scope, &shared);
-        Some(WatchHandle::new(move || {
-            drop(files);
-            #[cfg(macos)]
-            drop(query);
-            shared.close();
-        }))
+        paths: Vec<PathBuf>,
+        attempt: usize,
+    ) {
+        let retry_io = io.clone();
+        let retry_paths = paths.clone();
+        io.download(
+            paths,
+            Box::new(move |succeeded| {
+                if succeeded {
+                    if let Some(watch) = watch.upgrade() {
+                        watch.call_scope(scope, Source::Download);
+                    }
+                    return;
+                }
+                let vault_id = scope.vault_id();
+                let Some(&delay) = DOWNLOAD_RETRIES.get(attempt) else {
+                    sync_log::record(
+                        Level::Warn,
+                        vault_id,
+                        "Download failed after every retry",
+                        Some(format!("{} files", retry_paths.len())),
+                    );
+                    return;
+                };
+                let retry = move || {
+                    thread::sleep(delay);
+                    let remote: Vec<PathBuf> = retry_paths
+                        .into_iter()
+                        .filter(|path| matches!(retry_io.status(path), Ok(FileStatus::Remote)))
+                        .collect();
+                    if remote.is_empty() {
+                        return;
+                    }
+                    sync_log::record(
+                        Level::Info,
+                        vault_id,
+                        "Download retried",
+                        Some(format!("{} files, retry {}", remote.len(), attempt + 1)),
+                    );
+                    Self::start_download(retry_io, watch, scope, remote, attempt + 1);
+                };
+                if let Err(e) = thread::Builder::new()
+                    .name("folder-download-retry".into())
+                    .spawn(retry)
+                {
+                    sync_log::record(
+                        Level::Warn,
+                        vault_id,
+                        "Failed to start a download retry",
+                        Some(e.to_string()),
+                    );
+                }
+            }),
+        );
+    }
+
+    /// Whether the signals of the watches run.
+    #[cfg(test)]
+    pub fn watching(&self) -> bool {
+        self.watch.running()
     }
 
     pub fn root(&self) -> &Path {
@@ -434,12 +439,13 @@ impl SyncTransport for FolderTransport {
         Ok(())
     }
 
-    /// Watch the root with FSEvents, and with the metadata query on macOS,
-    /// and call `notify` for changes under the vault directory. A download
+    /// Watch the root with FSEvents or inotify, and with the metadata query
+    /// on macOS, and call `notify` for changes under the vault directory. One
+    /// instance of each signal serves every watch of the root. A download
     /// that [`Self::request_download`] started also calls `notify` when it
     /// ends. `None` if the root is missing.
     fn watch(&self, vault_id: Uuid, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.start_watch(
+        self.watch.add(
             Scope::Vault(vault_id),
             Some(vault_id),
             Path::new(&ShortId::encode_uuid(vault_id)),
@@ -517,7 +523,8 @@ impl SyncTransport for FolderTransport {
     /// Watch the root as [`Self::watch`] does and call `notify` for changes
     /// under `pairing/`. `None` if the root is missing.
     fn watch_pairings(&self, notify: Box<dyn Fn() + Send>) -> Option<WatchHandle> {
-        self.start_watch(Scope::Pairings, None, Path::new(PAIRING_DIR), notify)
+        self.watch
+            .add(Scope::Pairings, None, Path::new(PAIRING_DIR), notify)
     }
 
     fn list_blobs(&self, vault_id: Uuid) -> Result<Vec<FileHash>, Error> {
