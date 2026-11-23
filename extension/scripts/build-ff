@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Build the Firefox extension into build/ff. Run from any directory.
+# Requires Node.js 26.2.0 or newer in the 26.x line and npm 11.
+
+cd "$(dirname "$0")/.."
+
+npm ci
+npx webpack --env target=ff

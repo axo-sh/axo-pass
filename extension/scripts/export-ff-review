@@ -3,8 +3,8 @@ set -euxo pipefail
 
 # Build the Firefox package and archive the extension source for AMO review.
 # A reviewer reproduces the build from the source archive with:
-#     npm ci && webpack --env target=ff
-#     cd build/ff
+#     ./scripts/build-ff
+# Build steps and environment are documented in README.md.
 # Run from extension/. The source archive is HEAD:extension, so commit first.
 
 cd "$(dirname "$0")/.."
@@ -14,14 +14,13 @@ OUTPUT_DIR=$(pwd)/build
 mkdir -p "$OUTPUT_DIR"
 
 echo "====> Building Firefox extension..."
-npm ci
-webpack --env target=ff
+"$(dirname "$0")/build-ff"
 
 echo "====> Creating archive for submission..."
 (cd build/ff && zip -r "$OUTPUT_DIR/$PREFIX-ffextension.zip" .)
 
 echo "====> Creating archive for review..."
-git archive -o "$OUTPUT_DIR/$PREFIX-ffreview.tar.gz" HEAD:extension
+git -C "$(git rev-parse --show-toplevel)" archive -o "$OUTPUT_DIR/$PREFIX-ffreview.tar.gz" HEAD:extension
 
 set +x
 
