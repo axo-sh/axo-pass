@@ -17,12 +17,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::apply::ApplyReport;
 use super::crdt::ReplicaId;
 use super::local_state::SYNC_DIR;
 use super::model::KeyId;
 use super::state_file::StateHash;
 use super::status::PausedCause;
 use super::transport::TransportRoot;
+use super::view::Entity;
 use crate::core::files::write_atomic;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::short_id::ShortId;
@@ -65,6 +67,50 @@ pub struct Sidecar {
     /// key ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pruned_key: Option<KeyId>,
+    /// Changes from other Macs that the app shows until the user dismisses
+    /// them. They hold ids only, so the file names no entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Notice>,
+}
+
+/// Most notices a sidecar holds. The oldest are dropped first.
+const MAX_NOTICES: usize = 100;
+
+/// Change that another Mac made and the user did not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Notice {
+    /// Shown key of an item changed, so its path changed.
+    ItemKeyChanged { item: Uuid },
+    /// Shown key of a credential changed, so its path changed.
+    CredentialKeyChanged { credential: Uuid },
+    /// Item gained a website.
+    WebsiteAdded { item: Uuid },
+    /// Username, password, or one-time code slot of an item changed.
+    SlotChanged { item: Uuid },
+}
+
+impl Notice {
+    /// Notices of the changes that `report` lists.
+    pub(crate) fn of(report: &ApplyReport) -> Vec<Self> {
+        let keys = report
+            .key_changes
+            .iter()
+            .filter_map(|change| match change.entity {
+                Entity::Item(item) => Some(Self::ItemKeyChanged { item }),
+                Entity::Credential(credential) => Some(Self::CredentialKeyChanged { credential }),
+                Entity::Vault => None,
+            });
+        let websites = report
+            .websites_added
+            .iter()
+            .map(|item| Self::WebsiteAdded { item: *item });
+        let slots = report
+            .slots_changed
+            .iter()
+            .map(|item| Self::SlotChanged { item: *item });
+        keys.chain(websites).chain(slots).collect()
+    }
 }
 
 /// What the last transaction found about the sync of a vault.
@@ -279,6 +325,22 @@ impl Sidecar {
         } else {
             false
         }
+    }
+
+    /// Add `notices` that the sidecar does not hold. Drops the oldest above
+    /// the limit. Returns whether the sidecar changed.
+    pub fn add_notices(&mut self, notices: Vec<Notice>) -> bool {
+        let before = self.notices.clone();
+        for notice in notices {
+            if !self.notices.contains(&notice) {
+                self.notices.push(notice);
+            }
+        }
+        if self.notices.len() > MAX_NOTICES {
+            let drop = self.notices.len() - MAX_NOTICES;
+            self.notices.drain(..drop);
+        }
+        self.notices != before
     }
 
     /// Whether the paused causes hold `SeparateKey`, a separate enable found

@@ -142,6 +142,7 @@ use crate::secrets::vaults::sync::transport::s3::S3Transport;
 use crate::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use crate::secrets::vaults::sync::transport::{SyncTransport, SyncTransports, TransportRoot};
 use crate::secrets::vaults::sync::txn::{Recorded, SyncTxn};
+use crate::secrets::vaults::sync::view::Entity;
 
 mod legacy_v1; // MIGRATE_V1
 mod locks;
@@ -1634,6 +1635,29 @@ impl VaultWriter {
         pick: ResolvePick,
     ) -> Result<Committed<()>, Error> {
         self.write_as(target, unlock, SyncRequest::Resolve(pick), |_| Ok(()))
+    }
+
+    /// Keep the shown key of each entry of `entities` that its vault shows
+    /// with a suffixed key, by writing it into the key register, in a
+    /// transaction. An entry shown with its stored key is skipped. A vault
+    /// that is not synced changes nothing.
+    pub fn keep_keys(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        entities: Vec<Entity>,
+    ) -> Result<Committed<()>, Error> {
+        self.write_as(target, unlock, SyncRequest::KeepKeys(entities), |_| Ok(()))
+    }
+
+    /// Dismiss the notices of changes from other Macs of vault `target`, in
+    /// a transaction. The sidecar is the only file that changes.
+    pub fn dismiss_notices(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+    ) -> Result<Committed<()>, Error> {
+        self.write_as(target, unlock, SyncRequest::DismissNotices, |_| Ok(()))
     }
 
     /// Replace a refused vault file, one that fails to load, with its retained

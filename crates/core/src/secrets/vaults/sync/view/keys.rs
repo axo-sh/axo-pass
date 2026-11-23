@@ -112,6 +112,28 @@ impl VaultView {
         items.chain(credentials).collect()
     }
 
+    /// Live entries with a stored key that the view shows with another key,
+    /// a suffixed one, because another live entry stores the key or the key
+    /// fails `validate_key`. "Keep" writes the shown key into the register.
+    pub fn suffixed_keys(&self) -> Vec<Entity> {
+        let differs = |stored: &Option<StoredKey>, shown: &str| {
+            stored
+                .as_ref()
+                .is_some_and(|s| s.normalized().as_deref() != Some(shown))
+        };
+        let items = self
+            .items
+            .values()
+            .filter(|i| i.trashed.is_none() && differs(&i.stored_key, &i.key))
+            .map(|i| Entity::Item(i.id));
+        let credentials = self
+            .credentials
+            .values()
+            .filter(|c| c.trashed.is_none() && differs(&c.stored_key, &c.key))
+            .map(|c| Entity::Credential(c.id));
+        items.chain(credentials).collect()
+    }
+
     /// Set the shown key and the key notice of every item and credential from
     /// the stored keys.
     pub(super) fn assign_keys(&mut self) {

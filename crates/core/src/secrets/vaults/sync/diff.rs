@@ -27,7 +27,7 @@ use super::model::{
     SyncItem, SyncState, TrashValue, WebsiteValue,
 };
 use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
-use super::view::{HistoryView, VaultView, list_order};
+use super::view::{Entity, HistoryView, VaultView, list_order};
 use crate::secrets::vaults::Error;
 use crate::secrets::vaults::autofill::item::{Role, Website};
 use crate::secrets::vaults::model::fields::FieldKind;
@@ -272,6 +272,32 @@ impl LocalEdits {
     #[cfg(test)]
     pub(crate) fn edits(&self) -> &[Edit] {
         &self.edits
+    }
+
+    /// Add writes of the shown key into the key register of each entry of
+    /// `entities` that `view` shows with a suffixed key. Each supersedes
+    /// every value of its register.
+    pub(crate) fn add_keep_keys(&mut self, view: &VaultView, entities: &[Entity]) {
+        let suffixed = view.suffixed_keys();
+        for entity in entities.iter().filter(|entity| suffixed.contains(entity)) {
+            match *entity {
+                Entity::Item(id) => {
+                    if let Some(item) = view.items.get(&id) {
+                        self.edits
+                            .push(Edit::Item(id, ItemWrite::Key(item.key.clone())));
+                    }
+                },
+                Entity::Credential(id) => {
+                    if let Some(credential) = view.credentials.get(&id) {
+                        self.edits.push(Edit::Credential(
+                            id,
+                            CredentialWrite::Key(credential.key.clone()),
+                        ));
+                    }
+                },
+                Entity::Vault => {},
+            }
+        }
     }
 
     /// Add a write of `value` into the `recovery` register of `recipient`.

@@ -514,6 +514,8 @@ pub enum Action {
 
     #[serde(rename = "sync.applied")]
     SyncApplied,
+    #[serde(rename = "sync.key_changed")]
+    SyncKeyChanged,
     #[serde(rename = "sync.deleted_by_peer")]
     SyncDeletedByPeer,
     #[serde(rename = "sync.conflict_resolved")]
@@ -615,6 +617,7 @@ impl Action {
             Action::AuthBrowserGrantRemove => "auth.browser_grant_remove",
             Action::BrokerPeerRejected => "broker.peer_rejected",
             Action::SyncApplied => "sync.applied",
+            Action::SyncKeyChanged => "sync.key_changed",
             Action::SyncDeletedByPeer => "sync.deleted_by_peer",
             Action::SyncConflictResolved => "sync.conflict_resolved",
             Action::SyncRepair => "sync.repair",
@@ -631,7 +634,7 @@ impl Action {
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 84] = [
+    pub const ALL: [Action; 85] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -705,6 +708,7 @@ impl Action {
         Action::AuthBrowserGrantRemove,
         Action::BrokerPeerRejected,
         Action::SyncApplied,
+        Action::SyncKeyChanged,
         Action::SyncDeletedByPeer,
         Action::SyncConflictResolved,
         Action::SyncRepair,
@@ -837,6 +841,9 @@ impl Action {
             Action::SyncApplied => {
                 "Applied changes from other Macs to a synced vault. Marks websites added and role slots changed."
             },
+            Action::SyncKeyChanged => {
+                "The key of an item or field of a synced vault changed because of another Mac, so its path changed."
+            },
             Action::SyncDeletedByPeer => {
                 "Applied a permanent deletion from another Mac to a synced vault."
             },
@@ -937,6 +944,7 @@ impl Action {
             | Action::AuthBrowserGrantRemove => Category::Grant,
             Action::BrokerPeerRejected => Category::Broker,
             Action::SyncApplied
+            | Action::SyncKeyChanged
             | Action::SyncDeletedByPeer
             | Action::SyncConflictResolved
             | Action::SyncRepair
@@ -1016,6 +1024,7 @@ impl Action {
             | Action::PasskeyMoved
             | Action::PasskeyRenamed
             | Action::SyncApplied
+            | Action::SyncKeyChanged
             | Action::SyncDeletedByPeer
             | Action::SyncConflictResolved
             | Action::SyncRepair => ActionKind::Change,

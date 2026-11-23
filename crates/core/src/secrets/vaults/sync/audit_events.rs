@@ -47,7 +47,8 @@ impl SyncEvents {
     /// `sync.deleted_by_peer` names the Macs whose files were joined.
     ///
     /// `sync.applied` marks the items that gained a website and the items
-    /// whose role slots changed.
+    /// whose role slots changed. `sync.key_changed` lists the entries whose
+    /// shown key changed.
     pub(crate) fn applied(&mut self, sources: &BTreeSet<ReplicaId>, report: &ApplyReport) {
         if sources.is_empty() {
             return;
@@ -74,6 +75,14 @@ impl SyncEvents {
                 event = event.detail("slots_changed_item_ids", items);
             }
             self.events.push(event);
+        }
+        if !report.key_changes.is_empty() {
+            let entities: Vec<Entity> = report.key_changes.iter().map(|c| c.entity).collect();
+            let event = self
+                .event(Action::SyncKeyChanged, Outcome::Succeeded)
+                .detail("source_replicas", sources.clone())
+                .detail("changes", entities.len().to_string());
+            self.events.push(with_entities(event, &entities));
         }
         if !report.purged.is_empty() {
             let purged: Vec<Entity> = report.purged.iter().copied().collect();

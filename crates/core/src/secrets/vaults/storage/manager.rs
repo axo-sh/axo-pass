@@ -16,6 +16,7 @@ use crate::secrets::vaults::storage::device_keys::KeyState;
 use crate::secrets::vaults::storage::handle::VaultHandle;
 use crate::secrets::vaults::storage::txn::{Committed, Disabled, Target, Unlock};
 use crate::secrets::vaults::sync::edit_check::ResolvePick;
+use crate::secrets::vaults::sync::view::Entity;
 use crate::secrets::vaults::vault_import::{
     FileFailure, ImportPlan, ImportSummary, StagedFiles, existing_item_ids, stage_plan_files,
     write_plan,
@@ -253,6 +254,30 @@ impl VaultsManager {
     ) -> Result<(), Error> {
         let (store, target) = Self::locate(manager, vault_key)?;
         let committed = store.files().resolve_conflict(&target, Unlock::App, pick)?;
+        VaultsManager::lock(manager).install(committed);
+        Ok(())
+    }
+
+    /// Keep the shown keys of `entities` in vault `vault_key` of a shared
+    /// manager, as [`super::txn::VaultWriter::keep_keys`] does, and keep the
+    /// saved copy.
+    pub fn keep_keys(
+        manager: &Mutex<Self>,
+        vault_key: &str,
+        entities: Vec<Entity>,
+    ) -> Result<(), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().keep_keys(&target, Unlock::App, entities)?;
+        VaultsManager::lock(manager).install(committed);
+        Ok(())
+    }
+
+    /// Dismiss the notices of vault `vault_key` of a shared manager, as
+    /// [`super::txn::VaultWriter::dismiss_notices`] does, and keep the saved
+    /// copy.
+    pub fn dismiss_notices(manager: &Mutex<Self>, vault_key: &str) -> Result<(), Error> {
+        let (store, target) = Self::locate(manager, vault_key)?;
+        let committed = store.files().dismiss_notices(&target, Unlock::App)?;
         VaultsManager::lock(manager).install(committed);
         Ok(())
     }

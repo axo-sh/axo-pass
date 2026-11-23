@@ -81,7 +81,7 @@ use super::resolve::HistoryIds;
 use super::rotation::{
     Accepted, NewKey, Rotated, RotationPlan, RotationPrompt, RotationRecord, Rotations,
 };
-use super::sidecar::{Health, Sidecar};
+use super::sidecar::{Health, Notice, Sidecar};
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
 use super::status::{BUILD_ID, FoundCauses, SyncStatus};
@@ -1327,10 +1327,13 @@ impl SyncTxn {
     /// the transaction saves the vault only.
     ///
     /// A successful apply queues the audit events of the changes that came
-    /// from other Macs.
+    /// from other Macs, and adds their notices to the sidecar.
     pub(crate) fn apply_joined(&mut self, vault: &mut Vault) -> Result<(), Error> {
         if let Some(report) = self.try_apply(vault)? {
             self.events.applied(&self.sources, &report);
+            if !self.sources.is_empty() && self.sidecar.add_notices(Notice::of(&report)) {
+                self.sidecar_changed = true;
+            }
             return Ok(());
         }
         if self.repairing {
@@ -1580,6 +1583,13 @@ impl SyncTxn {
         request: &SyncRequest,
         edit: &EditRequest,
     ) -> Result<Recorded, Error> {
+        if *request == SyncRequest::DismissNotices {
+            if !self.sidecar.notices.is_empty() {
+                self.sidecar.notices.clear();
+                self.sidecar_changed = true;
+            }
+            return Ok(Recorded::Minted(None));
+        }
         if let Err(e) = HistoryIds::rewrite(&self.state, vault) {
             self.diff_failed(e)?;
             return Ok(Recorded::Minted(None));
@@ -1601,6 +1611,10 @@ impl SyncTxn {
         let checked = match request {
             SyncRequest::Restore => Ok(()),
             SyncRequest::Resolve(pick) => self.resolve(&mut edits, pick, now),
+            SyncRequest::KeepKeys(entities) => {
+                edits.add_keep_keys(&VaultView::of(&self.state), entities);
+                Ok(())
+            },
             _ => edit.check(&self.state, &mut edits),
         };
         if let Err(refusal) = checked {

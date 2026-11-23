@@ -33,10 +33,10 @@ use super::model::{PublicKey, ReplicaKeys, SyncState};
 use super::recovery::RecoveryRecipients;
 use super::repair::Repair;
 use super::rotation::{RotationPrompt, Rotations};
-use super::sidecar::Sidecar;
+use super::sidecar::{Notice, Sidecar};
 use super::status::SyncStatus;
 use super::transport::{SyncTransport, TransportRoot};
-use super::view::VaultView;
+use super::view::{Entity, VaultView};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::files::store::BlobStore;
@@ -73,6 +73,12 @@ pub struct SyncReport {
     /// Verified rotations from other Macs that wait for the answer of the
     /// user. Empty unless the sync state is trusted.
     pub rotations: Vec<RotationPrompt>,
+    /// Changes from other Macs that the user has not dismissed, oldest
+    /// first.
+    pub notices: Vec<Notice>,
+    /// Live entries shown with a suffixed key. Empty unless the sync state is
+    /// trusted.
+    pub suffixed_keys: Vec<Entity>,
 }
 
 /// File blobs of a synced vault in the sync report.
@@ -246,6 +252,8 @@ impl SyncReport {
             blobs: BlobStatus::default(),
             root: sidecar.transport.clone(),
             rotations: Vec::new(),
+            notices: sidecar.notices.clone(),
+            suffixed_keys: Vec::new(),
             case,
         };
         let (Some(trusted), Some(view)) = (&trusted, &view) else {
@@ -260,6 +268,7 @@ impl SyncReport {
         report.conflicts = view.conflicts().len();
         report.known_macs = Self::known_macs(trusted, view, writer.signer().as_ref());
         report.rotations = Rotations::prompts(local);
+        report.suffixed_keys = view.suffixed_keys();
         report.recovery_kit_missing = keyring.as_ref().is_none_or(|keyring| {
             RecoveryRecipients::of_key(&trusted.state.store, local.key_id, keyring).is_empty()
         });

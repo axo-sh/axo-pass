@@ -34,6 +34,7 @@ use axo_pass_core::secrets::vaults::sync::rotation::{
     RemovalReason, RotationPlan, RotationPrompt, RotationRecord,
 };
 use axo_pass_core::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
+use axo_pass_core::secrets::vaults::sync::sidecar::Notice;
 use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncStatus};
 use axo_pass_core::secrets::vaults::sync::sync_log::{
     self, Entry as SyncLogEntry, Level as SyncLogLevel,
@@ -41,6 +42,7 @@ use axo_pass_core::secrets::vaults::sync::sync_log::{
 use axo_pass_core::secrets::vaults::sync::transport::s3::credentials::default_credential_store;
 use axo_pass_core::secrets::vaults::sync::transport::s3::{S3Config, test_connection};
 use axo_pass_core::secrets::vaults::sync::transport::{RequestId, TransportRoot};
+use axo_pass_core::secrets::vaults::sync::view::Entity;
 use axo_pass_core::secrets::vaults::{
     Error as VaultError, KeyState, MissingVault, MovedVault, Resigned, ShortId, SyncedVault,
     VaultCatalog, VaultsManager,
@@ -711,6 +713,69 @@ fn auth_expired(e: &VaultError) -> bool {
     )
 }
 
+/// Item or credential of a vault, by short id.
+#[derive(uniffi::Record, Clone)]
+pub struct EntityRefInfo {
+    /// Whether `id` is a credential id. Otherwise it is an item id.
+    pub is_credential: bool,
+    pub id: String,
+}
+
+impl EntityRefInfo {
+    /// Reference to `entity`. `None` for the vault.
+    fn of(entity: Entity) -> Option<Self> {
+        match entity {
+            Entity::Item(id) => Some(Self {
+                is_credential: false,
+                id: ShortId::encode_uuid(id),
+            }),
+            Entity::Credential(id) => Some(Self {
+                is_credential: true,
+                id: ShortId::encode_uuid(id),
+            }),
+            Entity::Vault => None,
+        }
+    }
+
+    /// Core entity of this reference.
+    fn entity(&self) -> Result<Entity, FfiError> {
+        let id = parse_id(&self.id)?;
+        Ok(if self.is_credential {
+            Entity::Credential(id)
+        } else {
+            Entity::Item(id)
+        })
+    }
+}
+
+/// Change from another Mac that the user has not dismissed. Mirrors the core
+/// `Notice`.
+#[derive(uniffi::Enum)]
+pub enum SyncNoticeInfo {
+    /// The shown key of the item changed, so its path changed.
+    ItemKeyChanged { item_id: String },
+    /// The shown key of the credential changed, so its path changed.
+    CredentialKeyChanged { credential_id: String },
+    /// The item gained a website.
+    WebsiteAdded { item_id: String },
+    /// A username, password, or one-time code slot of the item changed.
+    SlotChanged { item_id: String },
+}
+
+impl From<Notice> for SyncNoticeInfo {
+    fn from(notice: Notice) -> Self {
+        let id = ShortId::encode_uuid;
+        match notice {
+            Notice::ItemKeyChanged { item } => Self::ItemKeyChanged { item_id: id(item) },
+            Notice::CredentialKeyChanged { credential } => Self::CredentialKeyChanged {
+                credential_id: id(credential),
+            },
+            Notice::WebsiteAdded { item } => Self::WebsiteAdded { item_id: id(item) },
+            Notice::SlotChanged { item } => Self::SlotChanged { item_id: id(item) },
+        }
+    }
+}
+
 /// Sync report of one vault. Mirrors the core `SyncReport`.
 #[derive(uniffi::Record)]
 pub struct SyncReportInfo {
@@ -733,6 +798,12 @@ pub struct SyncReportInfo {
     pub needs_folder: bool,
     /// Key rotations of other Macs that wait for an answer.
     pub rotations: Vec<RotationPromptInfo>,
+    /// Changes from other Macs that the user has not dismissed, oldest
+    /// first.
+    pub notices: Vec<SyncNoticeInfo>,
+    /// Items and credentials shown with a suffixed key. The app offers Keep
+    /// and Rename for each.
+    pub suffixed_keys: Vec<EntityRefInfo>,
 }
 
 impl From<SyncReport> for SyncReportInfo {
@@ -747,6 +818,12 @@ impl From<SyncReport> for SyncReportInfo {
             .collect();
         Self {
             rotations,
+            notices: report.notices.into_iter().map(Into::into).collect(),
+            suffixed_keys: report
+                .suffixed_keys
+                .into_iter()
+                .filter_map(EntityRefInfo::of)
+                .collect(),
             disable_in_progress: matches!(
                 report.case,
                 SyncLoad::DisableInProgress | SyncLoad::Leaving
@@ -1354,6 +1431,33 @@ impl AxoPass {
             )?)
         })
         .await
+    }
+
+    /// Keep the shown key of each of `entities` in vault `vault_key`, which
+    /// the vault shows with a suffixed key, by writing it into the key
+    /// register. An entity that is not shown with a suffixed key is skipped.
+    /// Needs the app unlocked.
+    pub async fn sync_keep_keys(
+        &self,
+        vault_key: String,
+        entities: Vec<EntityRefInfo>,
+    ) -> Result<(), FfiError> {
+        let entities = entities
+            .iter()
+            .map(EntityRefInfo::entity)
+            .collect::<Result<Vec<_>, FfiError>>()?;
+        let manager = Arc::clone(&self.manager);
+        Self::run_blocking(move || Ok(VaultsManager::keep_keys(&manager, &vault_key, entities)?))
+            .await?;
+        Self::refresh_sync();
+        Ok(())
+    }
+
+    /// Dismiss the notices of changes from other Macs of vault `vault_key`.
+    /// Needs the app unlocked.
+    pub async fn sync_dismiss_notices(&self, vault_key: String) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        Self::run_blocking(move || Ok(VaultsManager::dismiss_notices(&manager, &vault_key)?)).await
     }
 
     /// Accept the pending key rotation `rotation` of vault `vault_key`.

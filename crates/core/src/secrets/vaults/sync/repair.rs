@@ -20,6 +20,7 @@ use super::load::{SyncLoad, TrustedState};
 use super::local_state::LocalSyncState;
 use super::recovery::RecoveryAdd;
 use super::status::BUILD_ID;
+use super::view::Entity;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::txn::{Committed, Target, Unlock, VaultWriter};
@@ -56,6 +57,12 @@ pub(crate) enum SyncRequest {
     /// change. Refused with `EditRefused` if the register holds other write
     /// ids than the request read.
     Resolve(ResolvePick),
+    /// Write the shown key of each listed entry that the view shows with a
+    /// suffixed key into its key register, under the write id of the change.
+    /// An entry that is not shown with a suffixed key is skipped.
+    KeepKeys(Vec<Entity>),
+    /// Clear the notices of changes from other Macs in the sidecar.
+    DismissNotices,
 }
 
 impl Repair {

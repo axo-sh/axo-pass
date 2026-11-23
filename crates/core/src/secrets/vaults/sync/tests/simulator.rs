@@ -13,6 +13,7 @@
 //! its context moved past the context of its last published file.
 
 mod keys;
+mod notices;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
