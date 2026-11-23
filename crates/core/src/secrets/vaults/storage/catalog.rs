@@ -44,6 +44,7 @@ use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::recovery::import::RecoveredKey;
 use crate::secrets::vaults::sync::report::SyncReport;
 use crate::secrets::vaults::sync::setup::SyncSetup;
+use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::transport::TransportRoot;
 use crate::secrets::vaults::sync::wrapping::PairingKeys;
 
@@ -1000,6 +1001,14 @@ impl VaultCatalog {
                     }),
                     None => SyncSetup::check_joinable(root, *id, None, None, signer),
                 };
+                // A vault paused by a separate enable or a declined rotation
+                // is in the request, for the merge by pairing
+                // (`SyncSetup::merge_state`).
+                if matches!(joinable, Err(Error::SyncAlreadyEnabled))
+                    && Sidecar::read(root, *id).is_ok_and(|sidecar| sidecar.merges_by_pairing())
+                {
+                    return false;
+                }
                 if let Err(e) = &joinable {
                     log::info!("Pairing leaves out vault {id}: {e}");
                 }

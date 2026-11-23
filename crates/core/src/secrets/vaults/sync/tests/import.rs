@@ -92,7 +92,11 @@ fn make_remote(transport: &FakeTransport, vault_id: Uuid, replica: ReplicaId) {
 
 /// Start the pairing of `mac` as [`MAC_B`], with pairing keys that unwrap
 /// `key` and join with the file key `file_key`.
-fn start(mac: &Mac, key: &SyncKey, file_key: UnlockedKey) -> (PendingPairing, SharedUnwrap) {
+pub(super) fn start(
+    mac: &Mac,
+    key: &SyncKey,
+    file_key: UnlockedKey,
+) -> (PendingPairing, SharedUnwrap) {
     let file_key = Arc::new(file_key);
     mac.catalog
         .start_pairing_with(&root(), MAC_B, AuthContext::OneTime, |_| {

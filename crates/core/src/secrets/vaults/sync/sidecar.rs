@@ -290,6 +290,21 @@ impl Sidecar {
             .any(|cause| matches!(cause, PausedCause::SeparateKey { .. }))
     }
 
+    /// Whether the paused causes hold `RotationDeclined`, a key rotation that
+    /// the user declined.
+    pub fn rotation_declined(&self) -> bool {
+        self.health
+            .paused()
+            .iter()
+            .any(|cause| matches!(cause, PausedCause::RotationDeclined { .. }))
+    }
+
+    /// Whether a pairing can merge this Mac into the synced state: a separate
+    /// enable or a declined rotation cut this Mac off from the other Macs.
+    pub fn merges_by_pairing(&self) -> bool {
+        self.separate_key() || self.rotation_declined()
+    }
+
     /// Causes of a paused sync. Empty if the health is not `Paused`.
     pub fn paused(&self) -> &[PausedCause] {
         self.health.paused()

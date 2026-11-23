@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use super::import::start;
 use super::join::{PEER, peer_state};
 use super::join_sync::{Mac, enable, opened, recovered, root};
 use super::load::{Fixture, GENERATION, REPLICA, body, device_key, state_of, sync_files};
@@ -20,11 +21,12 @@ use crate::secrets::vaults::format::encrypted_vault::EncryptedVault;
 use crate::secrets::vaults::format::signing::TestSigner;
 use crate::secrets::vaults::storage::txn::{Committed, Disabled, Target, Unlock};
 use crate::secrets::vaults::sync::crdt::ReplicaId;
-use crate::secrets::vaults::sync::join_sync::JoinInto;
-use crate::secrets::vaults::sync::keys::SyncKey;
+use crate::secrets::vaults::sync::join_sync::{JoinInto, JoinKey};
+use crate::secrets::vaults::sync::keys::{SyncKey, TestKeyWrapper};
 use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::local_state::{PinSource, PinnedKeys};
 use crate::secrets::vaults::sync::model::{KeyId, PublicKey};
+use crate::secrets::vaults::sync::pairing::PairedVault;
 use crate::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::StateFile;
@@ -183,6 +185,102 @@ fn two_macs_that_enable_sync_at_once_show_separate_key_and_converge_after_one_tu
     let (_, b_state) = opened(&b.root, vault_id);
     let view = VaultView::of(&a_state);
     assert_eq!(view, VaultView::of(&b_state));
+    let a_vault = saved_vault(&a);
+    let b_saved = b.saved(&b_vault);
+    for key in ["item", "local"] {
+        assert!(a_vault.get_item(key).is_ok(), "{key}");
+        assert!(b_saved.get_item(key).is_ok(), "{key}");
+    }
+}
+
+#[test]
+fn pairing_merges_separately_enabled_macs_and_deletes_old_directory() {
+    let transport = Arc::new(FakeTransport::default());
+    let a = Fixture::with_transport(0, None, transport.clone());
+    a.add_item().unwrap();
+    let b = Mac::new(transport.clone());
+    let b_vault = b.copy_of(&a);
+    let vault_id = a.id();
+    let setup = enable(&a, root());
+    transport.remove_meta(vault_id);
+    let b_target = Target::of(&b_vault);
+    let b_setup = match SyncSetup::prepare(b.catalog.files(), &b_target, root(), MAC_B).unwrap() {
+        SetupStart::Kit(setup) => setup,
+        SetupStart::Join(root) => panic!("setup offered the join of {root}"),
+    };
+    let b_key = || b_vault.unlocked_key().unwrap();
+    b_setup
+        .confirm(b.catalog.files(), &b_target, Unlock::Test(&b_key))
+        .unwrap();
+    let b_replica = b_setup.replica_id();
+    write_on(&b, &b_vault, |vh| vh.add_item("local", "Local").map(|_| ()));
+    assert_eq!(write_on(&b, &b_vault, |_| Ok(())).sync_status, separate(1));
+    assert_eq!(a.write(|_| Ok(())).unwrap().sync_status, separate(1));
+
+    // Only a pairing merges the Macs. A recovery kit does not, since the
+    // vault of B syncs.
+    let by_kit = b.catalog.join_sync(
+        &recovered(&setup, &*transport),
+        JoinInto::Existing(b_target.clone()),
+        &root(),
+        MAC_B,
+        Unlock::Test(&b_key),
+    );
+    assert!(matches!(by_kit, Err(Error::SyncAlreadyEnabled)));
+
+    // The request of B holds the vault, and A pairs with it.
+    let (pending, _keys) = start(&b, setup.key(), b_vault.unlocked_key().unwrap());
+    assert!(pending.request().replicas.contains_key(&vault_id));
+    let new_replica = pending.request().replicas[&vault_id];
+    let join = JoinKey::paired(PairedVault {
+        vault_id,
+        replica_id: new_replica,
+        key_id: KeyId(1),
+        key: setup.key().clone(),
+        peer: setup.replica_id(),
+        pin: PinnedKeys {
+            source: PinSource::Pairing,
+            encryption: TestKeyWrapper::public_key(),
+            signing: PublicKey(device_key()),
+            revoked: false,
+        },
+    });
+
+    let joined = b
+        .catalog
+        .join_sync(
+            &join,
+            JoinInto::Existing(b_target),
+            &root(),
+            MAC_B,
+            Unlock::Test(&b_key),
+        )
+        .unwrap();
+
+    // B takes the new replica id and deletes its old directory.
+    assert_eq!(joined.sync_status, Some(SyncStatus::Active));
+    assert_eq!(vault_replica(&b_vault), Some(new_replica.0));
+    assert!(transport.names(vault_id, b_replica).is_empty());
+    assert!(!transport.names(vault_id, new_replica).is_empty());
+    let (b_local, _) = opened(&b.root, vault_id);
+    assert_eq!(b_local.replica_id, new_replica);
+    assert_eq!(
+        b_local
+            .pinned_keys
+            .get(&setup.replica_id())
+            .map(|pin| pin.source),
+        Some(PinSource::Pairing)
+    );
+
+    // Both Macs converge on the merged vault.
+    let a_committed = a.write(|_| Ok(())).unwrap();
+    let b_committed = write_on(&b, &b_vault, |_| Ok(()));
+    assert_eq!(a_committed.sync_status, Some(SyncStatus::Active));
+    assert_eq!(b_committed.sync_status, Some(SyncStatus::Active));
+    assert!(Sidecar::load(&a.root, vault_id).paused().is_empty());
+    let (_, a_state) = opened(&a.root, vault_id);
+    let (_, b_state) = opened(&b.root, vault_id);
+    assert_eq!(VaultView::of(&a_state), VaultView::of(&b_state));
     let a_vault = saved_vault(&a);
     let b_saved = b.saved(&b_vault);
     for key in ["item", "local"] {

@@ -64,7 +64,7 @@ use super::apply::ApplyFault;
 use super::apply::ApplyReport;
 use super::audit_events::SyncEvents;
 use super::blobs;
-use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
+use super::crdt::{CausalState, JoinOutcome, OwnFile, OwnFileState, ReplicaId, Session, WriteId};
 use super::diff::LocalEdits;
 use super::edit_check::{EditRefusal, EditRequest, RefusalReason, ResolvePick};
 use super::join::{FileJoin, StateJoin};
@@ -387,6 +387,25 @@ impl SyncTxn {
         self.changed |= join.changed;
         self.sources.extend(join.sources);
         join.changed
+    }
+
+    /// Join `old`, the state of the replica that this Mac had before it adopted
+    /// the key of a pairing, as received by `session`. A merge of two Macs
+    /// that enabled sync separately does this in place of the recovery merge,
+    /// so the writes and the removals of the old state are kept.
+    pub(crate) fn join_merged(
+        &mut self,
+        old: CausalState<SyncState>,
+        session: &mut Session,
+    ) -> Result<(), Error> {
+        let outcome = self
+            .state
+            .try_join(old, session)
+            .map_err(|e| Error::SyncMergeFailed(e.to_string()))?;
+        if outcome == JoinOutcome::Joined {
+            self.mark_changed();
+        }
+        Ok(())
     }
 
     /// Whether a disable deletes the own replica directory in place of the

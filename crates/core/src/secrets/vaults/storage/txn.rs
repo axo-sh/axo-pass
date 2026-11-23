@@ -2562,6 +2562,7 @@ impl VaultWriter {
         let vault_lock = self.locks.entry(id, caller_path);
         let mut locked = self.lock_entry(&vault_lock, id)?;
         SyncSetup::check_folder(&*transport, id)?;
+        let mut merging = None;
         let (path, loaded) = match &file {
             JoinFile::Existing(target) => {
                 let path = locked.state.resolve(id, &target.path)?;
@@ -2570,13 +2571,22 @@ impl VaultWriter {
                 if enc_vault.id != id {
                     return Err(Error::VaultNotFound(path.display().to_string()));
                 }
-                SyncSetup::check_joinable(
+                merging = SyncSetup::merge_state(
                     &self.root,
-                    id,
-                    Some(&enc_vault),
+                    &enc_vault,
                     local_keyring.as_ref(),
                     &*self.signer,
+                    join,
                 )?;
+                if merging.is_none() {
+                    SyncSetup::check_joinable(
+                        &self.root,
+                        id,
+                        Some(&enc_vault),
+                        local_keyring.as_ref(),
+                        &*self.signer,
+                    )?;
+                }
                 let generation = enc_vault.generation;
                 let vault = Box::new(Vault::from_unlocked_key(&file_key, enc_vault)?);
                 let loaded = JoinLoaded::Existing {
@@ -2618,6 +2628,17 @@ impl VaultWriter {
         let now = Timestamp::now().as_second() + self.clock_offset;
         let session = locked.state.session(replica, sync.loaded());
         let epoch = vault_lock.pending_epoch();
+        // A merge joins the old state of this Mac first, so its writes and
+        // removals are in the view, and runs no recovery merge.
+        let merged_from = match merging {
+            Some(old) => {
+                let old_replica = old.local.replica_id;
+                sync.join_merged(old.state, session)?;
+                log::info!("Vault {id} merges the state of replica {}", old_replica.0);
+                Some(old_replica)
+            },
+            None => None,
+        };
         sync.join_peers(&*transport, session);
         if sync.listed_every_peer() {
             vault_lock.clear_pending(epoch);
@@ -2636,7 +2657,9 @@ impl VaultWriter {
                     let count = removed.len();
                     log::info!("Vault {id} join removed duplicate websites of {count} items");
                 }
-                sync.record_merge(&vault, session, now)?;
+                if merged_from.is_none() {
+                    sync.record_merge(&vault, session, now)?;
+                }
                 sync.apply_merged(&mut vault)?;
                 (*vault, Some(contents))
             },
@@ -2681,7 +2704,18 @@ impl VaultWriter {
         let replica_id = replica.0;
         log::info!("Joined sync of vault {id} as replica {replica_id}");
         let _ = sync.write_key_file(&*transport, None, &*self.signer);
-        sync.publish(&*transport);
+        let published = sync.publish(&*transport);
+        // The old replica directory is this Mac's own, under the old key. It
+        // is deleted only after the merged state is published.
+        if let Some(old) = merged_from.filter(|_| published) {
+            match transport.delete_replica(id, old) {
+                Ok(()) => log::info!(
+                    "Deleted the replica directory {} of vault {id}, merged",
+                    old.0
+                ),
+                Err(e) => log::warn!("Failed to delete the old replica directory {}: {e}", old.0),
+            }
+        }
         sync.settle_status();
         sync.save_sidecar(&self.root);
         let save_count = if changed {

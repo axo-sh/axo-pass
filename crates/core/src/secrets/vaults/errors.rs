@@ -93,6 +93,9 @@ pub enum Error {
     #[error("Vault needs a sync repair: {0}")]
     SyncRepairNeeded(String),
 
+    #[error("Failed to merge the sync state of this Mac into the paired state: {0}")]
+    SyncMergeFailed(String),
+
     #[error("Failed to compare vault with its sync state: {0}")]
     SyncDiffError(String),
 

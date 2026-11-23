@@ -19,12 +19,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::crdt::ReplicaId;
+use super::join_sync::JoinKey;
 use super::keys::{SyncKey, SyncKeyring};
-use super::load::SyncLoad;
+use super::load::{SyncLoad, TrustedState};
 use super::local_state::{LocalStateError, LocalSyncState};
 use super::meta::MetaFile;
 use super::model::{ItemId, KeyId};
 use super::recovery::RecoveryKit;
+use super::sidecar::Sidecar;
 use super::transport::{ReadResult, SyncTransport, TransportRoot};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::format::encrypted_vault::{EncryptedVault, VerifiedVault};
@@ -198,6 +200,44 @@ impl SyncSetup {
             SyncLoad::VersionSkew(message) => Err(Error::SyncStateVersionSkew(message)),
             _ => Err(Error::SyncAlreadyEnabled),
         }
+    }
+
+    /// Trusted local sync state of `vault` if a join of `join` merges it into
+    /// the paired state, and `None` for any other join.
+    ///
+    /// A merge needs a key from a pairing, a vault that syncs and loads as
+    /// `Current`, and a sidecar that records `SeparateKey` or
+    /// `RotationDeclined`. For `SeparateKey`, the key of the pairing has the
+    /// key id of the local sync state and another fingerprint than the local
+    /// key, so it is the key of a Mac that enabled sync separately. For
+    /// `RotationDeclined`, it has a higher key id, so it is the key of the
+    /// rotation that was declined or a later one. `keyring` opens the local
+    /// sync state.
+    pub(crate) fn merge_state(
+        root: &Path,
+        vault: &VerifiedVault,
+        keyring: Option<&SyncKeyring>,
+        signer: &dyn VaultSigner,
+        join: &JoinKey,
+    ) -> Result<Option<TrustedState>, Error> {
+        if join.paired.is_none() || vault.replica_id.is_none() {
+            return Ok(None);
+        }
+        let sidecar = Sidecar::read(root, vault.id)?;
+        if !sidecar.merges_by_pairing() {
+            return Ok(None);
+        }
+        let local = LocalSyncState::load(root, vault.id, signer);
+        let (case, trusted) = SyncLoad::classify_trusted(vault, local, keyring, signer)?;
+        let Some(trusted) = trusted.filter(|_| matches!(case, SyncLoad::Current)) else {
+            return Ok(None);
+        };
+        let own = keyring.and_then(|keyring| keyring.get(trusted.local.key_id));
+        let separate = sidecar.separate_key()
+            && trusted.local.key_id == join.key_id
+            && own.is_some_and(|key| key.fingerprint() != join.key.fingerprint());
+        let declined = sidecar.rotation_declined() && join.key_id.0 > trusted.local.key_id.0;
+        Ok((separate || declined).then_some(trusted))
     }
 
     /// Check that the synced folder of `transport` holds vault `vault_id`,

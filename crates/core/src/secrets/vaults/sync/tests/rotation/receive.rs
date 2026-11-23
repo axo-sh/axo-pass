@@ -1,15 +1,25 @@
 //! Receiving side of a rotation: the pending rotation, paused joins, files
 //! under old or missing keys, the decline, and revoked signers.
 
+use std::path::PathBuf;
+
 use super::{Net, signing_of};
 use crate::audit::Action;
 use crate::audit::test_support::test_dir;
 use crate::secrets::vaults::format::signing::TestSigner;
-use crate::secrets::vaults::sync::model::{PublicKey, ReplicaKeys};
+use crate::secrets::vaults::storage::txn::Unlock;
+use crate::secrets::vaults::sync::crdt::ReplicaId;
+use crate::secrets::vaults::sync::join_sync::{JoinFile, JoinKey};
+use crate::secrets::vaults::sync::keys::{SyncKeyring, TestKeyWrapper};
+use crate::secrets::vaults::sync::local_state::{PinSource, PinnedKeys};
+use crate::secrets::vaults::sync::meta::MetaFile;
+use crate::secrets::vaults::sync::model::{KeyId, PublicKey, ReplicaKeys};
+use crate::secrets::vaults::sync::pairing::PairedVault;
 use crate::secrets::vaults::sync::rotation::{RemovalReason, RotationPlan, RotationPrompt};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::status::{PausedCause, SyncStatus};
 use crate::secrets::vaults::sync::tests::audit_events::events;
+use crate::secrets::vaults::sync::transport::TransportRoot;
 
 /// Plan that removes Mac `n` as lost or stolen.
 fn lost(n: usize) -> RotationPlan {
@@ -212,6 +222,76 @@ fn declined_rotation_pauses_sync_and_offers_relink() {
     assert!(net.macs[2].items().contains("after-decline"));
     net.macs[0].sync();
     assert!(!net.macs[0].items().contains("after-decline"));
+}
+
+#[test]
+fn pairing_relinks_mac_that_declined_rotation_and_keeps_its_edits() {
+    let net = Net::new(3);
+    net.sync_all(&[0, 1, 2]);
+    net.macs[0].rotate(&RotationPlan::rotate_key());
+    net.macs[1].sync();
+    let pending = net.macs[1].confirm();
+    net.macs[1].decline(&[pending]);
+    net.macs[1].add("after-decline");
+    let old_replica = Net::replica(1);
+    assert!(net.has_directory(1));
+
+    // Mac 1 pairs with Mac 0, which sends key 2.
+    let local = net.macs[0].local();
+    let keyring = SyncKeyring::unwrap(&local.sync_keys, &TestKeyWrapper).unwrap();
+    let key = keyring.get(KeyId(2)).unwrap().clone();
+    let new_replica = ReplicaId::generate();
+    let join = JoinKey::paired(PairedVault {
+        vault_id: net.vault_id(),
+        replica_id: new_replica,
+        key_id: KeyId(2),
+        key,
+        peer: Net::replica(0),
+        pin: PinnedKeys {
+            source: PinSource::Pairing,
+            encryption: net.macs[0].keys.encryption.clone(),
+            signing: net.macs[0].keys.signing.clone(),
+            revoked: false,
+        },
+    });
+    net.folder
+        .put_meta(net.vault_id(), &MetaFile::new(net.vault_id()).to_bytes());
+    let mac = &net.macs[1];
+    let target = mac.target(0);
+    let unlock = || mac.vault(0).unlocked_key().unwrap();
+    let root = TransportRoot::Folder {
+        path: PathBuf::from("/rotation"),
+    };
+
+    let joined = mac
+        .writer
+        .join_sync(
+            &join,
+            JoinFile::Existing(&target),
+            &root,
+            "Mac 1",
+            Unlock::Test(&unlock),
+        )
+        .unwrap();
+
+    // Mac 1 syncs under key 2 with a new replica id, and its old directory
+    // is deleted.
+    assert_eq!(joined.sync_status, Some(SyncStatus::Active));
+    let local = mac.local();
+    assert_eq!(local.key_id, KeyId(2));
+    assert_eq!(local.replica_id, new_replica);
+    assert!(local.declined_rotations.is_empty());
+    assert!(!net.has_directory(1));
+    assert!(!net.folder.names(net.vault_id(), new_replica).is_empty());
+    assert_ne!(old_replica, new_replica);
+
+    // The edit made while cut off reaches Mac 0, and Mac 1 has what Mac 0
+    // had.
+    net.macs[0].sync();
+    assert!(net.macs[0].items().contains("after-decline"));
+    assert_eq!(net.macs[0].status(), Some(SyncStatus::Active));
+    assert!(mac.items().contains("after-decline"));
+    assert_eq!(mac.status(), Some(SyncStatus::Active));
 }
 
 #[test]
