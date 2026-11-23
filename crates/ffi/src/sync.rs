@@ -16,8 +16,10 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use axo_pass_core::core::auth::AuthContext;
 use axo_pass_core::secrets::keychain::errors::KeychainError;
 use axo_pass_core::secrets::vaults::storage::txn::{Disabled, Target, Unlock};
+use axo_pass_core::secrets::vaults::sync::crdt::ReplicaId;
 use axo_pass_core::secrets::vaults::sync::join_sync::{JoinInto, WaitReason};
 use axo_pass_core::secrets::vaults::sync::load::{SignatureFailure, SyncLoad};
+use axo_pass_core::secrets::vaults::sync::local_state::PinSource;
 use axo_pass_core::secrets::vaults::sync::manager::{LogEvents, SyncEvents};
 use axo_pass_core::secrets::vaults::sync::model::ItemId;
 use axo_pass_core::secrets::vaults::sync::pairing::grant::GrantOutcome;
@@ -28,6 +30,9 @@ use axo_pass_core::secrets::vaults::sync::recovery::RecoveryKit;
 use axo_pass_core::secrets::vaults::sync::recovery::import::{RecoveryCheck, RecoveryImport};
 use axo_pass_core::secrets::vaults::sync::repair::SyncOverride;
 use axo_pass_core::secrets::vaults::sync::report::{KnownMac, QuarantinedEntry, SyncReport};
+use axo_pass_core::secrets::vaults::sync::rotation::{
+    RemovalReason, RotationPlan, RotationPrompt, RotationRecord,
+};
 use axo_pass_core::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncStatus};
 use axo_pass_core::secrets::vaults::sync::sync_log::{
@@ -512,18 +517,198 @@ pub struct KnownMacInfo {
     /// Last active time on the clock of that Mac, as a Unix timestamp in
     /// seconds.
     pub last_active: Option<i64>,
+    /// This Mac paired with the Mac.
+    pub paired: bool,
+    /// Remove Mac selects the Mac at first, since its keys were learned from
+    /// the synced folder and not by pairing.
+    pub preselected: bool,
+    /// A key rotation removed the Mac.
+    pub removed: bool,
+    /// The synced keys of the Mac differ from the keys this Mac pinned.
+    pub keys_flagged: bool,
+    /// Signing key of the Mac in lowercase hex, which names the Mac in every
+    /// vault for Remove Mac.
+    pub signing_key: Option<String>,
 }
 
 impl From<KnownMac> for KnownMacInfo {
     fn from(mac: KnownMac) -> Self {
+        let preselected = mac.preselected();
         Self {
             replica_id: ShortId::encode_uuid(mac.replica.0),
             name: mac.name,
             this_mac: mac.this_mac,
             left: mac.left,
             last_active: mac.last_active,
+            paired: mac.pin == Some(PinSource::Pairing),
+            preselected,
+            removed: mac.removed,
+            keys_flagged: mac.keys_flagged,
+            signing_key: mac.signing.map(|key| hex(&key.0)),
         }
     }
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Mac named in a key rotation.
+#[derive(uniffi::Record)]
+pub struct RotationMacInfo {
+    pub replica_id: String,
+    /// `None` if the sync state holds no name for the Mac.
+    pub name: Option<String>,
+}
+
+/// Key rotation signed by another Mac. `signer_id`, `key_id`, and
+/// `fingerprint` name it in the answer.
+#[derive(uniffi::Record)]
+pub struct RotationInfo {
+    pub signer: RotationMacInfo,
+    pub key_id: u32,
+    /// Fingerprint of the new key in lowercase hex.
+    pub fingerprint: String,
+    pub removed: Vec<RotationMacInfo>,
+    pub remaining: Vec<RotationMacInfo>,
+}
+
+/// Rotation the user is asked about. Mirrors the core `RotationPrompt`.
+#[derive(uniffi::Enum)]
+pub enum RotationPromptInfo {
+    /// Accept or decline one rotation. `replaces` is set if it replaces the
+    /// key this Mac uses.
+    Confirm {
+        rotation: RotationInfo,
+        replaces: bool,
+    },
+    /// Two rotations that remove each other's signer. The user accepts one or
+    /// declines both. `current` is set if this Mac uses the key of `first`.
+    Choose {
+        first: RotationInfo,
+        second: RotationInfo,
+        current: bool,
+    },
+}
+
+impl RotationPromptInfo {
+    /// Prompt of `prompt`, with the Mac names of `macs`.
+    fn of(prompt: RotationPrompt, macs: &[KnownMac]) -> Self {
+        let mac = |replica: ReplicaId| RotationMacInfo {
+            replica_id: ShortId::encode_uuid(replica.0),
+            name: macs
+                .iter()
+                .find(|mac| mac.replica == replica)
+                .map(|mac| mac.name.clone()),
+        };
+        let info = |record: RotationRecord| RotationInfo {
+            signer: mac(record.signer),
+            key_id: record.key_id.0,
+            fingerprint: record.key_fingerprint.to_hex(),
+            removed: record.removed.into_iter().map(mac).collect(),
+            remaining: record.remaining.into_iter().map(mac).collect(),
+        };
+        match prompt {
+            RotationPrompt::Confirm { rotation, replaces } => Self::Confirm {
+                rotation: info(rotation),
+                replaces,
+            },
+            RotationPrompt::Choose {
+                first,
+                second,
+                current,
+            } => Self::Choose {
+                first: info(first),
+                second: info(second),
+                current,
+            },
+        }
+    }
+}
+
+/// Rotation named by the app in an answer.
+#[derive(uniffi::Record)]
+pub struct RotationIdInfo {
+    pub signer_id: String,
+    pub key_id: u32,
+    pub fingerprint: String,
+}
+
+impl RotationIdInfo {
+    /// Pending rotation of `report` that this names.
+    fn find(&self, report: &SyncReport) -> Result<RotationRecord, FfiError> {
+        let signer = parse_id(&self.signer_id)?;
+        report
+            .rotations
+            .iter()
+            .flat_map(|prompt| match prompt {
+                RotationPrompt::Confirm { rotation, .. } => vec![rotation],
+                RotationPrompt::Choose { first, second, .. } => vec![first, second],
+            })
+            .find(|record| {
+                record.signer.0 == signer
+                    && record.key_id.0 == self.key_id
+                    && record.key_fingerprint.to_hex() == self.fingerprint
+            })
+            .cloned()
+            .ok_or_else(|| FfiError::NotFound("the key rotation is not pending".into()))
+    }
+}
+
+/// Mac to remove from every vault it belongs to, by its signing key in
+/// lowercase hex, as `KnownMacInfo` gives it.
+#[derive(uniffi::Record)]
+pub struct MacRemovalInfo {
+    pub signing_key: String,
+    /// The Mac is retired, so its files are joined first. Otherwise it is
+    /// lost or stolen, and the rotation does not wait for its files.
+    pub retired: bool,
+}
+
+/// Result of a rotation of one vault.
+#[derive(uniffi::Enum)]
+pub enum RotationOutcomeInfo {
+    /// The key was rotated. Replica ids are short ids. `unpinned` lists Macs
+    /// with no pinned keys, which received no key. `kept` lists removed Macs
+    /// whose directories were kept.
+    Rotated {
+        key_id: u32,
+        removed: Vec<String>,
+        unpinned: Vec<String>,
+        kept: Vec<String>,
+    },
+    /// Files of these retired Macs are still downloading. Nothing was
+    /// written. The app shows them and runs the removal again to keep
+    /// waiting.
+    Waiting { replica_ids: Vec<String> },
+    /// The vault could not be rotated, and the removed Macs still have
+    /// access to it.
+    Failed { message: String },
+}
+
+/// Rotation of one vault.
+#[derive(uniffi::Record)]
+pub struct VaultRotationInfo {
+    pub vault_key: String,
+    pub outcome: RotationOutcomeInfo,
+}
+
+/// Short ids of `replicas`.
+fn replica_ids(replicas: &[ReplicaId]) -> Vec<String> {
+    replicas
+        .iter()
+        .map(|replica| ShortId::encode_uuid(replica.0))
+        .collect()
+}
+
+/// Whether `e` is an expired app unlock, which locks the app.
+fn auth_expired(e: &VaultError) -> bool {
+    matches!(
+        e,
+        VaultError::KeyRetrievalFailed(KeychainError::AuthenticationExpired)
+            | VaultError::VaultInvalidAuth(KeychainError::AuthenticationExpired)
+    )
 }
 
 /// Sync report of one vault. Mirrors the core `SyncReport`.
@@ -546,13 +731,22 @@ pub struct SyncReportInfo {
     pub root: Option<SyncRootInfo>,
     /// The vault syncs with no folder. The user chooses the folder again.
     pub needs_folder: bool,
+    /// Key rotations of other Macs that wait for an answer.
+    pub rotations: Vec<RotationPromptInfo>,
 }
 
 impl From<SyncReport> for SyncReportInfo {
     fn from(report: SyncReport) -> Self {
         let needs_folder = report.needs_folder();
         let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        let rotations = report
+            .rotations
+            .iter()
+            .cloned()
+            .map(|prompt| RotationPromptInfo::of(prompt, &report.known_macs))
+            .collect();
         Self {
+            rotations,
             disable_in_progress: matches!(
                 report.case,
                 SyncLoad::DisableInProgress | SyncLoad::Leaving
@@ -966,6 +1160,64 @@ impl AxoPass {
             .map(|(_, vh)| (Target::of(vh), vh.vault_name().map(str::to_string)))
     }
 
+    /// Rotate each synced vault for which `plan` gives a plan, from its sync
+    /// report, one transaction each with `Unlock::App`. A retired Mac whose
+    /// files are still downloading gives `Waiting`, with no wait. An expired
+    /// app unlock fails the call.
+    fn rotate_vaults(
+        manager: &Mutex<VaultsManager>,
+        plan: impl Fn(&SyncReport) -> Option<RotationPlan>,
+    ) -> Result<Vec<VaultRotationInfo>, FfiError> {
+        let (store, keys) = {
+            let locked = VaultsManager::lock(manager);
+            let keys: Vec<String> = locked.iter_vaults().map(|(key, _)| key.clone()).collect();
+            (locked.store().clone(), keys)
+        };
+        let mut outcomes = Vec::new();
+        for vault_key in keys {
+            let report = match store.sync_report(&vault_key, Unlock::App) {
+                Ok(report) => report,
+                Err(e) if auth_expired(&e) => return Err(FfiError::AuthExpired),
+                Err(_) => continue,
+            };
+            if !report.case.builds_txn() {
+                continue;
+            }
+            let Some(plan) = plan(&report) else {
+                continue;
+            };
+            let mut waiting = Vec::new();
+            let result = VaultsManager::transact(manager, &vault_key, |store, target| {
+                store.files().rotate_waiting(
+                    target,
+                    || Unlock::App,
+                    &plan,
+                    |remote| {
+                        waiting = remote.to_vec();
+                        false
+                    },
+                )
+            });
+            let outcome = match result {
+                Ok(rotated) => RotationOutcomeInfo::Rotated {
+                    key_id: rotated.key_id.0,
+                    removed: replica_ids(&rotated.removed),
+                    unpinned: replica_ids(&rotated.unpinned),
+                    kept: replica_ids(&rotated.kept),
+                },
+                Err(VaultError::RotationCancelled) => RotationOutcomeInfo::Waiting {
+                    replica_ids: replica_ids(&waiting),
+                },
+                Err(e) if auth_expired(&e) => return Err(FfiError::AuthExpired),
+                Err(e) => RotationOutcomeInfo::Failed {
+                    message: e.to_string(),
+                },
+            };
+            outcomes.push(VaultRotationInfo { vault_key, outcome });
+        }
+        Ok(outcomes)
+    }
+
     /// Pairing request listed under `root` whose MAC verifies under `code`.
     /// `None` if the code is malformed or matches no request.
     fn match_pairing(
@@ -1100,6 +1352,133 @@ impl AxoPass {
                 &vault_key,
                 |store, target| SyncOverride::new(store.files(), target).confirm(Unlock::App),
             )?)
+        })
+        .await
+    }
+
+    /// Accept the pending key rotation `rotation` of vault `vault_key`.
+    /// Needs the app unlocked. Returns the replica ids of the Macs that the
+    /// rotation this Mac signed removed and the accepted one did not. The app
+    /// removes them again with `sync_remove_macs`.
+    pub async fn sync_accept_rotation(
+        &self,
+        vault_key: String,
+        rotation: RotationIdInfo,
+    ) -> Result<Vec<String>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        Self::run_blocking(move || {
+            let store = VaultsManager::lock(&manager).store().clone();
+            let record = rotation.find(&store.sync_report(&vault_key, Unlock::App)?)?;
+            let accepted = VaultsManager::transact(&manager, &vault_key, |store, target| {
+                store.files().accept_rotation(target, Unlock::App, &record)
+            })?;
+            Ok(replica_ids(&accepted.repeat))
+        })
+        .await
+    }
+
+    /// Decline the pending key rotations `rotations` of vault `vault_key`.
+    /// The vault stays on its key, and the app offers a re-link. Needs the
+    /// app unlocked.
+    pub async fn sync_decline_rotations(
+        &self,
+        vault_key: String,
+        rotations: Vec<RotationIdInfo>,
+    ) -> Result<(), FfiError> {
+        let manager = Arc::clone(&self.manager);
+        Self::run_blocking(move || {
+            let store = VaultsManager::lock(&manager).store().clone();
+            let report = store.sync_report(&vault_key, Unlock::App)?;
+            let records = rotations
+                .iter()
+                .map(|rotation| rotation.find(&report))
+                .collect::<Result<Vec<_>, FfiError>>()?;
+            Ok(VaultsManager::transact(
+                &manager,
+                &vault_key,
+                |store, target| {
+                    store
+                        .files()
+                        .decline_rotations(target, Unlock::App, &records)
+                },
+            )?)
+        })
+        .await
+    }
+
+    /// Remove the Macs of `removals` from every synced vault they belong to,
+    /// one rotation per vault, and rotate the sync key of those vaults. Needs
+    /// the app unlocked. A vault where a retired Mac's files are still
+    /// downloading waits for no file and writes nothing. Its outcome is
+    /// `Waiting`.
+    pub async fn sync_remove_macs(
+        &self,
+        removals: Vec<MacRemovalInfo>,
+    ) -> Result<Vec<VaultRotationInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        let outcomes = Self::run_blocking(move || {
+            Self::rotate_vaults(&manager, |report| {
+                let removals: Vec<_> = removals
+                    .iter()
+                    .filter_map(|removal| {
+                        let mac = report.known_macs.iter().find(|mac| {
+                            !mac.this_mac
+                                && !mac.removed
+                                && mac.signing.as_ref().map(|key| hex(&key.0)).as_deref()
+                                    == Some(removal.signing_key.as_str())
+                        })?;
+                        let reason = if removal.retired {
+                            RemovalReason::Retired
+                        } else {
+                            RemovalReason::Lost
+                        };
+                        Some((mac.replica, reason))
+                    })
+                    .collect();
+                (!removals.is_empty()).then(|| RotationPlan::remove(removals))
+            })
+        })
+        .await?;
+        Self::refresh_sync();
+        Ok(outcomes)
+    }
+
+    /// Rotate the sync key of every synced vault, removing no Mac. Needs the
+    /// app unlocked.
+    pub async fn sync_rotate_key(&self) -> Result<Vec<VaultRotationInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        let outcomes = Self::run_blocking(move || {
+            Self::rotate_vaults(&manager, |_| Some(RotationPlan::rotate_key()))
+        })
+        .await?;
+        Self::refresh_sync();
+        Ok(outcomes)
+    }
+
+    /// Clean up the retired or departed Mac with replica id `replica_id` in
+    /// vault `vault_key`. Needs the app unlocked. Returns whether its
+    /// directory was deleted. Fails with `RotationWaiting` while its files
+    /// download.
+    pub async fn sync_clean_replica(
+        &self,
+        vault_key: String,
+        replica_id: String,
+    ) -> Result<bool, FfiError> {
+        let replica = ReplicaId(parse_id(&replica_id)?);
+        let manager = Arc::clone(&self.manager);
+        Self::run_blocking(move || {
+            let cleaned = VaultsManager::transact(&manager, &vault_key, |store, target| {
+                store
+                    .files()
+                    .clean_waiting(target, || Unlock::App, replica, |_| false)
+                    .map_err(|e| match e {
+                        VaultError::RotationCancelled => {
+                            VaultError::RotationWaiting(vec![replica.0])
+                        },
+                        e => e,
+                    })
+            })?;
+            Ok(cleaned.deleted)
         })
         .await
     }
