@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Build the Chrome package for the Chrome Web Store.
+# Run from any directory. The Chrome Web Store does not need a source archive.
+
+cd "$(dirname "$0")/.."
+
+PREFIX=$(git rev-parse --short HEAD)-$(date +%Y%m%d%H%M%S)
+OUTPUT_DIR=$(pwd)/build
+
+echo "====> Building Chrome extension..."
+npm ci
+npx webpack --env target=chrome --env store
+
+echo "====> Creating archive for submission..."
+(cd build/chrome && zip -r "$OUTPUT_DIR/$PREFIX-chromeextension.zip" .)
+
+set +x
+
+echo
+echo "Done. Upload the archive at https://chrome.google.com/webstore/devconsole"

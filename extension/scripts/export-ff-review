@@ -14,7 +14,7 @@ OUTPUT_DIR=$(pwd)/build
 mkdir -p "$OUTPUT_DIR"
 
 echo "====> Building Firefox extension..."
-"$(dirname "$0")/build-ff"
+./scripts/build-ff
 
 echo "====> Creating archive for submission..."
 (cd build/ff && zip -r "$OUTPUT_DIR/$PREFIX-ffextension.zip" .)

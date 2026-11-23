@@ -59,8 +59,14 @@ module.exports = (env) => {
             from: `src/manifest.${browser}.json`,
             to: `${browser}/manifest.json`,
             transform(content) {
-              return content
-                .toString()
+              let text = content.toString();
+              // The Chrome Web Store rejects manifests with a key field.
+              if (env.store) {
+                const manifest = JSON.parse(text);
+                delete manifest.key;
+                text = JSON.stringify(manifest, null, 2);
+              }
+              return text
                 .replaceAll('__MANIFEST_NAME__', NAME)
                 .replaceAll('__MANIFEST_VERSION__', VERSION)
                 .replaceAll('__MANIFEST_VERSION_NAME__', VERSION_NAME)
