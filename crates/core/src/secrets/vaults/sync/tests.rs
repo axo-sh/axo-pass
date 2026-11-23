@@ -32,6 +32,7 @@ mod recovery;
 mod repair;
 mod report;
 mod resolve;
+mod rotation;
 mod round_trip;
 mod s3;
 mod separate;

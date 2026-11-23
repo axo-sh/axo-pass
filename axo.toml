@@ -46,6 +46,8 @@ check = "cargo check --workspace --all-targets"
 "check:linux" = "cargo check --target aarch64-unknown-linux-gnu -p axo-pass-core -p axo-pass-cli"
 "check:linux:tests" = "cargo check --target aarch64-unknown-linux-gnu -p axo-pass-core -p axo-pass-cli --tests"
 test = "cargo test --workspace"
+"test:sync" = "cargo test -p axo-pass-core --lib secrets::vaults::sync"
+"test:rotation" = "cargo test -p axo-pass-core --lib secrets::vaults::sync::tests::rotation"
 
 "test:gpg" = "gpgconf --kill gpg-agent; echo 1234 | gpg -as -"
 "test:ssh" = "ssh-add ~/.ssh/id_ed25519"
