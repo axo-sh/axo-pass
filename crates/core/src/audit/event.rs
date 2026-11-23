@@ -530,6 +530,12 @@ pub enum Action {
     SyncFileQuarantined,
     #[serde(rename = "sync.local_file_missing")]
     SyncLocalFileMissing,
+    #[serde(rename = "sync.file_ignored")]
+    SyncFileIgnored,
+    #[serde(rename = "sync.rotation")]
+    SyncRotation,
+    #[serde(rename = "sync.replica_cleaned")]
+    SyncReplicaCleaned,
 }
 
 impl Action {
@@ -617,12 +623,15 @@ impl Action {
             Action::SyncResumed => "sync.resumed",
             Action::SyncFileQuarantined => "sync.file_quarantined",
             Action::SyncLocalFileMissing => "sync.local_file_missing",
+            Action::SyncFileIgnored => "sync.file_ignored",
+            Action::SyncRotation => "sync.rotation",
+            Action::SyncReplicaCleaned => "sync.replica_cleaned",
         }
     }
 
     /// Every action, grouped by category in display order. A new action must
     /// be added here to appear in the audit log help.
-    pub const ALL: [Action; 81] = [
+    pub const ALL: [Action; 84] = [
         Action::SshSign,
         Action::SshPassphrase,
         Action::SshKeyAdd,
@@ -704,6 +713,9 @@ impl Action {
         Action::SyncResumed,
         Action::SyncFileQuarantined,
         Action::SyncLocalFileMissing,
+        Action::SyncFileIgnored,
+        Action::SyncRotation,
+        Action::SyncReplicaCleaned,
     ];
 
     /// Parse the dotted string form.
@@ -841,6 +853,11 @@ impl Action {
                 "Quarantined a sync file of another Mac that failed a check."
             },
             Action::SyncLocalFileMissing => "A sync file of a vault is missing on this Mac.",
+            Action::SyncFileIgnored => {
+                "Ignored a sync file of another Mac under an old or losing key, or of a removed Mac."
+            },
+            Action::SyncRotation => "Created, accepted, declined, or rejected a sync key rotation.",
+            Action::SyncReplicaCleaned => "Removed the sync files and entries of a retired Mac.",
         }
     }
 
@@ -927,7 +944,10 @@ impl Action {
             | Action::SyncStopped
             | Action::SyncResumed
             | Action::SyncFileQuarantined
-            | Action::SyncLocalFileMissing => Category::Sync,
+            | Action::SyncLocalFileMissing
+            | Action::SyncFileIgnored
+            | Action::SyncRotation
+            | Action::SyncReplicaCleaned => Category::Sync,
         }
     }
 
@@ -1015,7 +1035,10 @@ impl Action {
             | Action::SyncStopped
             | Action::SyncResumed
             | Action::SyncFileQuarantined
-            | Action::SyncLocalFileMissing => ActionKind::Other,
+            | Action::SyncLocalFileMissing
+            | Action::SyncFileIgnored
+            | Action::SyncRotation
+            | Action::SyncReplicaCleaned => ActionKind::Other,
         }
     }
 }

@@ -211,6 +211,48 @@ impl SyncEvents {
         self.events.push(event);
     }
 
+    /// A state file of `replica` was ignored for `reason`, such as an old key
+    /// id or a removed replica.
+    pub(crate) fn file_ignored(&mut self, replica: ReplicaId, file: &str, reason: &str) {
+        let event = self
+            .event(Action::SyncFileIgnored, Outcome::Succeeded)
+            .detail("replica", replica.0.to_string())
+            .detail("file", file)
+            .detail("reason", reason);
+        self.events.push(event);
+    }
+
+    /// Rotation to key `key_id` signed by `signer` was `change`: created,
+    /// accepted, declined, or rejected. `removed` lists the replicas it
+    /// removes.
+    pub(crate) fn rotation(
+        &mut self,
+        change: &str,
+        signer: ReplicaId,
+        key_id: u32,
+        removed: &[ReplicaId],
+    ) {
+        let outcome = match change {
+            "rejected" => Outcome::Denied,
+            _ => Outcome::Succeeded,
+        };
+        let event = self
+            .event(Action::SyncRotation, outcome)
+            .detail("change", change)
+            .detail("signer", signer.0.to_string())
+            .detail("key_id", key_id.to_string())
+            .detail("removed", list(removed.iter().map(|replica| replica.0)));
+        self.events.push(event);
+    }
+
+    /// Directory and entries of `replica` were removed by a cleanup.
+    pub(crate) fn replica_cleaned(&mut self, replica: ReplicaId) {
+        let event = self
+            .event(Action::SyncReplicaCleaned, Outcome::Succeeded)
+            .detail("replica", replica.0.to_string());
+        self.events.push(event);
+    }
+
     /// Record the failure to load the sync state of vault `vault_id` as `case`,
     /// which stops the transaction before any sync step. The sidecar under
     /// `root` holds the last failure recorded, so a vault that keeps failing
