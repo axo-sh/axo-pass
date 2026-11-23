@@ -134,6 +134,10 @@ pub enum StateFileError {
     /// ignored.
     #[error("state file is under another key with id {}", .0.0)]
     OtherKey(KeyId),
+    /// Key id below the newest key this Mac has accepted. The file is
+    /// ignored, whatever replica it names.
+    #[error("state file is under key {}, older than the accepted key", .0.0)]
+    OldKey(KeyId),
     /// Newer format version, or a body field this build does not know.
     #[error("state file is from a newer format: {0}")]
     VersionSkew(String),
@@ -217,7 +221,19 @@ impl StateFile {
         source: &StateSource,
         keyring: &SyncKeyring,
     ) -> Result<(StateHeader, CausalState<SyncState>), StateFileError> {
-        let (header, padded) = Self::open(bytes, source, keyring)?;
+        Self::decode_accepted(bytes, source, keyring, KeyId(0))
+    }
+
+    /// [`Self::decode`] on a Mac that has accepted the key `accepted`. A file
+    /// under a lower key id is `OldKey`, checked before the keyring, so it is
+    /// never decrypted.
+    pub fn decode_accepted(
+        bytes: &[u8],
+        source: &StateSource,
+        keyring: &SyncKeyring,
+        accepted: KeyId,
+    ) -> Result<(StateHeader, CausalState<SyncState>), StateFileError> {
+        let (header, padded) = Self::open_accepted(bytes, source, keyring, accepted)?;
         let body = PaddedBody::unpad(&padded)
             .map_err(|e| StateFileError::Quarantine(Damage::Padding(e)))?;
         let state = StateBody::decode(&body).map_err(|e| match e {
@@ -231,10 +247,22 @@ impl StateFile {
     /// the hash, the magic bytes, the header length, the header format
     /// version, the header fields, the vault and replica ids against
     /// `source`, the key id and fingerprint against `keyring`, and the AAD.
+    #[cfg(test)]
     pub(crate) fn open(
         bytes: &[u8],
         source: &StateSource,
         keyring: &SyncKeyring,
+    ) -> Result<(StateHeader, Zeroizing<Vec<u8>>), StateFileError> {
+        Self::open_accepted(bytes, source, keyring, KeyId(0))
+    }
+
+    /// [`Self::open`], with a key id below `accepted` refused as `OldKey`
+    /// after the vault and replica id checks.
+    fn open_accepted(
+        bytes: &[u8],
+        source: &StateSource,
+        keyring: &SyncKeyring,
+        accepted: KeyId,
     ) -> Result<(StateHeader, Zeroizing<Vec<u8>>), StateFileError> {
         let quarantine = StateFileError::Quarantine;
         if StateHash::of(bytes) != source.hash {
@@ -247,6 +275,9 @@ impl StateFile {
         }
         if header.replica_id != source.replica_id {
             return Err(quarantine(Damage::WrongReplica(header.replica_id)));
+        }
+        if header.key_id.0 < accepted.0 {
+            return Err(StateFileError::OldKey(header.key_id));
         }
         if keyring.get(header.key_id).is_none() {
             return Err(StateFileError::WaitingForKey(header.key_id));

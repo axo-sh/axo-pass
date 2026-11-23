@@ -19,7 +19,8 @@ pub(crate) struct PeerListing;
 
 impl PeerListing {
     /// Peer state files of vault `vault_id` listed by `transport` that
-    /// `sidecar` neither records as joined nor quarantines, by replica.
+    /// `sidecar` neither records as joined or ignored nor quarantines, by
+    /// replica.
     /// `own` is this replica, whose directory is not listed. Fails if the
     /// replica directories cannot be listed. A peer directory that cannot be
     /// listed is logged and skipped.
@@ -50,6 +51,7 @@ impl PeerListing {
                     .filter(|hash| {
                         let name = FileName::State(*hash).file_name();
                         !sidecar.is_joined(replica, *hash)
+                            && !sidecar.is_ignored(replica, *hash)
                             && !sidecar.is_quarantined(replica, &name, *hash)
                     })
                     .map(|hash| (replica, hash)),

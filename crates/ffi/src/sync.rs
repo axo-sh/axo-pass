@@ -391,6 +391,10 @@ pub enum PausedCauseInfo {
     KeyMissing { key_id: u32 },
     /// Another Mac enabled sync for the vault separately.
     SeparateKey { replicas: u32 },
+    /// The user declined a key rotation of the Mac with replica id
+    /// `signer_id`, a short id. This Mac is cut off from the Macs that
+    /// accepted it.
+    RotationDeclined { signer_id: String },
 }
 
 impl From<PausedCause> for PausedCauseInfo {
@@ -410,6 +414,9 @@ impl From<PausedCause> for PausedCauseInfo {
             PausedCause::KeyMissing { key_id } => Self::KeyMissing { key_id },
             PausedCause::SeparateKey { replicas } => Self::SeparateKey {
                 replicas: count(replicas),
+            },
+            PausedCause::RotationDeclined { signer } => Self::RotationDeclined {
+                signer_id: ShortId::encode_uuid(signer),
             },
         }
     }

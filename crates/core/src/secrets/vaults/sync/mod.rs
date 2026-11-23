@@ -3,6 +3,7 @@
 pub mod apply;
 pub(crate) mod audit_events;
 pub(crate) mod blobs;
+pub mod cleanup;
 pub mod crdt;
 pub mod diff;
 pub mod edit_check;
@@ -23,6 +24,7 @@ pub mod recovery;
 pub mod repair;
 pub mod report;
 pub mod resolve;
+pub mod rotation;
 pub mod setup;
 pub mod sidecar;
 pub mod state_file;

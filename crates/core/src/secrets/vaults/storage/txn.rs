@@ -129,6 +129,7 @@ use crate::secrets::vaults::sync::publish::Staged;
 use crate::secrets::vaults::sync::rebuild::Rebuild;
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::repair::{Repair, SyncRequest};
+use crate::secrets::vaults::sync::rotation::{RotationKeys, RotationStep};
 use crate::secrets::vaults::sync::setup::{FIRST_KEY_ID, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
 use crate::secrets::vaults::sync::state_file::StateHash;
@@ -179,6 +180,30 @@ pub struct VaultWriter {
     /// Seconds added to the clock of the read listings, shared by clones.
     #[cfg(test)]
     listing_offset: Arc<AtomicU64>,
+    /// Keys a rotation unwraps and stores keys with under `Unlock::Test`.
+    #[cfg(test)]
+    test_rotation_keys: Option<TestRotationKeys>,
+}
+
+/// Keys of a test Mac for rotations.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestRotationKeys(pub(crate) Arc<dyn RotationKeys + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for TestRotationKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TestRotationKeys(..)")
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for TestRotationKeys {
+    type Target = dyn RotationKeys + Send + Sync;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
 }
 
 impl Default for VaultWriter {
@@ -201,6 +226,8 @@ impl VaultWriter {
             apply_fault: None,
             #[cfg(test)]
             listing_offset: Arc::default(),
+            #[cfg(test)]
+            test_rotation_keys: None,
         }
     }
 
@@ -223,6 +250,17 @@ impl VaultWriter {
             clock_offset: 0,
             apply_fault: None,
             listing_offset: Arc::default(),
+            test_rotation_keys: None,
+        }
+    }
+
+    /// This writer with `keys` as the keys a rotation unwraps and stores
+    /// keys with under `Unlock::Test`.
+    #[cfg(test)]
+    pub(crate) fn with_test_rotation_keys(self, keys: Arc<dyn RotationKeys + Send + Sync>) -> Self {
+        Self {
+            test_rotation_keys: Some(TestRotationKeys(keys)),
+            ..self
         }
     }
 
@@ -802,6 +840,26 @@ pub struct Committed<R> {
     /// holds no trusted sync state, and for a rebuild or a restore over a
     /// refused file of a vault that is not synced.
     pub recovery_kit_missing: bool,
+    /// Whether a verified rotation from another Mac waits for the answer of
+    /// the user. False if the transaction holds no trusted sync state.
+    pub rotation_pending: bool,
+}
+
+impl<R> Committed<R> {
+    /// This result with `value` in place of its value.
+    pub(crate) fn with_value<T>(self, value: T) -> Committed<T> {
+        Committed {
+            value,
+            vault: self.vault,
+            vault_id: self.vault_id,
+            previous_key: self.previous_key,
+            changed: self.changed,
+            save_count: self.save_count,
+            sync_status: self.sync_status,
+            recovery_kit_missing: self.recovery_kit_missing,
+            rotation_pending: self.rotation_pending,
+        }
+    }
 }
 
 /// Outcome of [`VaultWriter::copy_staged`].
@@ -891,7 +949,7 @@ impl VaultWriter {
     where
         E: From<Error>,
     {
-        self.write_with(target, unlock, request, None, f)
+        self.write_with(target, unlock, request, None, None, f)
     }
 
     /// Transaction on the vault `target` that changes no vault content and
@@ -902,16 +960,71 @@ impl VaultWriter {
         unlock: Unlock<'_>,
         grant: &mut PairingGrant<'_>,
     ) -> Result<Committed<()>, Error> {
-        self.write_with(target, unlock, SyncRequest::Change, Some(grant), |_| Ok(()))
+        self.write_with(
+            target,
+            unlock,
+            SyncRequest::Change,
+            Some(grant),
+            None,
+            |_| Ok(()),
+        )
     }
 
-    /// [`Self::write_as`], with the pairing grant `grant` if set.
+    /// Transaction on the vault `target` that changes no vault content and
+    /// runs the rotation step `step` under the locks (`sync/rotation.rs`).
+    pub(crate) fn write_rotating(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        step: &mut RotationStep<'_>,
+    ) -> Result<Committed<()>, Error> {
+        self.write_with(
+            target,
+            unlock,
+            SyncRequest::Change,
+            None,
+            Some(step),
+            |_| Ok(()),
+        )
+    }
+
+    /// Run `f` with the keys of this Mac that a rotation unwraps and stores
+    /// keys with, read through `unlock` before the vault locks. `App` and
+    /// `Context` read `vault-encryption-key` on their context, which adds no
+    /// prompt to an authenticated context. A vault unlocked in memory holds
+    /// no vault encryption key, so `Unlocked` fails with `VaultLocked`.
+    pub(crate) fn with_rotation_keys<R>(
+        &self,
+        unlock: &Unlock<'_>,
+        f: impl FnOnce(&dyn RotationKeys) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        match unlock {
+            Unlock::App => {
+                check_vault_auth_still_valid()?;
+                f(&get_vault_encryption_key_on(
+                    AuthContext::SharedThreadLocal,
+                )?)
+            },
+            Unlock::Context(context) => f(&get_vault_encryption_key_on(context.clone())?),
+            Unlock::Key(managed_key) => f(*managed_key),
+            Unlock::Unlocked(_) => Err(Error::VaultLocked),
+            #[cfg(test)]
+            Unlock::Test(_) => match &self.test_rotation_keys {
+                Some(keys) => f(&**keys),
+                None => Err(Error::VaultLocked),
+            },
+        }
+    }
+
+    /// [`Self::write_as`], with the pairing grant `grant` and the rotation
+    /// step `step` if set.
     fn write_with<R, E>(
         &self,
         target: &Target,
         unlock: Unlock<'_>,
         request: SyncRequest,
         mut grant: Option<&mut PairingGrant<'_>>,
+        mut step: Option<&mut RotationStep<'_>>,
         mut f: impl FnOnce(&mut VaultHandle) -> Result<R, E>,
     ) -> Result<Committed<R>, E>
     where
@@ -920,7 +1033,8 @@ impl VaultWriter {
         let mut retry_key_missing = true;
         for _ in 0..MAX_ATTEMPTS {
             let grant = grant.as_deref_mut();
-            match self.attempt(target, &unlock, &request, retry_key_missing, grant, f)? {
+            let step = step.as_deref_mut();
+            match self.attempt(target, &unlock, &request, retry_key_missing, grant, step, f)? {
                 Attempt::Done(committed) => return Ok(committed),
                 Attempt::Retry(unused) => f = unused,
                 Attempt::KeyMissing(unused) => {
@@ -935,7 +1049,10 @@ impl VaultWriter {
     /// One attempt of [`Self::write_with`]. `f` is returned in `Retry` or
     /// `KeyMissing` if it did not run. `KeyMissing` is returned only if
     /// `retry_key_missing` is set. `grant` is checked before the joins,
-    /// prepared after them, and written after the saves.
+    /// prepared after them, and written after the saves. `step` runs before
+    /// the peer joins and after the first-use pins, and finishes after the
+    /// publish.
+    #[allow(clippy::too_many_arguments)]
     fn attempt<R, E, F>(
         &self,
         target: &Target,
@@ -943,6 +1060,7 @@ impl VaultWriter {
         request: &SyncRequest,
         retry_key_missing: bool,
         mut grant: Option<&mut PairingGrant<'_>>,
+        mut step: Option<&mut RotationStep<'_>>,
         f: F,
     ) -> Result<Attempt<R, F>, E>
     where
@@ -1018,6 +1136,10 @@ impl VaultWriter {
         if let Some(grant) = grant.as_deref() {
             grant.check(&case, sync.as_ref())?;
         }
+        // A rotation step refuses a vault whose sync state is not trusted.
+        if step.is_some() && sync.is_none() {
+            return Err(Error::RotationRefused(case.to_string()).into());
+        }
         // A recovery recipient is added only to a trusted sync state.
         let recovery = match request {
             SyncRequest::AddRecovery(add) => Some(add),
@@ -1092,6 +1214,16 @@ impl VaultWriter {
             if repair.is_some() && sync.syncs() {
                 changed |= sync.record_repair(&vault, session, now)?.is_some();
             }
+            // Rotations to this replica are found before the peer joins, so
+            // no file of a replica they remove is joined. An acceptance and a
+            // decline run before the peer joins, so the peer files under the
+            // new key join, and the joins a decline paused resume.
+            if let Some(transport) = transport.filter(|_| sync.syncs()) {
+                sync.find_rotations(transport);
+            }
+            if let Some(step) = step.as_deref_mut() {
+                step.before_peers(sync, transport, session, now)?;
+            }
             // The pending flag is cleared after a peer join that listed every
             // peer directory, whatever each file's outcome, unless it was set
             // again after the epoch was read (D4).
@@ -1119,6 +1251,14 @@ impl VaultWriter {
             // Peers are pinned after the joins and the apply, so a discarded
             // join pins nothing it held. A stopped sync pins nothing.
             sync.pin_first_use();
+            // A rotation or a cleanup runs on the joined state, after the
+            // pins. One that fails, or waits for a file, writes nothing.
+            if let Some(step) = step.as_deref_mut() {
+                step.after_joins(sync, transport, session, now, &*self.signer)?;
+            }
+            // The own `replica_keys` register with a second value is
+            // superseded with the keys of this Mac.
+            sync.supersede_own_keys(session, now, &*self.signer)?;
         }
 
         // The key comes from the vault. It differs from the caller's key if
@@ -1240,20 +1380,24 @@ impl VaultWriter {
                 // `Age` wrappings. A failed write does not fail the save.
                 if let Some(transport) = &transport {
                     match grant {
-                        Some(grant) => grant.write(sync, &**transport),
+                        Some(grant) => grant.write(sync, &**transport, &*self.signer),
                         None => {
-                            let _ = sync.write_key_file(&**transport, None);
+                            let _ = sync.write_key_file(&**transport, None, &*self.signer);
                         },
                     }
                 }
                 // No signed save follows the vault save. A failed copy does
                 // not fail the save. A transaction that did not publish
                 // uploads the referenced blobs that the folder lacks, and
-                // changes no local state.
+                // changes no local state. A rotation step deletes the
+                // directories it may only after the publish.
                 if let Some(transport) = &transport {
-                    sync.publish(&**transport);
+                    let published = sync.publish(&**transport);
                     if sync.syncs() {
                         sync.heal_blobs(&**transport);
+                    }
+                    if let Some(step) = step {
+                        step.after_publish(sync, &**transport, published);
                     }
                 }
                 sync.settle_status();
@@ -1298,6 +1442,9 @@ impl VaultWriter {
             return Err(Error::EditRefused(refusal).into());
         }
         let recovery_kit_missing = sync.as_ref().is_some_and(SyncTxn::recovery_kit_missing);
+        let rotation_pending = sync
+            .as_ref()
+            .is_some_and(|sync| !sync.rotation_prompts().is_empty());
         Ok(Attempt::Done(Committed {
             value,
             vault: vh,
@@ -1307,6 +1454,7 @@ impl VaultWriter {
             save_count,
             sync_status,
             recovery_kit_missing,
+            rotation_pending,
         }))
     }
 
@@ -1922,6 +2070,7 @@ impl VaultWriter {
             save_count,
             sync_status: None,
             recovery_kit_missing: false,
+            rotation_pending: false,
         }))
     }
 
@@ -2325,7 +2474,7 @@ impl VaultWriter {
         let changed = result?;
         let replica_id = replica.0;
         log::info!("Enabled sync of vault {id} as replica {replica_id}");
-        let _ = sync.write_key_file(&*transport, None);
+        let _ = sync.write_key_file(&*transport, None, &*self.signer);
         sync.publish(&*transport);
         sync.settle_status();
         sync.save_sidecar(&self.root);
@@ -2343,6 +2492,7 @@ impl VaultWriter {
             save_count,
             sync_status: Some(sync.status()),
             recovery_kit_missing: sync.recovery_kit_missing(),
+            rotation_pending: false,
         })
     }
 
@@ -2530,7 +2680,7 @@ impl VaultWriter {
         locked.state.set_path(path);
         let replica_id = replica.0;
         log::info!("Joined sync of vault {id} as replica {replica_id}");
-        let _ = sync.write_key_file(&*transport, None);
+        let _ = sync.write_key_file(&*transport, None, &*self.signer);
         sync.publish(&*transport);
         sync.settle_status();
         sync.save_sidecar(&self.root);
@@ -2552,6 +2702,7 @@ impl VaultWriter {
             save_count,
             sync_status: Some(sync.status()),
             recovery_kit_missing: sync.recovery_kit_missing(),
+            rotation_pending: false,
         })
     }
 
@@ -2646,7 +2797,7 @@ impl VaultWriter {
         }
         let mut committed = result?;
         if let Some(transport) = &transport {
-            let _ = sync.write_key_file(&**transport, None);
+            let _ = sync.write_key_file(&**transport, None, &*self.signer);
             sync.publish(&**transport);
             if sync.syncs() {
                 sync.heal_blobs(&**transport);
@@ -2755,6 +2906,7 @@ impl VaultWriter {
             vault: vh,
             sync_status: None,
             recovery_kit_missing: false,
+            rotation_pending: false,
         })
     }
 

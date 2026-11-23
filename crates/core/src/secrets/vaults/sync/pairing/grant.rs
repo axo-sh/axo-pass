@@ -169,9 +169,14 @@ impl<'a> PairingGrant<'a> {
     /// Write the wrapping into the own `key.json` of the vault of `sync`
     /// through `transport`, after the saves, in the one read and write of
     /// [`SyncTxn::write_key_file`]. The result is kept for the outcome.
-    pub(crate) fn write(&mut self, sync: &mut SyncTxn, transport: &dyn SyncTransport) {
+    pub(crate) fn write(
+        &mut self,
+        sync: &mut SyncTxn,
+        transport: &dyn SyncTransport,
+        signer: &dyn VaultSigner,
+    ) {
         let result = match self.wrapping.take() {
-            Some(wrapping) => sync.write_key_file(transport, Some(wrapping)),
+            Some(wrapping) => sync.write_key_file(transport, Some(wrapping), signer),
             None => Err(Error::SyncStateEncodeError(
                 "pairing wrapping was not built".to_string(),
             )),

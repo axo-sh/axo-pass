@@ -23,8 +23,8 @@ use super::crdt::{
 };
 use super::model::{
     CredentialId, FolderId, FolderValue, HistoryId, HistoryValue, ItemId, Placement,
-    RecoveryRecipient, ReplicaKeys, SecretText, SectionId, SectionValue, SyncCredential, SyncItem,
-    SyncState, TrashValue, WebsiteValue,
+    RecoveryRecipient, Removal, ReplicaKeys, SecretText, SectionId, SectionValue, SyncCredential,
+    SyncItem, SyncState, TrashValue, WebsiteValue,
 };
 use super::view::keys::{CREDENTIAL_KEY_PREFIX, ITEM_KEY_PREFIX, Suffix};
 use super::view::{HistoryView, VaultView, list_order};
@@ -108,6 +108,17 @@ pub(crate) enum Edit {
     /// disable of sync. The vault holds no `left` map, so the diff never
     /// finds it.
     Left(ReplicaId),
+    /// Write of a `Removal` into the `removed` register of a replica, at a
+    /// key rotation. The vault holds no `removed` map, so the diff never
+    /// finds it.
+    Removal(ReplicaId, Removal),
+    /// Remove of the `removed` entry of a replica that only a replaced
+    /// concurrent rotation removed.
+    DropRemoval(ReplicaId),
+    /// Remove of the `replica_names`, `replica_keys`, and `left` entries and
+    /// the `last_used_day_at` registers of a replica, at a cleanup. The
+    /// `removed` entry is kept.
+    CleanReplica(ReplicaId),
 }
 
 /// Write to one register of an item.
@@ -283,6 +294,34 @@ impl LocalEdits {
         self.edits.push(Edit::Left(replica));
     }
 
+    /// Add a write of the public keys `keys` into the `replica_keys`
+    /// register of `replica`, which must be this replica. It supersedes
+    /// every value of the register.
+    pub(crate) fn add_own_keys(&mut self, replica: ReplicaId, keys: ReplicaKeys) {
+        self.edits.push(Edit::ReplicaKeys(replica, keys));
+    }
+
+    /// Add a write of `removal` into the `removed` register of `replica`.
+    pub(crate) fn add_removal(&mut self, replica: ReplicaId, removal: Removal) {
+        self.edits.push(Edit::Removal(replica, removal));
+    }
+
+    /// Add a write of the last used time `at` into the register of `replica`
+    /// of the credential `credential`.
+    pub(crate) fn add_last_used(&mut self, credential: CredentialId, replica: ReplicaId, at: i64) {
+        self.edits.push(Edit::LastUsed(credential, replica, at));
+    }
+
+    /// Add the remove of the `removed` entry of `replica`.
+    pub(crate) fn add_drop_removal(&mut self, replica: ReplicaId) {
+        self.edits.push(Edit::DropRemoval(replica));
+    }
+
+    /// Add the remove of the entries of the cleaned replica `replica`.
+    pub(crate) fn add_clean_replica(&mut self, replica: ReplicaId) {
+        self.edits.push(Edit::CleanReplica(replica));
+    }
+
     /// Record the edits in `state` at `now`, in Unix seconds.
     ///
     /// Mints one write id if the edits are not empty, and writes every changed
@@ -425,7 +464,10 @@ impl Edit {
             | Self::Recovery(..)
             | Self::ReplicaName(..)
             | Self::ReplicaKeys(..)
-            | Self::Left(_) => false,
+            | Self::Left(_)
+            | Self::Removal(..)
+            | Self::DropRemoval(_)
+            | Self::CleanReplica(_) => false,
         }
     }
 
@@ -495,6 +537,30 @@ impl Edit {
                 store.replica_keys.entry(replica).put(mint, keys, kind)
             },
             Self::Left(replica) => store.left.entry(replica).put(mint, true, kind),
+            Self::Removal(replica, removal) => {
+                store.removed.entry(replica).put(mint, removal, kind)
+            },
+            Self::DropRemoval(replica) => {
+                store.removed.remove(&replica);
+            },
+            Self::CleanReplica(replica) => {
+                store.replica_names.remove(&replica);
+                store.replica_keys.remove(&replica);
+                store.left.remove(&replica);
+                let credentials: Vec<CredentialId> = store
+                    .credentials
+                    .iter()
+                    .filter(|(_, c)| c.last_used_day_at.get(&replica).is_some())
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in credentials {
+                    store
+                        .credentials
+                        .entry(id)
+                        .last_used_day_at
+                        .remove(&replica);
+                }
+            },
         }
     }
 }

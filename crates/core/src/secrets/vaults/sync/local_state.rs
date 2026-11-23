@@ -25,6 +25,7 @@ use zeroize::Zeroizing;
 use super::crdt::{CausalContext, CausalState, ReplicaId};
 use super::keys::{SyncKey, SyncKeyring, WrappedSyncKey};
 use super::model::{ByteString, KeyId, PublicKey, SYNC_FORMAT_VERSION, SyncState};
+use super::rotation::RotationRecord;
 use super::state_file::body::{BodyError, StateBody};
 use super::state_file::padded::{PaddedBody, PaddingError};
 use super::state_file::{FormatVersion, StateFile, StateHash};
@@ -95,6 +96,18 @@ pub struct LocalSyncState {
     pub sync_keys: Vec<WrappedSyncKey>,
     /// Public keys of each peer, pinned when first learned.
     pub pinned_keys: BTreeMap<ReplicaId, PinnedKeys>,
+    /// Rotation that made the key of `key_id`, accepted or signed by this
+    /// replica. `None` for a key of a setup, a join, or an import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<RotationRecord>,
+    /// Verified rotations that wait for the answer of the user. Joins of
+    /// the files of the replicas they remove are paused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_rotations: Vec<RotationRecord>,
+    /// Rotations the user declined, and rotations that lost to the rotation
+    /// this replica signed. They are not shown again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declined_rotations: Vec<RotationRecord>,
     #[serde(with = "ByteString")]
     nonce: [u8; 12],
     /// Ciphertext of the padded body.
@@ -183,6 +196,9 @@ impl LocalSyncState {
             leaving: false,
             sync_keys: Vec::new(),
             pinned_keys: BTreeMap::new(),
+            rotation: None,
+            pending_rotations: Vec::new(),
+            declined_rotations: Vec::new(),
             nonce: [0; 12],
             body: Vec::new(),
         }

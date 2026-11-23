@@ -81,6 +81,11 @@ private func pausedText(_ cause: PausedCauseInfo) -> (text: String, detail: Stri
     )
   case .separateKey:
     return (syncSeparateKeyMessage, nil)
+  case .rotationDeclined:
+    return (
+      "You declined a new sync key from another Mac, so this Mac no longer syncs with the Macs that accepted it. Pair this Mac again to rejoin.",
+      nil
+    )
   }
 }
 

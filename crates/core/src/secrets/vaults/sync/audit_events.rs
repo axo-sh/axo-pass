@@ -311,6 +311,7 @@ impl PausedCause {
             Self::DiffFailed { .. } => "diff_failed",
             Self::KeyMissing { .. } => "key_missing",
             Self::SeparateKey { .. } => "separate_key",
+            Self::RotationDeclined { .. } => "rotation_declined",
         }
     }
 }

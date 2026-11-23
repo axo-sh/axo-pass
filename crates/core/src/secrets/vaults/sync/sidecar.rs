@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use super::crdt::ReplicaId;
 use super::local_state::SYNC_DIR;
+use super::model::KeyId;
 use super::state_file::StateHash;
 use super::status::PausedCause;
 use super::transport::TransportRoot;
@@ -46,6 +47,24 @@ pub struct Sidecar {
     /// a state or read one.
     #[serde(default)]
     pub transport: Option<TransportRoot>,
+    /// Content hashes of the state files ignored for an old key id, a
+    /// losing key, or a removed replica, by replica. A file records
+    /// `sync.file_ignored` once. Pruned with the listing as `joined` is.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ignored: BTreeMap<ReplicaId, BTreeSet<StateHash>>,
+    /// Highest key id of a state file joined from each replica. The writer
+    /// drops the wrappings of retired key ids once every remaining replica
+    /// has published under the current key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub key_ids: BTreeMap<ReplicaId, KeyId>,
+    /// Rotations rejected without a prompt, as signer, key id, and
+    /// fingerprint, the newest last. Each records `sync.rotation` once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_rotations: Vec<String>,
+    /// Key id for which the own `key.json` dropped the wrappings of earlier
+    /// key ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruned_key: Option<KeyId>,
 }
 
 /// What the last transaction found about the sync of a vault.
@@ -202,25 +221,64 @@ impl Sidecar {
     /// Keep only the joined hashes of `replica` in `listed`. Returns whether
     /// a hash was dropped.
     pub fn retain_joined(&mut self, replica: ReplicaId, listed: &[StateHash]) -> bool {
-        let Some(hashes) = self.joined.get_mut(&replica) else {
+        let joined = Self::retain_hashes(&mut self.joined, replica, listed);
+        let ignored = Self::retain_hashes(&mut self.ignored, replica, listed);
+        joined || ignored
+    }
+
+    /// Keep only the hashes of `replica` in `listed` in `map`. Returns
+    /// whether a hash was dropped.
+    fn retain_hashes(
+        map: &mut BTreeMap<ReplicaId, BTreeSet<StateHash>>,
+        replica: ReplicaId,
+        listed: &[StateHash],
+    ) -> bool {
+        let Some(hashes) = map.get_mut(&replica) else {
             return false;
         };
         let before = hashes.len();
         hashes.retain(|hash| listed.contains(hash));
         let dropped = hashes.len() != before;
         if hashes.is_empty() {
-            self.joined.remove(&replica);
+            map.remove(&replica);
         }
         dropped
     }
 
-    /// Keep only the joined hashes of `own` and of the replicas in `listed`.
-    /// Returns whether a replica was dropped.
+    /// Keep only the joined and ignored hashes and the key ids of `own` and
+    /// of the replicas in `listed`. Returns whether a replica was dropped.
     pub fn retain_replicas(&mut self, own: ReplicaId, listed: &[ReplicaId]) -> bool {
-        let before = self.joined.len();
-        self.joined
-            .retain(|replica, _| *replica == own || listed.contains(replica));
-        self.joined.len() != before
+        let keep = |replica: &ReplicaId| *replica == own || listed.contains(replica);
+        let before = (self.joined.len(), self.ignored.len(), self.key_ids.len());
+        self.joined.retain(|replica, _| keep(replica));
+        self.ignored.retain(|replica, _| keep(replica));
+        self.key_ids.retain(|replica, _| keep(replica));
+        (self.joined.len(), self.ignored.len(), self.key_ids.len()) != before
+    }
+
+    /// Whether the state file with hash `hash` of `replica` was ignored.
+    pub fn is_ignored(&self, replica: ReplicaId, hash: StateHash) -> bool {
+        self.ignored
+            .get(&replica)
+            .is_some_and(|hashes| hashes.contains(&hash))
+    }
+
+    /// Record the state file with hash `hash` of `replica` as ignored.
+    /// Returns whether it was not recorded before.
+    pub fn record_ignored(&mut self, replica: ReplicaId, hash: StateHash) -> bool {
+        self.ignored.entry(replica).or_default().insert(hash)
+    }
+
+    /// Record that a state file of `replica` under `key_id` was joined.
+    /// Returns whether the highest key id of the replica changed.
+    pub fn record_key_id(&mut self, replica: ReplicaId, key_id: KeyId) -> bool {
+        let entry = self.key_ids.entry(replica).or_insert(KeyId(0));
+        if key_id.0 > entry.0 {
+            *entry = key_id;
+            true
+        } else {
+            false
+        }
     }
 
     /// Whether the paused causes hold `SeparateKey`, a separate enable found

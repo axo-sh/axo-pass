@@ -279,7 +279,7 @@ impl SyncLoad {
     /// of this case, as `VaultWriter::attempt` does: `Current`,
     /// `StoppedOlderVault`, and `NewerVault` load, and `OlderVault` and
     /// `Mismatch(ReplicaId)` are rebuilt from the sync state.
-    pub(crate) fn builds_txn(&self) -> bool {
+    pub fn builds_txn(&self) -> bool {
         matches!(
             self,
             Self::Current

@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::crdt::ReplicaId;
 use super::load::{SignatureFailure, SyncLoad};
@@ -63,6 +64,12 @@ pub enum PausedCause {
     /// of the state lacks. Another Mac enabled sync for the vault separately
     /// (D10 of doc 18). The files are left, not quarantined.
     SeparateKey { replicas: usize },
+    /// The user declined a key rotation signed by `signer`. Files under the
+    /// current key still join, and local edits are still published under
+    /// it. Macs that accepted the rotation ignore them, so this Mac is cut
+    /// off from those Macs until a re-link or a rotation of its own. Found
+    /// again from the signed header in each transaction.
+    RotationDeclined { signer: Uuid },
 }
 
 /// Cause of a stopped sync.
@@ -96,6 +103,8 @@ pub(crate) struct FoundCauses {
     pub(crate) diff_failed: Option<String>,
     /// Replicas of the listed state files of a separate enable.
     pub(crate) separate: BTreeSet<ReplicaId>,
+    /// Signer of a declined rotation that cuts this Mac off.
+    pub(crate) declined: Option<ReplicaId>,
 }
 
 impl FoundCauses {
@@ -151,6 +160,9 @@ impl FoundCauses {
             causes.push(PausedCause::SeparateKey {
                 replicas: self.separate.len(),
             });
+        }
+        if let Some(signer) = self.declined {
+            causes.push(PausedCause::RotationDeclined { signer: signer.0 });
         }
         causes
     }

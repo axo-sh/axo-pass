@@ -64,7 +64,9 @@ pub struct SyncState {
     /// its own. Cleanup removes the entry. The local pins and revocations are
     /// kept.
     pub replica_keys: OrMap<ReplicaId, MvRegister<ReplicaKeys, Stop>>,
-    /// Replicas removed by a key rotation. Never removed.
+    /// Replicas removed by a key rotation. An entry is removed only by a Mac
+    /// that replaces a losing concurrent rotation, if only that rotation
+    /// removed the replica. Cleanup keeps it.
     pub removed: OrMap<ReplicaId, MvRegister<Removal, Rotation>>,
     /// Replicas that disabled sync. Each replica writes only its own. Cleanup
     /// removes the entry.
@@ -339,7 +341,7 @@ pub struct RecoveryRecipient {
 pub struct KeyId(pub u32);
 
 /// SEC1 bytes of a P-256 public key. Not parsed or checked here.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PublicKey(#[serde(with = "ByteString")] pub Vec<u8>);
 

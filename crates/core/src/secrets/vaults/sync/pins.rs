@@ -8,8 +8,12 @@
 //! one, pins nothing, and a later join pins it. A pin is never replaced by a
 //! later join. This replica is never pinned.
 //!
-//! The pins and the revocation mark are read by the key rotation of
-//! milestone 13. The view of `replica_keys` does not use them yet.
+//! A key rotation wraps the new key only to pinned encryption keys and
+//! verifies only against pinned signing keys (`sync/rotation.rs`). Accepting
+//! or signing a rotation revokes the pins of the replicas it removes. The
+//! sync report flags a `replica_keys` register that differs from its pin.
+//! `VaultView::replica_keys` shows the register values and does not read the
+//! pins.
 
 use super::crdt::{CausalState, ReplicaId};
 use super::local_state::{LocalSyncState, PinSource, PinnedKeys};

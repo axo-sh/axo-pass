@@ -14,6 +14,14 @@
 //! `replica_keys` with no pin is pinned at first use (`sync/pins.rs`). A
 //! stopped transaction pins nothing.
 //!
+//! Before the peer joins, the `key.json` of each peer is read for signed
+//! rotations to this replica, and a verified one is kept as pending in the
+//! header. The files of the replicas a pending rotation removes are not
+//! joined. A rotation, an acceptance, a decline, and a cleanup are steps of
+//! a transaction (`sync/rotation.rs`, `sync/cleanup.rs`). A change of the
+//! key makes the transaction publish under the new key. An own
+//! `replica_keys` register with a second value is superseded.
+//!
 //! A transaction that publishes writes the staged file before the sync state,
 //! and copies it to the synced folder after the vault (`sync/publish.rs`).
 //! The file blobs that the staged file needs are uploaded first
@@ -60,23 +68,26 @@ use super::crdt::{CausalState, OwnFile, OwnFileState, ReplicaId, Session, WriteI
 use super::diff::LocalEdits;
 use super::edit_check::{EditRefusal, EditRequest, RefusalReason, ResolvePick};
 use super::join::{FileJoin, StateJoin};
-use super::keys::{SyncKey, SyncKeyring};
+use super::keys::{KeyFingerprint, SyncKey, SyncKeyring, WrappedSyncKey};
 use super::load::TrustedState;
 use super::local_state::LocalSyncState;
-use super::model::{KeyId, ReplicaKeys, SyncState};
+use super::model::{KeyId, Removal, ReplicaKeys, SyncState};
 use super::pins::{PairedPin, Pins};
 use super::publish::Staged;
 use super::rebuild::Rebuild;
 use super::recovery::{RecoveryAdd, RecoveryRecipients};
 use super::repair::{Repair, SyncRequest};
 use super::resolve::HistoryIds;
+use super::rotation::{
+    Accepted, NewKey, Rotated, RotationPlan, RotationPrompt, RotationRecord, Rotations,
+};
 use super::sidecar::{Health, Sidecar};
 use super::state_file::StateHash;
 use super::state_file::padded::PaddedBody;
 use super::status::{BUILD_ID, FoundCauses, SyncStatus};
-use super::transport::{FileName, SyncTransport, TransportRoot};
+use super::transport::{FileName, ReadResult, SyncTransport, TransportRoot};
 use super::view::VaultView;
-use super::wrapping::{DeviceWrapping, KeyFile};
+use super::wrapping::{DeviceWrapping, KeyFile, Wrapping};
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::store::BlobStore;
 use crate::secrets::vaults::format::signing::VaultSigner;
@@ -144,6 +155,11 @@ pub(crate) struct SyncTxn {
     /// Whether the publish listed the folder blobs and uploaded the missing
     /// ones, so [`Self::heal_blobs`] has nothing more to do.
     blobs_uploaded: bool,
+    /// Replicas removed by pending rotations, whose files are not joined.
+    paused: BTreeSet<ReplicaId>,
+    /// Whether the transaction publishes whatever the context, after a
+    /// change of the key.
+    force_publish: bool,
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
 }
@@ -161,6 +177,11 @@ impl SyncTxn {
         let events = SyncEvents::new(local.vault_id);
         let loaded_joined = sidecar.joined.clone();
         let loaded_stop = (local.stopped_build.clone(), local.override_build.clone());
+        let paused = Rotations::paused(&local);
+        let found = FoundCauses {
+            declined: Rotations::declined_signer(&local),
+            ..FoundCauses::default()
+        };
         Self {
             local,
             state,
@@ -178,13 +199,15 @@ impl SyncTxn {
             loaded_stop,
             repairing: false,
             vault_only: false,
-            found: FoundCauses::default(),
+            found,
             events,
             sources: BTreeSet::new(),
             remote: 0,
             peers_listed: false,
             blob_store: None,
             blobs_uploaded: false,
+            paused,
+            force_publish: false,
             #[cfg(test)]
             apply_fault: None,
         }
@@ -425,6 +448,518 @@ impl SyncTxn {
         pin
     }
 
+    /// Fingerprint of the key of the body.
+    fn current_fingerprint(&self) -> Option<KeyFingerprint> {
+        self.current_key().map(|(_, key)| key.fingerprint())
+    }
+
+    /// Read the `key.json` of every peer that `transport` lists for signed
+    /// rotations to this replica, before the peer joins (`sync/rotation.rs`).
+    /// A verified rotation is kept as pending in the header, and the files
+    /// of the replicas it removes are not joined. A transaction that does
+    /// not sync reads nothing.
+    pub(crate) fn find_rotations(&mut self, transport: &dyn SyncTransport) {
+        if !self.syncs() || self.is_leaving() {
+            return;
+        }
+        let Some(current) = self.current_fingerprint() else {
+            return;
+        };
+        let found = Rotations::find(transport, &self.local, &self.state.store, current);
+        let (changed, sidecar_changed) = Rotations::add(
+            &mut self.local,
+            found,
+            current,
+            &mut self.sidecar,
+            &mut self.events,
+        );
+        self.header_changed |= changed;
+        self.sidecar_changed |= sidecar_changed;
+        self.settle_rotations();
+    }
+
+    /// Recompute the paused replicas and the declined cause from the header.
+    fn settle_rotations(&mut self) {
+        self.paused = Rotations::paused(&self.local);
+        self.found.declined = Rotations::declined_signer(&self.local);
+    }
+
+    /// Prompts of the pending rotations.
+    pub(crate) fn rotation_prompts(&self) -> Vec<RotationPrompt> {
+        Rotations::prompts(&self.local)
+    }
+
+    /// Refuse a rotation step if sync does not run or is being disabled.
+    fn check_rotation_step(&self) -> Result<(), Error> {
+        if !self.syncs() {
+            return Err(Error::RotationRefused(
+                "sync is stopped or paused".to_string(),
+            ));
+        }
+        if self.is_leaving() {
+            return Err(Error::RotationRefused("sync is being disabled".to_string()));
+        }
+        Ok(())
+    }
+
+    /// Supersede the own `replica_keys` register with the keys of `signer`
+    /// if it holds more than one value, under one write id of `session`
+    /// minted at `now`. A transaction that does not sync writes nothing.
+    pub(crate) fn supersede_own_keys(
+        &mut self,
+        session: &mut Session,
+        now: i64,
+        signer: &dyn VaultSigner,
+    ) -> Result<(), Error> {
+        if !self.syncs() || self.is_leaving() {
+            return Ok(());
+        }
+        let replica = self.replica();
+        let values = self
+            .state
+            .store
+            .replica_keys
+            .get(&replica)
+            .map_or(0, |register| register.values().count());
+        if values <= 1 {
+            return Ok(());
+        }
+        let Some(keys) = self.own_keys(signer)? else {
+            return Ok(());
+        };
+        let vault_id = self.vault_id();
+        log::warn!("Vault {vault_id} supersedes {values} values of its own replica keys");
+        let mut edits = LocalEdits::default();
+        edits.add_own_keys(replica, keys);
+        self.record_own_edits(edits, session, now).map(|_| ())
+    }
+
+    /// Whether `replica` has left: the shown value of its `left` register.
+    fn has_left(&self, replica: ReplicaId) -> bool {
+        self.state
+            .store
+            .left
+            .get(&replica)
+            .and_then(|left| left.shown())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Replace the key of `key_id` in the keyring and in the stored keyring
+    /// with `key`, and make it the key of the body.
+    fn install_key(&mut self, key_id: KeyId, key: NewKey) -> Result<(), Error> {
+        let mut keys: Vec<(KeyId, SyncKey)> = self
+            .keyring
+            .keys()
+            .iter()
+            .filter(|(id, _)| *id != key_id)
+            .cloned()
+            .collect();
+        keys.push((key_id, key.key));
+        self.keyring = SyncKeyring::new(keys)?;
+        self.local
+            .sync_keys
+            .retain(|stored| stored.key_id != key_id);
+        self.local.sync_keys.push(WrappedSyncKey {
+            key_id,
+            wrapped: key.wrapped,
+        });
+        self.local.key_id = key_id;
+        self.mark_changed();
+        self.header_changed = true;
+        self.force_publish = true;
+        Ok(())
+    }
+
+    /// Revoke the pins of `replicas`.
+    fn revoke(&mut self, replicas: &[ReplicaId]) {
+        for replica in replicas {
+            if let Some(pin) = self.local.pinned_keys.get_mut(replica) {
+                pin.revoked = true;
+            }
+        }
+    }
+
+    /// Record a `Removal` under `key_id` for each of `replicas` whose
+    /// `removed` register lacks one, and remove the `removed` entry of each
+    /// of `dropped` whose values are all under `key_id`, under one write id
+    /// of `session` minted at `now`. The pin of a dropped replica is no
+    /// longer revoked.
+    fn record_removals(
+        &mut self,
+        replicas: &[ReplicaId],
+        dropped: &[ReplicaId],
+        key_id: KeyId,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<(), Error> {
+        let mut edits = LocalEdits::default();
+        for replica in dropped {
+            let only_this_key = self
+                .state
+                .store
+                .removed
+                .get(replica)
+                .is_some_and(|register| register.values().all(|(_, v)| v.value.key_id == key_id));
+            if only_this_key {
+                edits.add_drop_removal(*replica);
+                if let Some(pin) = self.local.pinned_keys.get_mut(replica) {
+                    pin.revoked = false;
+                }
+            }
+        }
+        for replica in replicas {
+            let present = self
+                .state
+                .store
+                .removed
+                .get(replica)
+                .is_some_and(|register| register.values().any(|(_, v)| v.value.key_id == key_id));
+            if !present {
+                edits.add_removal(*replica, Removal { key_id });
+            }
+        }
+        if !edits.is_empty() {
+            self.record_own_edits(edits, session, now)?;
+        }
+        Ok(())
+    }
+
+    /// Rotate the sync key to `key` under the next key id, removing the
+    /// replicas of `plan`, after the joins (`sync/rotation.rs`). Records a
+    /// `Removal` for each removed replica under one write id of `session`
+    /// minted at `now`, revokes their pins, and makes the key the key of the
+    /// body. The wrappings are written with the `key.json`, and the
+    /// transaction publishes. Refused if sync does not run, if a rotation is
+    /// pending, or if a replica of `plan` is this replica, is not in
+    /// `replica_keys`, or is already removed.
+    pub(crate) fn rotate(
+        &mut self,
+        plan: &RotationPlan,
+        key: NewKey,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<Rotated, Error> {
+        self.check_rotation_step()?;
+        let refused = |reason: String| Err(Error::RotationRefused(reason));
+        if !self.local.pending_rotations.is_empty() {
+            return refused("a rotation from another Mac waits for an answer".to_string());
+        }
+        let own = self.replica();
+        let store = &self.state.store;
+        for replica in plan.removals.keys() {
+            if *replica == own {
+                return refused("this Mac cannot remove itself".to_string());
+            }
+            if store.replica_keys.get(replica).is_none() {
+                return refused(format!("replica {} is not a known Mac", replica.0));
+            }
+            if store.removed.get(replica).is_some() {
+                return refused(format!("replica {} is already removed", replica.0));
+            }
+        }
+        let removed: Vec<ReplicaId> = plan.removals.keys().copied().collect();
+        let mut remaining = Vec::new();
+        let mut unpinned = Vec::new();
+        let candidates: Vec<ReplicaId> = store.replica_keys.iter().map(|(r, _)| *r).collect();
+        for replica in candidates {
+            if replica == own
+                || plan.removals.contains_key(&replica)
+                || self.state.store.removed.get(&replica).is_some()
+                || self.has_left(replica)
+            {
+                continue;
+            }
+            match self.local.pinned_keys.get(&replica) {
+                Some(pin) if !pin.revoked => remaining.push(replica),
+                Some(_) => {},
+                None => unpinned.push(replica),
+            }
+        }
+        let key_id = KeyId(self.local.key_id.0 + 1);
+        let key_fingerprint = key.key.fingerprint();
+        self.record_removals(&removed, &[], key_id, session, now)?;
+        self.revoke(&removed);
+        self.install_key(key_id, key)?;
+        let record = RotationRecord {
+            signer: own,
+            key_id,
+            key_fingerprint,
+            removed: removed.clone(),
+            remaining: remaining.clone(),
+        };
+        self.local.rotation = Some(record);
+        self.events.rotation("created", own, key_id.0, &removed);
+        let vault_id = self.vault_id();
+        log::info!(
+            "Vault {vault_id} rotates to key {} and removes {} replicas",
+            key_id.0,
+            removed.len()
+        );
+        self.settle_rotations();
+        Ok(Rotated {
+            key_id,
+            removed,
+            remaining,
+            unpinned,
+            ..Rotated::default()
+        })
+    }
+
+    /// Accept the pending rotation `record` with its key `key`, unwrapped
+    /// and verified before the locks. Adds the key, replacing a key under
+    /// the same key id, revokes the pins of the replicas it removes, records
+    /// their `Removal` entries if the state lacks them, under one write id
+    /// of `session` minted at `now`, and publishes under the new key. The
+    /// other pending rotations under its key id, and a replaced rotation,
+    /// are declined. Refused if sync does not run, if `record` is not
+    /// pending, or if `key` is not the key of `record`.
+    pub(crate) fn accept_rotation(
+        &mut self,
+        record: &RotationRecord,
+        key: NewKey,
+        session: &mut Session,
+        now: i64,
+    ) -> Result<Accepted, Error> {
+        self.check_rotation_step()?;
+        if !self.local.pending_rotations.contains(record) {
+            return Err(Error::RotationRefused(
+                "rotation is not pending".to_string(),
+            ));
+        }
+        if key.key.fingerprint() != record.key_fingerprint {
+            return Err(Error::SyncKeyFingerprintMismatch(record.key_id.0));
+        }
+        let own = self.replica();
+        let mut repeat = Vec::new();
+        // Replicas that only the replaced rotation removed. Their `removed`
+        // entries came from it, so they are dropped.
+        let mut dropped = Vec::new();
+        if let Some(current) = self.local.rotation.take()
+            && current.key_id == record.key_id
+        {
+            dropped = current
+                .removed
+                .iter()
+                .filter(|r| !record.removes(**r))
+                .copied()
+                .collect();
+            if current.signer == own {
+                repeat = dropped.clone();
+            }
+            self.local.declined_rotations.push(current);
+        }
+        let pending = std::mem::take(&mut self.local.pending_rotations);
+        for other in pending {
+            if other.key_id.0 > record.key_id.0 {
+                self.local.pending_rotations.push(other);
+            } else if other.key_id == record.key_id && other != *record {
+                self.local.declined_rotations.push(other);
+            }
+        }
+        self.record_removals(&record.removed, &dropped, record.key_id, session, now)?;
+        self.revoke(&record.removed);
+        self.install_key(record.key_id, key)?;
+        self.local.rotation = Some(record.clone());
+        self.sidecar.ignored.clear();
+        self.sidecar_changed = true;
+        self.events
+            .rotation("accepted", record.signer, record.key_id.0, &record.removed);
+        let vault_id = self.vault_id();
+        log::info!(
+            "Vault {vault_id} accepts the rotation to key {} signed by replica {}",
+            record.key_id.0,
+            record.signer.0
+        );
+        self.settle_rotations();
+        Ok(Accepted {
+            key_id: record.key_id,
+            repeat,
+        })
+    }
+
+    /// Decline the pending rotations `records`, before the joins, so the
+    /// joins they paused resume in this transaction. Refused if one is not
+    /// pending.
+    pub(crate) fn decline_rotations(&mut self, records: &[RotationRecord]) -> Result<(), Error> {
+        self.check_rotation_step()?;
+        if records
+            .iter()
+            .any(|record| !self.local.pending_rotations.contains(record))
+        {
+            return Err(Error::RotationRefused(
+                "rotation is not pending".to_string(),
+            ));
+        }
+        self.local
+            .pending_rotations
+            .retain(|pending| !records.contains(pending));
+        for record in records {
+            self.events
+                .rotation("declined", record.signer, record.key_id.0, &record.removed);
+            self.local.declined_rotations.push(record.clone());
+        }
+        let before = self.paused.clone();
+        self.settle_rotations();
+        for replica in before.difference(&self.paused) {
+            self.sidecar.ignored.remove(replica);
+        }
+        self.header_changed = true;
+        self.sidecar_changed = true;
+        Ok(())
+    }
+
+    /// Check that every listed state file of each of `replicas` is joined,
+    /// after the joins. Fails with `RotationWaiting` if a file is still
+    /// remote, and with `RotationRefused` if a file was neither joined,
+    /// ignored, nor quarantined.
+    pub(crate) fn check_joined(
+        &self,
+        transport: &dyn SyncTransport,
+        replicas: &[ReplicaId],
+    ) -> Result<(), Error> {
+        let vault_id = self.vault_id();
+        let mut waiting = Vec::new();
+        for replica in replicas {
+            for hash in transport.list_states(vault_id, *replica)? {
+                if self.sidecar.is_joined(*replica, hash) || self.sidecar.is_ignored(*replica, hash)
+                {
+                    continue;
+                }
+                let name = FileName::State(hash);
+                match transport.read(vault_id, *replica, name)? {
+                    ReadResult::Remote => {
+                        waiting.push(replica.0);
+                        break;
+                    },
+                    ReadResult::Missing => {},
+                    ReadResult::Local(bytes) => {
+                        let file_name = name.file_name();
+                        let hash = StateHash::of(&bytes);
+                        if !self.sidecar.is_quarantined(*replica, &file_name, hash) {
+                            return Err(Error::RotationRefused(format!(
+                                "state file {file_name} of replica {} was not joined",
+                                replica.0
+                            )));
+                        }
+                    },
+                }
+            }
+        }
+        if waiting.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::RotationWaiting(waiting))
+        }
+    }
+
+    /// Whether every listed state file of `replica` is joined, so a publish
+    /// of the joined state covers it.
+    pub(crate) fn covers(&self, transport: &dyn SyncTransport, replica: ReplicaId) -> bool {
+        transport
+            .list_states(self.vault_id(), replica)
+            .is_ok_and(|listed| {
+                listed
+                    .iter()
+                    .all(|hash| self.sidecar.is_joined(replica, *hash))
+            })
+    }
+
+    /// Whether `replica` can be cleaned up: it is not this replica, and it
+    /// has left, is removed, has a revoked pin, or has the keys of another
+    /// replica id, as after a re-link.
+    fn is_retired(&self, replica: ReplicaId, signer: &dyn VaultSigner) -> Result<bool, Error> {
+        if replica == self.replica() {
+            return Ok(false);
+        }
+        let store = &self.state.store;
+        if self.has_left(replica)
+            || store.removed.get(&replica).is_some()
+            || self
+                .local
+                .pinned_keys
+                .get(&replica)
+                .is_some_and(|pin| pin.revoked)
+        {
+            return Ok(true);
+        }
+        let keys_of = |r: &ReplicaId| -> Option<ReplicaKeys> {
+            match self.local.pinned_keys.get(r) {
+                Some(pin) => Some(ReplicaKeys {
+                    encryption: pin.encryption.clone(),
+                    signing: pin.signing.clone(),
+                }),
+                None => store
+                    .replica_keys
+                    .get(r)
+                    .and_then(|register| register.shown())
+                    .cloned(),
+            }
+        };
+        let Some(keys) = keys_of(&replica) else {
+            return Ok(false);
+        };
+        if self
+            .own_keys(signer)?
+            .is_some_and(|own| own.signing == keys.signing)
+        {
+            return Ok(true);
+        }
+        Ok(store.replica_keys.iter().any(|(other, _)| {
+            *other != replica
+                && *other != self.replica()
+                && keys_of(other).is_some_and(|k| k.signing == keys.signing)
+        }))
+    }
+
+    /// Clean up the retired or departed replica `replica`, after the joins
+    /// (`sync/cleanup.rs`). If its `last_used_day_at` registers hold a later
+    /// time than the own register, that time is written into the own
+    /// register first. Its `replica_names`, `replica_keys`, and `left`
+    /// entries and its `last_used_day_at` registers are then removed, all
+    /// under one write id of `session` minted at `now`. Refused if sync does
+    /// not run or `replica` cannot be cleaned up. Fails with
+    /// `RotationWaiting` if one of its files is still remote.
+    pub(crate) fn clean_replica(
+        &mut self,
+        transport: &dyn SyncTransport,
+        replica: ReplicaId,
+        session: &mut Session,
+        now: i64,
+        signer: &dyn VaultSigner,
+    ) -> Result<(), Error> {
+        self.check_rotation_step()?;
+        if !self.is_retired(replica, signer)? {
+            return Err(Error::CleanupRefused(format!(
+                "replica {} is not retired, departed, or removed",
+                replica.0
+            )));
+        }
+        self.check_joined(transport, &[replica])?;
+        let own = self.replica();
+        let mut edits = LocalEdits::default();
+        for (id, credential) in self.state.store.credentials.iter() {
+            let shown = |r: &ReplicaId| {
+                credential
+                    .last_used_day_at
+                    .get(r)
+                    .and_then(|register| register.shown())
+                    .copied()
+            };
+            if let Some(cleaned) = shown(&replica)
+                && shown(&own).is_none_or(|kept| kept < cleaned)
+            {
+                edits.add_last_used(*id, own, cleaned);
+            }
+        }
+        edits.add_clean_replica(replica);
+        self.record_own_edits(edits, session, now)?;
+        self.events.replica_cleaned(replica);
+        let vault_id = self.vault_id();
+        log::info!("Vault {vault_id} cleans up replica {}", replica.0);
+        Ok(())
+    }
+
     /// Key id of the body and its key in the keyring. `None` if the keyring
     /// lacks it, which a trusted state never does.
     pub(crate) fn current_key(&self) -> Option<(KeyId, &SyncKey)> {
@@ -477,30 +1012,93 @@ impl SyncTxn {
     /// added. A missing or malformed file is read as empty, so its `Device`
     /// wrappings are lost. A failed read or write fails with its error, and
     /// pauses sync with `PublishFailed` if a recipient was wanted.
+    ///
+    /// If this replica signed the rotation of the current key, a signed
+    /// `Device` wrapping of the key is added for each of its remaining
+    /// replicas that the file lacks, signed by `signer`. The file is read
+    /// for them until every one of those replicas has published under the
+    /// key. Once every remaining replica has published under the current
+    /// key, the wrappings of earlier key ids are dropped, once per key id.
     pub(crate) fn write_key_file(
         &mut self,
         transport: &dyn SyncTransport,
         device: Option<DeviceWrapping>,
+        signer: &dyn VaultSigner,
     ) -> Result<(), Error> {
         let recipients = if self.syncs() {
             self.recovery_recipients()
         } else {
             Vec::new()
         };
-        if device.is_none() && recipients.is_empty() {
+        let syncs = self.syncs() && !self.is_leaving();
+        let rotation = if syncs { self.own_rotation() } else { None };
+        let prune = syncs && self.prunes_retired_keys();
+        if device.is_none() && recipients.is_empty() && rotation.is_none() && !prune {
             return Ok(());
         }
-        let result = self.rewrite_key_file(transport, device, &recipients);
-        if let Err(e) = &result
-            && !recipients.is_empty()
-        {
-            let vault_id = self.vault_id();
-            log::warn!("Failed to write the age wrappings of vault {vault_id}: {e}");
-            self.found
-                .publish_failed
-                .get_or_insert_with(|| e.to_string());
+        let wants_rotation = rotation.is_some();
+        let result = self.rewrite_key_file(transport, device, &recipients, rotation, prune, signer);
+        match &result {
+            Ok(()) if prune => {
+                self.sidecar.pruned_key = Some(self.local.key_id);
+                self.sidecar_changed = true;
+            },
+            Err(e) if !recipients.is_empty() || wants_rotation => {
+                let vault_id = self.vault_id();
+                log::warn!("Failed to write the wrappings of vault {vault_id}: {e}");
+                self.found
+                    .publish_failed
+                    .get_or_insert_with(|| e.to_string());
+            },
+            _ => {},
         }
         result
+    }
+
+    /// Rotation of the current key if this replica signed it and one of its
+    /// remaining replicas has not published under the key.
+    fn own_rotation(&self) -> Option<RotationRecord> {
+        let rotation = self.local.rotation.as_ref()?;
+        let waiting = rotation.remaining.iter().any(|replica| {
+            self.sidecar
+                .key_ids
+                .get(replica)
+                .is_none_or(|key_id| key_id.0 < rotation.key_id.0)
+        });
+        (rotation.signer == self.replica() && rotation.key_id == self.local.key_id && waiting)
+            .then(|| rotation.clone())
+    }
+
+    /// Whether the wrappings of key ids below the current key are dropped:
+    /// the current key came from a rotation, the drop did not run for it,
+    /// and every peer of `replica_keys` that is not removed and has not left
+    /// has a joined state file under the current key.
+    fn prunes_retired_keys(&self) -> bool {
+        let key_id = self.local.key_id;
+        let rotated = self
+            .local
+            .rotation
+            .as_ref()
+            .is_some_and(|rotation| rotation.key_id == key_id);
+        if !rotated || self.sidecar.pruned_key == Some(key_id) {
+            return false;
+        }
+        let store = &self.state.store;
+        store.replica_keys.iter().all(|(replica, _)| {
+            *replica == self.replica()
+                || store.removed.get(replica).is_some()
+                || store
+                    .left
+                    .get(replica)
+                    .and_then(|left| left.shown())
+                    .copied()
+                    .unwrap_or(false)
+                || self
+                    .sidecar
+                    .key_ids
+                    .get(replica)
+                    .is_some_and(|k| k.0 >= key_id.0)
+        })
     }
 
     /// Read, change, and write the own `key.json` for
@@ -510,6 +1108,9 @@ impl SyncTxn {
         transport: &dyn SyncTransport,
         device: Option<DeviceWrapping>,
         recipients: &[String],
+        rotation: Option<RotationRecord>,
+        prune: bool,
+        signer: &dyn VaultSigner,
     ) -> Result<(), Error> {
         let vault_id = self.vault_id();
         let own = self.replica();
@@ -525,11 +1126,69 @@ impl SyncTxn {
                 log::info!("Vault {vault_id} adds {added} age wrappings to its key.json");
                 changed = true;
             }
+            if let Some(rotation) = rotation {
+                changed |= self.add_rotation_wrappings(&mut file, &rotation, key, signer)?;
+            }
+        }
+        if prune {
+            let key_id = self.local.key_id.0;
+            let before = file.wrappings.len();
+            file.wrappings.retain(|wrapping| match wrapping {
+                Wrapping::Device(device) => device.key_id.0 >= key_id,
+                Wrapping::Age(age) => age.key_id.0 >= key_id,
+                Wrapping::Unknown(_) => true,
+            });
+            let dropped = before - file.wrappings.len();
+            if dropped > 0 {
+                log::info!("Vault {vault_id} drops {dropped} wrappings of retired keys");
+                changed = true;
+            }
         }
         if !changed {
             return Ok(());
         }
         transport.write_own(vault_id, own, FileName::Key, &file.to_bytes())
+    }
+
+    /// Add to `file` a `Device` wrapping of `key`, signed by `signer`, for
+    /// each remaining replica of `rotation` that it lacks. A replica with no
+    /// pin is skipped. Returns whether a wrapping was added.
+    fn add_rotation_wrappings(
+        &self,
+        file: &mut KeyFile,
+        rotation: &RotationRecord,
+        key: &SyncKey,
+        signer: &dyn VaultSigner,
+    ) -> Result<bool, Error> {
+        let vault_id = self.vault_id();
+        let own = self.replica();
+        let from = self.own_keys(signer)?.ok_or_else(|| {
+            Error::RotationRefused("own keys are not in the sync state".to_string())
+        })?;
+        let mut added = false;
+        for replica in &rotation.remaining {
+            let present = file.devices().any(|device| {
+                device.to_replica == *replica
+                    && device.key_id == rotation.key_id
+                    && device.key_fingerprint == rotation.key_fingerprint
+                    && device.signature.is_some()
+            });
+            let Some(pin) = self.local.pinned_keys.get(replica).filter(|_| !present) else {
+                continue;
+            };
+            let mut wrapping =
+                DeviceWrapping::wrap(rotation.key_id, key, *replica, &pin.encryption, &from)?;
+            wrapping.sign_rotation(
+                vault_id,
+                own,
+                rotation.removed.clone(),
+                rotation.remaining.clone(),
+                signer,
+            )?;
+            file.put_device(wrapping);
+            added = true;
+        }
+        Ok(added)
     }
 
     /// Value of the own `replica_keys` register of the state that holds the
@@ -560,6 +1219,8 @@ impl SyncTxn {
             sidecar_changed: &mut self.sidecar_changed,
             session,
             found: &mut self.found,
+            paused: &self.paused,
+            events: &mut self.events,
         }
     }
 
@@ -1116,15 +1777,19 @@ impl SyncTxn {
             Some(own_files) => (self.sidecar.last_publish.as_ref(), &own_files[..]),
             None => (None, &[][..]),
         };
-        if !self.state.context.should_publish(
-            &self.local.published_context,
-            last_publish,
-            own_files,
-        ) {
+        if !self.force_publish
+            && !self.state.context.should_publish(
+                &self.local.published_context,
+                last_publish,
+                own_files,
+            )
+        {
             return Ok(());
         }
         let vault_id = self.vault_id();
-        if self.local.staged_context.as_ref() == Some(&self.state.context)
+        // A staged file of an earlier key is never copied again.
+        if !self.force_publish
+            && self.local.staged_context.as_ref() == Some(&self.state.context)
             && let Some(hash) = self.local.staged_hash
             && let Some(staged) = Staged::existing(root, vault_id, hash)
         {
@@ -1162,10 +1827,11 @@ impl SyncTxn {
     /// publish and as joined, and each older own file that was joined is
     /// deleted. A failed upload or copy is logged and leaves the staged file
     /// in place, named by `staged_hash`, for the next transaction to copy. A
-    /// failed upload copies no state file.
-    pub(crate) fn publish(&mut self, transport: &dyn SyncTransport) {
+    /// failed upload copies no state file. Returns whether a staged file was
+    /// copied.
+    pub(crate) fn publish(&mut self, transport: &dyn SyncTransport) -> bool {
         let Some(staged) = self.staged.take() else {
-            return;
+            return false;
         };
         let vault_id = self.vault_id();
         let replica = self.replica();
@@ -1174,14 +1840,14 @@ impl SyncTxn {
         {
             log::warn!("Failed to upload the file blobs of vault {vault_id}: {e}");
             self.found.publish_failed = Some(e.to_string());
-            return;
+            return false;
         }
         self.blobs_uploaded = self.blob_store.is_some();
         let own_files = self.own_files.take().unwrap_or_default();
         if let Err(e) = staged.copy(transport, vault_id, replica, &own_files) {
             log::warn!("Failed to publish the staged file of vault {vault_id}: {e}");
             self.found.publish_failed = Some(e.to_string());
-            return;
+            return false;
         }
         self.sidecar.last_publish = Some(staged.hash);
         self.sidecar.record_joined(replica, staged.hash);
@@ -1196,6 +1862,7 @@ impl SyncTxn {
                 log::warn!("Failed to delete own state file {name} of vault {vault_id}: {e}");
             }
         }
+        true
     }
 
     /// Upload each blob that the joined state references, that the local

@@ -202,16 +202,33 @@ fn report_counts_conflicts_lists_quarantined_files_with_their_macs_and_known_mac
         (b_replica, MAC_B, false, false),
         (c_replica, MAC_C, false, true),
     ]
-    .map(|(replica, name, this_mac, left)| KnownMac {
-        replica,
-        name: name.to_string(),
-        this_mac,
-        left,
-        last_active: last_active(replica),
+    .map(|(replica, name, this_mac, left)| {
+        (
+            replica,
+            name.to_string(),
+            this_mac,
+            left,
+            last_active(replica),
+        )
     })
     .to_vec();
-    expected.sort_by_key(|mac| mac.replica);
-    assert_eq!(report.known_macs, expected);
+    expected.sort_by_key(|mac| mac.0);
+    let shown: Vec<_> = report
+        .known_macs
+        .iter()
+        .map(|mac: &KnownMac| {
+            let KnownMac {
+                replica,
+                name,
+                this_mac,
+                left,
+                last_active,
+                ..
+            } = mac.clone();
+            (replica, name, this_mac, left, last_active)
+        })
+        .collect();
+    assert_eq!(shown, expected);
     assert!(
         report
             .known_macs

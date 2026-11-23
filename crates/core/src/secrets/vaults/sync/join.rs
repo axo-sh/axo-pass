@@ -5,13 +5,20 @@
 //! header is checked, the body is decrypted, and the state is checked and
 //! joined. Each file is joined, left, or quarantined on its own, so one bad
 //! file never stops another. Own files are joined first, then the files of
-//! every other replica directory. Rules for removed replicas and lower key
-//! ids are milestone 13.
+//! every other replica directory.
+//!
+//! A file is ignored, not quarantined, if its replica is in `removed`, or is
+//! removed by a verified rotation that waits for the answer of the user. So
+//! is a file under a key id below the key this Mac has accepted, whatever
+//! replica it names, and a file under the current key id with another
+//! fingerprint, which a losing concurrent rotation wrote. Each ignored file
+//! records `sync.file_ignored` once.
 
 use std::collections::BTreeSet;
 
 use uuid::Uuid;
 
+use super::audit_events::SyncEvents;
 use super::crdt::{CausalState, JoinAction, JoinOutcome, OwnFileState, ReplicaId, Session};
 use super::keys::SyncKeyring;
 use super::local_state::LocalSyncState;
@@ -31,9 +38,12 @@ pub(crate) enum FileJoin {
     Joined { changed: bool },
     /// Listed and not local yet.
     Remote,
-    /// Missing, unreadable, under a key the keyring lacks or holds under
-    /// another fingerprint, of a newer format, or refused.
+    /// Missing, unreadable, under a key the keyring lacks, of a newer
+    /// format, or refused.
     NotJoined,
+    /// Of a removed or paused replica, under an old key id, or under a
+    /// losing key.
+    Ignored,
     /// Quarantined now or by an earlier transaction.
     Quarantined,
 }
@@ -50,7 +60,7 @@ impl From<FileJoin> for OwnFileState {
         match join {
             FileJoin::Joined { .. } => Self::Joined,
             FileJoin::Remote => Self::Remote,
-            FileJoin::NotJoined | FileJoin::Quarantined => Self::NotJoined,
+            FileJoin::NotJoined | FileJoin::Ignored | FileJoin::Quarantined => Self::NotJoined,
         }
     }
 }
@@ -83,16 +93,23 @@ pub(crate) struct StateJoin<'a> {
     pub sidecar_changed: &'a mut bool,
     pub session: &'a mut Session,
     pub found: &'a mut FoundCauses,
+    /// Replicas removed by verified rotations that wait for the answer of
+    /// the user.
+    pub paused: &'a BTreeSet<ReplicaId>,
+    pub events: &'a mut SyncEvents,
 }
 
 impl StateJoin<'_> {
     /// Join the state file with hash `hash` of `replica`, unless the sidecar
     /// records it as joined.
     ///
-    /// A file that is missing, `Remote`, under a key the keyring lacks, under
-    /// another fingerprint for its key id, or of a newer format is left and
-    /// read again in a later transaction. A file under another fingerprint
-    /// is counted if [`Self::is_separate`] holds. A file that fails a
+    /// A file that is missing, `Remote`, under a key the keyring lacks, or of
+    /// a newer format is left and read again in a later transaction. A file
+    /// under another fingerprint for its key id is counted if
+    /// [`Self::is_separate`] holds, and is ignored otherwise. A file of a
+    /// removed or paused replica, and a file under a key id below the
+    /// accepted key, is ignored. An ignored file is read again in a later
+    /// transaction, so a decline resumes its join. A file that fails a
     /// context check is refused and read again. A damaged file, and a state
     /// that fails the closure or duplicate write id check, is quarantined by
     /// path and content hash.
@@ -108,6 +125,10 @@ impl StateJoin<'_> {
         let vault_id = self.vault_id;
         let name = FileName::State(hash);
         let file_name = name.file_name();
+        if replica != self.local.replica_id && self.is_removed(replica) {
+            self.ignore(replica, hash, "removed replica");
+            return FileJoin::Ignored;
+        }
         let bytes = match transport.read(vault_id, replica, name) {
             Ok(ReadResult::Local(bytes)) => bytes,
             Ok(ReadResult::Remote) => return FileJoin::Remote,
@@ -134,8 +155,9 @@ impl StateJoin<'_> {
             replica_id: replica,
             hash,
         };
-        let state = match StateFile::decode(&bytes, &source, self.keyring) {
-            Ok((_, state)) => state,
+        let decoded = StateFile::decode_accepted(&bytes, &source, self.keyring, self.local.key_id);
+        let (header, state) = match decoded {
+            Ok(decoded) => decoded,
             Err(StateFileError::Quarantine(damage)) => {
                 self.quarantine(replica, file_name, content_hash, damage.to_string());
                 return FileJoin::Quarantined;
@@ -153,8 +175,14 @@ impl StateJoin<'_> {
                 log::info!("State file {file_name} of vault {vault_id} is not joined: {e}");
                 if self.is_separate(replica, key_id) {
                     self.found.separate.insert(replica);
+                    return FileJoin::NotJoined;
                 }
-                return FileJoin::NotJoined;
+                self.ignore(replica, hash, "losing key");
+                return FileJoin::Ignored;
+            },
+            Err(StateFileError::OldKey(_)) => {
+                self.ignore(replica, hash, "old key id");
+                return FileJoin::Ignored;
             },
             Err(e) => {
                 log::info!("State file {file_name} of vault {vault_id} is not joined: {e}");
@@ -164,6 +192,7 @@ impl StateJoin<'_> {
         match self.state.try_join(state, self.session) {
             Ok(outcome) => {
                 self.sidecar.record_joined(replica, hash);
+                self.sidecar.record_key_id(replica, header.key_id);
                 *self.sidecar_changed = true;
                 FileJoin::Joined {
                     changed: outcome == JoinOutcome::Joined,
@@ -190,13 +219,33 @@ impl StateJoin<'_> {
     /// fingerprint is from a Mac that enabled sync separately (D10 of doc
     /// 18). The key id is the current key id, and the replica is not this
     /// replica, has no pin, and is not in `replica_keys` of the state. A
-    /// pinned replica under another fingerprint is the re-link case of
-    /// milestone 13 and is not counted.
+    /// pinned replica under another fingerprint wrote under the losing key of
+    /// a concurrent rotation, and is not counted.
     fn is_separate(&self, replica: ReplicaId, key_id: KeyId) -> bool {
         key_id == self.local.key_id
             && replica != self.local.replica_id
             && !self.local.pinned_keys.contains_key(&replica)
             && self.state.store.replica_keys.get(&replica).is_none()
+    }
+
+    /// Whether the files of `replica` are ignored: it is in `removed`, or a
+    /// pending rotation removes it.
+    fn is_removed(&self, replica: ReplicaId) -> bool {
+        self.paused.contains(&replica) || self.state.store.removed.get(&replica).is_some()
+    }
+
+    /// Ignore the state file with hash `hash` of `replica` for `reason`. The
+    /// first time records `sync.file_ignored`.
+    fn ignore(&mut self, replica: ReplicaId, hash: StateHash, reason: &str) {
+        if self.sidecar.record_ignored(replica, hash) {
+            let file = FileName::State(hash).file_name();
+            log::info!(
+                "State file {file} of vault {} is ignored: {reason}",
+                self.vault_id
+            );
+            self.events.file_ignored(replica, &file, reason);
+            *self.sidecar_changed = true;
+        }
     }
 
     /// Keep only the joined hashes of `replica` in `listed`.

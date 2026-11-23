@@ -28,9 +28,11 @@ use uuid::Uuid;
 use super::blobs;
 use super::crdt::ReplicaId;
 use super::load::{SyncLoad, TrustedState};
-use super::model::SyncState;
+use super::local_state::PinSource;
+use super::model::{PublicKey, ReplicaKeys, SyncState};
 use super::recovery::RecoveryRecipients;
 use super::repair::Repair;
+use super::rotation::{RotationPrompt, Rotations};
 use super::sidecar::Sidecar;
 use super::status::SyncStatus;
 use super::transport::{SyncTransport, TransportRoot};
@@ -38,6 +40,7 @@ use super::view::VaultView;
 use crate::secrets::vaults::errors::Error;
 use crate::secrets::vaults::files::FileHash;
 use crate::secrets::vaults::files::store::BlobStore;
+use crate::secrets::vaults::format::signing::VaultSigner;
 use crate::secrets::vaults::model::Vault;
 use crate::secrets::vaults::storage::txn::{LockedRead, Target, Unlock, VaultWriter};
 
@@ -67,6 +70,9 @@ pub struct SyncReport {
     /// Root of the synced folder in the sidecar. `None` for a synced vault
     /// whose sidecar has no root, and for a vault that is not synced.
     pub root: Option<TransportRoot>,
+    /// Verified rotations from other Macs that wait for the answer of the
+    /// user. Empty unless the sync state is trusted.
+    pub rotations: Vec<RotationPrompt>,
 }
 
 /// File blobs of a synced vault in the sync report.
@@ -158,6 +164,26 @@ pub struct KnownMac {
     /// as its last active time (D17 of doc 18). The clock of that Mac.
     /// `None` if the state holds no actor of the replica.
     pub last_active: Option<i64>,
+    /// How this Mac pinned the keys of the Mac. `None` for this Mac and for
+    /// a Mac with no pin. Remove Mac preselects a Mac pinned at first use.
+    pub pin: Option<PinSource>,
+    /// Pinned signing key of the Mac, or the own signing key for this Mac.
+    /// Remove Mac finds the Mac in each vault by it.
+    pub signing: Option<PublicKey>,
+    /// Whether a rotation removed the Mac.
+    pub removed: bool,
+    /// Whether the `replica_keys` register of the Mac holds more than one
+    /// value, or a value other than the pinned keys. The pinned keys are
+    /// used.
+    pub keys_flagged: bool,
+}
+
+impl KnownMac {
+    /// Whether Remove Mac preselects the Mac: its keys were pinned at first
+    /// use, and it is not this Mac and not removed.
+    pub fn preselected(&self) -> bool {
+        self.pin == Some(PinSource::FirstUse) && !self.this_mac && !self.removed
+    }
 }
 
 impl SyncReport {
@@ -219,6 +245,7 @@ impl SyncReport {
             override_preview: None,
             blobs: BlobStatus::default(),
             root: sidecar.transport.clone(),
+            rotations: Vec::new(),
             case,
         };
         let (Some(trusted), Some(view)) = (&trusted, &view) else {
@@ -231,7 +258,8 @@ impl SyncReport {
             sidecar.paused(),
         ));
         report.conflicts = view.conflicts().len();
-        report.known_macs = Self::known_macs(trusted, view);
+        report.known_macs = Self::known_macs(trusted, view, writer.signer().as_ref());
+        report.rotations = Rotations::prompts(local);
         report.recovery_kit_missing = keyring.as_ref().is_none_or(|keyring| {
             RecoveryRecipients::of_key(&trusted.state.store, local.key_id, keyring).is_empty()
         });
@@ -261,23 +289,65 @@ impl SyncReport {
     }
 
     /// Macs of the `replica_names` view `view` of `trusted`, with their
-    /// `left` value and the newest start time of their actors.
-    fn known_macs(trusted: &TrustedState, view: &VaultView) -> Vec<KnownMac> {
+    /// `left` value, the newest start time of their actors, and their pin.
+    /// `signer` gives the signing key of this Mac.
+    fn known_macs(
+        trusted: &TrustedState,
+        view: &VaultView,
+        signer: &dyn VaultSigner,
+    ) -> Vec<KnownMac> {
+        let local = &trusted.local;
+        let store = &trusted.state.store;
+        let own_signing = signer
+            .verifying_key()
+            .ok()
+            .map(|key| PublicKey(key.to_encoded_point(false).as_bytes().to_vec()));
         view.replica_names
             .iter()
-            .map(|(replica, name)| KnownMac {
-                replica: *replica,
-                name: name.clone(),
-                this_mac: *replica == trusted.local.replica_id,
-                left: view.left.get(replica).copied().unwrap_or(false),
-                last_active: trusted
-                    .state
-                    .actors
-                    .values()
-                    .filter(|actor| actor.replica == *replica)
-                    .map(|actor| actor.started_at)
-                    .max(),
+            .map(|(replica, name)| {
+                let this_mac = *replica == local.replica_id;
+                let pin = local.pinned_keys.get(replica);
+                let values: Vec<&ReplicaKeys> = store
+                    .replica_keys
+                    .get(replica)
+                    .map(|register| register.values().map(|(_, v)| &v.value).collect())
+                    .unwrap_or_default();
+                let keys_flagged = values.len() > 1
+                    || pin.is_some_and(|pin| {
+                        values.iter().any(|keys| {
+                            keys.encryption != pin.encryption || keys.signing != pin.signing
+                        })
+                    });
+                KnownMac {
+                    replica: *replica,
+                    name: name.clone(),
+                    this_mac,
+                    left: view.left.get(replica).copied().unwrap_or(false),
+                    last_active: trusted
+                        .state
+                        .actors
+                        .values()
+                        .filter(|actor| actor.replica == *replica)
+                        .map(|actor| actor.started_at)
+                        .max(),
+                    pin: pin.map(|pin| pin.source),
+                    signing: match pin {
+                        Some(pin) => Some(pin.signing.clone()),
+                        None if this_mac => own_signing.clone(),
+                        None => None,
+                    },
+                    removed: store.removed.get(replica).is_some(),
+                    keys_flagged,
+                }
             })
             .collect()
+    }
+
+    /// Mac of this report whose signing key is `signing`, for Remove Mac in
+    /// each vault. This Mac and removed Macs are not returned.
+    pub fn mac_with_signing(&self, signing: &PublicKey) -> Option<&KnownMac> {
+        self.known_macs
+            .iter()
+            .find(|mac| !mac.this_mac && !mac.removed && mac.signing.as_ref() == Some(signing))
     }
 }
