@@ -88,8 +88,8 @@ impl StateHash {
             return None;
         }
         let mut hash = [0u8; 32];
-        for (byte, pair) in hash.iter_mut().zip(text.chunks_exact(2)) {
-            *byte = digit(pair[0])? << 4 | digit(pair[1])?;
+        for (byte, [high, low]) in hash.iter_mut().zip(text.as_chunks::<2>().0) {
+            *byte = digit(*high)? << 4 | digit(*low)?;
         }
         Some(Self(hash))
     }

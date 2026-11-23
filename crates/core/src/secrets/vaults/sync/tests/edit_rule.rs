@@ -520,7 +520,7 @@ fn writer_write_equal_to_shown_value_resolves_conflict() {
 
         assert_eq!(
             value_texts(&sim.macs[2].state(), credential),
-            [shown.clone()],
+            std::slice::from_ref(&shown),
             "{writer}"
         );
         assert_eq!(

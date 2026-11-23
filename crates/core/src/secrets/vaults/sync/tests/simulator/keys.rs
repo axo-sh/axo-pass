@@ -132,8 +132,8 @@ fn mac_whose_clock_is_behind_does_not_take_key_of_restored_item() {
     let view = VaultView::of(&state);
     assert_eq!(view.items[&established].key, "mail");
     assert!(view.items[&later].key.starts_with("mail-"));
-    for n in 0..2 {
-        let vault = sim.macs[n].saved_vault();
+    for mac in sim.macs.iter().take(2) {
+        let vault = mac.saved_vault();
         assert_eq!(*vault.get_item_id("mail").unwrap(), established);
     }
     sim.check_established_keys(&state);
