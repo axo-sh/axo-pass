@@ -63,6 +63,18 @@ pub enum Error {
     #[error("Recovery kit recipient was not added: {0}")]
     RecoveryKitNotAdded(String),
 
+    #[error("Key rotation is refused: {0}")]
+    RotationRefused(String),
+
+    #[error("Key rotation waits for the files of {} Macs to download", .0.len())]
+    RotationWaiting(Vec<uuid::Uuid>),
+
+    #[error("Key rotation was cancelled while files were downloading")]
+    RotationCancelled,
+
+    #[error("Replica cannot be cleaned up: {0}")]
+    CleanupRefused(String),
+
     #[error("Two sync keys have key id {0}")]
     DuplicateSyncKeyId(u32),
 

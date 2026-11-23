@@ -12,6 +12,7 @@
 pub mod base32;
 pub mod encoding;
 
+use p256::ecdsa::VerifyingKey;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
@@ -27,6 +28,7 @@ use super::transport::{FileName, ReadResult, SyncTransport};
 use crate::secrets::keychain::managed_key::ManagedKey;
 use crate::secrets::vaults::bundle::{ExportMode, ImportIdentity};
 use crate::secrets::vaults::errors::Error;
+use crate::secrets::vaults::format::signing::{self, VaultSigner};
 use crate::secrets::vaults::storage::txn::Unlock;
 
 /// Version of the `key.json` format.
@@ -296,7 +298,7 @@ impl DeviceWrapping {
 
     /// Key of the wrapping, unwrapped by `unwrap`. Fails if it does not unwrap
     /// to 32 bytes, or if its fingerprint differs from `key_fingerprint`.
-    pub fn unwrap(&self, unwrap: &impl DeviceUnwrap) -> Result<SyncKey, Error> {
+    pub fn unwrap(&self, unwrap: &(impl DeviceUnwrap + ?Sized)) -> Result<SyncKey, Error> {
         let raw = unwrap
             .unwrap_sync_key(&self.wrapped)
             .ok_or(Error::SyncKeyDecryptionError(self.key_id.0))?;
@@ -331,7 +333,84 @@ impl DeviceWrapping {
             .field(&self.wrapped)
             .into_bytes()
     }
+
+    /// Message that the rotation signature of the wrapping covers:
+    /// `ap-key-wrap-v1:` and the canonical encoding of `vault_id`, `key_id`,
+    /// `key_fingerprint`, `from_replica`, `to_replica`, `from_encryption`,
+    /// `from_signing`, `removed`, `remaining`, and `wrapped`, in that order.
+    /// `removed` and `remaining` are counted lists of replica ids, empty if
+    /// absent. `from_replica` is the directory of the `key.json` that holds
+    /// the wrapping.
+    pub fn rotation_message(&self, vault_id: Uuid, from_replica: ReplicaId) -> Vec<u8> {
+        let ids = |list: &Option<Vec<ReplicaId>>| list.clone().unwrap_or_default();
+        let removed = ids(&self.removed);
+        let remaining = ids(&self.remaining);
+        let canonical = Canonical::new()
+            .id(vault_id)
+            .number(self.key_id.0)
+            .field(self.key_fingerprint.0)
+            .id(from_replica.0)
+            .id(self.to_replica.0)
+            .field(&self.from_encryption.0)
+            .field(&self.from_signing.0)
+            .list(removed.iter(), |c, replica| c.id(replica.0))
+            .list(remaining.iter(), |c, replica| c.id(replica.0))
+            .field(&self.wrapped)
+            .into_bytes();
+        [ROTATION_LABEL, &canonical].concat()
+    }
+
+    /// Set `removed` and `remaining`, and sign the wrapping with `signer`,
+    /// the `device-signing-key` of `from_replica`. Signing never prompts.
+    pub fn sign_rotation(
+        &mut self,
+        vault_id: Uuid,
+        from_replica: ReplicaId,
+        removed: Vec<ReplicaId>,
+        remaining: Vec<ReplicaId>,
+        signer: &dyn VaultSigner,
+    ) -> Result<(), Error> {
+        self.pairing_mac = None;
+        self.removed = Some(removed);
+        self.remaining = Some(remaining);
+        let message = self.rotation_message(vault_id, from_replica);
+        self.signature = Some(WrappingSignature(signer.sign(&message)?));
+        Ok(())
+    }
+
+    /// Check the rotation signature of the wrapping, read from the
+    /// `key.json` of `from_replica`, against `signing`, the pinned signing
+    /// key of `from_replica`. A wrapping with no signature, no `removed` or
+    /// `remaining` list, or a pairing MAC fails. So does a wrapping whose
+    /// `from_signing` is not `signing`.
+    pub fn verify_rotation(
+        &self,
+        vault_id: Uuid,
+        from_replica: ReplicaId,
+        signing: &PublicKey,
+    ) -> Result<(), Error> {
+        let refused = |reason: &str| Err(Error::RotationRefused(reason.to_string()));
+        let (Some(signature), Some(_), Some(_)) = (&self.signature, &self.removed, &self.remaining)
+        else {
+            return refused("wrapping is not a signed rotation");
+        };
+        if self.pairing_mac.is_some() {
+            return refused("wrapping holds a pairing MAC");
+        }
+        if self.from_signing != *signing {
+            return refused("sender signing key is not the pinned key");
+        }
+        let Ok(key) = VerifyingKey::from_sec1_bytes(&signing.0) else {
+            return refused("pinned signing key does not parse");
+        };
+        let message = self.rotation_message(vault_id, from_replica);
+        signing::verify(&key, &message, &signature.0)
+            .or_else(|_| refused("rotation signature does not verify"))
+    }
 }
+
+/// Prefix of the message of a rotation signature.
+const ROTATION_LABEL: &[u8] = b"ap-key-wrap-v1:";
 
 /// HMAC-SHA-256 of a pairing request or a pairing wrapping under the pairing
 /// key.
@@ -339,7 +418,8 @@ impl DeviceWrapping {
 #[serde(transparent)]
 pub struct PairingMac(#[serde(with = "ByteString")] pub [u8; 32]);
 
-/// Rotation signature of a `Device` wrapping. Written by milestone 13.
+/// Rotation signature of a `Device` wrapping: a DER ECDSA P-256 signature by
+/// the `device-signing-key` of the rotating replica.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WrappingSignature(#[serde(with = "ByteString")] pub Vec<u8>);
