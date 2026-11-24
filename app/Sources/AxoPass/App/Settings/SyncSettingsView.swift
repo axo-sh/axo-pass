@@ -331,7 +331,7 @@ struct SyncSettingsView: View {
   private var pairingsRow: some View {
     SettingsRow("Pairing:") {
       HStack(spacing: 8) {
-        Button(sync.isPairing ? "Show Pairing Code" : "Pair with Another Device") {
+        Button(sync.isPairing ? "Show Pairing Code" : "Pair with Another Device…") {
           sync.showInSettings(.pair(root: sync.folder, join: nil))
         }
         .disabled(sync.folder == nil)

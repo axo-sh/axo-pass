@@ -74,7 +74,7 @@ struct SetupAssistantFrame<Step: Hashable, Content: View>: View {
 /// Title and detail line at the top of a setup step.
 struct SetupHeader: View {
   let title: String
-  let detail: String
+  let detail: LocalizedStringKey
   var detailLineSpacing: CGFloat = 0
 
   var body: some View {

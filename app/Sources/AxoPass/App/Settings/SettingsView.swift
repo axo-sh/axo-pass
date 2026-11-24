@@ -703,12 +703,6 @@ private struct SshSettingsRows: View {
       Text("Lets ssh use keys stored in Axo Pass.")
         .captionStyle()
       HStack {
-        if state != .configured {
-          Button("Add to ~/.ssh/config") {
-            Task { await model.configureAgentConf() }
-          }
-          .disabled(model.isConfiguring)
-        }
         Button("Setup…", action: showSetup)
         if state == .configured {
           Button("Test Connection") {
@@ -776,23 +770,19 @@ private struct GpgSettingsRows: View {
       HStack(spacing: 8) {
         if let state {
           StatusLabel(
-            GpgPinentryStyle.label(state), symbol: GpgPinentryStyle.icon(state),
+            state == .otherProgram ? "Not Configured" : GpgPinentryStyle.label(state),
+            symbol: GpgPinentryStyle.icon(state),
             color: GpgPinentryStyle.color(state), path: model.confStatus?.confPath)
         }
         if model.isConfiguring || model.isTesting {
           ProgressView().controlSize(.small)
         }
       }
-      Text("Shows GPG passphrase prompts in Axo Pass.")
+      Text("Use Axo Pass for GPG passphrase prompts.")
         .captionStyle()
       HStack {
         Button("Setup…", action: showSetup)
-        if state != .configured {
-          Button("Add to gpg-agent.conf") {
-            Task { await model.configureAgentConf() }
-          }
-          .disabled(model.isConfiguring || model.confStatus?.expectedLine == nil)
-        } else {
+        if state == .configured {
           Button("Test Signing") {
             Task { await model.testIntegration() }
           }
@@ -849,12 +839,6 @@ private struct ShellSettingsRows: View {
       Text("Adds the `ap` command to zsh and shows ssh passphrase prompts in Axo Pass.")
         .captionStyle()
       HStack {
-        if model.status?.configured != true {
-          Button("Add to .zshrc") {
-            Task { await model.configure() }
-          }
-          .disabled(model.isConfiguring)
-        }
         Button("Setup…", action: showSetup)
       }
       if let error = model.configureError {
