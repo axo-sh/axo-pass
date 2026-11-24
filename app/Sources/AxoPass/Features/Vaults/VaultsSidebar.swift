@@ -44,14 +44,6 @@ struct VaultsSidebar: View {
     )
   }
 
-  /// Open the command palette centered under the window's toolbar.
-  private func showPalette() {
-    guard let window = NSApp.keyWindow else { return }
-    let toolbarBottom = window.frame.minY + window.contentLayoutRect.maxY
-    let anchor = NSRect(x: window.frame.midX, y: toolbarBottom, width: 0, height: 0)
-    windows.togglePalette(anchor, window.screen)
-  }
-
   var body: some View {
     List(selection: selectionBinding) {
       todayRow
@@ -119,11 +111,10 @@ struct VaultsSidebar: View {
         }
         .help(syncHelp)
         Button {
-          showPalette()
+          windows.toggleKeyWindowPalette()
         } label: {
           Label("Search", systemImage: "magnifyingglass")
         }
-        .keyboardShortcut("k")
         .help("Search all items. ⌘K")
       }
     }
@@ -147,11 +138,6 @@ struct VaultsSidebar: View {
           .help("Show pairing code")
         }
         HStack(spacing: 8) {
-          Button {
-            model.reload()
-          } label: {
-            Label("Reload", systemImage: "arrow.clockwise")
-          }
           Spacer()
           Button {
             model.lock()

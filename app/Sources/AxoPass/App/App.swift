@@ -135,6 +135,10 @@ struct AxoPassApp: App {
         GeneratePasswordMenuItem()
       }
       CommandGroup(after: .toolbar) {
+        PaletteMenuItem(windows: appDelegate.windows)
+          .environment(appDelegate.model)
+        ReloadMenuItem()
+          .environment(appDelegate.model)
         ShowDismissedMenuItem()
       }
       CommandGroup(after: .help) {
@@ -236,6 +240,29 @@ private struct LockMenuItem: View {
   var body: some View {
     Button("Lock") { model.lock() }
       .keyboardShortcut("l", modifiers: .command)
+      .disabled(!model.isAppUnlocked)
+  }
+}
+
+/// View ▸ Show Command Palette.
+private struct PaletteMenuItem: View {
+  let windows: WindowRequests
+  @Environment(VaultsModel.self) private var model
+
+  var body: some View {
+    Button("Show Command Palette") { windows.toggleKeyWindowPalette() }
+      .keyboardShortcut("k", modifiers: .command)
+      .disabled(!model.isAppUnlocked)
+  }
+}
+
+/// View ▸ Reload. Rescans the vaults on disk.
+private struct ReloadMenuItem: View {
+  @Environment(VaultsModel.self) private var model
+
+  var body: some View {
+    Button("Reload") { model.reload() }
+      .keyboardShortcut("r", modifiers: .command)
       .disabled(!model.isAppUnlocked)
   }
 }

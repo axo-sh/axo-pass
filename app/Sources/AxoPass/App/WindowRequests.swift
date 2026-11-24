@@ -18,6 +18,14 @@ final class WindowRequests {
   /// `StatusItemController`.
   var togglePalette: (NSRect, NSScreen?) -> Void = { _, _ in }
 
+  /// Toggle the command palette centered under the key window's toolbar.
+  func toggleKeyWindowPalette() {
+    guard let window = NSApp.keyWindow else { return }
+    let toolbarBottom = window.frame.minY + window.contentLayoutRect.maxY
+    let anchor = NSRect(x: window.frame.midX, y: toolbarBottom, width: 0, height: 0)
+    togglePalette(anchor, window.screen)
+  }
+
   /// Whether the welcome window stands in for the main window. True until a
   /// choice in the welcome window finishes, if no vault exists. Set by
   /// `AppDelegate`.
