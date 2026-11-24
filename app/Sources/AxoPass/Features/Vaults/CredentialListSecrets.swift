@@ -31,6 +31,33 @@ extension CredentialList {
     }
   }
 
+  /// Reveal on Option down and hide what that revealed on Option up.
+  func optionChanged(_ held: Bool) {
+    if held {
+      Task { await revealWhileHeld() }
+    } else {
+      hideHeld()
+    }
+  }
+
+  /// Reveal all credentials not already revealed. If Option was released while
+  /// the secrets loaded, they are hidden again immediately.
+  private func revealWhileHeld() async {
+    heldReveals.formUnion(
+      item.credentials
+        .filter { !$0.hasRecordValue && secrets[$0.key] == nil && !revealing.contains($0.key) }
+        .map(\.key))
+    await revealAll()
+    if !NSEvent.modifierFlags.contains(.option) { hideHeld() }
+  }
+
+  func hideHeld() {
+    for key in heldReveals {
+      secrets.removeValue(forKey: key)
+    }
+    heldReveals.removeAll()
+  }
+
   func hideAll() {
     for cred in concealedCredentials {
       secrets.removeValue(forKey: cred.key)

@@ -39,6 +39,9 @@ struct CredentialList: View {
   @State var errors: [String: String] = [:]
   @State var sectionErrors: [String: String] = [:]
   @State var revealing: Set<String> = []
+  // Keys revealed by holding Option. They are hidden when Option is released.
+  @State var heldReveals: Set<String> = []
+  @State private var flagsMonitor: Any? = nil
   @State var selection: Set<CredentialEntry> = []
   @State var renaming: RenameTarget? = nil
   // Item reads when the current rename began. A rename saves with them, so a
@@ -128,6 +131,23 @@ struct CredentialList: View {
       if old != new { previewClosed(old) }
     }
     .onDisappear { previewClosed(previewURL) }
+    .onAppear {
+      flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+        optionChanged(event.modifierFlags.contains(.option))
+        return event
+      }
+    }
+    .onDisappear {
+      if let flagsMonitor {
+        NSEvent.removeMonitor(flagsMonitor)
+      }
+      flagsMonitor = nil
+      hideHeld()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification))
+    {
+      _ in hideHeld()
+    }
     .background {
       Button("Copy Username", action: copyUsername)
         .keyboardShortcut("c", modifiers: [.command, .shift])
