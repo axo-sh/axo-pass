@@ -135,7 +135,7 @@ struct TodayPane: View {
       TodayCard { TodayNoteRow(error, color: .red) }
     } else if usedToday.entries.isEmpty {
       TodayCard {
-        TodayNoteRow("Lists the SSH keys, GPG keys, and logins that apps and tools use today.")
+        TodayNoteRow("No activity today.")
       }
     } else {
       TodayCard {
