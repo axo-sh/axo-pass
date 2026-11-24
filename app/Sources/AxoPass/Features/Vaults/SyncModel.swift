@@ -497,6 +497,50 @@ final class SyncModel {
     disableError = nil
   }
 
+  /// Turn off sync of every synced vault on this Mac, including synced vaults
+  /// whose vault file is missing. Other devices then list this Mac as left.
+  /// The vaults stay on this Mac. Returns a message for each vault that
+  /// failed. Stops and throws if authentication expired or was cancelled.
+  /// Needs the app unlocked.
+  func leaveAll() async throws -> [String] {
+    var failures: [String] = []
+    let keys = vaults.vaults.map(\.key).filter { reports[$0]?.status != nil }
+    for key in keys {
+      if let message = try await leaveOne({
+        _ = try await self.vaults.core.syncDisable(vaultKey: key)
+      }) {
+        failures.append("\(vaultName(key)): \(message)")
+      }
+      await reload(key)
+      await vaults.syncedVaultChanged(key)
+    }
+    reloadMissingVaults()
+    for missing in missingVaults {
+      if let message = try await leaveOne({
+        _ = try await self.vaults.core.disableMissingVault(vaultId: missing.vaultId)
+      }) {
+        failures.append("\(missing.vaultId): \(message)")
+      }
+    }
+    reloadMissingVaults()
+    return failures
+  }
+
+  /// Run one turn-off of `leaveAll`. Returns the error message if it failed.
+  /// Rethrows an expired or cancelled authentication.
+  private func leaveOne(_ call: () async throws -> Void) async throws -> String? {
+    do {
+      try await lockingOnExpiry(call)
+      return nil
+    } catch FfiError.AuthExpired {
+      throw FfiError.AuthExpired
+    } catch FfiError.AuthCancelled {
+      throw FfiError.AuthCancelled
+    } catch {
+      return error.userMessage
+    }
+  }
+
   // MARK: - Pairing on the new Mac
 
   /// Start pairing this Mac as the new Mac with the folder `root`. Reads

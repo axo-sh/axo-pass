@@ -28,8 +28,13 @@ final class ResetModel {
 
   private(set) var isWorking = false
   private(set) var error: String? = nil
+  /// True once the reset is done and the app is about to quit. The erase sheet
+  /// dismisses itself, since AppKit does not terminate while a sheet is open.
+  private(set) var isFinished = false
 
-  func run(_ kind: Kind, core: AxoPass) async {
+  /// Run the reset `kind`. An erase with `sync` first turns off sync of every
+  /// synced vault, so other devices list this Mac as left.
+  func run(_ kind: Kind, core: AxoPass, sync: SyncModel? = nil) async {
     guard !isWorking else { return }
     isWorking = true
     error = nil
@@ -40,6 +45,19 @@ final class ResetModel {
     } catch {
       self.error = error.userMessage
       return
+    }
+
+    // Best effort. A vault whose turn-off fails, for example because the
+    // synced folder is unreachable, stays listed on other devices until one
+    // of them removes this Mac.
+    if kind == .eraseThisMac, let sync {
+      do {
+        for failure in try await sync.leaveAll() {
+          NSLog("Erase did not turn off sync: %@", failure)
+        }
+      } catch {
+        NSLog("Erase did not turn off sync: %@", String(describing: error))
+      }
     }
 
     // The launchd service restarts a stopped agent, so unregister it first.
@@ -60,13 +78,13 @@ final class ResetModel {
       case .settings: Preferences.resetSettings()
       case .eraseThisMac: Preferences.resetAll()
       }
-      NSApp.terminate(nil)
+      quit()
     } catch {
       switch kind {
       case .settings:
         self.error = error.userMessage
       case .eraseThisMac:
-        Self.quitAfterFailedErase(error)
+        quitAfterFailedErase(error)
       }
     }
   }
@@ -74,7 +92,7 @@ final class ResetModel {
   /// Report a failed erase and quit. Part of the state may already be
   /// deleted, and sync and the SSH agent are stopped, so the app does not
   /// keep running.
-  private static func quitAfterFailedErase(_ error: Error) {
+  private func quitAfterFailedErase(_ error: Error) {
     let alert = NSAlert()
     alert.alertStyle = .critical
     alert.messageText = "Erase Did Not Finish"
@@ -82,7 +100,29 @@ final class ResetModel {
       "\(error.userMessage)\n\nSome data on this Mac may already be deleted. Axo Pass quits now. Open it again and choose Erase This Mac to finish."
     alert.addButton(withTitle: "Quit")
     alert.runModal()
-    NSApp.terminate(nil)
+    quit()
+  }
+
+  /// Quit after a reset. AppKit aborts a terminate request while a window has
+  /// an attached sheet, and the erase sheet is still open here. End the
+  /// sheets and terminate once they are gone. Exit the process directly if
+  /// that has not happened after a few seconds. The reset leaves nothing to
+  /// save.
+  private func quit() {
+    isFinished = true
+    DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+      NSLog("Quit after reset did not finish, exiting")
+      exit(0)
+    }
+    Self.terminateWhenSheetsAreGone()
+  }
+
+  private static func terminateWhenSheetsAreGone() {
+    if NSApp.windows.contains(where: { $0.attachedSheet != nil }) {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { terminateWhenSheetsAreGone() }
+    } else {
+      NSApp.terminate(nil)
+    }
   }
 }
 
@@ -134,8 +174,15 @@ struct EraseThisMacSheet: View {
         .font(.headline)
       Text(
         """
-        Delete all Axo Pass settings and data from this Mac. Synced vaults can be restored by \
-        pairing or with a recovery kit. Axo Pass will quit after erase.
+        Delete all Axo Pass settings and data from this Mac. Sync turns off first, so your other \
+        devices list this Mac as left. Synced vaults can be restored by pairing or with a \
+        recovery kit. Axo Pass will quit after erase.
+        """
+      )
+      Text(
+        """
+        The erase does not edit your config files. Remove the Axo Pass lines from \
+        ~/.ssh/config, ~/.gnupg/gpg-agent.conf, and ~/.zshrc yourself if you added them.
         """
       )
       if hasUnsynced {
@@ -154,17 +201,25 @@ struct EraseThisMacSheet: View {
         TextField("", text: $typed)
           .textFieldStyle(.roundedBorder)
           .autocorrectionDisabled()
+          .disabled(reset.isWorking)
       }
       if let error = reset.error {
         Text(error)
           .foregroundStyle(.red)
       }
       HStack {
+        if reset.isWorking {
+          ProgressView()
+            .controlSize(.small)
+          Text("Deleting data…")
+            .foregroundStyle(.secondary)
+        }
         Spacer()
         Button("Cancel", role: .cancel) { dismiss() }
           .keyboardShortcut(.cancelAction)
+          .disabled(reset.isWorking)
         Button("Erase This Mac", role: .destructive) {
-          Task { await reset.run(.eraseThisMac, core: model.core) }
+          Task { await reset.run(.eraseThisMac, core: model.core, sync: sync) }
         }
         .disabled(!isConfirmed || reset.isWorking)
       }
@@ -173,6 +228,9 @@ struct EraseThisMacSheet: View {
     .padding(20)
     .frame(width: 440)
     .task { await load() }
+    .onChange(of: reset.isFinished) {
+      if reset.isFinished { dismiss() }
+    }
   }
 
   /// Groups of the data that the erase deletes. Empty groups are hidden.

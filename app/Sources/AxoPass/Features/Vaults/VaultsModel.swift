@@ -1298,6 +1298,9 @@ final class VaultsModel {
       )
       await loadItems(for: vaultKey)
       return true
+    } catch FfiError.AuthExpired, FfiError.AuthCancelled {
+      lock()
+      return false
     } catch {
       actionError = error.userMessage
       return false
