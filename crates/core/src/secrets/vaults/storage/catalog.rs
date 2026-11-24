@@ -40,6 +40,7 @@ use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::model::ItemId;
 use crate::secrets::vaults::sync::pairing::PendingPairing;
+use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
 use crate::secrets::vaults::sync::recovery::import::RecoveredKey;
 use crate::secrets::vaults::sync::report::SyncReport;
@@ -968,6 +969,12 @@ impl VaultCatalog {
             context.clone(),
             name,
         )?;
+        // The request stays in the folder if the delete at quit does not
+        // reach it. Dismissing it keeps this Mac from prompting for it.
+        let request_id = pending.request().request_id;
+        if let Err(e) = PairingPrompt::dismiss_request(root, self.files.root(), request_id) {
+            log::warn!("Failed to dismiss own pairing request {request_id}: {e}");
+        }
         let keys = match read_first {
             Some(keys) => keys,
             None => read(context)?.ok_or(Error::VaultEncryptionKeyMissing)?,

@@ -41,6 +41,7 @@ use crate::secrets::vaults::sync::model::KeyId;
 use crate::secrets::vaults::sync::pairing::PairedVault;
 use crate::secrets::vaults::sync::pairing::prompt::PairingPrompt;
 use crate::secrets::vaults::sync::recovery::RecoveryKit;
+use crate::secrets::vaults::sync::scan_status::{self, ScanOutcome};
 use crate::secrets::vaults::sync::sidecar::{Health, Sidecar};
 use crate::secrets::vaults::sync::state_file::{StateFile, StateHash};
 use crate::secrets::vaults::sync::status::PausedCause;
@@ -886,4 +887,94 @@ fn rescan_counts_pairing_requests_and_reports_only_new_count() {
     managed.run();
 
     assert!(managed.events.taken().is_empty());
+}
+
+/// Outcome of the latest scan of the vault of `fx`.
+fn scan_outcome(fx: &Fixture) -> Option<ScanOutcome> {
+    scan_status::get(fx.id()).map(|status| status.outcome)
+}
+
+#[test]
+fn sync_now_joins_peer_change_with_no_watch_event() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    put_peer(&fx, &transport, PEER, "joined");
+    managed.manager.sync_now(fx.id());
+    managed.run();
+
+    assert_eq!(managed.unlock.transactions(), 1);
+    assert_eq!(managed.events.taken(), [Event::Synced(fx.id())]);
+    assert!(saved_vault(&fx).get_item("joined").is_ok());
+    assert_eq!(scan_outcome(&fx), Some(ScanOutcome::Synced));
+}
+
+#[test]
+fn sync_now_with_no_peer_change_reports_nothing() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    managed.manager.sync_now(fx.id());
+    managed.run();
+
+    assert!(managed.events.taken().is_empty());
+    assert_eq!(managed.unlock.transactions(), 0);
+    assert_eq!(scan_outcome(&fx), Some(ScanOutcome::Synced));
+}
+
+#[test]
+fn sync_now_for_unsynced_vault_does_nothing() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    managed.manager.sync_now(Uuid::from_u128(0xdead));
+    managed.run();
+
+    assert!(managed.events.taken().is_empty());
+    assert_eq!(managed.unlock.transactions(), 0);
+}
+
+#[test]
+fn scan_status_waits_for_undownloaded_peer_files() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let remote = peer_state(&fx, OTHER_PEER, "remote");
+    let bytes = state_file(&fx, OTHER_PEER, &remote);
+    let name = StateFile::name(StateHash::of(&bytes));
+    transport.put_remote_with(fx.id(), OTHER_PEER, &name, &bytes);
+    let managed = Managed::start(&fx, true);
+
+    managed.run();
+
+    assert_eq!(scan_outcome(&fx), Some(ScanOutcome::Waiting { files: 1 }));
+
+    assert_eq!(transport.complete_downloads(fx.id()), 1);
+    managed.manager.sync_now(fx.id());
+    managed.run();
+
+    assert_eq!(scan_outcome(&fx), Some(ScanOutcome::Synced));
+    assert_eq!(managed.events.taken(), [Event::Synced(fx.id())]);
+}
+
+#[test]
+fn scan_status_fails_if_folder_unavailable() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let managed = Managed::start(&fx, true);
+    managed.run();
+
+    transport.set_unavailable(true);
+    managed.manager.sync_now(fx.id());
+    managed.run();
+
+    assert!(matches!(
+        scan_outcome(&fx),
+        Some(ScanOutcome::Failed { .. })
+    ));
 }

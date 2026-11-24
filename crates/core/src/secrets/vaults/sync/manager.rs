@@ -704,6 +704,10 @@ impl Worker {
             import: start.import,
             reported: BTreeMap::new(),
         });
+        let counted: Vec<TransportRoot> = self.pairing_counts.keys().cloned().collect();
+        for root in counted {
+            self.report_pairings(&root, false);
+        }
     }
 
     /// Poll the pairing of the new Mac if a watch reported a change or the
@@ -934,8 +938,15 @@ impl Worker {
             return;
         };
         let dismissed = DismissedRequests::load(self.files().root()).of(root);
+        let own = self
+            .pairing
+            .as_ref()
+            .and_then(|pairing| pairing.watcher.request_id());
         let prompting = match PairingPrompt::prompting(&*transport, &dismissed, self.timestamp()) {
-            Ok(prompting) => prompting,
+            Ok(prompting) => prompting
+                .into_iter()
+                .filter(|id| Some(*id) != own)
+                .collect::<Vec<_>>(),
             Err(e) => {
                 sync_log::record(
                     sync_log::Level::Warn,

@@ -222,7 +222,7 @@ pub enum PairWait {
 impl std::fmt::Display for PairWait {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoKeyFile => f.write_str("The other Mac has not shared this vault yet"),
+            Self::NoKeyFile => f.write_str("Not shared yet"),
             Self::NotDownloaded => {
                 f.write_str("Waiting for the key file of the other Mac to download")
             },

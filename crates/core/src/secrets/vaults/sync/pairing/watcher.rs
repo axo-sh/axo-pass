@@ -27,7 +27,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::{PairWait, PairedVault, PendingPairing};
-use crate::secrets::vaults::sync::transport::{SyncTransport, WatchHandle};
+use crate::secrets::vaults::sync::transport::{RequestId, SyncTransport, WatchHandle};
 use crate::secrets::vaults::sync::wrapping::DeviceUnwrap;
 
 /// Time between two polls with no watch event.
@@ -102,6 +102,13 @@ impl PairingWatcher {
             return Vec::new();
         };
         pending.poll(&*self.transport, &self.unwrap)
+    }
+
+    /// Id of the request this Mac wrote. `None` once the pairing finished.
+    pub fn request_id(&self) -> Option<RequestId> {
+        self.pending
+            .as_ref()
+            .map(|pending| pending.request().request_id)
     }
 
     /// Why each vault without an accepted key waits, as of the last poll.
