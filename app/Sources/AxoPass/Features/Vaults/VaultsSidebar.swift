@@ -111,6 +111,12 @@ struct VaultsSidebar: View {
         }
         .help(syncHelp)
         Button {
+          model.lock()
+        } label: {
+          Label("Lock", systemImage: "lock")
+        }
+        .help("Lock")
+        Button {
           windows.toggleKeyWindowPalette()
         } label: {
           Label("Search", systemImage: "magnifyingglass")
@@ -119,37 +125,25 @@ struct VaultsSidebar: View {
       }
     }
     .safeAreaInset(edge: .bottom) {
-      VStack(alignment: .leading, spacing: 6) {
-        if sync.activePairing != nil {
-          Button {
-            sync.showPairing()
-          } label: {
-            HStack(spacing: 6) {
-              SpinningSyncIcon(isSpinning: true)
-              Text("Pairing in progress…")
-                .lineLimit(1)
-              Spacer(minLength: 0)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .contentShape(.rect)
+      if sync.activePairing != nil {
+        Button {
+          sync.showPairing()
+        } label: {
+          HStack(spacing: 6) {
+            SpinningSyncIcon(isSpinning: true)
+            Text("Pairing in progress…")
+              .lineLimit(1)
+            Spacer(minLength: 0)
           }
-          .buttonStyle(.plain)
-          .help("Show pairing code")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .contentShape(.rect)
         }
-        HStack(spacing: 8) {
-          Spacer()
-          Button {
-            model.lock()
-          } label: {
-            Label("Lock", systemImage: "lock")
-          }
-        }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .help("Show pairing code")
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
     }
     .sheet(isPresented: $showingNewVaultSheet) {
       VaultFormSheet { name, key in
