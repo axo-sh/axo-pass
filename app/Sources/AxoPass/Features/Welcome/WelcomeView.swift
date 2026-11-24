@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Window of the first run. Offers three ways to get a first vault: a new
-/// vault, an import from 1Password, or a setup from another Mac.
+/// vault, an import from 1Password, or a setup from another Mac. If a vault
+/// already exists, a Skip button goes straight to the integrations page.
 ///
 /// Shown in place of the main window while no vault exists and
 /// `hasCompletedFirstRun` is unset. The app is locked until a choice is made.
@@ -166,6 +167,12 @@ struct WelcomeView: View {
         }
       }
       .multilineTextAlignment(.center)
+
+      if !model.vaults.isEmpty {
+        Button("Skip", action: showIntegrations)
+          .buttonStyle(.link)
+          .disabled(working != nil)
+      }
     }
     .padding(32)
     .frame(width: width)
