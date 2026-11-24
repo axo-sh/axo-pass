@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Last page of the first run. Offers the SSH agent and `ap` shell setups,
-/// which open the same assistants as Settings, and shows two example `ap`
-/// commands.
+/// which open the same assistants as Settings, a recorder for the global
+/// palette shortcut, and two example `ap` commands.
 struct WelcomeIntegrationsPage: View {
   let ssh: SshModel
   let shell: ShellIntegrationModel
@@ -14,6 +14,8 @@ struct WelcomeIntegrationsPage: View {
   }
 
   @State private var setup: Setup? = nil
+  @AppStorage(Preferences.Key.paletteHotKey)
+  private var paletteHotKey: HotKey?
 
   private var sshConfigured: Bool { ssh.confStatus?.state == .configured }
   private var shellConfigured: Bool { shell.status?.configured == true }
@@ -24,7 +26,7 @@ struct WelcomeIntegrationsPage: View {
         Text("Connect your tools")
           .font(.title)
           .fontWeight(.semibold)
-        Text("Both setups are optional and can be done later in Settings.")
+        Text("Every step is optional and can be done later in Settings.")
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
@@ -44,6 +46,20 @@ struct WelcomeIntegrationsPage: View {
           symbol: "terminal.fill",
           isConfigured: shellConfigured
         ) { setup = .shell }
+
+        CardRow(
+          title: "Global shortcut",
+          detail: "Open the search palette from any app.",
+          symbol: "command.square.fill"
+        ) {
+          HotKeyRecorder(hotKey: $paletteHotKey)
+        }
+        if paletteHotKey != nil, GlobalHotKey.shared.registrationFailed {
+          Text("This shortcut is in use by another app. Choose a different one.")
+            .font(.caption)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
       }
 
       VStack(alignment: .leading, spacing: 8) {
@@ -89,6 +105,26 @@ private struct IntegrationRow: View {
   let action: () -> Void
 
   var body: some View {
+    CardRow(title: title, detail: detail, symbol: symbol) {
+      if isConfigured {
+        Image(systemName: "checkmark.circle.fill")
+          .foregroundStyle(.green)
+          .accessibilityLabel("Set up")
+      } else {
+        Button("Set Up…", action: action)
+      }
+    }
+  }
+}
+
+/// Icon, title, and detail in a rounded card, with trailing content.
+private struct CardRow<Trailing: View>: View {
+  let title: String
+  let detail: String
+  let symbol: String
+  @ViewBuilder let trailing: Trailing
+
+  var body: some View {
     HStack(spacing: 12) {
       TodayIcon(symbol: symbol, color: .accentColor)
       VStack(alignment: .leading, spacing: 2) {
@@ -100,13 +136,7 @@ private struct IntegrationRow: View {
           .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 0)
-      if isConfigured {
-        Image(systemName: "checkmark.circle.fill")
-          .foregroundStyle(.green)
-          .accessibilityLabel("Set up")
-      } else {
-        Button("Set Up…", action: action)
-      }
+      trailing
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
