@@ -59,7 +59,7 @@ struct VaultSheetTitle: View {
           .lineLimit(1)
       }
     }
-    .font(.headline)
+    .font(.title2.weight(.semibold))
   }
 }
 
