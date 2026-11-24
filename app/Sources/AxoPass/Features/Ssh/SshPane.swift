@@ -107,7 +107,7 @@ struct SshPane: View {
   /// to store it in a vault.
   private var emptyState: some View {
     ContentUnavailableView {
-      Label("No SSH Keys", systemImage: "key.horizontal")
+      Label("No SSH Keys", systemImage: KeyIcon.ssh.symbol)
     } description: {
       Text(
         "Generate a key in a vault, import a key file, or create a key that stays in the "

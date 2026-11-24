@@ -71,7 +71,7 @@ struct AgePane: View {
   /// button.
   private var emptyState: some View {
     ContentUnavailableView {
-      Label("No Age Identities", systemImage: "lock.rectangle.stack")
+      Label("No Age Identities", systemImage: KeyIcon.age.symbol)
     } description: {
       Text("Generate an identity to encrypt and decrypt files with age.")
     } actions: {

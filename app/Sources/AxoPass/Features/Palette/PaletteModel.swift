@@ -525,7 +525,7 @@ final class PaletteModel {
         kind: .vault,
         title: vault.name ?? vault.key,
         subtitle: vault.name == nil ? nil : vault.key,
-        systemImage: "archivebox",
+        systemImage: KeyIcon.vault.symbol,
         vaultKey: vault.key,
         keywords: [vault.key],
         actions: [showContents(path, title: "Show Items")],
@@ -576,7 +576,7 @@ final class PaletteModel {
         kind: .credential,
         title: cred.title,
         subtitle: cred.file?.name,
-        systemImage: cred.kind.kind == "ssh-key" ? "key.horizontal" : "doc",
+        systemImage: cred.kind.kind == "ssh-key" ? KeyIcon.ssh.symbol : "doc",
         keywords: [
           "\(display.item.title) \(cred.title)",
           "\(vaultName) \(display.item.title) \(cred.title)",
@@ -678,7 +678,7 @@ final class PaletteModel {
       kind: .sshKey,
       title: key.name,
       subtitle: key.comment,
-      systemImage: "terminal",
+      systemImage: KeyIcon.ssh.symbol,
       keywords: [key.comment ?? ""],
       actions: actions,
       secondaryAction: openSection(.ssh)
@@ -692,7 +692,7 @@ final class PaletteModel {
       kind: .gpgKey,
       title: key.name,
       subtitle: key.email,
-      systemImage: "signature",
+      systemImage: KeyIcon.gpg.symbol,
       keywords: [key.email ?? "", key.keyId],
       actions: [
         PaletteAction(id: "pub", title: "Copy Public Key", systemImage: "doc.on.doc") {
@@ -716,7 +716,7 @@ final class PaletteModel {
       kind: .ageKey,
       title: key.name,
       subtitle: nil,
-      systemImage: "lock.doc",
+      systemImage: KeyIcon.age.symbol,
       keywords: [key.recipient],
       actions: [
         PaletteAction(id: "recipient", title: "Copy Recipient", systemImage: "doc.on.doc") {

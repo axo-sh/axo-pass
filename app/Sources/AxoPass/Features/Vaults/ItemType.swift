@@ -25,7 +25,7 @@ enum ItemType: String, CaseIterable, Hashable {
     switch self {
     case .logins: return "key"
     case .passkeys: return "person.badge.key"
-    case .sshKeys: return "terminal"
+    case .sshKeys: return KeyIcon.ssh.symbol
     case .oneTimeCodes: return "clock.badge.checkmark"
     case .files: return "doc"
     case .other: return "doc.text"

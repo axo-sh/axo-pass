@@ -10,7 +10,7 @@ struct GpgKeyDetailView: View {
       if let key = model.selectedKey {
         GpgKeyDetail(model: model, key: key)
       } else {
-        ContentUnavailableView("Select a key", systemImage: "lock.doc")
+        ContentUnavailableView("Select a key", systemImage: KeyIcon.gpg.symbol)
       }
     }
     .paneBackground()
@@ -104,7 +104,7 @@ private struct GpgKeyDetail: View {
 
   private var header: some View {
     HStack(alignment: .top, spacing: 12) {
-      Image(systemName: "lock.doc.fill")
+      Image(systemName: KeyIcon.gpg.filledSymbol)
         .font(.system(size: 26))
         .foregroundStyle(.tint)
         .frame(width: 34)

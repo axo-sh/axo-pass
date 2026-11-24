@@ -84,7 +84,7 @@ struct GpgPane: View {
   /// Pass pinentry.
   private var emptyState: some View {
     ContentUnavailableView {
-      Label("No GPG Keys", systemImage: "signature")
+      Label("No GPG Keys", systemImage: KeyIcon.gpg.symbol)
     } description: {
       Text("Set up gpg to ask Axo Pass for key passphrases. Keys in your keyring are listed here.")
     } actions: {

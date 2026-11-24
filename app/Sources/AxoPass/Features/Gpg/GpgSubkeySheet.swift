@@ -87,7 +87,7 @@ struct GpgSubkeySheet: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      Image(systemName: "key.fill")
+      Image(systemName: KeyIcon.gpg.filledSymbol)
         .font(.title2)
         .foregroundStyle(.tint)
       VStack(alignment: .leading, spacing: 2) {

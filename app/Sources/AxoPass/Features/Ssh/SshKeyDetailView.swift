@@ -10,7 +10,7 @@ struct SshKeyDetailView: View {
       if let key = model.selectedKey {
         SshKeyDetail(model: model, key: key)
       } else {
-        ContentUnavailableView("Select a key", systemImage: "key.horizontal")
+        ContentUnavailableView("Select a key", systemImage: KeyIcon.ssh.symbol)
       }
     }
     .paneBackground()
@@ -201,7 +201,7 @@ private struct SshKeyDetail: View {
 
   private var header: some View {
     HStack(alignment: .top, spacing: 12) {
-      Image(systemName: "key.horizontal.fill")
+      Image(systemName: KeyIcon.ssh.filledSymbol)
         .font(.system(size: 26))
         .foregroundStyle(.tint)
         .frame(width: 34)

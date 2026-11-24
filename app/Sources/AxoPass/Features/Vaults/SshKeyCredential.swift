@@ -37,7 +37,7 @@ struct SshKeyBox: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 10) {
-        Image(systemName: "key.horizontal")
+        Image(systemName: KeyIcon.ssh.symbol)
           .font(.title3)
           .foregroundStyle(.secondary)
           .frame(width: 24)

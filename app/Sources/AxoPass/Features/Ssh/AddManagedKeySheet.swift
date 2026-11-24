@@ -19,7 +19,7 @@ struct AddManagedKeySheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(spacing: 10) {
-        Image(systemName: "key.fill")
+        Image(systemName: KeyIcon.ssh.filledSymbol)
           .font(.title2)
           .foregroundStyle(.tint)
         Text("New Managed Key").font(.headline)

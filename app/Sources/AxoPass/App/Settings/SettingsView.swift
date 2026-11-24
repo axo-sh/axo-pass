@@ -24,7 +24,7 @@ struct SettingsView: View {
         .tag(SettingsTab.terminal)
       VaultsSettingsView()
         .settingsPane()
-        .tabItem { SettingsTabLabel.label("Vaults", symbol: "archivebox") }
+        .tabItem { SettingsTabLabel.label("Vaults", symbol: KeyIcon.vault.symbol) }
         .tag(SettingsTab.vaults)
       SyncSettingsView()
         .settingsPane()

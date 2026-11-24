@@ -73,11 +73,11 @@ struct VaultsSidebar: View {
 
       Section {
         if sourcesExpanded {
-          sourceRow("SSH", source: .ssh, count: sshModel.keys.count)
+          sourceRow("SSH", icon: .ssh, source: .ssh, count: sshModel.keys.count)
             .tag(SidebarDestination.ssh)
-          sourceRow("GPG", source: .gpg, count: gpgModel.keys.count)
+          sourceRow("GPG", icon: .gpg, source: .gpg, count: gpgModel.keys.count)
             .tag(SidebarDestination.gpg)
-          sourceRow("Age", source: nil, count: ageModel.keys.count)
+          sourceRow("Age", icon: .age, source: nil, count: ageModel.keys.count)
             .tag(SidebarDestination.age)
         }
       } header: {
@@ -234,7 +234,7 @@ struct VaultsSidebar: View {
   /// broken issue, orange for another counted issue, and green if the source
   /// has keys and no counted issue.
   private func sourceRow(
-    _ title: String, source: IssueSource?, count: Int
+    _ title: String, icon: KeyIcon, source: IssueSource?, count: Int
   ) -> some View {
     let issue = source.flatMap { source in
       issues.countedIssues.first { $0.source == source }
@@ -246,7 +246,7 @@ struct VaultsSidebar: View {
       dotColor = count > 0 ? .green : nil
     }
     return HStack(spacing: 6) {
-      Text(title)
+      Label(title, systemImage: icon.symbol)
       Spacer(minLength: 0)
       if let dotColor {
         Circle()
@@ -552,7 +552,7 @@ private struct LibraryModePicker: View {
 
   var body: some View {
     HStack(spacing: 2) {
-      segment(.vaults, title: "Vaults", systemImage: "archivebox")
+      segment(.vaults, title: "Vaults", systemImage: KeyIcon.vault.symbol)
       segment(.types, title: "Types", systemImage: "square.3.layers.3d")
     }
     .padding(2)

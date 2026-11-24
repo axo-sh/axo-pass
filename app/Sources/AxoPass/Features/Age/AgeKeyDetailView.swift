@@ -10,7 +10,7 @@ struct AgeKeyDetailView: View {
       if let key = model.selectedKey {
         AgeKeyDetail(model: model, key: key)
       } else {
-        ContentUnavailableView("Select a key", systemImage: "lock.rectangle.stack")
+        ContentUnavailableView("Select a key", systemImage: KeyIcon.age.symbol)
       }
     }
     .paneBackground()
@@ -84,7 +84,7 @@ private struct AgeKeyDetail: View {
 
   private var header: some View {
     HStack(alignment: .top, spacing: 12) {
-      Image(systemName: "lock.rectangle.stack.fill")
+      Image(systemName: KeyIcon.age.filledSymbol)
         .font(.system(size: 26))
         .foregroundStyle(.tint)
         .frame(width: 34)
