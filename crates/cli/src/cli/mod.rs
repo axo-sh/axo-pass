@@ -104,6 +104,7 @@ pub enum AxoPassCommand {
     Age(AgeCommand),
 
     /// Native messaging manifests for the browser extension
+    #[command(hide = true)]
     Browser(BrowserCommand),
 
     /// Show version and build
