@@ -432,8 +432,8 @@ private struct AutoFillSettingsView: View {
         }
         Text(
           isEnabled == false
-            ? "Turn on Axo Pass under Passwords > Password Options to fill logins, one-time codes, and passkeys."
-            : "Fills logins, one-time codes, and passkeys."
+            ? "Turn on Axo Pass under General > AutoFill & Passwords to fill logins, one-time codes, and passkeys in Safari and other macOS apps."
+            : "Fills logins, one-time codes, and passkeys in Safari and other macOS apps."
         )
         .captionStyle()
       }
@@ -450,6 +450,7 @@ private struct AutoFillSettingsView: View {
               Button("Get \(BrowserManifestStyle.shortName(status.browser)) Extension…") {
                 NSWorkspace.shared.open(BrowserManifestStyle.storeURL(status.browser))
               }
+              .disabled(true)
             }
           }
         }
@@ -464,7 +465,7 @@ private struct AutoFillSettingsView: View {
               ProgressView().controlSize(.small)
             } else if let action = BrowserManifestStyle.action(status) {
               Button(action) { Task { await install(status.browser) } }
-                .disabled(installing != nil)
+                .disabled(true)
             }
           }
         }
