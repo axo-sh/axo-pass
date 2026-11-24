@@ -68,6 +68,19 @@ unsafe fn copy_guest(
     }
 }
 
+/// `errSecCSStaticCodeChanged`.
+const STATIC_CODE_CHANGED: i32 = -67034;
+
+/// Format a Security framework status. A changed executable gets a hint.
+/// The cause is a process that outlived its replaced binary.
+fn describe_status(status: i32) -> String {
+    if status == STATIC_CODE_CHANGED {
+        format!("{status} (executable changed on disk since the process started, restart it)")
+    } else {
+        status.to_string()
+    }
+}
+
 /// Check `code` against a code requirement in text form, e.g.
 /// `anchor apple generic and certificate leaf[subject.OU] = "TEAMID"`.
 ///
@@ -90,7 +103,10 @@ pub fn check_requirement(code: &SecCode, requirement: &str) -> anyhow::Result<()
 
         let status = code.check_validity(SecCSFlags(0), Some(&req));
         if status != 0 {
-            bail!("Code requirement {requirement:?} not satisfied: {status}");
+            bail!(
+                "Code requirement {requirement:?} not satisfied: {}",
+                describe_status(status)
+            );
         }
     }
     Ok(())
@@ -121,7 +137,7 @@ pub use crate::core::provenance::macos::kinfo::{get_effective_uid, get_parent_pi
 pub fn check_valid(code: &SecCode) -> anyhow::Result<()> {
     let status = unsafe { code.check_validity(SecCSFlags(0), None) };
     if status != 0 {
-        bail!("SecCodeCheckValidity failed: {status}");
+        bail!("SecCodeCheckValidity failed: {}", describe_status(status));
     }
     Ok(())
 }
