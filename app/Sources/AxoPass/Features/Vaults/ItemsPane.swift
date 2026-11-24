@@ -112,6 +112,10 @@ struct ItemsPane: View {
     .paneBackground()
     .navigationSplitViewColumnWidth(min: 200, ideal: 240)
     .navigationTitle(model.itemListTitle)
+    .focusedSceneValue(
+      \.newItemAction,
+      model.selectedVault == nil ? nil : { showingNewItemSheet = true }
+    )
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {

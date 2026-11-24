@@ -89,6 +89,7 @@ struct VaultsSidebar: View {
     }
     .listStyle(.sidebar)
     .navigationSplitViewColumnWidth(min: 160, ideal: 200)
+    .focusedSceneValue(\.newVaultAction, { showingNewVaultSheet = true })
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
         // Push the search button to the trailing edge of the sidebar toolbar.

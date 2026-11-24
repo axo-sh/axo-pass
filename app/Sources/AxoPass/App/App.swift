@@ -132,6 +132,9 @@ struct AxoPassApp: App {
         QuitMenuItem(appDelegate: appDelegate)
       }
       CommandGroup(after: .newItem) {
+        NewVaultMenuItem()
+        NewItemMenuItem()
+        Divider()
         GeneratePasswordMenuItem()
       }
       CommandGroup(after: .toolbar) {
@@ -185,6 +188,50 @@ private struct ShowDismissedMenuItem: View {
 
   var body: some View {
     Toggle("Show Dismissed Issues", isOn: $isOn)
+  }
+}
+
+/// Action of the File ▸ New Vault… item. Set by the sidebar of the key window.
+private struct NewVaultActionKey: FocusedValueKey {
+  typealias Value = () -> Void
+}
+
+/// Action of the File ▸ New Item… item. Set by the item list of the key window,
+/// and absent if no vault is selected.
+private struct NewItemActionKey: FocusedValueKey {
+  typealias Value = () -> Void
+}
+
+extension FocusedValues {
+  var newVaultAction: (() -> Void)? {
+    get { self[NewVaultActionKey.self] }
+    set { self[NewVaultActionKey.self] = newValue }
+  }
+
+  var newItemAction: (() -> Void)? {
+    get { self[NewItemActionKey.self] }
+    set { self[NewItemActionKey.self] = newValue }
+  }
+}
+
+/// File ▸ New Vault…. Disabled unless the main window is unlocked and key.
+private struct NewVaultMenuItem: View {
+  @FocusedValue(\.newVaultAction) private var action
+
+  var body: some View {
+    Button("New Vault…") { action?() }
+      .disabled(action == nil)
+  }
+}
+
+/// File ▸ New Item…. Disabled unless a vault is selected in the key window.
+private struct NewItemMenuItem: View {
+  @FocusedValue(\.newItemAction) private var action
+
+  var body: some View {
+    Button("New Item…") { action?() }
+      .keyboardShortcut("n", modifiers: .command)
+      .disabled(action == nil)
   }
 }
 
