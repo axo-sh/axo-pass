@@ -20,7 +20,7 @@ pub use overview::{
     VaultItemOverview, VaultItemSection, VaultMetadata, VaultSectionMetadata, display_order,
 };
 use secrecy::{ExposeSecret, SecretBox, SecretString};
-pub(crate) use sync::{SyncHistoryEntry, SyncWriter};
+pub(crate) use sync::{NewCredential, SyncHistoryEntry, SyncWriter};
 use time::OffsetDateTime;
 use uuid::Uuid;
 use zeroize::Zeroizing;

@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::secrets::vaults::autofill::item::{MatchKind, Role, Website};
-use crate::secrets::vaults::model::sync::{SyncHistoryEntry, SyncWriter};
+use crate::secrets::vaults::model::sync::{NewCredential, SyncHistoryEntry, SyncWriter};
 use crate::secrets::vaults::sync::crdt::{CausalState, ReplicaId, Session};
 use crate::secrets::vaults::sync::diff::LocalEdits;
 use crate::secrets::vaults::sync::model::SyncState;
@@ -611,24 +611,28 @@ fn entries_added_and_purged_by_id() {
     writer
         .add_credential(
             ids.removed,
-            in_trashed,
-            "New",
-            "new-field",
-            FieldKind::default(),
-            "value",
-            100,
+            NewCredential {
+                id: in_trashed,
+                title: "New",
+                key: "new-field",
+                kind: FieldKind::default(),
+                value: "value",
+                created_at: 100,
+            },
         )
         .unwrap();
     writer.add_item(added_item, "Added", "added", 101).unwrap();
     writer
         .add_credential(
             added_item,
-            in_added,
-            "Field",
-            "field",
-            FieldKind::default(),
-            "other",
-            102,
+            NewCredential {
+                id: in_added,
+                title: "Field",
+                key: "field",
+                kind: FieldKind::default(),
+                value: "other",
+                created_at: 102,
+            },
         )
         .unwrap();
     assert!(writer.add_item(added_item, "Again", "again", 103).is_err());
@@ -636,12 +640,14 @@ fn entries_added_and_purged_by_id() {
         writer
             .add_credential(
                 ids.kept,
-                in_added,
-                "Again",
-                "again",
-                FieldKind::default(),
-                "",
-                104
+                NewCredential {
+                    id: in_added,
+                    title: "Again",
+                    key: "again",
+                    kind: FieldKind::default(),
+                    value: "",
+                    created_at: 104,
+                },
             )
             .is_err()
     );

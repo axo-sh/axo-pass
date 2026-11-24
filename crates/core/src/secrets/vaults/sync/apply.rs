@@ -18,8 +18,8 @@ use super::view::{CredentialView, Entity, ItemView, VaultView};
 use crate::secrets::vaults::Error;
 use crate::secrets::vaults::autofill::item::{ItemAutofill, Website};
 use crate::secrets::vaults::model::{
-    DeletedInfo, HistoryMetadata, SyncHistoryEntry, SyncWriter, Vault, VaultItemCredentialOverview,
-    VaultItemOverview,
+    DeletedInfo, HistoryMetadata, NewCredential, SyncHistoryEntry, SyncWriter, Vault,
+    VaultItemCredentialOverview, VaultItemOverview,
 };
 use crate::secrets::vaults::passkey::signals::{SignalEntry, SignalStore};
 
@@ -384,12 +384,14 @@ impl Apply<'_, '_> {
             if !self.stored.credentials.contains_key(id) {
                 self.writer.add_credential(
                     shown.item,
-                    *id,
-                    &shown.title,
-                    &shown.key,
-                    shown.kind.clone(),
-                    shown.value.0.as_str(),
-                    shown.created_at,
+                    NewCredential {
+                        id: *id,
+                        title: &shown.title,
+                        key: &shown.key,
+                        kind: shown.kind.clone(),
+                        value: shown.value.0.as_str(),
+                        created_at: shown.created_at,
+                    },
                 )?;
                 self.added.insert(Entity::Credential(*id));
                 self.changed(Entity::Credential(*id));

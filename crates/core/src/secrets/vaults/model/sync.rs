@@ -81,6 +81,16 @@ pub(crate) struct SyncHistoryEntry<'a> {
     pub(crate) value: Option<&'a str>,
 }
 
+/// Credential as given to [`SyncWriter::add_credential`].
+pub(crate) struct NewCredential<'a> {
+    pub(crate) id: CredentialId,
+    pub(crate) title: &'a str,
+    pub(crate) key: &'a str,
+    pub(crate) kind: FieldKind,
+    pub(crate) value: &'a str,
+    pub(crate) created_at: i64,
+}
+
 /// Place of a credential in the vault, with the id of its item.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
@@ -550,13 +560,16 @@ impl SyncWriter<'_> {
     pub(crate) fn add_credential(
         &mut self,
         item: ItemId,
-        id: CredentialId,
-        title: &str,
-        key: &str,
-        kind: FieldKind,
-        value: &str,
-        created_at: i64,
+        credential: NewCredential<'_>,
     ) -> Result<(), Error> {
+        let NewCredential {
+            id,
+            title,
+            key,
+            kind,
+            value,
+            created_at,
+        } = credential;
         if self.place(id).is_ok() {
             return Err(Error::InvalidCredentialKey(format!(
                 "credential {id} exists"
