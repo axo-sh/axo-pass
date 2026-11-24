@@ -90,7 +90,9 @@ struct VaultExportSheet: View {
 
       if let lockedKey {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Export Vault").font(.headline)
+          VaultSheetTitle(
+            name: model.vaults.first { $0.key == lockedKey }?.name ?? lockedKey,
+            key: lockedKey, section: "Export Backup")
           Text(
             "Backs up the selected vault to a single encrypted file. For exporting multiple vaults at once, see settings."
           )

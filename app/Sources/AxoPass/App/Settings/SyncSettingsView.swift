@@ -2,8 +2,9 @@ import AxoPassFFI
 import SwiftUI
 
 /// Sync settings that apply to every synced vault: the synced folder, the
-/// devices, the vault status list, and the pairing requests.
-/// Recovery kits and the key of one vault are in its status sheet. Sheets opened here show in the Settings window.
+/// devices, the pairing requests, and the reset of the sync keys. The vault
+/// list is in Settings > Vaults. Recovery kits and the key of one vault are in
+/// its status sheet. Sheets opened here show in the Settings window.
 struct SyncSettingsView: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
@@ -17,8 +18,6 @@ struct SyncSettingsView: View {
   /// Whether the removal of this device runs.
   @State private var leaving = false
   @State private var error: String? = nil
-  /// Measured height of the vault list content.
-  @State private var vaultListHeight: CGFloat = 0
 
   var body: some View {
     SettingsForm {
@@ -26,9 +25,11 @@ struct SyncSettingsView: View {
       SettingsDivider()
       devicesRow
       SettingsDivider()
-      vaultsRow
-      SettingsDivider()
       pairingsRow
+      if !sync.syncedVaults.isEmpty {
+        SettingsDivider()
+        syncKeysRow
+      }
     }
     .sheet(isPresented: $showingLocation) {
       SyncLocationSheet()
@@ -53,52 +54,15 @@ struct SyncSettingsView: View {
       )
     }
     .task(id: model.vaults) { await sync.reloadAll() }
-    .task(id: sync.folder) { await sync.reloadRemoteVaults() }
   }
 
-  // MARK: - Vaults
+  // MARK: - Sync keys
 
-  /// Synced vaults with a status dot and a short status line. A click opens
-  /// the sync status of the vault. Vaults with sync turned off and vaults in
-  /// the synced folder follow under section headings, each unsynced vault with
-  /// a Turn On Sync button. The list scrolls if it is taller than a fixed
-  /// height. Reset Sync Keys is last.
-  private var vaultsRow: some View {
-    SettingsRow("Vaults:") {
-      let vaults = sync.syncedVaults
-      let unsynced = sync.unsyncedVaults
-      ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
-          if vaults.isEmpty {
-            Text(syncOffText)
-              .foregroundStyle(.secondary)
-          } else {
-            GroupedTable(vaults, id: \.vault.key) { entry in
-              vaultRow(entry.vault, entry.report)
-            }
-          }
-          if !unsynced.isEmpty {
-            vaultSection("Sync off (\(unsynced.count))") {
-              GroupedTable(unsynced, id: \.key) { unsyncedVaultRow($0) }
-            }
-          }
-          if sync.folder != nil {
-            remoteVaultsSection
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self) {
-          $0.size.height
-        } action: {
-          vaultListHeight = $0
-        }
-      }
-      .frame(height: min(vaultListHeight, Self.vaultListMaxHeight))
-      .scrollBounceBehavior(.basedOnSize)
-      // A scroll view has no text baseline. Align the row label with the
-      // text of the first row, which is inset by the table row padding.
-      .alignmentGuide(.firstTextBaseline) { $0[.top] + 20 }
-      if !vaults.isEmpty {
+  /// Reset of the sync keys of every synced vault.
+  @ViewBuilder
+  private var syncKeysRow: some View {
+    if !sync.syncedVaults.isEmpty {
+      SettingsRow("Sync keys:") {
         Button("Reset Sync Keys…") { sync.showInSettings(.rotateKey(nil)) }
         Text(
           "Use this if someone else may have a copy of your synced folder or a recovery kit. Your devices keep access."
@@ -106,98 +70,6 @@ struct SyncSettingsView: View {
         .captionStyle()
       }
     }
-  }
-
-  /// Vaults in the synced folder. A vault on this device shows its name, and
-  /// any other vault shows its id, since the folder does not hold names.
-  @ViewBuilder
-  private var remoteVaultsSection: some View {
-    if let message = sync.remoteVaultsError {
-      Text("Cannot read the synced folder: \(message)")
-        .foregroundStyle(.red)
-        .captionStyle()
-    } else if let ids = sync.remoteVaultIds {
-      let remote = sync.remoteVaults
-      vaultSection("In synced folder (\(ids.count))") {
-        if remote.isEmpty {
-          Text("The synced folder has no vaults.")
-            .foregroundStyle(.secondary)
-        } else {
-          GroupedTable(remote, id: \.id) { remoteVaultRow($0) }
-        }
-      }
-    }
-  }
-
-  /// Maximum height of the vault list before it scrolls.
-  private static let vaultListMaxHeight: CGFloat = 200
-
-  /// Section heading above a group of vault rows.
-  private func vaultSection<Content: View>(
-    _ title: String, @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title)
-        .font(.subheadline.weight(.medium))
-        .foregroundStyle(.secondary)
-      content()
-    }
-  }
-
-  /// Row of a vault in the synced folder.
-  private func remoteVaultRow(_ vault: RemoteVaultRef) -> some View {
-    HStack(spacing: 8) {
-      // Placeholder for the status dot, so names line up with the rows above.
-      Color.clear
-        .frame(width: 8, height: 8)
-      Text(vault.localName ?? vault.id)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .help("Vault id: \(vault.id)")
-      Spacer(minLength: 8)
-      Text(vault.localName == nil ? "Not on this device" : "On this device")
-        .foregroundStyle(.secondary)
-    }
-  }
-
-  /// Row of a vault with sync turned off.
-  private func unsyncedVaultRow(_ vault: SyncVaultRef) -> some View {
-    HStack(spacing: 8) {
-      Circle()
-        .fill(.secondary)
-        .frame(width: 8, height: 8)
-      Text(vault.name)
-        .lineLimit(1)
-        .truncationMode(.middle)
-      Spacer(minLength: 8)
-      Button("Sync…") { sync.showInSettings(.enable(vault)) }
-    }
-  }
-
-  private func vaultRow(_ vault: SyncVaultRef, _ report: SyncReportInfo) -> some View {
-    let summary = syncStatusSummary(report)
-    return Button {
-      sync.showInSettings(.status(vault))
-    } label: {
-      HStack(spacing: 8) {
-        Circle()
-          .fill(summary.color)
-          .frame(width: 8, height: 8)
-        Text(vault.name)
-          .lineLimit(1)
-          .truncationMode(.middle)
-        Spacer(minLength: 8)
-        Text(summary.line)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Image(systemName: "chevron.right")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-      }
-      .contentShape(.rect)
-    }
-    .buttonStyle(.plain)
-    .help(summary.help.isEmpty ? "Show the sync status of \(vault.name)" : summary.help)
   }
 
   // MARK: - Folder

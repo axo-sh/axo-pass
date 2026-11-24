@@ -195,7 +195,7 @@ struct SyncStatusSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(vault.name).font(.headline)
+      VaultSheetTitle(name: vault.name, key: vault.key, section: "Sync Status")
         .padding([.horizontal, .top], 20)
 
       if let report = sync.report(vault.key) {

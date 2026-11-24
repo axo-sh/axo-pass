@@ -21,7 +21,7 @@ struct VaultVersionsSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("History of \(vaultName)").font(.headline)
+      VaultSheetTitle(name: vaultName, key: vaultKey, section: "History")
 
       if refused == true {
         Label(

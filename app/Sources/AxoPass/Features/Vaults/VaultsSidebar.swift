@@ -23,9 +23,7 @@ struct VaultsSidebar: View {
   @State private var showingNewVaultSheet = false
   @State private var showingImportSheet = false
   @State private var showingItemImportSheet = false
-  @State private var deletingVault: SyncVaultRef? = nil
   @State private var titleSheet: TitleSheetRequest? = nil
-  @State private var exportingVaultKey: String? = nil
   @State private var versionsVaultKey: String? = nil
   @AppStorage("sidebarLibraryExpanded") private var libraryExpanded = true
   @AppStorage("sidebarSourcesExpanded") private var sourcesExpanded = true
@@ -160,27 +158,10 @@ struct VaultsSidebar: View {
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
     }
-    .sheet(item: $exportingVaultKey) { vaultKey in
-      VaultExportSheet(model: model, only: vaultKey)
-    }
+    .syncSheets()
     .sheet(item: $versionsVaultKey) { vaultKey in
       let existing = model.vaults.first { $0.key == vaultKey }
       VaultVersionsSheet(vaultKey: vaultKey, vaultName: existing?.name ?? vaultKey)
-    }
-    .syncSheets()
-    .confirmationDialog(
-      "Delete \(deletingVault?.name ?? "this vault") from this Mac?",
-      isPresented: Binding(
-        get: { deletingVault != nil }, set: { if !$0 { deletingVault = nil } }),
-      presenting: deletingVault
-    ) { vault in
-      Button("Delete", role: .destructive) {
-        Task { await model.deleteVault(vault.key) }
-      }
-      Button("Cancel", role: .cancel) {}
-        .keyboardShortcut(.defaultAction)
-    } message: { vault in
-      Text(sync.state(vault.key)?.isOn == true ? syncedVaultDeleteMessage : vaultDeleteMessage)
     }
     // Read the sync state of each vault after the unlock and when the list
     // changes.
@@ -337,16 +318,9 @@ struct VaultsSidebar: View {
         .tag(SidebarDestination.vault(vault.key))
         .contextMenu {
           Button("Rename…") { showRenameSheet(vault) }
-          Button("Change Key…") { showChangeKeySheet(vault) }
-          Button("Export Backup…") { exportingVaultKey = vault.key }
           Button("History…") { versionsVaultKey = vault.key }
-          Toggle(
-            "Suggest in AutoFill",
-            isOn: Binding(
-              get: { !model.autofillExcludedVaults.contains(vault.key) },
-              set: { model.setAutofillExcluded(vaultKey: vault.key, excluded: !$0) }))
-          syncMenuItem(vault)
-          Button("Delete…", role: .destructive) { deletingVault = syncRef(vault) }
+          Divider()
+          Button("Vault Settings…") { sync.showInMain(.vault(syncRef(vault))) }
         }
       }
 
@@ -407,35 +381,8 @@ struct VaultsSidebar: View {
     .listRowSeparator(.hidden)
   }
 
-  /// Read the vault name, then show the rename sheet. A refused rename keeps
-  /// the input in the sheet and reads the name again.
   private func showRenameSheet(_ vault: VaultInfo) {
-    Task {
-      let reads = SheetReads(await model.vaultReads(vault.key))
-      titleSheet = TitleSheetRequest(
-        heading: "Rename Vault", actionLabel: "Rename", initialTitle: vault.name ?? vault.key,
-        fieldLabel: "Name"
-      ) { name in
-        do {
-          try await model.renameVault(vaultKey: vault.key, newName: name, reads: reads.reads)
-          return nil
-        } catch {
-          guard let refusal = EditRefusal(error) else { return error.userMessage }
-          reads.reads = await model.vaultReads(vault.key)
-          return refusal.sheetMessage(action: "Rename")
-        }
-      }
-    }
-  }
-
-  private func showChangeKeySheet(_ vault: VaultInfo) {
-    titleSheet = TitleSheetRequest(
-      heading: "Change Vault Key", actionLabel: "Change", initialTitle: vault.key,
-      fieldLabel: "Key", footnote: "a-z, 0-9, -, _. \(keyChangeWarning)"
-    ) { key in
-      await model.changeVaultKey(vaultKey: vault.key, newKey: key)
-        ? nil : (model.actionError ?? "Failed to change vault key.")
-    }
+    Task { titleSheet = await .renameVault(vault, model: model) }
   }
 
   /// Help text of the sync toolbar button.
@@ -450,24 +397,6 @@ struct VaultsSidebar: View {
 
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
     SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
-  }
-
-  /// Turn sync on or off for `vault`. Disabled while its state is not read,
-  /// failed to read, or an earlier turn-off waits for the synced folder.
-  @ViewBuilder
-  private func syncMenuItem(_ vault: VaultInfo) -> some View {
-    switch sync.state(vault.key) {
-    case .on:
-      Button("Sync Status…") { sync.sheet = .status(syncRef(vault)) }
-      Button("Turn Off Sync…") {
-        sync.clearDisableError()
-        sync.disableRequest = syncRef(vault)
-      }
-    case .off:
-      Button("Turn On Sync…") { sync.sheet = .enable(syncRef(vault)) }
-    default:
-      Button("Turn On Sync…") {}.disabled(true)
-    }
   }
 }
 

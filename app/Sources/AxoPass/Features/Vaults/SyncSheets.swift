@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 
 extension View {
   /// Present the sync sheets that `SyncModel` requests for `host`: the enable
-  /// sheet, the pairing sheets, the kit import, the status sheets, the
-  /// conflicts sheet, the key state sheet, and the rotation sheets. The main
+  /// sheet, the pairing sheets, the kit import, the status sheets, the vault
+  /// sheet, the conflicts sheet, the key state sheet, and the rotation sheets. The main
   /// host also presents the turn-off confirmation. Attach `.main` in the main
   /// window and in the welcome window, and `.settings` in the Settings window.
   /// Only one of the main and welcome windows is open at a time, so a shared
@@ -67,6 +67,7 @@ private struct SyncSheetsModifier: ViewModifier {
         case .rotateKey(let vault): RotateKeySheet(vault: vault)
         case .revokeKit(let vault, let kit): RevokeKitSheet(vault: vault, kit: kit)
         case .rotation(let vault): RotationPromptSheet(vault: vault)
+        case .vault(let vault): VaultSheet(vault: vault)
         }
       }
       .confirmationDialog(
@@ -328,7 +329,7 @@ struct SyncEnableSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Turn On Sync for \(vault.name)").font(.headline)
+      VaultSheetTitle(name: vault.name, key: vault.key, section: "Turn On Sync")
 
       switch step {
       case .preparing: preparingStep

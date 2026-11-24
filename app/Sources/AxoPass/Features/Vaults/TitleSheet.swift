@@ -10,6 +10,8 @@ struct TitleSheetRequest: Identifiable {
   var fieldLabel: String = "Title"
   /// Caption shown under the field.
   var footnote: String? = nil
+  /// Vault the sheet changes. The title then reads "Vault > heading".
+  var vault: SyncVaultRef? = nil
   /// Saves the trimmed title. Returns an error message, or nil on success.
   let onSubmit: @MainActor (String) async -> String?
 }
@@ -32,7 +34,11 @@ struct TitleSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text(request.heading).font(.headline)
+      if let vault = request.vault {
+        VaultSheetTitle(name: vault.name, key: vault.key, section: request.heading)
+      } else {
+        Text(request.heading).font(.headline)
+      }
       Form {
         TextField(request.fieldLabel, text: $title)
         if let footnote = request.footnote {

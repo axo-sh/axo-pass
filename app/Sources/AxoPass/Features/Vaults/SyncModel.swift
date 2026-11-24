@@ -120,9 +120,12 @@ enum SyncSheet: Identifiable {
   case revokeKit(SyncVaultRef, RecoveryKitInfo)
   /// Rotations of other devices that wait for an answer in the vault.
   case rotation(SyncVaultRef)
+  /// Information and actions of the vault.
+  case vault(SyncVaultRef)
 
   var id: String {
     switch self {
+    case .vault(let vault): return "vault-\(vault.key)"
     case .enable(let vault): return "enable-\(vault.key)"
     case .pair(_, let join): return "pair-\(join?.key ?? "")"
     case .kitImport(_, let join): return "kit-\(join?.key ?? "")"

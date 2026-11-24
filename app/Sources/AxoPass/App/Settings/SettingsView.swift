@@ -353,8 +353,8 @@ private struct NotificationToggle: View {
   }
 }
 
-/// Vault files moved on new hardware, and export of vaults to an encrypted
-/// bundle file or import from one.
+/// Vault list, vault files moved on new hardware, and export of vaults to an
+/// encrypted bundle file or import from one.
 private struct VaultsSettingsView: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
@@ -366,6 +366,9 @@ private struct VaultsSettingsView: View {
 
   var body: some View {
     SettingsForm {
+      VaultListRow()
+      SettingsDivider()
+
       if !moved.isEmpty {
         SettingsRow("Moved vaults:") {
           HStack(spacing: 8) {
@@ -400,6 +403,7 @@ private struct VaultsSettingsView: View {
     .sheet(isPresented: $showingMoved) {
       MovedVaultsSheet(moved: moved)
     }
+    .syncSheets(in: .settings)
     .task { moved = (try? await sync.movedVaults()) ?? [] }
   }
 }
