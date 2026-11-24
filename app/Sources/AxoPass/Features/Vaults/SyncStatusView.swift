@@ -190,6 +190,7 @@ struct SyncStatusSheet: View {
   @State private var overrideCount: UInt32? = nil
   @State private var confirmingTurnOff = false
   @State private var folderCopied = false
+  @State private var kitCopied = false
   @State private var isSyncing = false
 
   var body: some View {
@@ -204,8 +205,7 @@ struct SyncStatusSheet: View {
           rotationsSection(report)
           causesSection(report)
           quarantinedSection(report)
-          if report.status != nil { syncKeySection }
-          turnOffSection(report)
+          syncActionsSection(report)
         }
         .formStyle(.grouped)
         .scrollBounceBehavior(.basedOnSize)
@@ -560,44 +560,93 @@ struct SyncStatusSheet: View {
   private func kitRow(_ report: SyncReportInfo) -> some View {
     let kit = report.recoveryKits.last
     return LabeledContent("Recovery Kit") {
-      HStack(spacing: 8) {
-        VStack(alignment: .trailing, spacing: 2) {
-          if let kit {
-            Text(kit.label ?? kit.shortRecipient)
-              .font(kit.label == nil ? .callout.monospaced() : .body)
-              .lineLimit(1)
-              .truncationMode(.tail)
+      VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 8) {
+          if report.recoveryKitMissing {
+            HStack(spacing: 4) {
+              Image(systemName: "exclamationmark.circle.fill")
+              Text(kit == nil ? "None saved" : "Needs a new kit")
+            }
+            .foregroundStyle(.orange)
+            .help("No recovery kit opens the current sync key of this vault.")
+            Button("Save New Kit…") { sync.sheet = .newKit(vault) }
+              .controlSize(.small)
+              .disabled(isWorking)
+          } else if let kit {
+            kitName(kit)
+          }
+          kitMenu(kit, stale: report.recoveryKitMissing)
+        }
+        if let kit {
+          if report.recoveryKitMissing {
+            kitSummary(kit)
+          } else {
             Text(kitDetail(kit))
               .font(.caption)
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
-          if report.recoveryKitMissing {
-            Label(
-              kit == nil ? "None saved" : "Needs a new kit",
-              systemImage: "exclamationmark.circle.fill"
-            )
-            .font(.caption)
-            .foregroundStyle(.orange)
-            .help("No recovery kit opens the current sync key of this vault.")
-          }
         }
-        .help(kit.map { "Recipient: \($0.recipient)\nKey id: \($0.keyId)" } ?? "")
-        Menu {
-          Button(kit == nil ? "New Kit…" : "Replace Kit…") { sync.sheet = .newKit(vault) }
-          Button("Check a Kit…") { sync.sheet = .checkKit }
-          if let kit {
-            Button("Revoke Kit…") { sync.sheet = .revokeKit(vault, kit) }
-          }
-        } label: {
-          Image(systemName: "ellipsis.circle")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Kit actions")
       }
     }
+  }
+
+  /// Menu of kit actions. A stale row has an inline button for a new kit, so
+  /// the menu omits it.
+  private func kitMenu(_ kit: RecoveryKitInfo?, stale: Bool) -> some View {
+    Menu {
+      if !stale {
+        Button(kit == nil ? "New Kit…" : "Replace Kit…") { sync.sheet = .newKit(vault) }
+      }
+      Button("Check a Kit…") { sync.sheet = .checkKit }
+      if let kit {
+        Button("Revoke Kit…") { sync.sheet = .revokeKit(vault, kit) }
+      }
+    } label: {
+      Image(systemName: "ellipsis.circle")
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("Kit actions")
+  }
+
+  /// Label of a kit, or its short recipient if it has no label. A click
+  /// copies the full recipient.
+  private func kitName(_ kit: RecoveryKitInfo) -> some View {
+    Button {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(kit.recipient, forType: .string)
+      kitCopied = true
+      Task {
+        try? await Task.sleep(for: .seconds(1.5))
+        kitCopied = false
+      }
+    } label: {
+      Text(kitCopied ? "Copied" : (kit.label ?? kit.shortRecipient))
+        .font(kit.label == nil ? .caption.monospaced() : .body)
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+    .buttonStyle(.plain)
+    .help("Copy \(kit.recipient)\nKey id: \(kit.keyId)")
+  }
+
+  /// Kit name and detail on one line, or on two lines if the row is narrow.
+  private func kitSummary(_ kit: RecoveryKitInfo) -> some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        kitName(kit)
+        Text("·").font(.caption)
+        Text(kitDetail(kit)).font(.caption)
+      }
+      VStack(alignment: .trailing, spacing: 2) {
+        kitName(kit)
+        Text(kitDetail(kit)).font(.caption)
+      }
+    }
+    .foregroundStyle(.secondary)
+    .lineLimit(1)
   }
 
   /// Date a kit was added, and the device that added it if known.
@@ -608,34 +657,50 @@ struct SyncStatusSheet: View {
     return "Added \(date) on \(device)"
   }
 
-  /// Replacement of the sync key of this vault only.
-  private var syncKeySection: some View {
-    Section {
-      Button("Replace Sync Key…") { sync.sheet = .rotateKey(vault) }
-        .disabled(isWorking)
-    } header: {
-      Text("Sync Key")
-    } footer: {
-      Text(
-        "Use this if a recovery kit of this vault is lost. Your devices keep access. Kits made before the change stop working, so you save a new one."
-      )
+  /// Sync key replacement and turn off of this vault. A stopped sync offers
+  /// the turn off button with its causes.
+  @ViewBuilder
+  private func syncActionsSection(_ report: SyncReportInfo) -> some View {
+    let stopped: Bool = if case .stopped? = report.status { true } else { false }
+    let showsKey = report.status != nil
+    let showsTurnOff = !stopped
+    if showsKey || showsTurnOff {
+      Section("Sync") {
+        if showsKey {
+          actionRow(
+            "Sync Key",
+            help:
+              "Replaces the sync key of this vault. Other devices switch to the new key automatically. This invalidates the existing recovery kit. Save a new one."
+          ) {
+            Button("Replace Sync Key…") { sync.sheet = .rotateKey(vault) }
+              .disabled(isWorking)
+          }
+        }
+        if showsTurnOff {
+          actionRow(
+            "This Mac",
+            help:
+              "Stop syncing \(vault.name) on this Mac. You can still open the vault, but changes will no longer sync. Other devices are not affected."
+          ) {
+            turnOffButton
+          }
+        }
+      }
     }
   }
 
-  /// Turn off sync of this vault on this Mac. A stopped sync offers the same
-  /// button with its causes.
-  @ViewBuilder
-  private func turnOffSection(_ report: SyncReportInfo) -> some View {
-    if case .stopped? = report.status {
-      EmptyView()
-    } else {
-      Section {
-        turnOffButton
-      } header: {
-        Text("This Device")
-      } footer: {
-        Text("This Mac stops syncing the vault. The vault stays here and on your other devices.")
-      }
+  /// Label with a button inline and help text below.
+  private func actionRow<Control: View>(
+    _ title: String,
+    help: String,
+    @ViewBuilder control: () -> Control
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      LabeledContent(title) { control() }
+      Text(help)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
