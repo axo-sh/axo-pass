@@ -445,7 +445,8 @@ fn creating_vault_with_signing_key_lost_creates_no_key() {
 
 #[test]
 fn build_with_missing_keys_changes_nothing() {
-    let rows: [(&str, TestKeys, KeyState, fn(&Error) -> bool); 2] = [
+    type Row = (&'static str, TestKeys, KeyState, fn(&Error) -> bool);
+    let rows: [Row; 2] = [
         (
             "neither key",
             TestKeys::neither(),

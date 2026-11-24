@@ -1873,6 +1873,7 @@ impl AxoPass {
     /// the `reads` of the item. A synced vault refuses the edit with
     /// `EditRefused` if a register it writes changed since the read or holds a
     /// conflict.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_or_update_credential(
         &self,
         vault_key: String,
@@ -1937,6 +1938,7 @@ impl AxoPass {
     /// Change the key, title, or kind of a credential without resubmitting its
     /// value. `None` arguments are left unchanged. `reads` are the `reads` of
     /// the item.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_credential(
         &self,
         vault_key: String,

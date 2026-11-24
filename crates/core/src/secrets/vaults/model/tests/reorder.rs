@@ -45,7 +45,14 @@ fn reorder_invalidates_metadata_cache() {
 #[test]
 fn reorder_rejects_invalid_unsectioned_lists() {
     type Expected = fn(&Error) -> bool;
-    let cases: [(&str, &str, &[&str], &[&str], Expected); 5] = [
+    type Case = (
+        &'static str,
+        &'static str,
+        &'static [&'static str],
+        &'static [&'static str],
+        Expected,
+    );
+    let cases: [Case; 5] = [
         (
             "partial list",
             "item",

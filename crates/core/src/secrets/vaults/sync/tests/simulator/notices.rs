@@ -107,11 +107,11 @@ fn duplicate_keys_listed_as_suffixed_and_keep_writes_shown_key() {
     assert!(published);
     sim.converge();
 
-    for n in 0..2 {
-        assert!(report(&sim.macs[n]).suffixed_keys.is_empty(), "Mac {n}");
-        let view = VaultView::of(&sim.macs[n].state());
+    for (n, mac) in sim.macs.iter().enumerate() {
+        assert!(report(mac).suffixed_keys.is_empty(), "Mac {n}");
+        let view = VaultView::of(&mac.state());
         assert_eq!(view.items[&item].key, shown, "Mac {n}");
-        assert_eq!(sim.macs[n].saved_vault().get_item(&shown).unwrap().id, item);
+        assert_eq!(mac.saved_vault().get_item(&shown).unwrap().id, item);
     }
     sim.check_converged();
 }
