@@ -10,7 +10,7 @@ let package = Package(
   name: "Axo Pass",
   platforms: [.macOS(.v15)],
   dependencies: [
-    .package(url: "https://github.com/octavore/sunshine", from: "0.4.0")
+    .package(url: "https://github.com/octavore/sunshine", from: "0.4.1")
   ],
   targets: [
     .systemLibrary(

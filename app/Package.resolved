@@ -1,13 +1,13 @@
 {
-  "originHash" : "2b76140fafc0f3b427ef7f55c9e09d3c20de3e1a6c91478b44fc995fd3c76ba8",
+  "originHash" : "a2f9f88437c9c3b0897bd9f339e82e8776586a3f272f81cf1cb83f801f775a97",
   "pins" : [
     {
       "identity" : "sunshine",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/octavore/sunshine",
       "state" : {
-        "revision" : "1ecefb8e14cf2d3eef44082c14289265e9a7aa1d",
-        "version" : "0.4.0"
+        "revision" : "02a1a1bd5c853b4aba3ef5c48b604538a48dab9c",
+        "version" : "0.4.1"
       }
     }
   ],
