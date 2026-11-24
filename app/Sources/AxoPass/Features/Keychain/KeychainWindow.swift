@@ -37,7 +37,7 @@ struct KeychainWindow: View {
   var body: some View {
     NavigationStack {
       content
-        .navigationTitle("Keychain")
+        .navigationTitle("App Keychain")
         .toolbar { toolbarContent }
         .inspector(isPresented: $showInspector) {
           inspector

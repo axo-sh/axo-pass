@@ -74,7 +74,11 @@ struct AxoPassApp: App {
         .frame(minWidth: 640, minHeight: 360)
         // Only reachable from an unlocked app, so a relaunch (always locked)
         // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
-        .background(WindowAccessor { $0.isRestorable = false })
+        .background(
+          WindowAccessor {
+            $0.isRestorable = false
+            $0.isExcludedFromWindowsMenu = true
+          })
     }
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
@@ -85,18 +89,26 @@ struct AxoPassApp: App {
         .frame(minWidth: 640, minHeight: 360)
         // Only reachable from an unlocked app, so a relaunch (always locked)
         // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
-        .background(WindowAccessor { $0.isRestorable = false })
+        .background(
+          WindowAccessor {
+            $0.isRestorable = false
+            $0.isExcludedFromWindowsMenu = true
+          })
     }
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
 
-    Window("Keychain", id: Self.keychainWindowID) {
+    Window("App Keychain", id: Self.keychainWindowID) {
       KeychainWindow()
         .environment(appDelegate.model)
         .frame(minWidth: 640, minHeight: 360)
         // Only reachable from an unlocked app, so a relaunch (always locked)
         // must never reopen it. See `adoptMainWindow` in `AppDelegate`.
-        .background(WindowAccessor { $0.isRestorable = false })
+        .background(
+          WindowAccessor {
+            $0.isRestorable = false
+            $0.isExcludedFromWindowsMenu = true
+          })
     }
     .defaultSize(width: 900, height: 520)
     .defaultLaunchBehavior(.suppressed)
@@ -105,7 +117,11 @@ struct AxoPassApp: App {
     Window("Generate Password", id: Self.generatorWindowID) {
       PasswordGeneratorView()
         .frame(width: 340)
-        .background(WindowAccessor { $0.isRestorable = false })
+        .background(
+          WindowAccessor {
+            $0.isRestorable = false
+            $0.isExcludedFromWindowsMenu = true
+          })
     }
     .windowResizability(.contentSize)
     .defaultLaunchBehavior(.suppressed)
@@ -356,15 +372,15 @@ private struct SyncLogMenuItem: View {
   }
 }
 
-/// Help ▸ Keychain. Read-only, and only available while unlocked; a locked app
-/// shows the main window, and its lock screen, instead.
+/// Help ▸ App Keychain. Read-only, and only available while unlocked; a locked
+/// app shows the main window, and its lock screen, instead.
 private struct KeychainMenuItem: View {
   let windows: WindowRequests
   @Environment(VaultsModel.self) private var model
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
-    Button("Keychain") {
+    Button("App Keychain") {
       guard model.isAppUnlocked, !windows.isFirstRunPending() else {
         windows.requestMain()
         return
