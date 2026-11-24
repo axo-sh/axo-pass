@@ -1,5 +1,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use indoc::formatdoc;
 
@@ -11,6 +14,16 @@ pub const SENTINEL_END: &str = "# END axo-pass";
 // use to detect if the shell integration block is already present in the zshrc
 // file
 pub const SHELLENV_MARKER: &str = "ap shellenv zsh";
+
+/// Variable `ap shellenv zsh` exports. A new zsh that has it set loaded the
+/// shell integration, wherever the user added it.
+pub const HOOK_ENV_VAR: &str = "AXO_PASS_SHELLENV";
+
+/// Longest wait for the probe shell to start.
+const HOOK_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Result of the last `verify_shell_hook` call.
+static HOOK_VERIFIED: AtomicBool = AtomicBool::new(false);
 
 pub fn zshrc_path() -> PathBuf {
     if let Ok(zdotdir) = std::env::var("ZDOTDIR") {
@@ -47,7 +60,7 @@ pub fn ap_symlink_path() -> Option<PathBuf> {
 /// Creates or refreshes `~/.local/bin/ap` so `ap` resolves for scripts and
 /// non-zsh tools, not just interactive zsh. A pre-existing regular file at that
 /// path is the user's own binary and is left untouched.
-fn install_symlink() -> Result<(), String> {
+pub fn install_symlink() -> Result<(), String> {
     let target = ap_bin_path().ok_or("Could not determine ap binary path")?;
     let dir = local_bin_dir().ok_or("Could not determine home directory")?;
     std::fs::create_dir_all(&dir)
@@ -77,13 +90,116 @@ fn install_symlink() -> Result<(), String> {
     Ok(())
 }
 
-/// Returns `(configured, zshrc_path)`.
-pub fn check_status() -> (bool, PathBuf) {
-    let path = zshrc_path();
-    let configured = std::fs::read_to_string(&path)
-        .map(|content| content.contains(SHELLENV_MARKER))
+/// State of the `.zshrc` block and the `~/.local/bin/ap` symlink.
+pub struct Status {
+    /// The `.zshrc` block is present.
+    pub zshrc_configured: bool,
+    /// The last `verify_shell_hook` call found the hook in a new zsh.
+    pub hook_verified: bool,
+    /// `~/.local/bin/ap` is a symlink to the current `ap` binary.
+    pub symlink_ok: bool,
+    pub zshrc_path: PathBuf,
+    pub symlink_path: Option<PathBuf>,
+}
+
+impl Status {
+    /// The shell hook is in `.zshrc` or was found in a new zsh.
+    pub fn hook_configured(&self) -> bool {
+        self.zshrc_configured || self.hook_verified
+    }
+
+    /// Both the shell hook and the symlink are in place.
+    pub fn configured(&self) -> bool {
+        self.hook_configured() && self.symlink_ok
+    }
+}
+
+/// Whether `content` has an uncommented line that sources the shell hook.
+fn has_active_hook(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim_start();
+        !line.starts_with('#') && line.contains(SHELLENV_MARKER)
+    })
+}
+
+/// Start an interactive zsh and report whether the shell hook ran in it.
+///
+/// Covers setups that `.zshrc` detection misses, such as `.zshenv`, a
+/// dotfiles repo, or a sourced file. Runs the user's startup files, so call
+/// it only on request. The result is kept for `check_status`.
+pub fn verify_shell_hook() -> bool {
+    let found = probe_zsh_for_hook();
+    HOOK_VERIFIED.store(found, Ordering::Relaxed);
+    found
+}
+
+fn probe_zsh_for_hook() -> bool {
+    let mut child = match Command::new("zsh")
+        .arg("-ic")
+        .arg(format!("print -r -- ${HOOK_ENV_VAR}"))
+        .env_remove(HOOK_ENV_VAR)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log::debug!("Failed to start zsh: {e}");
+            return false;
+        },
+    };
+
+    let deadline = Instant::now() + HOOK_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            },
+            _ => {
+                log::debug!("Shell hook probe did not finish");
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            },
+        }
+    }
+
+    child
+        .wait_with_output()
+        .ok()
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .last()
+                .map(|line| line.trim() == "1")
+        })
+        .unwrap_or(false)
+}
+
+/// Whether `link` is a symlink that points at `target`, which must exist.
+fn symlink_points_to(link: &Path, target: &Path) -> bool {
+    std::fs::read_link(link).ok().as_deref() == Some(target) && target.exists()
+}
+
+pub fn check_status() -> Status {
+    let zshrc_path = zshrc_path();
+    let zshrc_configured = std::fs::read_to_string(&zshrc_path)
+        .map(|content| has_active_hook(&content))
         .unwrap_or(false);
-    (configured, path)
+    let symlink_path = ap_symlink_path();
+    let symlink_ok = match (&symlink_path, ap_bin_path()) {
+        (Some(link), Some(target)) => symlink_points_to(link, Path::new(&target)),
+        _ => false,
+    };
+    Status {
+        zshrc_configured,
+        hook_verified: HOOK_VERIFIED.load(Ordering::Relaxed),
+        symlink_ok,
+        zshrc_path,
+        symlink_path,
+    }
 }
 
 /// Quotes a path for a zshrc assignment such as `export NAME=<value>`.
@@ -103,26 +219,29 @@ fn build_block() -> Result<String, String> {
 /// Lines of the shell integration block between the sentinels, with a
 /// trailing newline.
 pub fn block_body() -> String {
-    let mut block = formatdoc! {r#"
+    formatdoc! {r#"
         if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
           export PATH="$HOME/.local/bin:$PATH"
         fi
         source <(ap shellenv zsh)
-    "#};
+    "#}
+}
 
-    // SSH_ASKPASS routes ssh/ssh-add's passphrase and password prompts into
-    // the app when they have no terminal to prompt on. Only available when
-    // running from the installed app bundle, same as the pinentry wrapper.
-    if let Some(askpass_path) = askpass::wrapper_path() {
-        let askpass_path = askpass_path.to_string_lossy();
-        let escaped_askpass_path = shell_quote(&askpass_path);
-        block.push_str(&formatdoc! {r#"
-            export SSH_ASKPASS={escaped_askpass_path}
-            export SSH_ASKPASS_REQUIRE=force
-        "#});
-    }
-
-    block
+/// Export lines that point `SSH_ASKPASS` at the bundled helper, with a
+/// trailing newline.
+///
+/// `SSH_ASKPASS` routes ssh and ssh-add passphrase and password prompts into
+/// the app if they have no terminal to prompt on. Empty outside the installed
+/// app bundle, same as the pinentry wrapper.
+pub fn askpass_exports() -> String {
+    let Some(askpass_path) = askpass::wrapper_path() else {
+        return String::new();
+    };
+    let escaped_askpass_path = shell_quote(&askpass_path.to_string_lossy());
+    formatdoc! {r#"
+        export SSH_ASKPASS={escaped_askpass_path}
+        export SSH_ASKPASS_REQUIRE=force
+    "#}
 }
 
 /// Finds the byte range of an existing sentinel-delimited block, if any,
@@ -267,6 +386,62 @@ mod tests {
         let content = read(&path);
         assert!(content.starts_with("export PATH=/usr/local/bin:$PATH\n"));
         assert!(content.contains(SENTINEL_START));
+    }
+
+    #[test]
+    fn active_hook_line_detected() {
+        assert!(has_active_hook("export A=1\nsource <(ap shellenv zsh)\n"));
+        assert!(has_active_hook("  eval \"$(ap shellenv zsh)\"\n"));
+    }
+
+    #[test]
+    fn commented_hook_line_ignored() {
+        assert!(!has_active_hook("# source <(ap shellenv zsh)\n"));
+        assert!(!has_active_hook("  # source <(ap shellenv zsh)\n"));
+        assert!(!has_active_hook(""));
+    }
+
+    #[test]
+    fn symlink_to_existing_target_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("ap");
+        let link = dir.path().join("link");
+        std::fs::write(&target, "").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(symlink_points_to(&link, &target));
+    }
+
+    #[test]
+    fn missing_symlink_does_not_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("ap");
+        std::fs::write(&target, "").unwrap();
+
+        assert!(!symlink_points_to(&dir.path().join("link"), &target));
+    }
+
+    #[test]
+    fn symlink_to_other_target_does_not_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("ap");
+        let other = dir.path().join("other");
+        let link = dir.path().join("link");
+        std::fs::write(&target, "").unwrap();
+        std::fs::write(&other, "").unwrap();
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+
+        assert!(!symlink_points_to(&link, &target));
+    }
+
+    #[test]
+    fn dangling_symlink_does_not_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("ap");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(!symlink_points_to(&link, &target));
     }
 
     #[test]

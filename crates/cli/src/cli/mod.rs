@@ -228,10 +228,15 @@ impl AxoPassCommand {
                 let mut cmd = AxoPassCli::command();
                 generate(*shell, &mut cmd, "ap", &mut io::stdout());
 
-                // add ssh agent environment setup (only zsh supported)
+                // add ssh agent and askpass environment setup (only zsh supported)
                 // todo: add config flag
                 if matches!(shell, Shell::Zsh) {
                     println!("{}", include_str!("commands/ssh_agent/ssh_agent.zsh"));
+                    print!("{}", axo_pass_core::shell_integration::askpass_exports());
+                    println!(
+                        "export {}=1",
+                        axo_pass_core::shell_integration::HOOK_ENV_VAR
+                    );
                 }
             },
         }
