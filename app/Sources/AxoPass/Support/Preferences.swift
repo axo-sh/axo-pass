@@ -38,6 +38,9 @@ enum Preferences {
     /// Dismissed advice issues, as `Issue.id` to the end of the snooze in
     /// seconds since 1970. A dismissal without an end is stored as 0.
     static let dismissedIssues = "issues.dismissed"
+    /// Whether Today lists dismissed and snoozed issues. Set from View ▸ Show
+    /// Dismissed Issues.
+    static let showDismissedIssues = "issues.showDismissed"
     /// Whether a choice in the welcome window finished, or a vault existed at
     /// launch. Unset on a new Mac.
     static let hasCompletedFirstRun = "firstRun.completed"

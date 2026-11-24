@@ -9,7 +9,7 @@ import SwiftUI
 /// "Get started" checklist, with a count of the steps done. The checklist stays
 /// until every step is done or skipped. Info issues are left out. Advice
 /// issues can be snoozed or dismissed, and setup issues skipped. Both are then
-/// listed under "Dismissed".
+/// hidden. View ▸ Show Dismissed Issues lists them under "Dismissed".
 struct TodayPane: View {
   let sshModel: SshModel
   let gpgModel: GpgModel
@@ -21,6 +21,7 @@ struct TodayPane: View {
   @State private var shellModel = ShellIntegrationModel()
   @State private var usedToday = UsedTodayModel()
   @State private var sheet: TodaySheet? = nil
+  @AppStorage(Preferences.Key.showDismissedIssues) private var showsDismissed = false
 
   var body: some View {
     let counted = issues.countedIssues
@@ -45,7 +46,7 @@ struct TodayPane: View {
             issueCard(counted)
           }
         }
-        if !dismissed.isEmpty {
+        if showsDismissed && !dismissed.isEmpty {
           TodaySectionHeader("Dismissed")
           issueCard(dismissed, dismissed: true)
         }

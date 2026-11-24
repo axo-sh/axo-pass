@@ -134,6 +134,9 @@ struct AxoPassApp: App {
       CommandGroup(after: .newItem) {
         GeneratePasswordMenuItem()
       }
+      CommandGroup(after: .toolbar) {
+        ShowDismissedMenuItem()
+      }
       CommandGroup(after: .help) {
         AuditLogMenuItem(windows: appDelegate.windows)
           .environment(appDelegate.model)
@@ -170,6 +173,15 @@ struct AxoPassApp: App {
   static let syncLogWindowID = "sync-log"
   static let keychainWindowID = "keychain"
   static let generatorWindowID = "generator"
+}
+
+/// View ▸ Show Dismissed Issues, which lists dismissed issues on Today.
+private struct ShowDismissedMenuItem: View {
+  @AppStorage(Preferences.Key.showDismissedIssues) private var isOn = false
+
+  var body: some View {
+    Toggle("Show Dismissed Issues", isOn: $isOn)
+  }
 }
 
 /// File ▸ Generate Password…, a standalone generator.
