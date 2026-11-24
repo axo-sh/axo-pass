@@ -65,6 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Alerts if the app bundle is moved or deleted while running.
   private let locationMonitor = AppLocationMonitor()
 
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    // Keeps AppKit from adding Enter Full Screen to the View menu.
+    UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     // An unsuitable install location offers to move the app before any setup
     // runs. A broker launch shows no prompt.
@@ -230,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // A relaunch shows the welcome window again through `WindowRequests` if
     // first run is still pending, so restoration is not needed.
     window.isRestorable = false
+    window.collectionBehavior.insert(.fullScreenNone)
   }
 
   /// Called from the main scene's content once its window exists.
@@ -239,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // broker launch that must show no window at all. A launch by a person opens
     // it through `WindowRequests` instead, so nothing is lost.
     window.isRestorable = false
+    window.collectionBehavior.insert(.fullScreenNone)
   }
 
   /// Closing the main window leaves the broker serving with nothing to show, so
