@@ -406,7 +406,7 @@ struct TodayPane: View {
     case .syncFolderNeeded(let vault), .syncStopped(let vault, _), .syncPaused(let vault, _),
       .syncUnreadable(let vault, _):
       sync.sheet = .status(vault)
-    case .recoveryKitMissing(let vault):
+    case .recoveryKitMissing(let vault, _):
       sync.sheet = .newKit(vault)
     case .pairingRequests(let root, _):
       sync.sheet = .pairingPrompt(root: root)

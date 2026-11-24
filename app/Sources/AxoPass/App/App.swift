@@ -115,6 +115,7 @@ struct AxoPassApp: App {
         .environment(appDelegate.model)
         .environment(appDelegate.sync)
         .environment(appDelegate.issues)
+        .environment(appDelegate.windows)
         .environmentObject(appDelegate.updaterUI)
     }
     .commands {

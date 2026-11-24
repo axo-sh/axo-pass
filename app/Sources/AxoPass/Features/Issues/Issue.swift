@@ -75,7 +75,7 @@ enum Issue: Hashable, Identifiable {
   case syncStopped(SyncVaultRef, cause: StopCauseInfo)
   case syncPaused(SyncVaultRef, causes: [PausedCauseInfo])
   case syncUnreadable(SyncVaultRef, message: String)
-  case recoveryKitMissing(SyncVaultRef)
+  case recoveryKitMissing(SyncVaultRef, invalidated: Bool)
   case pairingRequests(root: SyncRootInfo, count: UInt32)
 
   // SSH.
@@ -121,7 +121,7 @@ enum Issue: Hashable, Identifiable {
     case .syncStopped(let vault, _): return "sync-stopped-\(vault.key)"
     case .syncPaused(let vault, _): return "sync-paused-\(vault.key)"
     case .syncUnreadable(let vault, _): return "sync-unreadable-\(vault.key)"
-    case .recoveryKitMissing(let vault): return "recovery-kit-missing-\(vault.key)"
+    case .recoveryKitMissing(let vault, _): return "recovery-kit-missing-\(vault.key)"
     case .pairingRequests(let root, _): return "pairing-requests-\(rootDescription(root))"
     case .agentNotRunning: return "agent-not-running"
     case .agentNeedsApproval: return "agent-needs-approval"
@@ -255,8 +255,10 @@ enum Issue: Hashable, Identifiable {
       return "Sync paused for \(vault.name)"
     case .syncUnreadable(let vault, _):
       return "Sync status of \(vault.name) could not be read"
-    case .recoveryKitMissing(let vault):
-      return "\(vault.name) does not open with any recovery kit"
+    case .recoveryKitMissing(let vault, let invalidated):
+      return invalidated
+        ? "Recovery kit for \(vault.name) is out of date and no longer valid"
+        : "\(vault.name) does not have a recovery kit"
     case .pairingRequests(_, let count):
       return count == 1 ? "1 pairing request" : "\(count) pairing requests"
     case .agentNotRunning(let staleSocket, _):

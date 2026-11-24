@@ -106,6 +106,7 @@ struct ItemsPane: View {
       }
       if let vault = model.selectedVault {
         SyncNoticeBanner(vault: vault)
+        SyncChangesBanner(vault: vault)
       }
     }
     .paneBackground()
@@ -419,7 +420,7 @@ private struct AutofillSetupBanner: View {
     }
     .padding(10)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.quaternary)
+    .opaqueBannerBackground()
   }
 }
 

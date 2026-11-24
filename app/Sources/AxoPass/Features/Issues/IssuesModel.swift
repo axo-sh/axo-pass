@@ -266,7 +266,7 @@ final class IssuesModel {
       case .active?, nil: break
       }
       if report.recoveryKitMissing {
-        list.append(.recoveryKitMissing(ref))
+        list.append(.recoveryKitMissing(ref, invalidated: !report.recoveryKits.isEmpty))
       }
     }
     let roots = sync.pairingCounts.keys.sorted { rootDescription($0) < rootDescription($1) }

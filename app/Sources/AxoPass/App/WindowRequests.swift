@@ -37,7 +37,12 @@ final class WindowRequests {
     PanelAppVisibility.shared.windowRequested()
     keychainOpens += 1
   }
-  func requestSettings() {
+  /// Selected Settings tab.
+  var settingsTab: SettingsTab = .terminal
+
+  /// Ask for the Settings window, at `tab` if given.
+  func requestSettings(tab: SettingsTab? = nil) {
+    if let tab { settingsTab = tab }
     PanelAppVisibility.shared.windowRequested()
     settingsOpens += 1
   }

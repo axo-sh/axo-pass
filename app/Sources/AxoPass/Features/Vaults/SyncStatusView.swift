@@ -1,28 +1,68 @@
 import AppKit
 import AxoPassFFI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Text of a vault paused by a separate key.
 let syncSeparateKeyMessage =
-  "Another device turned on sync for this vault separately. Turn off sync on one device, then turn it on again there to join the other copy."
+  "Another device also enabled sync for this vault. Pair the devices to merge them."
+
+/// Text of a vault that is cut off by a declined sync key.
+let syncRotationDeclinedMessage =
+  "You declined a new sync key from another device, so this device no longer syncs with the devices that accepted it. Pair this device again to rejoin, or remove the device that made the key."
 
 /// Notice of a synced vault that needs the user, read from its sync report.
 /// Nil if sync runs with nothing to do.
 func syncNotice(_ report: SyncReportInfo) -> String? {
   if report.needsFolder { return "Choose the synced folder of this vault again." }
+  if !report.rotations.isEmpty {
+    return "The sync key for this vault was updated by another device. Review it in Sync Status."
+  }
   switch report.status {
   case .stopped(let cause)?: return stopText(cause)
   case .paused(let causes)?:
     if causes.contains(where: { if case .separateKey = $0 { return true } else { return false } }) {
       return syncSeparateKeyMessage
     }
+    if causes.contains(where: {
+      if case .rotationDeclined = $0 { return true } else { return false }
+    }) {
+      return syncRotationDeclinedMessage
+    }
     return "Sync is paused."
   case .active?, nil: break
   }
-  if report.recoveryKitMissing {
-    return "This vault does not open with any recovery kit. Save a new kit."
-  }
   return nil
+}
+
+/// Short status line of a synced vault and the color of its status dot, read
+/// from its sync report in the order of `syncNotice`. The help text holds the
+/// full notice or the causes of a pause.
+func syncStatusSummary(_ report: SyncReportInfo) -> (line: String, color: Color, help: String) {
+  let notice = syncNotice(report)
+  if report.needsFolder { return ("Choose the synced folder again", .orange, notice ?? "") }
+  if !report.rotations.isEmpty { return ("New sync key to review", .orange, notice ?? "") }
+  switch report.status {
+  case .stopped(let cause)?:
+    return ("Stopped", .red, stopText(cause))
+  case .paused(let causes)?:
+    return ("Paused", .orange, causes.map { pausedText($0).text }.joined(separator: "\n"))
+  case nil:
+    return ("Unavailable", .secondary, "")
+  case .active?:
+    break
+  }
+  if report.recoveryKitMissing {
+    return (
+      "Needs a new recovery kit", .orange,
+      "This vault does not open with any recovery kit. Save a new kit."
+    )
+  }
+  if report.conflicts > 0 {
+    let count = report.conflicts == 1 ? "1 conflict" : "\(report.conflicts) conflicts"
+    return ("Syncing, \(count)", .green, "Conflicts to resolve: \(report.conflicts)")
+  }
+  return ("Syncing", .green, "")
 }
 
 /// Reason of a stopped sync.
@@ -51,7 +91,7 @@ private func signatureText(_ reason: SignatureFailureInfo) -> String {
 }
 
 /// Reason of a paused sync, with the error detail if any.
-private func pausedText(_ cause: PausedCauseInfo) -> (text: String, detail: String?) {
+func pausedText(_ cause: PausedCauseInfo) -> (text: String, detail: String?) {
   switch cause {
   case .unreachable(let error):
     return ("Synced folder cannot be reached.", error)
@@ -82,10 +122,7 @@ private func pausedText(_ cause: PausedCauseInfo) -> (text: String, detail: Stri
   case .separateKey:
     return (syncSeparateKeyMessage, nil)
   case .rotationDeclined:
-    return (
-      "You declined a new sync key from another Mac, so this Mac no longer syncs with the Macs that accepted it. Pair this Mac again to rejoin.",
-      nil
-    )
+    return (syncRotationDeclinedMessage, nil)
   }
 }
 
@@ -96,40 +133,64 @@ struct SyncNoticeBanner: View {
   let vault: VaultInfo
 
   var body: some View {
-    if let report = sync.report(vault.key), let notice = syncNotice(report) {
-      VStack(alignment: .leading, spacing: 6) {
+    if let report = sync.report(vault.key), let notice = syncNotice(report),
+      !sync.hiddenNoticeVaults.contains(vault.key)
+    {
+      let ref = SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
+      VStack(alignment: .leading, spacing: 8) {
         Label("Sync needs attention", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-          .font(.subheadline.weight(.semibold))
+          .font(.headline)
         Text(notice)
-          .font(.caption)
+          .font(.body)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Button("Sync Status…") {
-          sync.sheet = .status(SyncVaultRef(key: vault.key, name: vault.name ?? vault.key))
+        HStack {
+          if !report.rotations.isEmpty {
+            Button("Review…") { sync.sheet = .rotation(ref) }
+          }
+          Button("Sync Status…") { sync.sheet = .status(ref) }
+          Button("Hide") { sync.hideNotice(vault.key) }
+            .help("Hide this notice until Axo Pass restarts")
         }
-        .controlSize(.small)
       }
-      .padding(10)
+      .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(.quaternary)
+      .opaqueBannerBackground()
     }
   }
 }
 
+extension View {
+  /// Banner background that list rows do not show through.
+  func opaqueBannerBackground() -> some View {
+    background {
+      Color(nsColor: .windowBackgroundColor).overlay(.quaternary)
+    }
+    .overlay(alignment: .bottom) { Divider() }
+  }
+}
+
 /// Sync status of one vault: the status, folder, and conflict count, the
-/// causes and actions, the kit prompt, the quarantined files, and the known
-/// devices.
+/// causes and actions, the quarantined files, the recovery kits, and the sync
+/// key. The synced folder, devices, and pairing of all vaults are in
+/// Settings > Sync.
 struct SyncStatusSheet: View {
   @Environment(SyncModel.self) private var sync
   @Environment(VaultsModel.self) private var model
+  @Environment(WindowRequests.self) private var windows
   @Environment(\.dismiss) private var dismiss
 
   let vault: SyncVaultRef
+  /// Window that presents the sheet. In Settings, "Sync Settings…" only
+  /// dismisses the sheet.
+  var host: SyncSheetHost = .main
 
   @State private var isWorking = false
   @State private var error: String? = nil
   @State private var overrideCount: UInt32? = nil
   @State private var confirmingTurnOff = false
+  @State private var folderCopied = false
+  @State private var isSyncing = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -139,14 +200,16 @@ struct SyncStatusSheet: View {
       if let report = sync.report(vault.key) {
         Form {
           overviewSection(report)
-          causesSection(report)
-          if report.recoveryKitMissing { kitSection }
-          quarantinedSection(report)
           devicesSection(report)
+          rotationsSection(report)
+          causesSection(report)
+          quarantinedSection(report)
+          if report.status != nil { syncKeySection }
+          turnOffSection(report)
         }
         .formStyle(.grouped)
         .scrollBounceBehavior(.basedOnSize)
-        .frame(minHeight: 200, maxHeight: 460)
+        .frame(minHeight: 200, maxHeight: 560)
       } else if case .unknown(let message)? = sync.state(vault.key) {
         SyncErrorLabel(message: "Could not read sync status: \(message)")
           .padding(20)
@@ -164,6 +227,11 @@ struct SyncStatusSheet: View {
       }
 
       HStack {
+        Button("Sync Settings…") {
+          dismiss()
+          if host == .main { windows.requestSettings(tab: .sync) }
+        }
+        .help("Synced folder, devices, and pairing of all synced vaults")
         if isWorking { ProgressView().controlSize(.small) }
         Spacer()
         Button("Done") { dismiss() }
@@ -199,6 +267,22 @@ struct SyncStatusSheet: View {
 
   // MARK: - Sections
 
+  /// Key rotations of other devices that wait for an answer.
+  @ViewBuilder
+  private func rotationsSection(_ report: SyncReportInfo) -> some View {
+    if !report.rotations.isEmpty {
+      Section("New Sync Key") {
+        Text(
+          report.rotations.count == 1
+            ? "Another device made a new sync key for this vault and waits for your answer."
+            : "Other devices made new sync keys for this vault and wait for your answer."
+        )
+        .fixedSize(horizontal: false, vertical: true)
+        Button("Review…") { sync.sheet = .rotation(vault) }
+      }
+    }
+  }
+
   /// Status, folder, and conflict count. Conflicts show only if there are any.
   private func overviewSection(_ report: SyncReportInfo) -> some View {
     Section {
@@ -211,11 +295,36 @@ struct SyncStatusSheet: View {
         }
       } else if let root = report.root {
         LabeledContent("Folder") {
-          Text(rootDescription(root))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(rootHelp(root))
-            .textSelection(.enabled)
+          Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(rootHelp(root), forType: .string)
+            folderCopied = true
+            Task {
+              try? await Task.sleep(for: .seconds(1.5))
+              folderCopied = false
+            }
+          } label: {
+            Text(folderCopied ? "Copied" : rootDescription(root))
+              .lineLimit(1)
+              .truncationMode(.middle)
+          }
+          .buttonStyle(.plain)
+          .help("Copy \(rootHelp(root))")
+        }
+      }
+
+      if report.status != nil, report.root != nil, !report.needsFolder {
+        LabeledContent("Last Sync") {
+          HStack(spacing: 8) {
+            if isSyncing {
+              ProgressView().controlSize(.small)
+            } else {
+              scanLabel(report.scan)
+            }
+            Button("Sync Now") { syncNow() }
+              .controlSize(.small)
+              .disabled(isWorking || isSyncing)
+          }
         }
       }
 
@@ -228,11 +337,88 @@ struct SyncStatusSheet: View {
           }
         }
       }
+
+      if report.status != nil || report.recoveryKitMissing { kitRow(report) }
     } footer: {
       if report.needsFolder || report.root == nil {
         Text("Choose the folder that holds this vault on this Mac.")
       }
     }
+  }
+
+  /// Devices connected to this vault, this device first. Devices that left or
+  /// were removed are not listed.
+  @ViewBuilder
+  private func devicesSection(_ report: SyncReportInfo) -> some View {
+    let macs = report.knownMacs
+      .filter { $0.thisMac || !($0.left || $0.removed) }
+      .sorted { ($0.thisMac ? 0 : 1, $0.name) < ($1.thisMac ? 0 : 1, $1.name) }
+    if report.status != nil, !macs.isEmpty {
+      Section("Devices") {
+        ForEach(macs, id: \.replicaId) { deviceRow($0) }
+      }
+    }
+  }
+
+  private func deviceRow(_ mac: KnownMacInfo) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      HStack(spacing: 6) {
+        Text(mac.name)
+          .lineLimit(1)
+          .truncationMode(.middle)
+        if mac.keysFlagged {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+            .help(
+              "This device published keys that differ from the keys pinned for it. The pinned keys are used."
+            )
+        }
+      }
+      Text(deviceDetail(mac))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func deviceDetail(_ mac: KnownMacInfo) -> String {
+    if mac.thisMac { return "This device" }
+    if let receivedAt = mac.receivedAt {
+      return "Changes received \(relativeTime(receivedAt))"
+    }
+    return "No changes received"
+  }
+
+  /// Result of the latest scan of the synced folder since the app started.
+  @ViewBuilder
+  private func scanLabel(_ scan: ScanStatusInfo?) -> some View {
+    if let scan {
+      switch scan.outcome {
+      case .synced:
+        Text(relativeTime(scan.at))
+      case .waiting(let files):
+        Label(
+          files == 1
+            ? "Waiting for 1 file to download"
+            : "Waiting for \(files) files to download",
+          systemImage: "icloud.and.arrow.down"
+        )
+        .foregroundStyle(.orange)
+        .help("Checked \(relativeTime(scan.at)). The files download in the background.")
+      case .failed(let message):
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.red)
+          .lineLimit(2)
+          .help("Checked \(relativeTime(scan.at)).")
+      }
+    } else {
+      Text("Not yet")
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func relativeTime(_ seconds: Int64) -> String {
+    Date(timeIntervalSince1970: TimeInterval(seconds))
+      .formatted(.relative(presentation: .named))
   }
 
   @ViewBuilder
@@ -260,6 +446,7 @@ struct SyncStatusSheet: View {
       Section {
         ForEach(Array(causes.enumerated()), id: \.offset) { _, cause in
           causeRow(pausedText(cause))
+          pausedActions(cause, report)
         }
       } footer: {
         Text("Edits on this Mac are kept and sync once resolved.")
@@ -285,6 +472,33 @@ struct SyncStatusSheet: View {
           .lineLimit(3)
           .textSelection(.enabled)
       }
+    }
+  }
+
+  /// Actions of a paused cause. A separate enable and a declined rotation
+  /// are resolved by pairing with a device that syncs the vault.
+  @ViewBuilder
+  private func pausedActions(_ cause: PausedCauseInfo, _ report: SyncReportInfo) -> some View {
+    switch cause {
+    case .separateKey:
+      Button("Pair with Another Device…") {
+        sync.sheet = .pair(root: report.root ?? sync.folder, join: vault)
+      }
+    case .rotationDeclined(let signerId):
+      HStack {
+        Button("Pair with Another Device…") {
+          sync.sheet = .pair(root: report.root ?? sync.folder, join: vault)
+        }
+        if let signer = report.knownMacs.first(where: { $0.replicaId == signerId }),
+          let signingKey = signer.signingKey
+        {
+          Button("Remove \(signer.name)…") {
+            sync.sheet = .removeMac(preselect: signingKey)
+          }
+        }
+      }
+    default:
+      EmptyView()
     }
   }
 
@@ -341,11 +555,87 @@ struct SyncStatusSheet: View {
     }
   }
 
-  private var kitSection: some View {
-    Section("Recovery Kit") {
-      Text("No recovery kit opens the current sync key of this vault.")
-        .fixedSize(horizontal: false, vertical: true)
-      Button("Save a New Recovery Kit…") { sync.sheet = .newKit(vault) }
+  /// Recovery kit of the vault. The vault holds one kit, so a new kit
+  /// replaces it. A missing kit for the current key shows as a warning.
+  private func kitRow(_ report: SyncReportInfo) -> some View {
+    let kit = report.recoveryKits.last
+    return LabeledContent("Recovery Kit") {
+      HStack(spacing: 8) {
+        VStack(alignment: .trailing, spacing: 2) {
+          if let kit {
+            Text(kit.label ?? kit.shortRecipient)
+              .font(kit.label == nil ? .callout.monospaced() : .body)
+              .lineLimit(1)
+              .truncationMode(.tail)
+            Text(kitDetail(kit))
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+          if report.recoveryKitMissing {
+            Label(
+              kit == nil ? "None saved" : "Needs a new kit",
+              systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .help("No recovery kit opens the current sync key of this vault.")
+          }
+        }
+        .help(kit.map { "Recipient: \($0.recipient)\nKey id: \($0.keyId)" } ?? "")
+        Menu {
+          Button(kit == nil ? "New Kit…" : "Replace Kit…") { sync.sheet = .newKit(vault) }
+          Button("Check a Kit…") { sync.sheet = .checkKit }
+          if let kit {
+            Button("Revoke Kit…") { sync.sheet = .revokeKit(vault, kit) }
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Kit actions")
+      }
+    }
+  }
+
+  /// Date a kit was added, and the device that added it if known.
+  private func kitDetail(_ kit: RecoveryKitInfo) -> String {
+    let date = Date(timeIntervalSince1970: TimeInterval(kit.writtenAt))
+      .formatted(date: .abbreviated, time: .omitted)
+    guard let device = kit.addedBy else { return "Added \(date)" }
+    return "Added \(date) on \(device)"
+  }
+
+  /// Replacement of the sync key of this vault only.
+  private var syncKeySection: some View {
+    Section {
+      Button("Replace Sync Key…") { sync.sheet = .rotateKey(vault) }
+        .disabled(isWorking)
+    } header: {
+      Text("Sync Key")
+    } footer: {
+      Text(
+        "Use this if a recovery kit of this vault is lost. Your devices keep access. Kits made before the change stop working, so you save a new one."
+      )
+    }
+  }
+
+  /// Turn off sync of this vault on this Mac. A stopped sync offers the same
+  /// button with its causes.
+  @ViewBuilder
+  private func turnOffSection(_ report: SyncReportInfo) -> some View {
+    if case .stopped? = report.status {
+      EmptyView()
+    } else {
+      Section {
+        turnOffButton
+      } header: {
+        Text("This Device")
+      } footer: {
+        Text("This Mac stops syncing the vault. The vault stays here and on your other devices.")
+      }
     }
   }
 
@@ -369,31 +659,22 @@ struct SyncStatusSheet: View {
     }
   }
 
-  /// Known devices, this one first. Other devices show when they were last active.
-  @ViewBuilder
-  private func devicesSection(_ report: SyncReportInfo) -> some View {
-    if !report.knownMacs.isEmpty {
-      Section("Devices") {
-        ForEach(report.knownMacs.sorted { $0.thisMac && !$1.thisMac }, id: \.replicaId) { mac in
-          LabeledContent {
-            if mac.thisMac {
-              Text("This device")
-            } else if mac.left {
-              Text("Left")
-            } else if let lastActive = mac.lastActive {
-              Text(
-                Date(timeIntervalSince1970: TimeInterval(lastActive)),
-                format: .relative(presentation: .named))
-            }
-          } label: {
-            Text(mac.name)
-          }
-        }
+  // MARK: - Actions
+
+  /// Scan the synced folder for changes of other devices now. The report
+  /// reloads after the scan had time to run.
+  private func syncNow() {
+    error = nil
+    isSyncing = true
+    Task {
+      defer { isSyncing = false }
+      do {
+        try await sync.syncNow(vaultKey: vault.key)
+      } catch {
+        self.error = error.userMessage
       }
     }
   }
-
-  // MARK: - Actions
 
   private func differences(_ count: UInt32) -> String {
     count == 1 ? "1 difference" : "\(count) differences"
@@ -465,19 +746,27 @@ struct NewRecoveryKitSheet: View {
   let vault: SyncVaultRef
 
   @State private var text: String? = nil
+  @State private var label = ""
   @State private var kitSaved = false
   @State private var isWorking = false
   @State private var done = false
   @State private var error: String? = nil
+
+  /// The vault has a kit that the new kit replaces.
+  private var replaces: Bool { !(sync.report(vault.key)?.recoveryKits.isEmpty ?? true) }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text("New Recovery Kit for \(vault.name)").font(.headline)
 
       if done {
-        Text("The recovery kit is added. It opens the vault from the synced folder.")
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+        Text(
+          replaces
+            ? "The new recovery kit replaces the earlier kit. It opens the vault from the synced folder."
+            : "The recovery kit is added. It opens the vault from the synced folder."
+        )
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
         HStack {
           Spacer()
           Button("Done") { dismiss() }
@@ -493,6 +782,8 @@ struct NewRecoveryKitSheet: View {
         RecoveryKitPanel(text: text, vaultName: vault.name, kitSaved: $kitSaved) {
           error = $0
         }
+
+        KitLabelField(label: $label)
 
         if let error { SyncErrorLabel(message: error) }
 
@@ -544,10 +835,181 @@ struct NewRecoveryKitSheet: View {
     Task {
       defer { isWorking = false }
       do {
-        try await sync.confirmKit(vaultKey: vault.key, kitText: text)
+        try await sync.confirmKit(
+          vaultKey: vault.key, kitText: text,
+          label: label.trimmingCharacters(in: .whitespacesAndNewlines))
         done = true
       } catch FfiError.AuthExpired {
         // The app locked, which closes the sheet.
+      } catch {
+        self.error = error.userMessage
+      }
+    }
+  }
+}
+
+/// Check of a recovery kit that the user chooses or pastes. Reports whether
+/// the kit opens the current sync key of its vault. Writes nothing other than
+/// download requests.
+struct CheckKitSheet: View {
+  @Environment(SyncModel.self) private var sync
+  @Environment(VaultsModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+
+  /// Result of a check.
+  private enum Outcome {
+    /// The kit opens the current sync key.
+    case current
+    /// The kit is for an earlier sync key.
+    case earlier
+    /// No file of the synced folder opens with the kit.
+    case noKey
+    /// Files of these devices are downloading.
+    case waiting([String])
+  }
+
+  @State private var kitText = ""
+  @State private var outcome: Outcome? = nil
+  @State private var isWorking = false
+  @State private var error: String? = nil
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Check a Recovery Kit").font(.headline)
+
+      Text(
+        "Choose a kit file or paste its text. Axo Pass checks whether the kit opens the current sync key of its vault. The check does not change the vault."
+      )
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
+
+      TextEditor(text: $kitText)
+        .font(.caption.monospaced())
+        .scrollContentBackground(.hidden)
+        .padding(4)
+        .frame(height: 120)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        .onChange(of: kitText) {
+          outcome = nil
+          error = nil
+        }
+
+      if let outcome { outcomeView(outcome) }
+      if let error { SyncErrorLabel(message: error) }
+
+      HStack {
+        Button("Choose File…") { chooseFile() }
+        if isWorking { ProgressView().controlSize(.small) }
+        Spacer()
+        Button("Done") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Check") { check() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(trimmedText.isEmpty || isWorking)
+      }
+    }
+    .padding(20)
+    .frame(width: 520)
+    .onChange(of: model.isAppUnlocked) { _, unlocked in
+      if !unlocked { dismiss() }
+    }
+  }
+
+  private var trimmedText: String {
+    kitText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Vault of this Mac named by the "Vault:" line of the kit. Nil if the line
+  /// is missing or no listed vault has the id.
+  private var kitVault: SyncVaultRef? {
+    let line = trimmedText.split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .first { $0.hasPrefix("Vault:") }
+    guard let line else { return nil }
+    let uuid = line.dropFirst("Vault:".count).trimmingCharacters(in: .whitespaces)
+    guard let id = shortId(id: uuid), let key = model.vaultKey(id: id) else { return nil }
+    return SyncVaultRef(key: key, name: sync.vaultName(key))
+  }
+
+  @ViewBuilder
+  private func outcomeView(_ outcome: Outcome) -> some View {
+    let vault = kitVault
+    let name = vault?.name ?? "its vault"
+    switch outcome {
+    case .current:
+      Label(
+        "This kit opens the current sync key of \(name).", systemImage: "checkmark.circle.fill"
+      )
+      .foregroundStyle(.green)
+      .fixedSize(horizontal: false, vertical: true)
+    case .earlier:
+      VStack(alignment: .leading, spacing: 8) {
+        Label(
+          "This kit is for an earlier sync key of \(name). It does not open the vault.",
+          systemImage: "exclamationmark.triangle.fill"
+        )
+        .foregroundStyle(.orange)
+        .fixedSize(horizontal: false, vertical: true)
+        if let vault {
+          Button("New Kit for \(vault.name)…") { sync.sheet = .newKit(vault) }
+        }
+      }
+    case .noKey:
+      Label(
+        "The files in the synced folder do not open with this kit. The kit was not added, or its vault syncs with another folder.",
+        systemImage: "xmark.circle.fill"
+      )
+      .foregroundStyle(.red)
+      .fixedSize(horizontal: false, vertical: true)
+    case .waiting(let names):
+      Label(
+        "Files from \(nameList(names)) are downloading. Check again in a few seconds.",
+        systemImage: "icloud.and.arrow.down"
+      )
+      .foregroundStyle(.orange)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  // MARK: - Actions
+
+  private func chooseFile() {
+    let panel = NSOpenPanel()
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.allowedContentTypes = [.plainText]
+    panel.prompt = "Choose"
+    panel.message = "Choose the recovery kit file."
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    do {
+      kitText = try String(contentsOf: url, encoding: .utf8)
+    } catch {
+      self.error = error.userMessage
+    }
+  }
+
+  /// Check the kit against the synced folder of its vault, or the synced
+  /// folder of the app if this Mac does not list the vault.
+  private func check() {
+    let vault = kitVault
+    guard let root = vault.flatMap({ sync.report($0.key)?.root }) ?? sync.folder else {
+      error = syncNoFolderMessage
+      return
+    }
+    let text = trimmedText
+    error = nil
+    outcome = nil
+    isWorking = true
+    Task {
+      defer { isWorking = false }
+      do {
+        switch try await sync.checkKit(root: root, kitText: text) {
+        case .recovered: outcome = .current
+        case .kitOutdated: outcome = .earlier
+        case .noKey: outcome = .noKey
+        case .waiting(let macs): outcome = .waiting(macs.map { $0.name ?? "another device" })
+        }
       } catch {
         self.error = error.userMessage
       }

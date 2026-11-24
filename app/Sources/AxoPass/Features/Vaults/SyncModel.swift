@@ -72,6 +72,14 @@ struct SyncVaultRef: Identifiable, Hashable {
   var id: String { key }
 }
 
+/// Vault in the synced folder. The vault name is only known if the vault is on
+/// this device.
+struct RemoteVaultRef: Identifiable, Hashable {
+  let id: String
+  let localKey: String?
+  let localName: String?
+}
+
 /// Sync sheet that `SyncModel` requests. A nil `root` is shown as the pointer
 /// to the synced folder in Settings.
 enum SyncSheet: Identifiable {
@@ -94,11 +102,24 @@ enum SyncSheet: Identifiable {
   case conflicts(SyncVaultRef, itemKey: String?)
   /// New recovery kit for the current sync key of the vault.
   case newKit(SyncVaultRef)
+  /// Check of a recovery kit against the current sync key of its vault.
+  case checkKit
   /// Synced vaults whose vault file is missing.
   case missingVaults
   /// Key state of this Mac: new hardware, signing key lost, or a keychain
   /// error.
   case keyState
+  /// Remove devices from every vault they belong to. `preselect` is the
+  /// signing key of a device that starts selected. If nil, the devices whose
+  /// keys came from the synced folder start selected.
+  case removeMac(preselect: String?)
+  /// Replace the sync key of the vault, or of every synced vault if nil.
+  case rotateKey(SyncVaultRef?)
+  /// Revoke one recovery kit of the vault and replace the sync key of that
+  /// vault only.
+  case revokeKit(SyncVaultRef, RecoveryKitInfo)
+  /// Rotations of other devices that wait for an answer in the vault.
+  case rotation(SyncVaultRef)
 
   var id: String {
     switch self {
@@ -110,10 +131,76 @@ enum SyncSheet: Identifiable {
     case .status(let vault): return "status-\(vault.key)"
     case .conflicts(let vault, let itemKey): return "conflicts-\(vault.key)-\(itemKey ?? "")"
     case .newKit(let vault): return "new-kit-\(vault.key)"
+    case .checkKit: return "check-kit"
     case .missingVaults: return "missing-vaults"
     case .keyState: return "key-state"
+    case .removeMac: return "remove-mac"
+    case .rotateKey(let vault): return "rotate-key-\(vault?.key ?? "")"
+    case .revokeKit(let vault, let kit): return "revoke-kit-\(vault.key)-\(kit.recipient)"
+    case .rotation(let vault): return "rotation-\(vault.key)"
     }
   }
+}
+
+/// Window that presents a sync sheet.
+enum SyncSheetHost {
+  /// Main window, or the welcome window in its place.
+  case main
+  /// Settings window.
+  case settings
+}
+
+/// Device of the synced vaults, grouped by signing key across the vaults, as
+/// Settings > Sync lists it.
+struct SyncDevice: Identifiable {
+  /// Signing key in lowercase hex, or the replica id of a device without one.
+  let id: String
+  let name: String
+  let thisMac: Bool
+  /// Signing key in lowercase hex. Nil if no vault lists one.
+  let signingKey: String?
+  /// Latest time that changes of the device reached this device in any of the
+  /// vaults, on this device's clock. Nil if none was recorded.
+  let receivedAt: Int64?
+  /// Device was removed from every vault it belongs to.
+  let removed: Bool
+  /// Device left or was removed from every vault it belongs to.
+  let left: Bool
+  /// Keys published by the device differ from the keys pinned for it in any
+  /// vault.
+  let keysFlagged: Bool
+  /// Keys of the device came from pairing in any vault.
+  let paired: Bool
+  /// Names of the vaults the device belongs to.
+  let vaultNames: [String]
+  /// Vaults where the device left or was removed, with its replica id in each.
+  /// Cleanup deletes its files there.
+  let retired: [(vaultKey: String, replicaId: String)]
+}
+
+/// Another device that a synced vault lists, grouped by signing key across the
+/// vaults, as Remove Mac offers it.
+struct RemovableMac: Identifiable, Hashable {
+  /// Signing key in lowercase hex, which names the device in every vault.
+  let signingKey: String
+  let name: String
+  /// Whether Remove Mac selects the device at first. Set if any vault learned
+  /// its keys from the synced folder and not by pairing.
+  let preselected: Bool
+  /// The device turned sync off in every vault.
+  let left: Bool
+  /// Names of the vaults the device belongs to.
+  let vaultNames: [String]
+
+  var id: String { signingKey }
+}
+
+/// Why a removed device loses access, as the user chooses it.
+enum MacRemovalReason: String, CaseIterable, Identifiable {
+  case retired = "Retired"
+  case lost = "Lost or stolen"
+
+  var id: String { rawValue }
 }
 
 /// Sync of the vaults for the app. One instance registers the sync events
@@ -167,18 +254,35 @@ final class SyncModel {
 
   /// Short description of the pairing progress. Nil if nothing runs.
   var pairingStatus: String? {
-    guard isPairing else { return nil }
-    let pending = imports.values.filter(\.isPending).count
-    if let activePairing {
-      let total = activePairing.vaultIds().count
-      let received = activePairing.vaultIds().filter { imports[$0]?.hasKey == true }.count
-      if received < total { return "Pairing: \(received) of \(total) vaults received" }
-    }
-    return pending == 1 ? "Importing 1 vault" : "Importing \(pending) vaults"
+    isPairing ? "Pairing in progress…" : nil
   }
 
-  /// Sync sheet that is shown. Setting another sheet replaces it.
-  var sheet: SyncSheet? = nil
+  /// Sync sheet that is shown. Setting another sheet replaces it in the same
+  /// window. Clearing it returns later sheets to the main window.
+  var sheet: SyncSheet? = nil {
+    didSet { if sheet == nil { sheetHost = .main } }
+  }
+
+  /// Window that presents `sheet`.
+  private(set) var sheetHost: SyncSheetHost = .main
+
+  /// Vaults whose sync notice banner is hidden until the app restarts.
+  private(set) var hiddenNoticeVaults: Set<String> = []
+
+  /// Hide the sync notice banner of vault `vaultKey`. Sync Status still shows the notice.
+  func hideNotice(_ vaultKey: String) { hiddenNoticeVaults.insert(vaultKey) }
+
+  /// Show `sheet` in the Settings window.
+  func showInSettings(_ sheet: SyncSheet) {
+    sheetHost = .settings
+    self.sheet = sheet
+  }
+
+  /// Show `sheet` in the main window, even if a sheet shows in Settings.
+  func showInMain(_ sheet: SyncSheet) {
+    sheetHost = .main
+    self.sheet = sheet
+  }
 
   /// Vault whose turn-off confirmation is shown.
   var disableRequest: SyncVaultRef? = nil
@@ -213,6 +317,48 @@ final class SyncModel {
     let defaults = UserDefaults.standard
     if let name = defaults.string(forKey: Preferences.Key.syncS3) { return .s3(name: name) }
     return defaults.string(forKey: Preferences.Key.syncFolder).map { .folder(path: $0) }
+  }
+
+  /// Ids of the vaults in the synced folder at the last read. Nil until read,
+  /// and after a failed read.
+  private(set) var remoteVaultIds: [String]? = nil
+
+  /// Message of the last failed read of the synced folder. Nil if it read.
+  private(set) var remoteVaultsError: String? = nil
+
+  /// List the vaults in the synced folder again. Clears the list if no folder
+  /// is chosen.
+  func reloadRemoteVaults() async {
+    guard let root = folder else {
+      remoteVaultIds = nil
+      remoteVaultsError = nil
+      return
+    }
+    do {
+      let ids = try await vaults.core.syncRemoteVaults(root: root)
+      guard root == folder else { return }
+      remoteVaultIds = ids
+      remoteVaultsError = nil
+    } catch {
+      guard root == folder else { return }
+      remoteVaultIds = nil
+      remoteVaultsError = error.userMessage
+    }
+  }
+
+  /// Vaults in the synced folder, with the local vault of each, by name. A
+  /// vault that is not on this device has no local vault and sorts last.
+  var remoteVaults: [RemoteVaultRef] {
+    (remoteVaultIds ?? [])
+      .map { id in
+        let local = vaults.vaults.first { $0.id == id }
+        return RemoteVaultRef(id: id, localKey: local?.key, localName: local?.name)
+      }
+      .sorted { a, b in
+        let rankA = a.localName == nil ? 1 : 0
+        let rankB = b.localName == nil ? 1 : 0
+        return (rankA, a.localName ?? "", a.id) < (rankB, b.localName ?? "", b.id)
+      }
   }
 
   /// Set the synced folder of the app to `url`.
@@ -379,6 +525,14 @@ final class SyncModel {
     await vaults.syncedVaultChanged(vaultKey)
   }
 
+  /// Scan vault `vaultKey` for changes of other devices now. The sync
+  /// manager runs the scan, so the report reloads after a short wait.
+  func syncNow(vaultKey: String) async throws {
+    try vaults.core.syncNow(vaultKey: vaultKey)
+    try? await Task.sleep(for: .seconds(1))
+    await reload(vaultKey)
+  }
+
   /// Set the synced folder of vault `vaultKey`, chosen again, to `url`. The
   /// folder must hold the vault. Reads no key.
   func setRoot(vaultKey: String, url: URL) async throws {
@@ -392,13 +546,227 @@ final class SyncModel {
     try await lockingOnExpiry { try await vaults.core.recoveryKitCreate(vaultKey: vaultKey) }
   }
 
-  /// Add the kit `kitText` to vault `vaultKey` after the user saved it. Needs
-  /// the app unlocked.
-  func confirmKit(vaultKey: String, kitText: String) async throws {
+  /// Add the kit `kitText` to vault `vaultKey` with the label `label` after
+  /// the user saved it. An empty label is none. Needs the app unlocked.
+  func confirmKit(vaultKey: String, kitText: String, label: String) async throws {
     try await lockingOnExpiry {
-      try await vaults.core.recoveryKitConfirm(vaultKey: vaultKey, kitText: kitText)
+      try await vaults.core.recoveryKitConfirm(
+        vaultKey: vaultKey, kitText: kitText, label: label.isEmpty ? nil : label)
     }
     await reload(vaultKey)
+  }
+
+  // MARK: - Rotation
+
+  /// Display name of vault `vaultKey`.
+  func vaultName(_ vaultKey: String) -> String {
+    vaults.vaults.first { $0.key == vaultKey }?.name ?? vaultKey
+  }
+
+  /// Synced vaults whose last report lists a device with a signing key.
+  private var syncedReports: [(key: String, report: SyncReportInfo)] {
+    vaults.vaults.compactMap { vault in
+      guard let report = reports[vault.key], report.status != nil else { return nil }
+      return (vault.key, report)
+    }
+  }
+
+  /// Synced vaults as of the last reports, by name.
+  var syncedVaults: [(vault: SyncVaultRef, report: SyncReportInfo)] {
+    syncedReports
+      .map { (vault: SyncVaultRef(key: $0.key, name: vaultName($0.key)), report: $0.report) }
+      .sorted { ($0.vault.name, $0.vault.key) < ($1.vault.name, $1.vault.key) }
+  }
+
+  /// Local vaults with sync turned off, by name.
+  var unsyncedVaults: [SyncVaultRef] {
+    vaults.vaults
+      .filter { if case .off = state($0.key) { return true } else { return false } }
+      .map { SyncVaultRef(key: $0.key, name: vaultName($0.key)) }
+      .sorted { ($0.name, $0.key) < ($1.name, $1.key) }
+  }
+
+  /// Whether a synced vault or a pairing request needs the user, as of the
+  /// last reports.
+  var needsAttention: Bool {
+    !pairingCounts.isEmpty || syncedReports.contains { syncNotice($0.report) != nil }
+  }
+
+  /// Only synced vault with a notice, as of the last reports. Nil if no
+  /// vault or more than one vault has a notice, or if a pairing request
+  /// waits.
+  var singleNoticeVault: SyncVaultRef? {
+    guard pairingCounts.isEmpty else { return nil }
+    let notices = syncedVaults.filter { syncNotice($0.report) != nil }
+    return notices.count == 1 ? notices[0].vault : nil
+  }
+
+  /// Devices of the synced vaults, grouped by signing key. This device is
+  /// first, then the others by name.
+  func syncDevices() -> [SyncDevice] {
+    var order: [String] = []
+    var groups: [String: [(vaultKey: String, mac: KnownMacInfo)]] = [:]
+    for (key, report) in syncedReports {
+      for mac in report.knownMacs {
+        let id = mac.thisMac ? "this-mac" : (mac.signingKey ?? mac.replicaId)
+        if groups[id] == nil { order.append(id) }
+        groups[id, default: []].append((vaultKey: key, mac: mac))
+      }
+    }
+    return order.compactMap { id -> SyncDevice? in
+      guard let entries = groups[id], let first = entries.first?.mac else { return nil }
+      let macs = entries.map(\.mac)
+      return SyncDevice(
+        id: id,
+        name: first.name,
+        thisMac: first.thisMac,
+        signingKey: macs.lazy.compactMap(\.signingKey).first,
+        receivedAt: macs.compactMap(\.receivedAt).max(),
+        removed: macs.allSatisfy(\.removed),
+        left: macs.allSatisfy { $0.left || $0.removed },
+        keysFlagged: macs.contains(where: \.keysFlagged),
+        paired: macs.contains(where: \.paired),
+        vaultNames: entries.map { vaultName($0.vaultKey) }.sorted(),
+        retired: entries.filter { !$0.mac.thisMac && ($0.mac.left || $0.mac.removed) }
+          .map { (vaultKey: $0.vaultKey, replicaId: $0.mac.replicaId) })
+    }
+    .sorted { ($0.thisMac ? 0 : 1, $0.name, $0.id) < ($1.thisMac ? 0 : 1, $1.name, $1.id) }
+  }
+
+  /// Other devices of the synced vaults that a rotation has not removed,
+  /// grouped by signing key, by name.
+  func removableMacs() -> [RemovableMac] {
+    var groups: [String: (name: String, preselected: Bool, left: Bool, vaults: [String])] = [:]
+    for (key, report) in syncedReports {
+      for mac in report.knownMacs where !mac.thisMac && !mac.removed {
+        guard let signingKey = mac.signingKey else { continue }
+        var group = groups[signingKey] ?? (mac.name, false, true, [])
+        group.preselected = group.preselected || mac.preselected
+        group.left = group.left && mac.left
+        group.vaults.append(vaultName(key))
+        groups[signingKey] = group
+      }
+    }
+    return groups.map { signingKey, group in
+      RemovableMac(
+        signingKey: signingKey, name: group.name, preselected: group.preselected,
+        left: group.left, vaultNames: group.vaults.sorted())
+    }
+    .sorted { ($0.name, $0.signingKey) < ($1.name, $1.signingKey) }
+  }
+
+  /// Names of the devices of the synced vaults that keep access after a
+  /// rotation that removes the devices with `removedKeys`: every other device
+  /// that has not left and was not removed. Sorted, without duplicates.
+  func remainingMacNames(removing removedKeys: Set<String>) -> [String] {
+    var names: Set<String> = []
+    for (_, report) in syncedReports {
+      for mac in report.knownMacs where !mac.thisMac && !mac.removed && !mac.left {
+        if let signingKey = mac.signingKey, removedKeys.contains(signingKey) { continue }
+        names.insert(mac.name)
+      }
+    }
+    return names.sorted()
+  }
+
+  /// Remove the devices of `removals` from every synced vault they belong to,
+  /// with a new sync key for each of those vaults. Needs the app unlocked. A
+  /// vault whose retired devices still download files returns `waiting` and
+  /// writes nothing, so the same call runs again to keep waiting.
+  func removeMacs(_ removals: [MacRemovalInfo]) async throws -> [VaultRotationInfo] {
+    let outcomes = try await lockingOnExpiry {
+      try await vaults.core.syncRemoveMacs(removals: removals)
+    }
+    await rotationChanged(outcomes)
+    return outcomes
+  }
+
+  /// Rotate the sync key of vault `vaultKey`, or of every synced vault if it
+  /// is nil, and remove no device. Needs the app unlocked.
+  func rotateKey(vaultKey: String?) async throws -> [VaultRotationInfo] {
+    let outcomes = try await lockingOnExpiry {
+      try await vaults.core.syncRotateKey(vaultKey: vaultKey)
+    }
+    await rotationChanged(outcomes)
+    return outcomes
+  }
+
+  /// Revoke the recovery kit with the age recipient `recipient` of vault
+  /// `vaultKey` and replace the sync key of that vault only. Removes no
+  /// device. Needs the app unlocked.
+  func revokeKit(vaultKey: String, recipient: String) async throws -> [VaultRotationInfo] {
+    let outcomes = try await lockingOnExpiry {
+      try await vaults.core.syncRevokeKit(vaultKey: vaultKey, recipient: recipient)
+    }
+    await rotationChanged(outcomes)
+    return outcomes
+  }
+
+  /// Accept the rotation `rotation` of vault `vaultKey`. Returns the devices
+  /// of the rotation this Mac signed that the accepted one did not remove, as
+  /// removals to run again. Needs the app unlocked.
+  func acceptRotation(vaultKey: String, rotation: RotationInfo) async throws -> [MacRemovalInfo] {
+    let repeated = try await lockingOnExpiry {
+      try await vaults.core.syncAcceptRotation(vaultKey: vaultKey, rotation: rotation.idInfo)
+    }
+    let report = try await vaults.core.syncReport(vaultKey: vaultKey)
+    await reload(vaultKey)
+    await vaults.syncedVaultChanged(vaultKey)
+    return repeated.compactMap { replicaId in
+      report.knownMacs.first { $0.replicaId == replicaId }?.signingKey.map {
+        MacRemovalInfo(signingKey: $0, retired: false)
+      }
+    }
+  }
+
+  /// Decline the rotations `rotations` of vault `vaultKey`. Needs the app
+  /// unlocked.
+  func declineRotations(vaultKey: String, rotations: [RotationInfo]) async throws {
+    try await lockingOnExpiry {
+      try await vaults.core.syncDeclineRotations(
+        vaultKey: vaultKey, rotations: rotations.map(\.idInfo))
+    }
+    await reload(vaultKey)
+    await vaults.syncedVaultChanged(vaultKey)
+  }
+
+  /// Clean up the retired device `replicaId` of vault `vaultKey`. Returns
+  /// whether its directory was deleted. Needs the app unlocked.
+  func cleanReplica(vaultKey: String, replicaId: String) async throws -> Bool {
+    let deleted = try await lockingOnExpiry {
+      try await vaults.core.syncCleanReplica(vaultKey: vaultKey, replicaId: replicaId)
+    }
+    await reload(vaultKey)
+    return deleted
+  }
+
+  // MARK: - Notices
+
+  /// Keep the suffixed keys of `entities` in vault `vaultKey`, which writes
+  /// the shown key into the key register. Needs the app unlocked.
+  func keepKeys(vaultKey: String, entities: [EntityRefInfo]) async throws {
+    try await lockingOnExpiry {
+      try await vaults.core.syncKeepKeys(vaultKey: vaultKey, entities: entities)
+    }
+    await reload(vaultKey)
+    await vaults.syncedVaultChanged(vaultKey)
+  }
+
+  /// Dismiss the notices of changes from other devices of vault `vaultKey`.
+  /// Needs the app unlocked.
+  func dismissNotices(vaultKey: String) async throws {
+    try await lockingOnExpiry {
+      try await vaults.core.syncDismissNotices(vaultKey: vaultKey)
+    }
+    await reload(vaultKey)
+  }
+
+  /// Read the vaults that `outcomes` rotated again.
+  private func rotationChanged(_ outcomes: [VaultRotationInfo]) async {
+    for outcome in outcomes {
+      await reload(outcome.vaultKey)
+      if case .rotated = outcome.outcome { await vaults.syncedVaultChanged(outcome.vaultKey) }
+    }
   }
 
   // MARK: - Missing vaults
@@ -602,9 +970,9 @@ final class SyncModel {
 
   // MARK: - Pairing prompt
 
-  /// Computer name of the request under `root` that `code` matches. Nil if no
+  /// Details of the request under `root` that `code` matches. Nil if no
   /// request matches. Reads no key.
-  func matchCode(root: SyncRootInfo, code: String) async throws -> String? {
+  func matchCode(root: SyncRootInfo, code: String) async throws -> PairingMatchInfo? {
     try await vaults.core.pairingMatchCode(root: root, code: code)
   }
 
@@ -695,6 +1063,7 @@ final class SyncModel {
 
   fileprivate func pairingEnded() {
     activePairing = nil
+    dropImportsAwaitingKey()
   }
 
   fileprivate func importProgress(_ vaultId: String, _ progress: VaultImportProgress) {

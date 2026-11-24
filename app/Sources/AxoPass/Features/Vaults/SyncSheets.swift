@@ -4,13 +4,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension View {
-  /// Present the sync sheets that `SyncModel` requests: the enable sheet, the
-  /// pairing sheets, the kit import, the status sheets, the conflicts sheet,
-  /// the key state sheet, and the turn-off confirmation. Attach in the main window and in the
-  /// welcome window. Only one of the two is open at a time, so a shared
-  /// `sync.sheet` never presents twice. Do not attach it to a third window.
-  func syncSheets() -> some View {
-    modifier(SyncSheetsModifier())
+  /// Present the sync sheets that `SyncModel` requests for `host`: the enable
+  /// sheet, the pairing sheets, the kit import, the status sheets, the
+  /// conflicts sheet, the key state sheet, and the rotation sheets. The main
+  /// host also presents the turn-off confirmation. Attach `.main` in the main
+  /// window and in the welcome window, and `.settings` in the Settings window.
+  /// Only one of the main and welcome windows is open at a time, so a shared
+  /// `sync.sheet` never presents twice.
+  func syncSheets(in host: SyncSheetHost = .main) -> some View {
+    modifier(SyncSheetsModifier(host: host))
   }
 }
 
@@ -36,28 +38,42 @@ extension SyncModel {
 
 private struct SyncSheetsModifier: ViewModifier {
   @Environment(SyncModel.self) private var sync
+  let host: SyncSheetHost
+
+  /// Sheet of `host`. A dismissal clears the sheet only if `host` still
+  /// presents it, so a sheet moved to another window stays.
+  private var sheet: Binding<SyncSheet?> {
+    Binding(
+      get: { sync.sheetHost == host ? sync.sheet : nil },
+      set: { if $0 != nil || sync.sheetHost == host { sync.sheet = $0 } })
+  }
 
   func body(content: Content) -> some View {
-    @Bindable var sync = sync
     content
-      .sheet(item: $sync.sheet) { sheet in
+      .sheet(item: sheet) { sheet in
         switch sheet {
         case .enable(let vault): SyncEnableSheet(vault: vault)
         case .pair(let root, let join): PairingSheet(root: root, join: join)
         case .kitImport(let root, let join): KitImportSheet(root: root, join: join)
         case .pairingPrompt(let root): PairingPromptSheet(root: root)
         case .pendingPairings(let root): PendingPairingsSheet(root: root)
-        case .status(let vault): SyncStatusSheet(vault: vault)
+        case .status(let vault): SyncStatusSheet(vault: vault, host: host)
         case .conflicts(let vault, let itemKey): ConflictsSheet(vault: vault, itemKey: itemKey)
         case .newKit(let vault): NewRecoveryKitSheet(vault: vault)
+        case .checkKit: CheckKitSheet()
         case .missingVaults: MissingVaultsSheet()
         case .keyState: KeyStateSheet()
+        case .removeMac(let preselect): RemoveMacSheet(preselect: preselect)
+        case .rotateKey(let vault): RotateKeySheet(vault: vault)
+        case .revokeKit(let vault, let kit): RevokeKitSheet(vault: vault, kit: kit)
+        case .rotation(let vault): RotationPromptSheet(vault: vault)
         }
       }
       .confirmationDialog(
         "Turn off sync for \(sync.disableRequest?.name ?? "this vault")?",
         isPresented: Binding(
-          get: { sync.disableRequest != nil }, set: { if !$0 { sync.disableRequest = nil } }),
+          get: { host == .main && sync.disableRequest != nil },
+          set: { if !$0 { sync.disableRequest = nil } }),
         presenting: sync.disableRequest
       ) { vault in
         Button("Turn Off Sync", role: .destructive) {
@@ -69,7 +85,8 @@ private struct SyncSheetsModifier: ViewModifier {
       .alert(
         "Could not turn off sync",
         isPresented: Binding(
-          get: { sync.disableError != nil }, set: { if !$0 { sync.clearDisableError() } }),
+          get: { host == .main && sync.disableError != nil },
+          set: { if !$0 { sync.clearDisableError() } }),
         presenting: sync.disableError
       ) { _ in
         Button("OK") { sync.clearDisableError() }
@@ -81,7 +98,7 @@ private struct SyncSheetsModifier: ViewModifier {
 
 /// Text of the turn-off confirmation.
 let syncDisableMessage =
-  "This Mac stops syncing the vault. The vault stays here and on your other devices. This Mac still has the vault's sync key until key rotation arrives in a later version."
+  "This Mac stops syncing the vault. The vault stays here and on your other devices. This Mac keeps its copy of the vault's sync key. To cut it off, choose Remove Device on another device."
 
 /// Text of the delete confirmation of a synced vault.
 let syncedVaultDeleteMessage =
@@ -100,7 +117,7 @@ let recoveryKitMessage =
   "The kit opens the vault if no other device is available. Store it away from the synced folder, since anyone with both can read the vault."
 
 /// Text for a sync sheet if no synced folder is chosen.
-let syncNoFolderMessage = "Choose a synced folder in Settings › Vaults first."
+let syncNoFolderMessage = "Choose a synced folder in Settings › Sync first."
 
 /// Error of a sync sheet.
 struct SyncErrorLabel: View {
@@ -169,6 +186,34 @@ struct RecoveryKitPanel: View {
     let operation = NSPrintOperation(view: view, printInfo: info)
     operation.jobTitle = "Axo Pass Recovery Kit - \(vaultName)"
     operation.run()
+  }
+}
+
+extension RecoveryKitInfo {
+  /// Age recipient shortened to its start and end, such as "age1qyqs…x7k2".
+  var shortRecipient: String {
+    guard recipient.count > 16 else { return recipient }
+    return "\(recipient.prefix(8))…\(recipient.suffix(4))"
+  }
+
+  /// Label of the kit, or its shortened recipient if it has none.
+  var displayName: String { label ?? shortRecipient }
+}
+
+/// Optional label of a new recovery kit, such as where it is stored. It syncs
+/// with the kit recipient and shows in the vault sync status on every device.
+struct KitLabelField: View {
+  @Binding var label: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      TextField("Label", text: $label, prompt: Text("Printed, home safe"))
+        .textFieldStyle(.roundedBorder)
+      Text("Optional. Describe where the kit is kept. The label shows on all your devices.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
   }
 }
 

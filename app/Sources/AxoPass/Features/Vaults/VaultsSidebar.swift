@@ -101,22 +101,23 @@ struct VaultsSidebar: View {
       ToolbarItemGroup(placement: .primaryAction) {
         // Push the search button to the trailing edge of the sidebar toolbar.
         Spacer()
-        // Add synced vaults to this Mac from the synced folder of the app.
-        Menu {
-          Button("Pair with Another Device…") { sync.showPairing() }
-          Button("Use a Recovery Kit…") { sync.showKitImport() }
-          Divider()
-          Button("Pending Pairings…") { sync.showPendingPairings() }
-            .disabled(sync.folder == nil)
+        // Sync status of all vaults. Opens the status of the only vault with a
+        // notice, or Settings > Sync.
+        Button {
+          if let vault = sync.singleNoticeVault {
+            sync.showInMain(.status(vault))
+          } else {
+            windows.requestSettings(tab: .sync)
+          }
         } label: {
           Label {
-            Text("Add Synced Vaults")
+            Text("Sync Settings")
           } icon: {
-            SpinningSyncIcon(isSpinning: sync.isPairing)
+            SpinningSyncIcon(
+              isSpinning: sync.activePairing != nil, needsAttention: sync.needsAttention)
           }
         }
-        .menuIndicator(.hidden)
-        .help("Add synced vaults from another device or with a recovery kit")
+        .help(syncHelp)
         Button {
           showPalette()
         } label: {
@@ -128,13 +129,13 @@ struct VaultsSidebar: View {
     }
     .safeAreaInset(edge: .bottom) {
       VStack(alignment: .leading, spacing: 6) {
-        if let status = sync.pairingStatus {
+        if sync.activePairing != nil {
           Button {
-            sync.showPendingPairings()
+            sync.showPairing()
           } label: {
             HStack(spacing: 6) {
               SpinningSyncIcon(isSpinning: true)
-              Text(status)
+              Text("Pairing in progress…")
                 .lineLimit(1)
               Spacer(minLength: 0)
             }
@@ -143,7 +144,7 @@ struct VaultsSidebar: View {
             .contentShape(.rect)
           }
           .buttonStyle(.plain)
-          .help("Show pending pairings")
+          .help("Show pairing code")
         }
         HStack(spacing: 8) {
           Button {
@@ -412,7 +413,7 @@ struct VaultsSidebar: View {
         Button("Import Passwords…") { showingItemImportSheet = true }
         Button("Import Backup…") { showingImportSheet = true }
         Divider()
-        Button("Add from Another Device…") { sync.showPairing() }
+        Button("Pair with Another Device…") { sync.showPairing() }
         Button("Use a Recovery Kit…") { sync.showKitImport() }
       } label: {
         Color.clear
@@ -456,6 +457,16 @@ struct VaultsSidebar: View {
     }
   }
 
+  /// Help text of the sync toolbar button.
+  private var syncHelp: String {
+    if sync.activePairing != nil { return "Pairing in progress. Open Sync Settings." }
+    if let vault = sync.singleNoticeVault {
+      return "Sync of \(vault.name) needs attention. Open its sync status."
+    }
+    if sync.needsAttention { return "Sync needs attention. Open Sync Settings." }
+    return "Open Sync Settings"
+  }
+
   private func syncRef(_ vault: VaultInfo) -> SyncVaultRef {
     SyncVaultRef(key: vault.key, name: vault.name ?? vault.key)
   }
@@ -479,14 +490,29 @@ struct VaultsSidebar: View {
   }
 }
 
-/// Task id for loading the item type counts.
 /// Sync icon that turns slowly while `isSpinning`, and rests while it is not.
+/// The icon shows an orange alert mark if `needsAttention` and it is not
+/// spinning.
 private struct SpinningSyncIcon: View {
   let isSpinning: Bool
+  var needsAttention = false
   @State private var angle = 0.0
 
+  private var showsAlert: Bool { needsAttention && !isSpinning }
+
+  /// Icon in the inherited foreground style, or orange for the alert.
+  @ViewBuilder
+  private var icon: some View {
+    if showsAlert {
+      Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+        .foregroundStyle(.orange)
+    } else {
+      Image(systemName: "arrow.triangle.2.circlepath")
+    }
+  }
+
   var body: some View {
-    Image(systemName: "arrow.triangle.2.circlepath")
+    icon
       .rotationEffect(.degrees(angle))
       .onChange(of: isSpinning, initial: true) { _, spinning in
         if spinning {
@@ -500,6 +526,7 @@ private struct SpinningSyncIcon: View {
   }
 }
 
+/// Task id for loading the item type counts.
 private struct TypeCountsTrigger: Equatable {
   let mode: LibraryMode
   let vaults: [VaultInfo]

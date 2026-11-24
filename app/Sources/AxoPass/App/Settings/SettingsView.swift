@@ -10,27 +10,38 @@ import SwiftUI
 /// window as well as disabling the menu item.
 struct SettingsView: View {
   @Environment(VaultsModel.self) private var model
+  @Environment(WindowRequests.self) private var windows
   @EnvironmentObject private var updaterUI: SunshineUpdaterUIController
   @State private var window: NSWindow?
   @State private var titleLock = WindowTitleLock()
 
   var body: some View {
-    TabView {
+    @Bindable var windows = windows
+    TabView(selection: $windows.settingsTab) {
       TerminalSettingsView()
         .settingsPane()
-        .tabItem { SettingsTab.label("Terminal", symbol: "terminal") }
+        .tabItem { SettingsTabLabel.label("Terminal", symbol: "terminal") }
+        .tag(SettingsTab.terminal)
       VaultsSettingsView()
         .settingsPane()
-        .tabItem { SettingsTab.label("Vaults", symbol: "archivebox") }
+        .tabItem { SettingsTabLabel.label("Vaults", symbol: "archivebox") }
+        .tag(SettingsTab.vaults)
+      SyncSettingsView()
+        .settingsPane()
+        .tabItem { SettingsTabLabel.label("Sync", symbol: "arrow.triangle.2.circlepath") }
+        .tag(SettingsTab.sync)
       AutoFillSettingsView()
         .settingsPane()
-        .tabItem { SettingsTab.label("AutoFill", symbol: "key.viewfinder") }
+        .tabItem { SettingsTabLabel.label("AutoFill", symbol: "key.viewfinder") }
+        .tag(SettingsTab.autoFill)
       GeneralSettingsView()
         .settingsPane()
-        .tabItem { SettingsTab.label("General", symbol: "gearshape") }
+        .tabItem { SettingsTabLabel.label("General", symbol: "gearshape") }
+        .tag(SettingsTab.general)
       SunshineUpdateSettingsView(controller: updaterUI)
         .settingsPane()
-        .tabItem { SettingsTab.label("About", symbol: "info.circle") }
+        .tabItem { SettingsTabLabel.label("About", symbol: "info.circle") }
+        .tag(SettingsTab.about)
     }
     .background(
       WindowAccessor {
@@ -47,6 +58,16 @@ struct SettingsView: View {
     guard !model.isAppUnlocked else { return }
     window?.close()
   }
+}
+
+/// Tab of the Settings window.
+enum SettingsTab: Hashable {
+  case terminal
+  case vaults
+  case sync
+  case autoFill
+  case general
+  case about
 }
 
 /// Keeps a window's title fixed. The Settings scene's `TabView` is an
@@ -76,7 +97,7 @@ private final class WindowTitleLock {
 ///
 /// This returns a `Label` rather than being a view, because `tabItem` only reads
 /// a `Label`, `Text`, or `Image` passed to it directly.
-private enum SettingsTab {
+private enum SettingsTabLabel {
   static func label(_ title: String, symbol: String) -> Label<Text, Image> {
     Label {
       Text(title)
@@ -332,8 +353,8 @@ private struct NotificationToggle: View {
   }
 }
 
-/// Synced folder of the vaults, and export of vaults to an encrypted bundle
-/// file or import from one.
+/// Vault files moved on new hardware, and export of vaults to an encrypted
+/// bundle file or import from one.
 private struct VaultsSettingsView: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
@@ -342,7 +363,6 @@ private struct VaultsSettingsView: View {
   /// Vault files moved to `unreadable/` on new hardware.
   @State private var moved: [MovedVaultInfo] = []
   @State private var showingMoved = false
-  @State private var showingLocation = false
 
   var body: some View {
     SettingsForm {
@@ -358,25 +378,6 @@ private struct VaultsSettingsView: View {
         }
         SettingsDivider()
       }
-
-      SettingsRow("Synced folder:") {
-        HStack(spacing: 8) {
-          Text(sync.folder.map(rootDescription) ?? "None")
-            .foregroundStyle(sync.folder == nil ? .secondary : .primary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(sync.folder.map(rootDescription) ?? "")
-          Button(sync.folder == nil ? "Choose…" : "Change…") { showingLocation = true }
-        }
-        .help(
-          "A change applies only to vaults turned on later. The path can differ on each device.")
-        Text(
-          "Use a folder that a sync service or shared drive copies to your other devices, or an S3-compatible bucket."
-        )
-        .captionStyle()
-      }
-
-      SettingsDivider()
 
       SettingsRow("Backups:") {
         HStack {
@@ -398,9 +399,6 @@ private struct VaultsSettingsView: View {
     }
     .sheet(isPresented: $showingMoved) {
       MovedVaultsSheet(moved: moved)
-    }
-    .sheet(isPresented: $showingLocation) {
-      SyncLocationSheet()
     }
     .task { moved = (try? await sync.movedVaults()) ?? [] }
   }
@@ -864,7 +862,7 @@ private struct ShellSettingsRows: View {
 
 /// Status line in a settings row. Only the icon is colored. An optional config
 /// file path follows in secondary text, with the home directory shown as `~`.
-private struct StatusLabel: View {
+struct StatusLabel: View {
   let title: String
   let symbol: String
   let color: Color
@@ -907,7 +905,7 @@ private enum SettingsLayout {
 }
 
 /// Settings pane content of rows and dividers.
-private struct SettingsForm<Content: View>: View {
+struct SettingsForm<Content: View>: View {
   @ViewBuilder let content: Content
 
   var body: some View {
@@ -920,7 +918,7 @@ private struct SettingsForm<Content: View>: View {
 
 /// Settings row with a trailing-aligned label and leading-aligned content. An
 /// empty label leaves the label column blank.
-private struct SettingsRow<Content: View>: View {
+struct SettingsRow<Content: View>: View {
   let label: String
   @ViewBuilder let content: Content
 
@@ -942,7 +940,7 @@ private struct SettingsRow<Content: View>: View {
 }
 
 /// Full-width line between groups of rows.
-private struct SettingsDivider: View {
+struct SettingsDivider: View {
   var body: some View {
     Divider()
       .padding(.vertical, 2)
@@ -954,7 +952,7 @@ extension View {
   /// controller resizes the window to each tab's fitting size, so a size set on
   /// the `TabView` itself does not apply. A width change moves the centered
   /// toolbar items, and a height change does not.
-  fileprivate func settingsPane() -> some View {
+  func settingsPane() -> some View {
     self
       .padding(.horizontal, 28)
       .padding(.vertical, 24)
@@ -963,7 +961,7 @@ extension View {
   }
 
   /// The look of explanatory text under a control: smaller and secondary.
-  fileprivate func captionStyle() -> some View {
+  func captionStyle() -> some View {
     self
       .font(.callout)
       .foregroundStyle(.secondary)
