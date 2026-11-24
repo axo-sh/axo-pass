@@ -141,7 +141,7 @@ pub(super) async fn list_keys(
                 })
                 .collect(),
         },
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 

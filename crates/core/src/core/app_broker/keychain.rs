@@ -121,7 +121,7 @@ pub(super) async fn list_passwords(
     let read = move |context: AuthContext| lister.list_passwords(context);
     match read_or_prompt(authorizer, prompt, peer, in_flight, read).await {
         Ok(entries) => WireResponse::KeychainPasswords { entries },
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -135,7 +135,7 @@ pub(super) async fn read_or_prompt<T, F>(
     peer: audit::Actor,
     in_flight: &InFlightRequest,
     read: F,
-) -> Result<T, WireResponse>
+) -> Result<T, Box<WireResponse>>
 where
     T: Send + 'static,
     F: Fn(AuthContext) -> Result<T, KeychainError> + Clone + Send + 'static,
@@ -147,9 +147,9 @@ where
             log::debug!("App is locked, prompting for {:?}", prompt.kind);
         },
         Err(e) => {
-            return Err(WireResponse::Failed {
+            return Err(Box::new(WireResponse::Failed {
                 message: e.to_string(),
-            });
+            }));
         },
     }
 
@@ -163,7 +163,7 @@ where
             authorizer
                 .end(prompt, PromptOutcome::Failed(message.clone()))
                 .await;
-            return Err(WireResponse::Failed { message });
+            return Err(Box::new(WireResponse::Failed { message }));
         },
     };
     in_flight.attach(&context);
@@ -173,15 +173,16 @@ where
         Ok(value) => (Ok(value), PromptOutcome::Succeeded),
         // A foreign context expires only if the app invalidated it, which is
         // how its Cancel button ends the prompt.
-        Err(KeychainError::UserCancelled | KeychainError::AuthenticationExpired) => {
-            (Err(WireResponse::Cancelled), PromptOutcome::Cancelled)
-        },
+        Err(KeychainError::UserCancelled | KeychainError::AuthenticationExpired) => (
+            Err(Box::new(WireResponse::Cancelled)),
+            PromptOutcome::Cancelled,
+        ),
         Err(e) => {
             let message = e.to_string();
             (
-                Err(WireResponse::Failed {
+                Err(Box::new(WireResponse::Failed {
                     message: message.clone(),
-                }),
+                })),
                 PromptOutcome::Failed(message),
             )
         },

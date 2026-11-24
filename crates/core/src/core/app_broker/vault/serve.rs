@@ -67,9 +67,9 @@ async fn authorize(
     prompt: &VaultAccessPrompt,
     actor: &Actor,
     in_flight: &InFlightRequest,
-) -> Result<VaultAuthorization, WireResponse> {
+) -> Result<VaultAuthorization, Box<WireResponse>> {
     if in_flight.is_abandoned() {
-        return Err(WireResponse::Cancelled);
+        return Err(Box::new(WireResponse::Cancelled));
     }
     // The app evaluates inside `begin`, holding the auth lock, so it is
     // dismissed rather than dropped when the client disconnects.
@@ -82,7 +82,7 @@ async fn authorize(
             authorizer
                 .end(prompt.clone(), PromptOutcome::Failed(message.clone()))
                 .await;
-            return Err(WireResponse::Failed { message });
+            return Err(Box::new(WireResponse::Failed { message }));
         },
     };
     // An import unlocks and writes one vault at a time on this context, so
@@ -111,7 +111,7 @@ pub(in super::super) async fn authorize_and_serve_logins(
     let VaultAuthorization { context, reused } =
         match authorize(authorizer, &prompt, &actor, in_flight).await {
             Ok(authorization) => authorization,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     if let Some(message) = refused_reuse(&prompt, reused) {
         log::warn!("App broker refused a reused approval: {message}");
@@ -245,7 +245,7 @@ pub(in super::super) async fn authorize_and_serve(
 ) -> WireResponse {
     let context = match authorize(authorizer, &prompt, &actor, in_flight).await {
         Ok(authorization) => authorization.context,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     if let Some(ended) = choose_placement(authorizer, &mut prompt, &mut payload).await {
