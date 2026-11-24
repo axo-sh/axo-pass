@@ -65,8 +65,8 @@ struct VaultSheetTitle: View {
 
 /// Information and actions of one vault: name, key, sync status, AutoFill,
 /// rename, key change, backup, history, sync, and delete. Opened from the vault
-/// list in Settings > Vaults and from the sidebar. Sync actions replace this
-/// sheet with the sync sheet in the same window.
+/// list in Settings > Vaults and from the sidebar. Sync status opens in a sheet
+/// above this one. Turn-on replaces this sheet in the same window.
 struct VaultSheet: View {
   @Environment(VaultsModel.self) private var model
   @Environment(SyncModel.self) private var sync
@@ -77,6 +77,7 @@ struct VaultSheet: View {
   @State private var titleSheet: TitleSheetRequest? = nil
   @State private var exporting = false
   @State private var showingVersions = false
+  @State private var showingSyncStatus = false
   @State private var confirmingDelete = false
 
   /// Vault as listed, or nil after the vault is deleted or its key changed.
@@ -117,6 +118,9 @@ struct VaultSheet: View {
     }
     .sheet(isPresented: $exporting) {
       VaultExportSheet(model: model, only: vault.key)
+    }
+    .sheet(isPresented: $showingSyncStatus) {
+      SyncStatusSheet(vault: vault, host: sync.sheetHost)
     }
     .sheet(isPresented: $showingVersions) {
       VaultVersionsSheet(vaultKey: vault.key, vaultName: info?.name ?? vault.name)
@@ -219,7 +223,7 @@ struct VaultSheet: View {
   private var syncAction: some View {
     switch sync.state(vault.key) {
     case .on:
-      Button("Status…") { sync.sheet = .status(vault) }
+      Button("Status…") { showingSyncStatus = true }
     case .off:
       Button("Turn On…") { sync.sheet = .enable(vault) }
     default:
