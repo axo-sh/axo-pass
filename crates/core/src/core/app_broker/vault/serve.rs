@@ -62,6 +62,9 @@ pub(super) enum AccessIds {
 
 /// Raise the app's prompt and return the context to unlock on. When the user
 /// declines, the response to send instead.
+///
+/// The response is boxed. `WireResponse` has large variants, and an unboxed
+/// `Err` would make every `Result` this returns that large.
 async fn authorize(
     authorizer: &dyn VaultAuthorizer,
     prompt: &VaultAccessPrompt,

@@ -904,6 +904,7 @@ pub enum Disabled {
 
 /// Outcome of one attempt of [`VaultWriter::write`].
 enum Attempt<R, F> {
+    /// Boxed because `Committed` is much larger than the other variants.
     Done(Box<Committed<R>>),
     /// The wrapped file key changed. Holds the unused transaction function.
     Retry(F),

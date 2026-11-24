@@ -129,6 +129,9 @@ pub(super) async fn list_passwords(
 /// app is locked, ask the app for a context through `authorizer`, which puts
 /// `prompt` up, and run `read` again on that context. An error is returned as
 /// the response to send.
+///
+/// The response is boxed. `WireResponse` has large variants, and an unboxed
+/// `Err` would make every `Result` this returns that large.
 pub(super) async fn read_or_prompt<T, F>(
     authorizer: &dyn PassphraseAuthorizer,
     prompt: PassphrasePrompt,
