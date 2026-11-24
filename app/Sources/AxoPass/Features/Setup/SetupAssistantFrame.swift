@@ -30,11 +30,10 @@ final class SetupNavigator<Step: Hashable> {
 struct SetupAssistantFrame<Step: Hashable, Content: View>: View {
   let navigator: SetupNavigator<Step>
   var error: String? = nil
-  @ViewBuilder let content: (Step) -> Content
-
   /// Minimum height of the flow. Steps of different lengths resize the window
   /// less.
-  private static var minHeight: CGFloat { 360 }
+  var minHeight: CGFloat = 360
+  @ViewBuilder let content: (Step) -> Content
 
   private var stepTransition: AnyTransition {
     .asymmetric(
@@ -49,7 +48,7 @@ struct SetupAssistantFrame<Step: Hashable, Content: View>: View {
         .transition(stepTransition)
     }
     .frame(width: 460)
-    .frame(minHeight: Self.minHeight, alignment: .topLeading)
+    .frame(minHeight: minHeight, alignment: .topLeading)
     .clipped()
   }
 

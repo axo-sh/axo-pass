@@ -2,16 +2,15 @@ import AxoPassFFI
 import SwiftUI
 
 /// Setup assistant for the `IdentityAgent` line in `~/.ssh/config`, which
-/// routes ssh's agent requests into this app's SSH agent. Steps: read what
-/// changes, write the line, and see the result.
+/// routes ssh's agent requests into this app's SSH agent. Steps: write the
+/// line, and see the result.
 struct SshSetupSheet: View {
   let model: SshModel
 
   @Environment(\.dismiss) private var dismiss
 
   private enum Step {
-    case overview
-    case configure
+    case setup
     case done
   }
 
@@ -24,7 +23,7 @@ struct SshSetupSheet: View {
     self.model = model
     _navigator = State(
       initialValue: SetupNavigator(
-        start: model.confStatus?.state == .configured ? .done : .overview))
+        start: model.confStatus?.state == .configured ? .done : .setup))
   }
 
   private var status: SshAgentConfStatus? { model.confStatus }
@@ -34,36 +33,36 @@ struct SshSetupSheet: View {
   var body: some View {
     SetupAssistantFrame(navigator: navigator, error: error) { step in
       switch step {
-      case .overview: overviewStep
-      case .configure: configureStep
+      case .setup: setupStep
       case .done: doneStep
       }
     }
     .onChange(of: isConfigured) { _, configured in
-      if configured && navigator.step == .configure { navigator.go(to: .done) }
+      if configured && navigator.step == .setup { navigator.go(to: .done) }
     }
   }
 
-  /// Error of the write on the configure step, or of the test on the last step.
+  /// Error of the write on the setup step, or of the test on the last step.
   private var error: String? {
     switch navigator.step {
-    case .overview: nil
-    case .configure: model.configureError
+    case .setup: model.configureError
     case .done:
       if case .failure(let message) = model.testResult { message } else { nil }
     }
   }
 
-  private var overviewStep: some View {
+  private var setupStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(
-        title: "SSH Agent Setup",
-        detail:
-          "ssh asks whatever `IdentityAgent` names for your keys and signatures. Pointing it at Axo Pass's agent socket routes ssh through this app."
-      )
-      Text("The setup edits \(configPath).")
-        .font(.callout)
-        .textSelection(.enabled)
+      Text("SSH Agent Setup")
+        .font(.title2)
+        .fontWeight(.semibold)
+      Text("Configure SSH to use the Axo Pass SSH agent to use SSH keys stored in Axo Pass.")
+        .fixedSize(horizontal: false, vertical: true)
+      Text("The following lines will be added to your SSH config (\(configPath)):")
+        .fixedSize(horizontal: false, vertical: true)
+      if let status {
+        SetupCodeBlock(text: "Host *\n  \(expectedLine(for: status))")
+      }
       if let current = status?.currentAgent {
         SetupReplaceWarning(
           message: "Another agent is configured. It will be commented out.", current: current)
@@ -71,45 +70,23 @@ struct SshSetupSheet: View {
       Spacer(minLength: 0)
       HStack {
         Spacer()
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button("Continue") {
-          replacedAgent = status?.currentAgent
-          navigator.go(to: .configure)
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(status == nil)
-      }
-    }
-  }
-
-  private var configureStep: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(
-        title: "Add to ~/.ssh/config",
-        detail: "This line is added to \(configPath).")
-      if let status {
-        SetupCodeBlock(text: "Host *\n  \(expectedLine(for: status))")
-      }
-      Spacer(minLength: 0)
-      HStack {
-        Button("Back") { navigator.go(to: .overview, forward: false) }
-        Spacer()
         if model.isConfiguring {
           ProgressView().controlSize(.small)
         }
         Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
         Button("Add to ~/.ssh/config") {
+          replacedAgent = status?.currentAgent
           Task { await model.configureAgentConf() }
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(model.isConfiguring)
+        .disabled(status == nil || model.isConfiguring)
       }
     }
   }
 
   private var doneStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(title: "SSH Agent Ready", detail: "ssh now uses the Axo Pass agent.")
+      SetupHeader(title: "SSH Agent Ready", detail: "SSH now uses the Axo Pass agent.")
       SetupDoneCard(
         summary: "Configured in \(configPath).",
         code: status.map { "Host *\n  \(expectedLine(for: $0))" }

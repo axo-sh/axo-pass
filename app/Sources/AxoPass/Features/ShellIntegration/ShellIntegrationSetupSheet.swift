@@ -2,16 +2,15 @@ import AxoPassFFI
 import SwiftUI
 
 /// Setup assistant for the `ap` shell integration block appended to
-/// `~/.zshrc` (or `$ZDOTDIR/.zshrc`). Steps: read what changes, write the
-/// block, and see the result. A configured shell opens on the last step.
+/// `~/.zshrc` (or `$ZDOTDIR/.zshrc`). Steps: write the block, and see the
+/// result. A configured shell opens on the last step.
 struct ShellIntegrationSetupSheet: View {
   let model: ShellIntegrationModel
 
   @Environment(\.dismiss) private var dismiss
 
   private enum Step {
-    case overview
-    case configure
+    case setup
     case manual
     case done
   }
@@ -22,7 +21,7 @@ struct ShellIntegrationSetupSheet: View {
   init(model: ShellIntegrationModel) {
     self.model = model
     _navigator = State(
-      initialValue: SetupNavigator(start: model.status?.configured == true ? .done : .overview))
+      initialValue: SetupNavigator(start: model.status?.configured == true ? .done : .setup))
   }
 
   private var status: ShellIntegrationStatus? { model.status }
@@ -37,18 +36,18 @@ struct ShellIntegrationSetupSheet: View {
   var body: some View {
     SetupAssistantFrame(
       navigator: navigator,
-      error: navigator.step == .configure || navigator.step == .manual
-        ? model.configureError : nil
+      error: navigator.step == .setup || navigator.step == .manual
+        ? model.configureError : nil,
+      minHeight: navigator.step == .done ? 540 : 360
     ) { step in
       switch step {
-      case .overview: overviewStep
-      case .configure: configureStep
+      case .setup: setupStep
       case .manual: manualStep
       case .done: doneStep
       }
     }
     .onChange(of: isConfigured) { _, configured in
-      if configured && (navigator.step == .configure || navigator.step == .manual) {
+      if configured && (navigator.step == .setup || navigator.step == .manual) {
         navigator.go(to: .done)
       }
     }
@@ -68,21 +67,24 @@ struct ShellIntegrationSetupSheet: View {
     }
   }
 
-  private var overviewStep: some View {
+  private var setupStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(
-        title: "Shell Integration Setup",
-        detail:
-          "Symlinks `ap` into `~/.local/bin` so it resolves in scripts and non-zsh tools, then appends a block to \(zshrcPath) that puts `~/.local/bin` on your PATH and sources the bundled CLI's shell environment.",
-        detailLineSpacing: 3
-      )
+      Text("Shell Integration Setup")
+        .font(.title2)
+        .fontWeight(.semibold)
       Text(
-        "When running from the installed app, the shell environment also points SSH_ASKPASS at the bundled askpass helper. ssh and ssh-add prompts then route into Axo Pass instead of a terminal or GUI dialog."
+        "**ap** is the Axo Pass command line tool. It can read secrets from your vaults and run commands with secrets in their environment, protected by Touch ID."
       )
-      .font(.callout)
       .lineSpacing(3)
-      .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
+      Text(
+        "The following makes **ap** available in your terminal. It links **ap** into `~/.local/bin` and appends a block to \(zshrcPath) that adds the folder to your PATH and configures your shell. It also configures SSH to ask Axo Pass for key passphrases."
+      )
+      .lineSpacing(3)
+      .fixedSize(horizontal: false, vertical: true)
+      if let blockText {
+        SetupCodeBlock(text: blockText)
+      }
       if let status, status.hookConfigured, !status.symlinkOk {
         Label {
           (Text(status.symlinkPath).bold()
@@ -101,21 +103,32 @@ struct ShellIntegrationSetupSheet: View {
           navigator.go(to: .manual)
         }
         Spacer()
+        if model.isConfiguring {
+          ProgressView().controlSize(.small)
+        }
         Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button("Continue") { navigator.go(to: .configure) }
-          .keyboardShortcut(.defaultAction)
+        Button("Continue") {
+          Task {
+            await model.configure()
+            if model.configureError == nil { navigator.go(to: .done) }
+          }
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(model.isConfiguring)
       }
     }
   }
 
   private var manualStep: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(
-        title: "Add It Yourself",
-        detail:
-          "Add these lines to a file zsh loads, such as \(zshrcPath), `~/.zshenv`, or a file in your dotfiles. Setup links `ap` into `~/.local/bin` but does not edit your shell files.",
-        detailLineSpacing: 3
+      Text("Add It Yourself")
+        .font(.title2)
+        .fontWeight(.semibold)
+      Text(
+        "Add these lines to a file zsh loads, such as \(zshrcPath), `~/.zshenv`, or a file in your dotfiles. Setup links **ap** into `~/.local/bin` but does not edit your shell files."
       )
+      .lineSpacing(3)
+      .fixedSize(horizontal: false, vertical: true)
       if let blockText {
         SetupCodeBlock(text: blockText)
       }
@@ -131,7 +144,7 @@ struct ShellIntegrationSetupSheet: View {
       }
       Spacer(minLength: 0)
       HStack {
-        Button("Back") { navigator.go(to: .overview, forward: false) }
+        Button("Back") { navigator.go(to: .setup, forward: false) }
         Spacer()
         if model.isConfiguring {
           ProgressView().controlSize(.small)
@@ -144,37 +157,10 @@ struct ShellIntegrationSetupSheet: View {
     }
   }
 
-  private var configureStep: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      SetupHeader(
-        title: "Add to \(zshrcPath)", detail: "A block like this is appended to \(zshrcPath).")
-      if let blockText {
-        SetupCodeBlock(text: blockText)
-      }
-      Spacer(minLength: 0)
-      HStack {
-        Button("Back") { navigator.go(to: .overview, forward: false) }
-        Spacer()
-        if model.isConfiguring {
-          ProgressView().controlSize(.small)
-        }
-        Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button("Set Up") {
-          Task {
-            await model.configure()
-            if model.configureError == nil { navigator.go(to: .done) }
-          }
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(model.isConfiguring)
-      }
-    }
-  }
-
   private var doneStep: some View {
     VStack(alignment: .leading, spacing: 16) {
       SetupHeader(
-        title: "Shell Integration Ready", detail: "New terminal windows pick up the change.")
+        title: "Shell Integration Ready", detail: "New terminal windows will pick up the change.")
       SetupDoneCard(
         summary: status?.zshrcConfigured == false
           ? "Detected in your zsh startup files." : "Configured in \(zshrcPath).",
@@ -192,11 +178,39 @@ struct ShellIntegrationSetupSheet: View {
           }
         }
       }
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Getting Started")
+          .font(.headline)
+        ExampleCommand(
+          text: "ap read axo://vault/item/password",
+          detail: "Print a secret.")
+        ExampleCommand(
+          text: "API_KEY=axo://vault/item/token ap exec -- ./deploy.sh",
+          detail: "Run a command with interpolated secrets in its environment.")
+        ExampleCommand(
+          text: "ap exec --env-file .env -- ./deploy.sh",
+          detail: "Run a command with interpolated secrets from a dotenv file.")
+      }
       Spacer(minLength: 0)
       HStack {
         Spacer()
         Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
       }
+    }
+  }
+}
+
+/// Command in a code block with a one line description below.
+private struct ExampleCommand: View {
+  let text: String
+  let detail: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(detail)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      SetupCodeBlock(text: text)
     }
   }
 }
