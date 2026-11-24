@@ -95,15 +95,12 @@ struct GpgSetupSheet: View {
         .foregroundStyle(.orange)
         .fixedSize(horizontal: false, vertical: true)
       }
-      DisclosureGroup("Configure manually") {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Add the line above to \(confPath), then run:")
-          SetupCodeBlock(text: "gpgconf --reload gpg-agent")
-        }
-        .font(.callout)
-        .padding(.top, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      VStack(alignment: .leading, spacing: 6) {
+        Text("To add it yourself, edit the file, then run:")
+        SetupCodeBlock(text: "gpgconf --reload gpg-agent")
       }
+      .font(.callout)
+      .frame(maxWidth: .infinity, alignment: .leading)
       Spacer(minLength: 0)
       HStack {
         Button("Back") { navigator.go(to: .overview, forward: false) }

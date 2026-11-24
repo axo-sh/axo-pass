@@ -88,18 +88,7 @@ struct SshSetupSheet: View {
         title: "Add to ~/.ssh/config",
         detail: "This line is added to \(configPath).")
       if let status {
-        SetupCodeBlock(text: expectedLine(for: status))
-      }
-      DisclosureGroup("Configure manually") {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Add the following to \(configPath):")
-          Text("Host *\n  \(status.map(expectedLine) ?? "")")
-            .font(.caption.monospaced())
-            .textSelection(.enabled)
-        }
-        .font(.callout)
-        .padding(.top, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        SetupCodeBlock(text: "Host *\n  \(expectedLine(for: status))")
       }
       Spacer(minLength: 0)
       HStack {

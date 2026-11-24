@@ -96,7 +96,8 @@ struct SetupCodeBlock: View {
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Text(text)
-        .font(.caption.monospaced())
+        .font(.body.monospaced())
+        .lineSpacing(3)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
