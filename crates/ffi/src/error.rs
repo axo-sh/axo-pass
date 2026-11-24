@@ -135,6 +135,7 @@ impl From<VaultError> for FfiError {
             | VaultError::PairingVaultNotOffered(_)
             | VaultError::RecoveryKitMalformed(_)
             | VaultError::RecoveryKitNotAdded(_)
+            | VaultError::RecoveryKitNotRemoved(_)
             | VaultError::VaultIdExists(_)
             | VaultError::ResignNotOffered) => FfiError::InvalidInput(other.to_string()),
             other => FfiError::Internal(other.to_string()),

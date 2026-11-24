@@ -29,10 +29,13 @@ use axo_pass_core::secrets::vaults::sync::pairing::{PairWait, PairedVault, Pairi
 use axo_pass_core::secrets::vaults::sync::recovery::RecoveryKit;
 use axo_pass_core::secrets::vaults::sync::recovery::import::{RecoveryCheck, RecoveryImport};
 use axo_pass_core::secrets::vaults::sync::repair::SyncOverride;
-use axo_pass_core::secrets::vaults::sync::report::{KnownMac, QuarantinedEntry, SyncReport};
+use axo_pass_core::secrets::vaults::sync::report::{
+    KnownMac, QuarantinedEntry, RecoveryKitEntry, SyncReport,
+};
 use axo_pass_core::secrets::vaults::sync::rotation::{
     RemovalReason, RotationPlan, RotationPrompt, RotationRecord,
 };
+use axo_pass_core::secrets::vaults::sync::scan_status::{self, ScanOutcome, ScanStatus};
 use axo_pass_core::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use axo_pass_core::secrets::vaults::sync::sidecar::Notice;
 use axo_pass_core::secrets::vaults::sync::status::{PausedCause, StopCause, SyncStatus};
@@ -519,6 +522,9 @@ pub struct KnownMacInfo {
     /// Last active time on the clock of that Mac, as a Unix timestamp in
     /// seconds.
     pub last_active: Option<i64>,
+    /// Time that a state file of the Mac last changed the state of this Mac,
+    /// as a Unix timestamp in seconds on the clock of this Mac.
+    pub received_at: Option<i64>,
     /// This Mac paired with the Mac.
     pub paired: bool,
     /// Remove Mac selects the Mac at first, since its keys were learned from
@@ -542,6 +548,7 @@ impl From<KnownMac> for KnownMacInfo {
             this_mac: mac.this_mac,
             left: mac.left,
             last_active: mac.last_active,
+            received_at: mac.received_at,
             paired: mac.pin == Some(PinSource::Pairing),
             preselected,
             removed: mac.removed,
@@ -776,6 +783,36 @@ impl From<Notice> for SyncNoticeInfo {
     }
 }
 
+/// Saved recovery kit of a vault. Mirrors the core `RecoveryKitEntry`.
+#[derive(uniffi::Record)]
+pub struct RecoveryKitInfo {
+    /// Age recipient of the kit, `age1...`.
+    pub recipient: String,
+    /// Key id the kit was made for.
+    pub key_id: u32,
+    /// The kit opens the current sync key.
+    pub current: bool,
+    pub label: Option<String>,
+    /// Unix seconds of the write, on the clock of the device that added it.
+    pub written_at: i64,
+    /// Name of the device that added the kit. `None` if the sync state does
+    /// not name it, as after a cleanup of that device.
+    pub added_by: Option<String>,
+}
+
+impl From<RecoveryKitEntry> for RecoveryKitInfo {
+    fn from(entry: RecoveryKitEntry) -> Self {
+        Self {
+            recipient: entry.recipient,
+            key_id: entry.key_id.0,
+            current: entry.current,
+            label: entry.label,
+            written_at: entry.written_at,
+            added_by: entry.added_by,
+        }
+    }
+}
+
 /// Sync report of one vault. Mirrors the core `SyncReport`.
 #[derive(uniffi::Record)]
 pub struct SyncReportInfo {
@@ -790,6 +827,8 @@ pub struct SyncReportInfo {
     pub known_macs: Vec<KnownMacInfo>,
     /// No recovery kit opens the current sync key.
     pub recovery_kit_missing: bool,
+    /// Saved recovery kits, oldest first.
+    pub recovery_kits: Vec<RecoveryKitInfo>,
     /// Number of differences the override would show as conflicts, if the
     /// override is offered.
     pub override_preview: Option<u32>,
@@ -804,6 +843,9 @@ pub struct SyncReportInfo {
     /// Items and credentials shown with a suffixed key. The app offers Keep
     /// and Rename for each.
     pub suffixed_keys: Vec<EntityRefInfo>,
+    /// Latest peer scan of this vault since the app started. `None` if the
+    /// sync manager has not scanned it.
+    pub scan: Option<ScanStatusInfo>,
 }
 
 impl From<SyncReport> for SyncReportInfo {
@@ -841,9 +883,49 @@ impl From<SyncReport> for SyncReportInfo {
                 .map(KnownMacInfo::from)
                 .collect(),
             recovery_kit_missing: report.recovery_kit_missing,
+            recovery_kits: report
+                .recovery_kits
+                .into_iter()
+                .map(RecoveryKitInfo::from)
+                .collect(),
             override_preview: report.override_preview.map(count),
             root: report.root.as_ref().map(SyncRootInfo::from),
             needs_folder,
+            scan: None,
+        }
+    }
+}
+
+/// Latest peer scan of a vault in this process.
+#[derive(uniffi::Record)]
+pub struct ScanStatusInfo {
+    /// Unix seconds of the scan.
+    pub at: i64,
+    pub outcome: ScanOutcomeInfo,
+}
+
+#[derive(uniffi::Enum)]
+pub enum ScanOutcomeInfo {
+    Synced,
+    /// Peer state files that are not downloaded yet.
+    Waiting {
+        files: u32,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl From<ScanStatus> for ScanStatusInfo {
+    fn from(status: ScanStatus) -> Self {
+        let outcome = match status.outcome {
+            ScanOutcome::Synced => ScanOutcomeInfo::Synced,
+            ScanOutcome::Waiting { files } => ScanOutcomeInfo::Waiting { files },
+            ScanOutcome::Failed { message } => ScanOutcomeInfo::Failed { message },
+        };
+        Self {
+            at: status.at,
+            outcome,
         }
     }
 }
@@ -1159,6 +1241,19 @@ pub struct PairingRequestInfo {
     pub age_seconds: u64,
 }
 
+/// Details of the pairing request that a code matches.
+#[derive(uniffi::Record)]
+pub struct PairingMatchInfo {
+    /// Computer name of the new Mac.
+    pub name: String,
+    /// Seconds since the request file changed. `None` if the request is no
+    /// longer listed.
+    pub age_seconds: Option<u64>,
+    /// Number of vaults the new Mac asks for, including vaults this Mac does
+    /// not sync.
+    pub requested_vault_count: u32,
+}
+
 /// Grant outcome of one picked vault.
 #[derive(uniffi::Record)]
 pub struct PairingGrantInfo {
@@ -1228,6 +1323,16 @@ impl AxoPass {
         Ok(Target::of(&store.load(vault_key)?))
     }
 
+    /// Id of the listed vault `vault_key`.
+    fn vault_id_of(manager: &Mutex<VaultsManager>, vault_key: &str) -> Result<Uuid, FfiError> {
+        let manager = VaultsManager::lock(manager);
+        let handle = manager
+            .iter_vaults()
+            .find_map(|(key, vh)| (key == vault_key).then_some(vh))
+            .ok_or_else(|| FfiError::Internal("vault not found".into()))?;
+        Ok(handle.peek_vault_id()?)
+    }
+
     /// Target and vault name of the listed vault with id `vault_id`, if the
     /// manager lists one.
     fn listed(manager: &Mutex<VaultsManager>, vault_id: Uuid) -> Option<(Target, Option<String>)> {
@@ -1243,7 +1348,7 @@ impl AxoPass {
     /// app unlock fails the call.
     fn rotate_vaults(
         manager: &Mutex<VaultsManager>,
-        plan: impl Fn(&SyncReport) -> Option<RotationPlan>,
+        plan: impl Fn(&str, &SyncReport) -> Option<RotationPlan>,
     ) -> Result<Vec<VaultRotationInfo>, FfiError> {
         let (store, keys) = {
             let locked = VaultsManager::lock(manager);
@@ -1260,7 +1365,7 @@ impl AxoPass {
             if !report.case.builds_txn() {
                 continue;
             }
-            let Some(plan) = plan(&report) else {
+            let Some(plan) = plan(&vault_key, &report) else {
                 continue;
             };
             let mut waiting = Vec::new();
@@ -1404,7 +1509,22 @@ impl AxoPass {
     /// unlocked.
     pub async fn sync_report(&self, vault_key: String) -> Result<SyncReportInfo, FfiError> {
         let store = self.store()?;
-        Self::run_blocking(move || Ok(store.sync_report(&vault_key, Unlock::App)?.into())).await
+        let vault_id = Self::vault_id_of(&self.manager, &vault_key).ok();
+        Self::run_blocking(move || {
+            let mut info: SyncReportInfo = store.sync_report(&vault_key, Unlock::App)?.into();
+            info.scan = vault_id.and_then(scan_status::get).map(Into::into);
+            Ok(info)
+        })
+        .await
+    }
+
+    /// Scan vault `vault_key` for peer changes now, and join them. The
+    /// manager thread runs the scan and reports `vault_synced` if it joined a
+    /// change. Does not require authentication.
+    pub fn sync_now(&self, vault_key: String) -> Result<(), FfiError> {
+        let vault_id = Self::vault_id_of(&self.manager, &vault_key)?;
+        Self::sync_manager()?.sync_now(vault_id);
+        Ok(())
     }
 
     /// Number of differences the override of vault `vault_key` would show as
@@ -1521,7 +1641,7 @@ impl AxoPass {
     ) -> Result<Vec<VaultRotationInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
         let outcomes = Self::run_blocking(move || {
-            Self::rotate_vaults(&manager, |report| {
+            Self::rotate_vaults(&manager, |_, report| {
                 let removals: Vec<_> = removals
                     .iter()
                     .filter_map(|removal| {
@@ -1547,14 +1667,59 @@ impl AxoPass {
         Ok(outcomes)
     }
 
-    /// Rotate the sync key of every synced vault, removing no Mac. Needs the
-    /// app unlocked.
-    pub async fn sync_rotate_key(&self) -> Result<Vec<VaultRotationInfo>, FfiError> {
+    /// Rotate the sync key of vault `vault_key`, or of every synced vault if
+    /// it is `None`, removing no Mac. Needs the app unlocked. Fails with
+    /// `InvalidInput` if `vault_key` is given and the vault does not sync.
+    pub async fn sync_rotate_key(
+        &self,
+        vault_key: Option<String>,
+    ) -> Result<Vec<VaultRotationInfo>, FfiError> {
         let manager = Arc::clone(&self.manager);
+        let single = vault_key.is_some();
         let outcomes = Self::run_blocking(move || {
-            Self::rotate_vaults(&manager, |_| Some(RotationPlan::rotate_key()))
+            Self::rotate_vaults(&manager, |key, _| {
+                vault_key
+                    .as_deref()
+                    .is_none_or(|only| only == key)
+                    .then(RotationPlan::rotate_key)
+            })
         })
         .await?;
+        if single && outcomes.is_empty() {
+            return Err(FfiError::InvalidInput(
+                "The vault does not sync.".to_string(),
+            ));
+        }
+        Self::refresh_sync();
+        Ok(outcomes)
+    }
+
+    /// Revoke the recovery kit with the age recipient `recipient` of vault
+    /// `vault_key` and replace the sync key of that vault only, in one
+    /// rotation. Removes no Mac. Every other kit of the vault stops opening
+    /// it. Needs the app unlocked. Fails with `InvalidInput` if the vault does
+    /// not sync or does not hold the kit.
+    pub async fn sync_revoke_kit(
+        &self,
+        vault_key: String,
+        recipient: String,
+    ) -> Result<Vec<VaultRotationInfo>, FfiError> {
+        let manager = Arc::clone(&self.manager);
+        let outcomes = Self::run_blocking(move || {
+            Self::rotate_vaults(&manager, |key, report| {
+                let holds = report
+                    .recovery_kits
+                    .iter()
+                    .any(|kit| kit.recipient == recipient);
+                (key == vault_key && holds).then(|| RotationPlan::revoke_kit(recipient.clone()))
+            })
+        })
+        .await?;
+        if outcomes.is_empty() {
+            return Err(FfiError::InvalidInput(
+                "The vault does not sync or does not hold this recovery kit.".to_string(),
+            ));
+        }
         Self::refresh_sync();
         Ok(outcomes)
     }
@@ -1681,17 +1846,29 @@ impl AxoPass {
         .await
     }
 
-    /// Computer name of the pairing request under `root` that `code`
-    /// matches. `None` if no request matches, and no name is shown.
+    /// Details of the pairing request under `root` that `code` matches.
+    /// `None` if no request matches, and no details are shown.
     pub async fn pairing_match_code(
         &self,
         root: SyncRootInfo,
         code: String,
-    ) -> Result<Option<String>, FfiError> {
+    ) -> Result<Option<PairingMatchInfo>, FfiError> {
         let store = self.store()?;
         Self::run_blocking(move || {
-            let matched = Self::match_pairing(&store, &root.into(), &code)?;
-            Ok(matched.map(|(request, _)| request.name))
+            let root: TransportRoot = root.into();
+            let Some((request, _)) = Self::match_pairing(&store, &root, &code)? else {
+                return Ok(None);
+            };
+            let transport = SyncSetup::transport(store.files(), &root)?;
+            let age_seconds = PairingPrompt::list(&*transport)?
+                .into_iter()
+                .find(|(id, _)| *id == request.request_id)
+                .map(|(_, age)| age.as_secs().unsigned_abs());
+            Ok(Some(PairingMatchInfo {
+                name: request.name,
+                age_seconds,
+                requested_vault_count: u32::try_from(request.replicas.len()).unwrap_or(u32::MAX),
+            }))
         })
         .await
     }
@@ -1806,6 +1983,22 @@ impl AxoPass {
         .await
     }
 
+    /// Ids of the vaults under `root`. Reads no vault file, so no vault name
+    /// is shown.
+    pub async fn sync_remote_vaults(&self, root: SyncRootInfo) -> Result<Vec<String>, FfiError> {
+        let store = self.store()?;
+        Self::run_blocking(move || {
+            let root: TransportRoot = root.into();
+            let transport = SyncSetup::transport(store.files(), &root)?;
+            Ok(transport
+                .list_vaults()?
+                .into_iter()
+                .map(ShortId::encode_uuid)
+                .collect())
+        })
+        .await
+    }
+
     /// Delete the pairing request `request_id` under `root`. A running
     /// pairing of this Mac is cancelled with its handle, not here.
     pub async fn pairing_request_delete(
@@ -1901,14 +2094,16 @@ impl AxoPass {
         .await
     }
 
-    /// Add the recipient of the kit `kit_text` to vault `vault_key`, after
-    /// the user confirmed that the kit is saved. Needs the app unlocked.
+    /// Add the recipient of the kit `kit_text` to vault `vault_key` with the
+    /// label `label`, after the user confirmed that the kit is saved. The
+    /// label is trimmed, and an empty label is none. Needs the app unlocked.
     pub async fn recovery_kit_confirm(
         &self,
         vault_key: String,
         kit_text: String,
+        label: Option<String>,
     ) -> Result<(), FfiError> {
-        let kit = RecoveryKit::parse(&kit_text)?;
+        let kit = RecoveryKit::parse(&kit_text)?.labeled(label.as_deref());
         let manager = Arc::clone(&self.manager);
         Self::run_blocking(move || {
             Ok(VaultsManager::transact(
