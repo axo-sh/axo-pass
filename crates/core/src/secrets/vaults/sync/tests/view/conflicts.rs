@@ -436,6 +436,7 @@ fn conflicts_of_other_policies_not_listed() {
             let recipient = RecoveryRecipient {
                 key_id: KeyId(u32::from(n)),
                 key_fingerprint: [n; 16],
+                label: None,
             };
             s.recovery.entry("age1a".to_string()).write(m, recipient);
         }

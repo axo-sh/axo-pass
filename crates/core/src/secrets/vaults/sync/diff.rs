@@ -98,6 +98,10 @@ pub(crate) enum Edit {
     /// no recovery map, so the diff never finds it. `SyncRequest::AddRecovery`
     /// and the sync setup add it.
     Recovery(String, RecoveryRecipient),
+    /// Remove of the `recovery` entry of an age recipient, for a revoked kit.
+    /// `SyncRequest::RemoveRecovery` and a rotation that revokes a kit add
+    /// it.
+    RemoveRecovery(String),
     /// Write of the display name of this replica. The vault holds no replica
     /// names, so the diff never finds it.
     ReplicaName(ReplicaId, String),
@@ -306,6 +310,12 @@ impl LocalEdits {
         self.edits.push(Edit::Recovery(recipient, value));
     }
 
+    /// Add the remove of the `recovery` entry of `recipient`. A join with a
+    /// state that holds a write in the entry not seen here brings it back.
+    pub(crate) fn add_remove_recovery(&mut self, recipient: String) {
+        self.edits.push(Edit::RemoveRecovery(recipient));
+    }
+
     /// Add writes of the display name `name` and the public keys `keys` into
     /// the `replica_names` and `replica_keys` registers of `replica`, which
     /// must be this replica. Each supersedes every value of its register.
@@ -488,6 +498,7 @@ impl Edit {
             | Self::RemoveCredential(_)
             | Self::RemoveHistory(..)
             | Self::Recovery(..)
+            | Self::RemoveRecovery(_)
             | Self::ReplicaName(..)
             | Self::ReplicaKeys(..)
             | Self::Left(_)
@@ -555,6 +566,9 @@ impl Edit {
             },
             Self::Recovery(recipient, value) => {
                 store.recovery.entry(recipient).put(mint, value, kind)
+            },
+            Self::RemoveRecovery(recipient) => {
+                store.recovery.remove(&recipient);
             },
             Self::ReplicaName(replica, name) => {
                 store.replica_names.entry(replica).put(mint, name, kind)

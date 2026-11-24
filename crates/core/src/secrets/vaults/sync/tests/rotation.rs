@@ -7,8 +7,10 @@
 mod cleanup;
 mod concurrent;
 mod faults;
+mod kits;
 mod receive;
 mod remove;
+mod revoke;
 mod rotate_key;
 mod signature;
 mod simulator;

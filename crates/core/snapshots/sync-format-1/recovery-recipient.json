@@ -1,6 +1,11 @@
 [
   {
     "key_id": 1,
+    "key_fingerprint": "BwcHBwcHBwcHBwcHBwcHBw==",
+    "label": "Printed, home safe"
+  },
+  {
+    "key_id": 1,
     "key_fingerprint": "BwcHBwcHBwcHBwcHBwcHBw=="
   }
 ]

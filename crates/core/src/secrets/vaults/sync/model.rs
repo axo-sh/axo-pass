@@ -333,6 +333,10 @@ pub struct RecoveryRecipient {
     /// Fingerprint of that key, as printed in the kit.
     #[serde(with = "ByteString")]
     pub key_fingerprint: [u8; 16],
+    /// Label the user gave the kit, such as where it is stored. Not part of
+    /// the kit text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Id of a sync key. The serde form is the number.

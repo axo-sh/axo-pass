@@ -102,6 +102,15 @@ pub(crate) enum Recorded {
     Refused(EditRefusal),
 }
 
+/// Wrappings that a rewrite of the own `key.json` drops.
+#[derive(Clone, Copy, Debug)]
+struct Prunes {
+    /// Wrappings of key ids below the current key.
+    retired_keys: bool,
+    /// `Age` wrappings of recipients that the `recovery` map no longer holds.
+    revoked: bool,
+}
+
 /// Trusted sync state of one transaction, with the keyring that opened it and
 /// the sidecar.
 pub(crate) struct SyncTxn {
@@ -160,6 +169,10 @@ pub(crate) struct SyncTxn {
     /// Whether the transaction publishes whatever the context, after a
     /// change of the key.
     force_publish: bool,
+    /// Whether the own `key.json` drops the `Age` wrappings of recipients
+    /// that the `recovery` map no longer holds. Set by a removed kit, a
+    /// rotation, and an acceptance.
+    prune_revoked: bool,
     #[cfg(test)]
     apply_fault: Option<ApplyFault>,
 }
@@ -208,6 +221,7 @@ impl SyncTxn {
             blobs_uploaded: false,
             paused,
             force_publish: false,
+            prune_revoked: false,
             #[cfg(test)]
             apply_fault: None,
         }
@@ -600,19 +614,23 @@ impl SyncTxn {
     }
 
     /// Record a `Removal` under `key_id` for each of `replicas` whose
-    /// `removed` register lacks one, and remove the `removed` entry of each
-    /// of `dropped` whose values are all under `key_id`, under one write id
-    /// of `session` minted at `now`. The pin of a dropped replica is no
-    /// longer revoked.
+    /// `removed` register lacks one, remove the `removed` entry of each of
+    /// `dropped` whose values are all under `key_id`, and remove the
+    /// `recovery` entry of each of `revoked`, under one write id of `session`
+    /// minted at `now`. The pin of a dropped replica is no longer revoked.
     fn record_removals(
         &mut self,
         replicas: &[ReplicaId],
         dropped: &[ReplicaId],
+        revoked: &BTreeSet<String>,
         key_id: KeyId,
         session: &mut Session,
         now: i64,
     ) -> Result<(), Error> {
         let mut edits = LocalEdits::default();
+        for recipient in revoked {
+            edits.add_remove_recovery(recipient.clone());
+        }
         for replica in dropped {
             let only_this_key = self
                 .state
@@ -646,12 +664,15 @@ impl SyncTxn {
 
     /// Rotate the sync key to `key` under the next key id, removing the
     /// replicas of `plan`, after the joins (`sync/rotation.rs`). Records a
-    /// `Removal` for each removed replica under one write id of `session`
-    /// minted at `now`, revokes their pins, and makes the key the key of the
-    /// body. The wrappings are written with the `key.json`, and the
+    /// `Removal` for each removed replica and removes the `recovery` entry of
+    /// each revoked kit, under one write id of `session` minted at `now`,
+    /// revokes the pins of the removed replicas, and makes the key the key of
+    /// the body. The wrappings are written with the `key.json`, which drops
+    /// the `Age` wrappings of recipients the map no longer holds, and the
     /// transaction publishes. Refused if sync does not run, if a rotation is
-    /// pending, or if a replica of `plan` is this replica, is not in
-    /// `replica_keys`, or is already removed.
+    /// pending, if a replica of `plan` is this replica, is not in
+    /// `replica_keys`, or is already removed, or if a revoked kit is not in
+    /// the `recovery` map.
     pub(crate) fn rotate(
         &mut self,
         plan: &RotationPlan,
@@ -677,6 +698,13 @@ impl SyncTxn {
                 return refused(format!("replica {} is already removed", replica.0));
             }
         }
+        if let Some(recipient) = plan
+            .revoke
+            .iter()
+            .find(|recipient| store.recovery.get(*recipient).is_none())
+        {
+            return refused(format!("recovery kit {recipient} is not in the vault"));
+        }
         let removed: Vec<ReplicaId> = plan.removals.keys().copied().collect();
         let mut remaining = Vec::new();
         let mut unpinned = Vec::new();
@@ -697,9 +725,10 @@ impl SyncTxn {
         }
         let key_id = KeyId(self.local.key_id.0 + 1);
         let key_fingerprint = key.key.fingerprint();
-        self.record_removals(&removed, &[], key_id, session, now)?;
+        self.record_removals(&removed, &[], &plan.revoke, key_id, session, now)?;
         self.revoke(&removed);
         self.install_key(key_id, key)?;
+        self.prune_revoked = true;
         let record = RotationRecord {
             signer: own,
             key_id,
@@ -729,10 +758,11 @@ impl SyncTxn {
     /// and verified before the locks. Adds the key, replacing a key under
     /// the same key id, revokes the pins of the replicas it removes, records
     /// their `Removal` entries if the state lacks them, under one write id
-    /// of `session` minted at `now`, and publishes under the new key. The
-    /// other pending rotations under its key id, and a replaced rotation,
-    /// are declined. Refused if sync does not run, if `record` is not
-    /// pending, or if `key` is not the key of `record`.
+    /// of `session` minted at `now`, and publishes under the new key. The own
+    /// `key.json` drops the `Age` wrappings of recipients the `recovery` map
+    /// no longer holds. The other pending rotations under its key id, and a
+    /// replaced rotation, are declined. Refused if sync does not run, if
+    /// `record` is not pending, or if `key` is not the key of `record`.
     pub(crate) fn accept_rotation(
         &mut self,
         record: &RotationRecord,
@@ -776,9 +806,17 @@ impl SyncTxn {
                 self.local.declined_rotations.push(other);
             }
         }
-        self.record_removals(&record.removed, &dropped, record.key_id, session, now)?;
+        self.record_removals(
+            &record.removed,
+            &dropped,
+            &BTreeSet::new(),
+            record.key_id,
+            session,
+            now,
+        )?;
         self.revoke(&record.removed);
         self.install_key(record.key_id, key)?;
+        self.prune_revoked = true;
         self.local.rotation = Some(record.clone());
         self.sidecar.ignored.clear();
         self.sidecar_changed = true;
@@ -1009,6 +1047,29 @@ impl SyncTxn {
         Ok(())
     }
 
+    /// Refuse the removal of the kit recipient `recipient`, before it is
+    /// recorded, if sync does not run, if the sync state is `leaving`, or if
+    /// the `recovery` map lacks the recipient.
+    pub(crate) fn check_recovery_removal(&self, recipient: &str) -> Result<(), Error> {
+        let refused = |reason: &str| Err(Error::RecoveryKitNotRemoved(reason.to_string()));
+        if !self.syncs() {
+            return refused("sync is stopped or paused");
+        }
+        if self.is_leaving() {
+            return refused("sync is being disabled");
+        }
+        if !self
+            .state
+            .store
+            .recovery
+            .iter()
+            .any(|(r, _)| r == recipient)
+        {
+            return refused("kit is not in the vault");
+        }
+        Ok(())
+    }
+
     /// Recipients of the `recovery` map that receive an `Age` wrapping of the
     /// current key (`sync/recovery.rs`).
     pub(crate) fn recovery_recipients(&self) -> Vec<String> {
@@ -1038,6 +1099,12 @@ impl SyncTxn {
     /// for them until every one of those replicas has published under the
     /// key. Once every remaining replica has published under the current
     /// key, the wrappings of earlier key ids are dropped, once per key id.
+    ///
+    /// After a removed kit, a rotation, or an acceptance in this transaction,
+    /// the `Age` wrappings of recipients that the `recovery` map no longer
+    /// holds are dropped, under any key id. Only the own file changes. The
+    /// `key.json` of another replica keeps its wrappings until that replica
+    /// removes the kit, rotates, or accepts a rotation.
     pub(crate) fn write_key_file(
         &mut self,
         transport: &dyn SyncTransport,
@@ -1052,11 +1119,22 @@ impl SyncTxn {
         let syncs = self.syncs() && !self.is_leaving();
         let rotation = if syncs { self.own_rotation() } else { None };
         let prune = syncs && self.prunes_retired_keys();
-        if device.is_none() && recipients.is_empty() && rotation.is_none() && !prune {
+        let prune_revoked = syncs && self.prune_revoked;
+        if device.is_none()
+            && recipients.is_empty()
+            && rotation.is_none()
+            && !prune
+            && !prune_revoked
+        {
             return Ok(());
         }
         let wants_rotation = rotation.is_some();
-        let result = self.rewrite_key_file(transport, device, &recipients, rotation, prune, signer);
+        let prunes = Prunes {
+            retired_keys: prune,
+            revoked: prune_revoked,
+        };
+        let result =
+            self.rewrite_key_file(transport, device, &recipients, rotation, prunes, signer);
         match &result {
             Ok(()) if prune => {
                 self.sidecar.pruned_key = Some(self.local.key_id);
@@ -1128,13 +1206,26 @@ impl SyncTxn {
         device: Option<DeviceWrapping>,
         recipients: &[String],
         rotation: Option<RotationRecord>,
-        prune: bool,
+        prunes: Prunes,
         signer: &dyn VaultSigner,
     ) -> Result<(), Error> {
         let vault_id = self.vault_id();
         let own = self.replica();
         let mut file = KeyFile::read_own(transport, vault_id, own)?;
         let mut changed = false;
+        if prunes.revoked {
+            let recovery = &self.state.store.recovery;
+            let before = file.wrappings.len();
+            file.wrappings.retain(|wrapping| match wrapping {
+                Wrapping::Age(age) => recovery.get(&age.recipient).is_some(),
+                Wrapping::Device(_) | Wrapping::Unknown(_) => true,
+            });
+            let dropped = before - file.wrappings.len();
+            if dropped > 0 {
+                log::info!("Vault {vault_id} drops {dropped} age wrappings of revoked kits");
+                changed = true;
+            }
+        }
         if let Some(device) = device {
             file.put_device(device);
             changed = true;
@@ -1149,7 +1240,7 @@ impl SyncTxn {
                 changed |= self.add_rotation_wrappings(&mut file, &rotation, key, signer)?;
             }
         }
-        if prune {
+        if prunes.retired_keys {
             let key_id = self.local.key_id.0;
             let before = file.wrappings.len();
             file.wrappings.retain(|wrapping| match wrapping {
@@ -1555,8 +1646,9 @@ impl SyncTxn {
     /// the write id, or `None` if the vault has no edits. For
     /// `SyncRequest::Restore`, an item or credential the vault lacks is moved
     /// to the trash, not removed. `SyncRequest::AddRecovery` adds the write
-    /// of its recipient under the same write id. If the diff fails, nothing
-    /// is recorded, and the transaction saves the vault only.
+    /// of its recipient under the same write id, and
+    /// `SyncRequest::RemoveRecovery` the remove of its entry. If the diff
+    /// fails, nothing is recorded, and the transaction saves the vault only.
     ///
     /// Before the diff, the history entry that the requested change added for
     /// a replaced shown value takes the id derived from the write id of that
@@ -1625,6 +1717,17 @@ impl SyncTxn {
         edits.keep_not_chosen(&self.state, now);
         if let SyncRequest::AddRecovery(add) = request {
             edits.add_recovery(add.recipient.clone(), add.value.clone());
+            // The map holds one kit. The new kit replaces the others.
+            for (other, _) in self.state.store.recovery.iter() {
+                if *other != add.recipient {
+                    edits.add_remove_recovery(other.clone());
+                    self.prune_revoked = true;
+                }
+            }
+        }
+        if let SyncRequest::RemoveRecovery(recipient) = request {
+            edits.add_remove_recovery(recipient.clone());
+            self.prune_revoked = true;
         }
         let resolved = edits.superseded(&self.state);
         let differences = edits.len();

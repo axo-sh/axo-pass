@@ -190,10 +190,17 @@ fn removals() -> Vec<Removal> {
 }
 
 fn recovery_recipients() -> Vec<RecoveryRecipient> {
-    vec![RecoveryRecipient {
+    let full = RecoveryRecipient {
         key_id: KeyId(1),
         key_fingerprint: [7; 16],
-    }]
+        label: Some("Printed, home safe".to_string()),
+    };
+    let minimal = RecoveryRecipient {
+        key_id: KeyId(1),
+        key_fingerprint: [7; 16],
+        label: None,
+    };
+    vec![full, minimal]
 }
 
 /// Signal entry of every list, and a dismissal of every kind.
@@ -305,6 +312,7 @@ fn bytes_are_cbor_byte_strings_and_json_base64() {
     let recipient = RecoveryRecipient {
         key_id: KeyId(1),
         key_fingerprint: fingerprint,
+        label: None,
     };
     let mut expected = vec![0x50];
     expected.extend(fingerprint);

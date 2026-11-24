@@ -3,13 +3,27 @@
 //! A kit holds an age identity, the vault id, the key id, and the fingerprint
 //! of the sync key it was made for. Creating a kit writes nothing. After the
 //! user confirms that the kit is saved, [`RecoveryKit::confirm_saved`] writes
-//! the recipient into the `recovery` map of the sync state (D18).
+//! the recipient into the `recovery` map of the sync state (D18). The value
+//! holds the key id, the fingerprint, and the label of
+//! [`RecoveryKit::labeled`], if any.
 //!
 //! Each transaction that syncs and has a transport adds to the own `key.json`
 //! an `Age` wrapping of the current key for each recipient that the file lacks
 //! (decision 13). A recipient counts if any value of its register holds the
 //! current key id and the fingerprint of the current key in all 16 bytes. The
 //! same rule decides the degraded state, `Committed::recovery_kit_missing`.
+//!
+//! The `recovery` map holds one kit. Adding a kit removes the other entries
+//! in the same write, so the new kit replaces the earlier one. Kits added
+//! concurrently on two Macs can both remain until one is replaced.
+//!
+//! A kit is revoked by removing its entry from the map, with
+//! `SyncRequest::RemoveRecovery` or with a rotation whose plan revokes it
+//! (`sync/rotation.rs`). The transaction drops from the own `key.json` the
+//! `Age` wrappings of each recipient the map no longer holds. A removal
+//! without a rotation leaves the kit able to open the current key, since a
+//! copy can remain in the `key.json` of another replica, in a sync service,
+//! or in a backup. After a rotation the kit does not open the new key.
 //!
 //! The kit text (D19) is five lines, in this order:
 //!
@@ -58,7 +72,17 @@ pub struct RecoveryKit {
     pub key_id: KeyId,
     /// Fingerprint of the key, as printed in the kit.
     pub fingerprint: KeyFingerprint,
+    /// Label written with the recipient. Not part of the kit text, so a
+    /// parsed kit has none.
+    pub label: Option<String>,
 }
+
+/// Most characters of a kit label. A longer label is cut.
+pub const MAX_LABEL_CHARS: usize = 100;
+
+/// Label of the kit saved when sync is turned on. The setup does not ask
+/// for one.
+pub const SETUP_KIT_LABEL: &str = "Saved when sync was turned on";
 
 impl RecoveryKit {
     /// New kit for `key` under `key_id` of vault `vault_id`, with a new age
@@ -69,7 +93,24 @@ impl RecoveryKit {
             vault_id,
             key_id,
             fingerprint: key.fingerprint(),
+            label: None,
         }
+    }
+
+    /// Kit with the label `label`, trimmed and cut to [`MAX_LABEL_CHARS`]. An
+    /// empty label is none.
+    pub fn labeled(mut self, label: Option<&str>) -> Self {
+        self.label = label
+            .map(|label| {
+                label
+                    .trim()
+                    .chars()
+                    .take(MAX_LABEL_CHARS)
+                    .collect::<String>()
+            })
+            .map(|label| label.trim_end().to_string())
+            .filter(|label| !label.is_empty());
+        self
     }
 
     /// Kit text of D19. Holds the age identity.
@@ -121,6 +162,7 @@ impl RecoveryKit {
             vault_id,
             key_id: KeyId(key_id),
             fingerprint: KeyFingerprint(fingerprint),
+            label: None,
         })
     }
 
@@ -141,11 +183,13 @@ impl RecoveryKit {
         &self.identity
     }
 
-    /// Value of the `recovery` register of the kit recipient.
+    /// Value of the `recovery` register of the kit recipient, with the kit
+    /// label.
     pub fn recipient_value(&self) -> RecoveryRecipient {
         RecoveryRecipient {
             key_id: self.key_id,
             key_fingerprint: self.fingerprint.0,
+            label: self.label.clone(),
         }
     }
 
@@ -188,6 +232,7 @@ impl fmt::Debug for RecoveryKit {
             .field("vault_id", &self.vault_id)
             .field("key_id", &self.key_id)
             .field("fingerprint", &self.fingerprint)
+            .field("label", &self.label)
             .finish_non_exhaustive()
     }
 }

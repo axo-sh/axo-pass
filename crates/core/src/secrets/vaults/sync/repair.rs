@@ -53,6 +53,12 @@ pub(crate) enum SyncRequest {
     /// and writes nothing if sync does not run or the kit is not for the
     /// current key.
     AddRecovery(RecoveryAdd),
+    /// Remove the `recovery` entry of the age recipient of a revoked kit,
+    /// under the write id of the change. Fails with `RecoveryKitNotRemoved`
+    /// and writes nothing if sync does not run or the map lacks the
+    /// recipient. The own `key.json` then drops the `Age` wrappings of the
+    /// recipient.
+    RemoveRecovery(String),
     /// Resolve a conflict with the value it picks, under the write id of the
     /// change. Refused with `EditRefused` if the register holds other write
     /// ids than the request read.

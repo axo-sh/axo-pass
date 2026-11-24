@@ -1149,6 +1149,14 @@ impl VaultWriter {
         if recovery.is_some() && sync.is_none() {
             return Err(Error::RecoveryKitNotAdded(case.to_string()).into());
         }
+        // A recovery recipient is removed only from a trusted sync state.
+        let revoked = match request {
+            SyncRequest::RemoveRecovery(recipient) => Some(recipient),
+            _ => None,
+        };
+        if revoked.is_some() && sync.is_none() {
+            return Err(Error::RecoveryKitNotRemoved(case.to_string()).into());
+        }
         // The override runs only while it is offered. Otherwise it writes
         // nothing, except the sidecar record of a load failure.
         let confirmed = *request == SyncRequest::Override;
@@ -1302,6 +1310,9 @@ impl VaultWriter {
                 if let Some(add) = recovery {
                     sync.check_recovery(add)?;
                 }
+                if let Some(recipient) = revoked {
+                    sync.check_recovery_removal(recipient)?;
+                }
                 if sync.syncs() {
                     let vault = vh.get_unlocked_vault_mut()?;
                     match sync.record(vault, session, now, request, &edit)? {
@@ -1317,6 +1328,12 @@ impl VaultWriter {
                 }
                 if recovery.is_some() && !sync.syncs() {
                     return Err(Error::RecoveryKitNotAdded(
+                        "vault failed to diff against its sync state".to_string(),
+                    )
+                    .into());
+                }
+                if revoked.is_some() && !sync.syncs() {
+                    return Err(Error::RecoveryKitNotRemoved(
                         "vault failed to diff against its sync state".to_string(),
                     )
                     .into());
@@ -1648,6 +1665,22 @@ impl VaultWriter {
         entities: Vec<Entity>,
     ) -> Result<Committed<()>, Error> {
         self.write_as(target, unlock, SyncRequest::KeepKeys(entities), |_| Ok(()))
+    }
+
+    /// Remove the recovery kit recipient `recipient` from the `recovery` map
+    /// of vault `target`, in a transaction. The own `key.json` drops its
+    /// `Age` wrappings. Fails with `RecoveryKitNotRemoved` and writes nothing
+    /// if the vault has no trusted sync state, if sync does not run, or if
+    /// the map lacks the recipient. The sync key does not change, so a copy
+    /// of the kit can still open the key from an older `key.json`.
+    pub fn remove_recovery(
+        &self,
+        target: &Target,
+        unlock: Unlock<'_>,
+        recipient: &str,
+    ) -> Result<Committed<()>, Error> {
+        let request = SyncRequest::RemoveRecovery(recipient.to_string());
+        self.write_as(target, unlock, request, |_| Ok(()))
     }
 
     /// Dismiss the notices of changes from other Macs of vault `target`, in

@@ -2,12 +2,14 @@
 //!
 //! A rotation generates a sync key under the next key id. "Remove Mac" writes
 //! a `Removal` with the new key id for each removed replica, and "Rotate sync
-//! key" removes none. The rotating replica wraps the new key to the pinned
-//! encryption key of each remaining replica in its own `key.json`, signs each
-//! wrapping with its `device-signing-key` (`wrapping.rs`), and publishes
-//! under the new key id. A remaining replica is a replica of `replica_keys`
-//! with an unrevoked pin that is not this replica, not removed, and has not
-//! left. A replica with no pin receives no wrapping and is listed.
+//! key" removes none. "Revoke and replace" removes the `recovery` entry of
+//! one kit in the same write id, and removes no replica. The rotating replica
+//! wraps the new key to the pinned encryption key of each remaining replica
+//! in its own `key.json`, signs each wrapping with its `device-signing-key`
+//! (`wrapping.rs`), and publishes under the new key id. A remaining replica is
+//! a replica of `replica_keys` with an unrevoked pin that is not this replica,
+//! not removed, and has not left. A replica with no pin receives no wrapping
+//! and is listed.
 //!
 //! The rotation of a replica removed as retired runs only after its state
 //! files are local and joined. The wait for the downloads runs outside the
@@ -30,6 +32,17 @@
 //! signed by a replica the other removes loses, then the lower fingerprint
 //! wins. If each removes the signer of the other, the user chooses. A
 //! replica that signed one of the two stays with its own.
+//!
+//! A revoked kit receives no `Age` wrapping of the new key, since the
+//! `recovery` map no longer holds its recipient. The rotation and each
+//! acceptance drop from the own `key.json` the `Age` wrappings of recipients
+//! that the map no longer holds, under any key id, so the copies of the
+//! current key for the revoked kit are deleted. The `key.json` of another
+//! replica keeps its copies until that replica accepts the rotation or
+//! rotates. A copy that a sync service or a backup kept stays readable with
+//! the kit, and opens only the key it wraps. The wrappings of key ids below
+//! the current key are also dropped once every remaining replica has
+//! published under it (`SyncTxn::write_key_file`).
 //!
 //! Accepting a rotation adds its key, revokes the pins of the replicas it
 //! removes, writes their `Removal` entries if the state lacks them, and
@@ -120,11 +133,14 @@ pub enum RemovalReason {
     Lost,
 }
 
-/// Replicas a rotation removes, with their reasons. Empty for "Rotate sync
-/// key".
+/// Replicas a rotation removes, with their reasons, and the recovery kits it
+/// revokes. Both are empty for "Rotate sync key".
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RotationPlan {
     pub removals: BTreeMap<ReplicaId, RemovalReason>,
+    /// Age recipients of the kits whose `recovery` entries the rotation
+    /// removes, under the write id of its `Removal` entries.
+    pub revoke: BTreeSet<String>,
 }
 
 impl RotationPlan {
@@ -137,6 +153,16 @@ impl RotationPlan {
     pub fn remove(removals: impl IntoIterator<Item = (ReplicaId, RemovalReason)>) -> Self {
         Self {
             removals: removals.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Plan that revokes the kit of the age recipient `recipient` and removes
+    /// no replica.
+    pub fn revoke_kit(recipient: impl Into<String>) -> Self {
+        Self {
+            revoke: BTreeSet::from([recipient.into()]),
+            ..Self::default()
         }
     }
 

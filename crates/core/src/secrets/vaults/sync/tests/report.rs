@@ -527,16 +527,13 @@ fn new_kit_confirmation_clears_kit_missing() {
     assert!(!read_report(&fx).unwrap().recovery_kit_missing);
 
     // A vault that holds a recipient of the current key gets another kit,
-    // and both recipients are kept.
+    // which replaces the first.
     let second = create_kit(&fx).unwrap();
 
     assert!(!confirm(&fx, &second).unwrap());
     let (_, state) = saved(&fx);
     let recipients: BTreeSet<String> = VaultView::of(&state).recovery.into_keys().collect();
-    assert_eq!(
-        recipients,
-        BTreeSet::from([kit.recipient(), second.recipient()])
-    );
+    assert_eq!(recipients, BTreeSet::from([second.recipient()]));
 }
 
 #[test]

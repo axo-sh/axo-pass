@@ -179,6 +179,7 @@ const STATE_WRITES: [Write<SyncState>; 10] = [
         let recipient = RecoveryRecipient {
             key_id: KeyId(1),
             key_fingerprint: [u8::from(alt); 16],
+            label: None,
         };
         s.recovery.entry("age1a".to_string()).write(m, recipient);
     }),

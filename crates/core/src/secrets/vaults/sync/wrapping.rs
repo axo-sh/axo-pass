@@ -90,7 +90,10 @@ impl KeyFile {
     /// Own `key.json` of `replica` in vault `vault_id`, read through
     /// `transport` before this Mac rewrites it. A missing file, or one that
     /// fails to parse, is read as empty. A file that is `Remote` or of
-    /// another version fails, so no wrapping of it is lost.
+    /// another version fails, so no wrapping of it is lost. A `Remote` file
+    /// is requested for download, so a later transaction reads it. A sync
+    /// service can evict the file, since this Mac reads it only to rewrite
+    /// it.
     pub(crate) fn read_own(
         transport: &dyn SyncTransport,
         vault_id: Uuid,
@@ -98,9 +101,14 @@ impl KeyFile {
     ) -> Result<Self, Error> {
         match transport.read(vault_id, replica, FileName::Key)? {
             ReadResult::Missing => Ok(Self::default()),
-            ReadResult::Remote => Err(Error::SyncTransportError(
-                "own key.json is not local".to_string(),
-            )),
+            ReadResult::Remote => {
+                if let Err(e) = transport.request_download(vault_id) {
+                    log::warn!("Failed to request the download of vault {vault_id}: {e}");
+                }
+                Err(Error::SyncTransportError(
+                    "own key.json is not local".to_string(),
+                ))
+            },
             ReadResult::Local(bytes) => match Self::parse(&bytes) {
                 Ok(file) => Ok(file),
                 Err(KeyFileError::VersionSkew(message)) => {

@@ -63,6 +63,9 @@ pub enum Error {
     #[error("Recovery kit recipient was not added: {0}")]
     RecoveryKitNotAdded(String),
 
+    #[error("Recovery kit recipient was not removed: {0}")]
+    RecoveryKitNotRemoved(String),
+
     #[error("Key rotation is refused: {0}")]
     RotationRefused(String),
 

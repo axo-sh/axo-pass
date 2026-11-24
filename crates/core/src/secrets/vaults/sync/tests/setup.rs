@@ -27,6 +27,7 @@ use crate::secrets::vaults::sync::load::SyncLoad;
 use crate::secrets::vaults::sync::local_state::LocalSyncState;
 use crate::secrets::vaults::sync::meta::MetaFile;
 use crate::secrets::vaults::sync::model::{ItemId, KeyId, PublicKey, ReplicaKeys};
+use crate::secrets::vaults::sync::recovery::SETUP_KIT_LABEL;
 use crate::secrets::vaults::sync::recovery::import::{RecoveryCheck, RecoveryImport};
 use crate::secrets::vaults::sync::setup::{SetupStart, SyncSetup};
 use crate::secrets::vaults::sync::sidecar::Sidecar;
@@ -195,6 +196,7 @@ fn first_state_holds_own_name_keys_recipient_and_every_entry_under_one_write_id(
             .shown(),
         Some(&setup.kit().recipient_value())
     );
+    assert_eq!(setup.kit().label.as_deref(), Some(SETUP_KIT_LABEL));
     assert!(state.store.left.is_empty());
 
     // The view holds every live and trashed entry of the vault.

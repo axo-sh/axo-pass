@@ -62,6 +62,7 @@ pub(super) fn full_state() -> State {
         RecoveryRecipient {
             key_id: KeyId(1),
             key_fingerprint: [7; 16],
+            label: None,
         },
     );
     s.folders.entry(id(10)).write(

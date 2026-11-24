@@ -135,6 +135,33 @@ fn failed_key_json_write_pauses_sync_with_publish_failed_and_next_transaction_wr
 }
 
 #[test]
+fn remote_own_key_json_downloaded_and_written_by_next_transaction() {
+    let transport = Arc::new(FakeTransport::default());
+    let fx = synced(&transport);
+    let kit = kit_of(&fx);
+    confirm(&fx, &kit).unwrap();
+    let file = key_file(&transport, fx.id(), REPLICA).unwrap();
+    transport.remove(fx.id(), REPLICA, "key.json");
+    transport.put_remote_with(fx.id(), REPLICA, "key.json", &file.to_bytes());
+
+    let committed = fx.write(|_| Ok(())).unwrap();
+    assert!(matches!(
+        committed.sync_status,
+        Some(SyncStatus::Paused(ref causes))
+            if matches!(causes[..], [PausedCause::PublishFailed { .. }])
+    ));
+    assert_eq!(transport.download_requests(), [fx.id()]);
+
+    assert_eq!(transport.complete_downloads(fx.id()), 1);
+    let committed = fx.write(|_| Ok(())).unwrap();
+    assert_eq!(committed.sync_status, Some(SyncStatus::Active));
+    assert_eq!(
+        ages(&transport, fx.id(), REPLICA),
+        [(kit.recipient(), KeyId(1))]
+    );
+}
+
+#[test]
 fn stopped_transaction_writes_no_key_json_and_confirmation_while_stopped_writes_nothing() {
     let transport = Arc::new(FakeTransport::default());
     let fx = synced(&transport);

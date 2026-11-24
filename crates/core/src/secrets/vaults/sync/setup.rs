@@ -25,7 +25,7 @@ use super::load::{SyncLoad, TrustedState};
 use super::local_state::{LocalStateError, LocalSyncState};
 use super::meta::MetaFile;
 use super::model::{ItemId, KeyId};
-use super::recovery::RecoveryKit;
+use super::recovery::{RecoveryKit, SETUP_KIT_LABEL};
 use super::sidecar::Sidecar;
 use super::transport::{ReadResult, SyncTransport, TransportRoot};
 use crate::secrets::vaults::errors::Error;
@@ -65,8 +65,9 @@ impl SyncSetup {
     /// The vault is verified under the key of `writer`. A vault that syncs is
     /// refused ([`Self::check_not_synced`]). A folder that holds the vault
     /// gives [`SetupStart::Join`]. Otherwise the sync key, the replica id,
-    /// and the kit are generated. Fails if the folder cannot be reached, or
-    /// if its `meta.json` of the vault fails to parse.
+    /// and the kit are generated. The kit has the label [`SETUP_KIT_LABEL`].
+    /// Fails if the folder cannot be reached, or if its `meta.json` of the
+    /// vault fails to parse.
     pub fn prepare(
         writer: &VaultWriter,
         target: &Target,
@@ -83,7 +84,7 @@ impl SyncSetup {
             return Ok(SetupStart::Join(root));
         }
         let key = SyncKey::generate();
-        let kit = RecoveryKit::create(vault_id, FIRST_KEY_ID, &key);
+        let kit = RecoveryKit::create(vault_id, FIRST_KEY_ID, &key).labeled(Some(SETUP_KIT_LABEL));
         Ok(SetupStart::Kit(Self {
             vault_id,
             replica_id: ReplicaId::generate(),

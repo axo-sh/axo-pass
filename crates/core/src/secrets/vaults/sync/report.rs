@@ -27,9 +27,10 @@ use uuid::Uuid;
 
 use super::blobs;
 use super::crdt::ReplicaId;
+use super::keys::SyncKeyring;
 use super::load::{SyncLoad, TrustedState};
 use super::local_state::PinSource;
-use super::model::{PublicKey, ReplicaKeys, SyncState};
+use super::model::{KeyId, PublicKey, ReplicaKeys, SyncState};
 use super::recovery::RecoveryRecipients;
 use super::repair::Repair;
 use super::rotation::{RotationPrompt, Rotations};
@@ -61,6 +62,9 @@ pub struct SyncReport {
     /// Whether the `recovery` map holds no recipient of the current key, the
     /// degraded state (D18 of doc 16).
     pub recovery_kit_missing: bool,
+    /// Saved recovery kits of the `recovery` map, oldest first. Empty unless
+    /// the sync state is trusted.
+    pub recovery_kits: Vec<RecoveryKitEntry>,
     /// Number of differences the user override would show as conflicts, if
     /// the override is offered.
     pub override_preview: Option<usize>,
@@ -157,6 +161,71 @@ pub struct QuarantinedEntry {
     pub reason: String,
 }
 
+/// Saved recovery kit, read from its register in the `recovery` map. The
+/// label, key id, time, and writer are those of the newest value, by counter
+/// and then by write id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryKitEntry {
+    /// Age recipient of the kit, the key of the map.
+    pub recipient: String,
+    /// Key id the kit was made for.
+    pub key_id: KeyId,
+    /// Whether any value of the register holds the current key id and the
+    /// fingerprint of the current key. The rule of
+    /// [`RecoveryRecipients::current`], so a concurrent value cannot hide a
+    /// kit that opens the current key.
+    pub current: bool,
+    pub label: Option<String>,
+    /// Time of the write, in Unix seconds on the clock of the writer.
+    pub written_at: i64,
+    /// Display name of the replica that wrote the value. `None` if the state
+    /// does not name it, as after a cleanup of that replica.
+    pub added_by: Option<String>,
+}
+
+impl RecoveryKitEntry {
+    /// Kits of the `recovery` map of `trusted`, oldest first, then by
+    /// recipient. A writer is named through the `actors` of the state and the
+    /// `replica_names` of `view`. A kit counts as current if `keyring` holds
+    /// the current key and a value of its register matches it.
+    fn of(trusted: &TrustedState, view: &VaultView, keyring: Option<&SyncKeyring>) -> Vec<Self> {
+        let state = &trusted.state;
+        let key_id = trusted.local.key_id;
+        let fingerprint = keyring
+            .and_then(|keyring| keyring.get(key_id))
+            .map(|key| key.fingerprint());
+        let mut entries: Vec<Self> = state
+            .store
+            .recovery
+            .iter()
+            .filter_map(|(recipient, register)| {
+                let values = register.ordered();
+                let (order, newest) = values.last()?;
+                let current = fingerprint.is_some_and(|fingerprint| {
+                    values.iter().any(|(_, v)| {
+                        v.value.key_id == key_id && v.value.key_fingerprint == fingerprint.0
+                    })
+                });
+                let added_by = state
+                    .actors
+                    .get(&order.write_id.actor)
+                    .and_then(|actor| view.replica_names.get(&actor.replica))
+                    .cloned();
+                Some(Self {
+                    recipient: recipient.clone(),
+                    key_id: newest.value.key_id,
+                    current,
+                    label: newest.value.label.clone(),
+                    written_at: newest.written_at,
+                    added_by,
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| (a.written_at, &a.recipient).cmp(&(b.written_at, &b.recipient)));
+        entries
+    }
+}
+
 /// Mac that the sync state knows by display name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnownMac {
@@ -248,6 +317,7 @@ impl SyncReport {
             quarantined,
             known_macs: Vec::new(),
             recovery_kit_missing: false,
+            recovery_kits: Vec::new(),
             override_preview: None,
             blobs: BlobStatus::default(),
             root: sidecar.transport.clone(),
@@ -272,6 +342,7 @@ impl SyncReport {
         report.recovery_kit_missing = keyring.as_ref().is_none_or(|keyring| {
             RecoveryRecipients::of_key(&trusted.state.store, local.key_id, keyring).is_empty()
         });
+        report.recovery_kits = RecoveryKitEntry::of(trusted, view, keyring.as_ref());
         let vault = Vault::from_unlocked_key(&file_key, vault)?;
         let transport = writer
             .transport_of(sidecar.transport.as_ref())

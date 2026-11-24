@@ -47,6 +47,7 @@ fn recipient_with_current_key_id_and_another_fingerprint_receives_no_wrapping_an
     let value = RecoveryRecipient {
         key_id: KeyId(1),
         key_fingerprint: SyncKey::from_bytes([9; 32]).fingerprint().0,
+        label: None,
     };
     // A removed Mac adds the recipient for the key id it predicts.
     let state = with_recipient(macs.macs[0].state(), REMOVED, &planted, value);
@@ -75,6 +76,7 @@ fn recipient_for_older_key_id_receives_no_wrapping() {
         RecoveryRecipient {
             key_id: KeyId(1),
             key_fingerprint: key().fingerprint().0,
+            label: None,
         },
     );
     let state = with_recipient(
@@ -84,6 +86,7 @@ fn recipient_for_older_key_id_receives_no_wrapping() {
         RecoveryRecipient {
             key_id: KeyId(2),
             key_fingerprint: current.fingerprint().0,
+            label: None,
         },
     );
     fx.put_text(&under_key_2(&fx, &state, &two_keys()));
