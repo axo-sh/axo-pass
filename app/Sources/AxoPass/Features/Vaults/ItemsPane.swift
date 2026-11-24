@@ -28,7 +28,6 @@ struct ItemsPane: View {
   @Environment(VaultsModel.self) private var model
   @Environment(\.undoManager) private var undoManager
   @State private var showingNewItemSheet = false
-  @State private var showingNewLoginSheet = false
   @State private var showingImport = false
   @State private var showingItemImport = false
   @State private var titleSheet: TitleSheetRequest? = nil
@@ -119,7 +118,6 @@ struct ItemsPane: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Menu {
-          Button("New Login…") { showingNewLoginSheet = true }
           Button("New Item…") { showingNewItemSheet = true }
           Divider()
           Button("New Folder") { newFolder() }
@@ -136,8 +134,12 @@ struct ItemsPane: View {
       ItemImportSheet(model: model)
     }
     .sheet(isPresented: $showingNewItemSheet) {
-      NewItemSheet { key, title in
+      NewItemSheet { key, title, asLogin in
         guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
+        if asLogin {
+          let created = await model.createLogin(vaultKey: vaultKey, itemKey: key, title: title)
+          return created == nil ? (model.actionError ?? "Failed to create login.") : nil
+        }
         if await model.addItem(vaultKey: vaultKey, itemKey: key, itemTitle: title) {
           return nil
         }
@@ -151,13 +153,6 @@ struct ItemsPane: View {
       Button("OK") { moveError = nil }
     } message: {
       Text(moveError ?? "")
-    }
-    .sheet(isPresented: $showingNewLoginSheet) {
-      NewItemSheet(heading: "New Login") { key, title in
-        guard let vaultKey = model.selectedVaultKey else { return "No vault selected." }
-        let created = await model.createLogin(vaultKey: vaultKey, itemKey: key, title: title)
-        return created == nil ? (model.actionError ?? "Failed to create login.") : nil
-      }
     }
     .sheet(item: $titleSheet) { request in
       TitleSheet(request: request)
@@ -185,8 +180,8 @@ struct ItemsPane: View {
     }
   }
 
-  /// Shown for a vault with no items. "New Login" and "New Item" open the
-  /// sheets of the toolbar menu. "Import" offers a password manager export or
+  /// Shown for a vault with no items. "New Item" opens the sheet of the
+  /// toolbar menu. "Import" offers a password manager export or
   /// a backup.
   private var emptyState: some View {
     ContentUnavailableView {
@@ -194,7 +189,6 @@ struct ItemsPane: View {
     } description: {
       Text("Add a login, or import items from a backup or another password manager.")
     } actions: {
-      Button("New Login") { showingNewLoginSheet = true }
       Button("New Item") { showingNewItemSheet = true }
       Menu("Import") {
         Button("Import Passwords…") { showingItemImport = true }
@@ -483,18 +477,18 @@ private struct FolderRow: View {
 }
 
 private struct NewItemSheet: View {
-  var heading = "New Item"
-  let onSubmit: (_ key: String, _ title: String) async -> String?
+  let onSubmit: (_ key: String, _ title: String, _ asLogin: Bool) async -> String?
 
   @Environment(\.dismiss) private var dismiss
   @State private var title: String = ""
   @State private var key: String = ""
+  @State private var asLogin = false
   @State private var isSubmitting = false
   @State private var errorMessage: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text(heading).font(.headline)
+      Text("New Item").font(.headline)
       Form {
         TextField("Title", text: $title)
         TextField("Key", text: $key)
@@ -504,6 +498,7 @@ private struct NewItemSheet: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        Toggle("Save as login", isOn: $asLogin)
       }
 
       if let errorMessage {
@@ -519,7 +514,7 @@ private struct NewItemSheet: View {
           Task {
             isSubmitting = true
             errorMessage = nil
-            if let error = await onSubmit(key, title) {
+            if let error = await onSubmit(key, title, asLogin) {
               errorMessage = error
             } else {
               dismiss()
