@@ -94,8 +94,16 @@ fn shell_quote(value: &str) -> String {
 /// Builds the current shell integration block, sentinels included, with a
 /// trailing newline.
 fn build_block() -> Result<String, String> {
+    Ok(format!(
+        "{SENTINEL_START}\n{}{SENTINEL_END}\n",
+        block_body()
+    ))
+}
+
+/// Lines of the shell integration block between the sentinels, with a
+/// trailing newline.
+pub fn block_body() -> String {
     let mut block = formatdoc! {r#"
-        {SENTINEL_START}
         if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
           export PATH="$HOME/.local/bin:$PATH"
         fi
@@ -114,9 +122,7 @@ fn build_block() -> Result<String, String> {
         "#});
     }
 
-    block.push_str(SENTINEL_END);
-    block.push('\n');
-    Ok(block)
+    block
 }
 
 /// Finds the byte range of an existing sentinel-delimited block, if any,

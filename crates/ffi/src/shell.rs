@@ -8,6 +8,8 @@ pub struct ShellIntegrationStatus {
     pub configured: bool,
     /// Absolute path to the `.zshrc` file that was checked / written.
     pub zshrc_path: String,
+    /// Lines written between the sentinels, including the bundled askpass path.
+    pub block: String,
 }
 
 /// What a GPG key or subkey may be used for.
@@ -20,6 +22,7 @@ impl AxoPass {
         ShellIntegrationStatus {
             configured,
             zshrc_path: path.to_string_lossy().to_string(),
+            block: shell_integration::block_body(),
         }
     }
 
@@ -31,6 +34,7 @@ impl AxoPass {
             Ok(ShellIntegrationStatus {
                 configured: true,
                 zshrc_path: path.to_string_lossy().to_string(),
+                block: shell_integration::block_body(),
             })
         })
         .await

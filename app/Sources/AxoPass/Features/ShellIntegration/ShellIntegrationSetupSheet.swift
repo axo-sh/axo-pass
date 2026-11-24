@@ -27,14 +27,10 @@ struct ShellIntegrationSetupSheet: View {
   private var isConfigured: Bool { status?.configured == true }
   private var zshrcPath: String { status?.zshrcPath ?? "~/.zshrc" }
 
-  private static let blockText = """
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-      export PATH="$HOME/.local/bin:$PATH"
-    fi
-    source <(ap shellenv zsh)
-    export SSH_ASKPASS="/path/to/ap-ssh-askpass"
-    export SSH_ASKPASS_REQUIRE=force
-    """
+  /// Block lines as the write produces them, without the trailing newline.
+  private var blockText: String? {
+    status?.block.trimmingCharacters(in: .newlines)
+  }
 
   var body: some View {
     SetupAssistantFrame(
@@ -78,7 +74,9 @@ struct ShellIntegrationSetupSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       SetupHeader(
         title: "Add to \(zshrcPath)", detail: "A block like this is appended to \(zshrcPath).")
-      SetupCodeBlock(text: Self.blockText)
+      if let blockText {
+        SetupCodeBlock(text: blockText)
+      }
       Spacer(minLength: 0)
       HStack {
         Button("Back") { navigator.go(to: .overview, forward: false) }
@@ -103,7 +101,7 @@ struct ShellIntegrationSetupSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       SetupHeader(
         title: "Shell Integration Ready", detail: "New terminal windows pick up the change.")
-      SetupDoneSummary(path: zshrcPath, activeLine: Self.blockText)
+      SetupDoneSummary(path: zshrcPath, activeLine: blockText)
       Spacer(minLength: 0)
       HStack {
         Spacer()
