@@ -71,6 +71,10 @@ pub struct Sidecar {
     /// them. They hold ids only, so the file names no entry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<Notice>,
+    /// Time that a state file of each replica last changed the state of this
+    /// Mac, in Unix seconds on the clock of this Mac.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub received_at: BTreeMap<ReplicaId, i64>,
 }
 
 /// Most notices a sidecar holds. The oldest are dropped first.
@@ -291,15 +295,35 @@ impl Sidecar {
         dropped
     }
 
-    /// Keep only the joined and ignored hashes and the key ids of `own` and
-    /// of the replicas in `listed`. Returns whether a replica was dropped.
+    /// Keep only the joined and ignored hashes, the key ids, and the receive
+    /// times of `own` and of the replicas in `listed`. Returns whether a
+    /// replica was dropped.
     pub fn retain_replicas(&mut self, own: ReplicaId, listed: &[ReplicaId]) -> bool {
         let keep = |replica: &ReplicaId| *replica == own || listed.contains(replica);
-        let before = (self.joined.len(), self.ignored.len(), self.key_ids.len());
+        let lens = |this: &Self| {
+            (
+                this.joined.len(),
+                this.ignored.len(),
+                this.key_ids.len(),
+                this.received_at.len(),
+            )
+        };
+        let before = lens(self);
         self.joined.retain(|replica, _| keep(replica));
         self.ignored.retain(|replica, _| keep(replica));
         self.key_ids.retain(|replica, _| keep(replica));
-        (self.joined.len(), self.ignored.len(), self.key_ids.len()) != before
+        self.received_at.retain(|replica, _| keep(replica));
+        lens(self) != before
+    }
+
+    /// Record at `now` that the files of the replicas in `received` changed
+    /// the state. Returns whether the sidecar changed.
+    pub fn record_received(&mut self, now: i64, received: &BTreeSet<ReplicaId>) -> bool {
+        let mut changed = false;
+        for replica in received {
+            changed |= self.received_at.insert(*replica, now) != Some(now);
+        }
+        changed
     }
 
     /// Whether the state file with hash `hash` of `replica` was ignored.

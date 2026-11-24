@@ -239,6 +239,10 @@ pub struct KnownMac {
     /// as its last active time (D17 of doc 18). The clock of that Mac.
     /// `None` if the state holds no actor of the replica.
     pub last_active: Option<i64>,
+    /// Time that a state file of the Mac last changed the state of this Mac.
+    /// The clock of this Mac. `None` for this Mac, and if no file of the Mac
+    /// changed the state since this Mac recorded it.
+    pub received_at: Option<i64>,
     /// How this Mac pinned the keys of the Mac. `None` for this Mac and for
     /// a Mac with no pin. Remove Mac preselects a Mac pinned at first use.
     pub pin: Option<PinSource>,
@@ -336,7 +340,7 @@ impl SyncReport {
             sidecar.paused(),
         ));
         report.conflicts = view.conflicts().len();
-        report.known_macs = Self::known_macs(trusted, view, writer.signer().as_ref());
+        report.known_macs = Self::known_macs(trusted, view, &sidecar, writer.signer().as_ref());
         report.rotations = Rotations::prompts(local);
         report.suffixed_keys = view.suffixed_keys();
         report.recovery_kit_missing = keyring.as_ref().is_none_or(|keyring| {
@@ -369,11 +373,13 @@ impl SyncReport {
     }
 
     /// Macs of the `replica_names` view `view` of `trusted`, with their
-    /// `left` value, the newest start time of their actors, and their pin.
-    /// `signer` gives the signing key of this Mac.
+    /// `left` value, the newest start time of their actors, their receive
+    /// time in `sidecar`, and their pin. `signer` gives the signing key of
+    /// this Mac.
     fn known_macs(
         trusted: &TrustedState,
         view: &VaultView,
+        sidecar: &Sidecar,
         signer: &dyn VaultSigner,
     ) -> Vec<KnownMac> {
         let local = &trusted.local;
@@ -410,6 +416,7 @@ impl SyncReport {
                         .filter(|actor| actor.replica == *replica)
                         .map(|actor| actor.started_at)
                         .max(),
+                    received_at: sidecar.received_at.get(replica).copied(),
                     pin: pin.map(|pin| pin.source),
                     signing: match pin {
                         Some(pin) => Some(pin.signing.clone()),

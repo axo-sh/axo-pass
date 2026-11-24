@@ -56,6 +56,27 @@ fn website_added_by_peer_is_noticed_until_dismissed() {
 }
 
 #[test]
+fn received_time_recorded_for_peer_that_changed_state() {
+    let mut sim = Sim::new(2, None);
+    let writer = Sim::replica(0);
+    let reader = Sim::replica(1);
+    assert!(
+        Sidecar::load(&sim.macs[1].root, sim.macs[1].vault_id())
+            .received_at
+            .is_empty()
+    );
+
+    sim.write(0, |vh| vh.add_item("mail", "Mail").map(|_| ()));
+    sim.converge();
+
+    let received = Sidecar::load(&sim.macs[1].root, sim.macs[1].vault_id()).received_at;
+    assert!(received[&writer] > 0);
+    assert!(!received.contains_key(&reader));
+    let own = Sidecar::load(&sim.macs[0].root, sim.macs[0].vault_id()).received_at;
+    assert!(!own.contains_key(&writer));
+}
+
+#[test]
 fn duplicate_keys_listed_as_suffixed_and_keep_writes_shown_key() {
     let mut sim = Sim::new(2, None);
     sim.write(0, |vh| vh.add_item("mail", "From zero").map(|_| ()));

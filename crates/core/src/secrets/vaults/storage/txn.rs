@@ -1418,7 +1418,7 @@ impl VaultWriter {
                         step.after_publish(sync, &**transport, published);
                     }
                 }
-                sync.settle_status();
+                sync.settle_status(now);
                 sync.save_sidecar(&self.root);
                 sync_status = Some(sync.status());
                 changed
@@ -2533,7 +2533,7 @@ impl VaultWriter {
         log::info!("Enabled sync of vault {id} as replica {replica_id}");
         let _ = sync.write_key_file(&*transport, None, &*self.signer);
         sync.publish(&*transport);
-        sync.settle_status();
+        sync.settle_status(now);
         sync.save_sidecar(&self.root);
         let save_count = if changed {
             vault_lock.record_save()
@@ -2773,7 +2773,7 @@ impl VaultWriter {
                 Err(e) => log::warn!("Failed to delete the old replica directory {}: {e}", old.0),
             }
         }
-        sync.settle_status();
+        sync.settle_status(now);
         sync.save_sidecar(&self.root);
         let save_count = if changed {
             vault_lock.record_save()
@@ -2894,7 +2894,7 @@ impl VaultWriter {
                 sync.heal_blobs(&**transport);
             }
         }
-        sync.settle_status();
+        sync.settle_status(now);
         sync.save_sidecar(&self.root);
         committed.recovery_kit_missing = sync.recovery_kit_missing();
         Ok(committed)

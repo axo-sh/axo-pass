@@ -2060,9 +2060,15 @@ impl SyncTxn {
     /// event of a load failure, and each file quarantined by this transaction
     /// queues `sync.file_quarantined`. A load failure that clears while sync
     /// is stopped queues no event, since sync does not resume.
-    pub(crate) fn settle_status(&mut self) {
+    ///
+    /// Also records at `now` the replicas whose files changed the state in
+    /// this transaction.
+    pub(crate) fn settle_status(&mut self, now: i64) {
         for (replica, file) in self.found.new_quarantined.drain(..) {
             self.events.file_quarantined(replica, &file);
+        }
+        if self.syncs() {
+            self.sidecar_changed |= self.sidecar.record_received(now, &self.sources);
         }
         let stopped = self.is_stopped();
         let before = &self.sidecar.health;
