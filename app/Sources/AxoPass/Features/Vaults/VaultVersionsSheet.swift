@@ -26,7 +26,7 @@ struct VaultVersionsSheet: View {
       if refused == true {
         Label(
           "This vault file failed to load. Restore a previous version to replace it. The file that failed is kept aside.",
-          systemImage: "exclamationmark.triangle.fill"
+          systemImage: "exclamationmark.circle.fill"
         )
         .font(.callout)
         .foregroundStyle(.secondary)

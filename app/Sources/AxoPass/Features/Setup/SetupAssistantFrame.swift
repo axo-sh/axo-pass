@@ -130,7 +130,7 @@ struct SetupReplaceWarning: View {
           .textSelection(.enabled)
       }
     } icon: {
-      Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+      Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
     }
     .fixedSize(horizontal: false, vertical: true)
   }

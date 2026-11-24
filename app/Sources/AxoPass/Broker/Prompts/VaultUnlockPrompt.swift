@@ -887,7 +887,7 @@ private struct VaultUnlockView: View {
             .foregroundStyle(.primary)
             .lineSpacing(3)
         } icon: {
-          Image(systemName: "exclamationmark.triangle")
+          Image(systemName: "exclamationmark.circle")
             .foregroundStyle(.orange)
         }
         .multilineTextAlignment(.leading)

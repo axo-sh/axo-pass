@@ -80,7 +80,7 @@ struct SshAgentSheet: View {
       VStack(alignment: .leading, spacing: 6) {
         Label(
           "Allow Axo Pass in System Settings > General > Login Items & Extensions so the agent restarts if it stops.",
-          systemImage: "exclamationmark.triangle.fill"
+          systemImage: "exclamationmark.circle.fill"
         )
         .font(.caption)
         .foregroundStyle(.orange)
@@ -143,7 +143,7 @@ enum SshAgentStyle {
     switch status {
     case .running: return "checkmark.circle.fill"
     case .notRunning: return "circle"
-    case .staleSocket: return "exclamationmark.triangle.fill"
+    case .staleSocket: return "exclamationmark.circle.fill"
     case nil: return "questionmark.circle"
     }
   }

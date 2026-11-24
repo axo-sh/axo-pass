@@ -14,7 +14,7 @@ struct SshPane: View {
   var body: some View {
     List(selection: $model.selectedFingerprint) {
       if let err = model.loadError {
-        Label(err, systemImage: "exclamationmark.triangle")
+        Label(err, systemImage: "exclamationmark.circle")
           .font(.caption)
           .foregroundStyle(.red)
       } else {

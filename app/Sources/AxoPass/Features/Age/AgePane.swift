@@ -10,7 +10,7 @@ struct AgePane: View {
   var body: some View {
     List(selection: $model.selectedRecipient) {
       if let err = model.loadError {
-        Label(err, systemImage: "exclamationmark.triangle")
+        Label(err, systemImage: "exclamationmark.circle")
           .font(.caption)
           .foregroundStyle(.red)
       } else {

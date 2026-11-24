@@ -869,7 +869,7 @@ private struct IssueSeverityIcon: View {
     switch severity {
     case .broken: return "exclamationmark"
     case .request: return "bell.fill"
-    case .advice: return "exclamationmark.triangle.fill"
+    case .advice: return "exclamationmark.circle.fill"
     case .setup: return "wrench.and.screwdriver.fill"
     case .info: return "info"
     }

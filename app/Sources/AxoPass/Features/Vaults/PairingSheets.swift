@@ -553,7 +553,7 @@ struct KitImportSheet: View {
       // The import moves the vault files on new hardware, after the kit opens
       // the key.
       if sync.keyState == .newHardware {
-        Label(newHardwareMoveMessage, systemImage: "exclamationmark.triangle.fill")
+        Label(newHardwareMoveMessage, systemImage: "exclamationmark.circle.fill")
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -725,7 +725,7 @@ struct KitImportSheet: View {
 
   private func refusedStep(_ reason: String) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      Label(reason, systemImage: "exclamationmark.triangle.fill")
+      Label(reason, systemImage: "exclamationmark.circle.fill")
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
       HStack {

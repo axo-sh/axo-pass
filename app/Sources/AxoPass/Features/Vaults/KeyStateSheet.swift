@@ -92,7 +92,7 @@ struct KeyStateSheet: View {
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
-      Label(newHardwareMoveMessage, systemImage: "exclamationmark.triangle.fill")
+      Label(newHardwareMoveMessage, systemImage: "exclamationmark.circle.fill")
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 

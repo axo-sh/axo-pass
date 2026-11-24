@@ -84,7 +84,7 @@ struct AddVaultKeySheet: View {
       }
       .formStyle(.columns)
       if let error {
-        Label(error, systemImage: "exclamationmark.triangle.fill")
+        Label(error, systemImage: "exclamationmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.red)
           .fixedSize(horizontal: false, vertical: true)

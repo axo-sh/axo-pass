@@ -10,7 +10,7 @@ struct GpgPane: View {
   var body: some View {
     List(selection: $model.selectedFingerprint) {
       if let err = model.loadError {
-        Label(err, systemImage: "exclamationmark.triangle")
+        Label(err, systemImage: "exclamationmark.circle")
           .font(.caption)
           .foregroundStyle(.red)
       } else {
@@ -126,7 +126,7 @@ enum GpgPinentryStyle {
     switch state {
     case .configured: return "checkmark.circle.fill"
     case .notConfigured: return "circle"
-    case .otherProgram: return "exclamationmark.triangle.fill"
+    case .otherProgram: return "exclamationmark.circle.fill"
     case nil: return "questionmark.circle"
     }
   }

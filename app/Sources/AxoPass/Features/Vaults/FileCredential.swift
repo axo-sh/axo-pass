@@ -166,7 +166,7 @@ struct FileBox: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 10) {
-        Image(systemName: file?.symbolName ?? "exclamationmark.triangle")
+        Image(systemName: file?.symbolName ?? "exclamationmark.circle")
           .font(.title3)
           .foregroundStyle(.secondary)
           .frame(width: 24)
@@ -246,7 +246,7 @@ struct FileBox: View {
     case .damaged:
       Label(
         "The stored contents are damaged and fail verification.",
-        systemImage: "exclamationmark.triangle.fill"
+        systemImage: "exclamationmark.circle.fill"
       )
       .font(.caption)
       .foregroundStyle(.red)

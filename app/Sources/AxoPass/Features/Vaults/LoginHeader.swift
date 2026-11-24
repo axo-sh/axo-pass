@@ -193,7 +193,7 @@ extension CredentialList {
 
   private var repairBanner: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Label("Password missing", systemImage: "exclamationmark.triangle")
+      Label("Password missing", systemImage: "exclamationmark.circle")
         .font(.headline)
       Text("Choose which credential to use as the password.")
         .foregroundStyle(.secondary)

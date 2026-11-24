@@ -227,7 +227,7 @@ struct RotationKitFlow: View {
             Text("New kit added")
               .foregroundStyle(.secondary)
           } else {
-            Label("Skipped", systemImage: "exclamationmark.triangle.fill")
+            Label("Skipped", systemImage: "exclamationmark.circle.fill")
               .foregroundStyle(.orange)
             Button("New Kit…") {
               sync.sheet = .newKit(SyncVaultRef(key: vaultKey, name: sync.vaultName(vaultKey)))

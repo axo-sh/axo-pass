@@ -459,7 +459,7 @@ private struct AutoFillSettingsView: View {
           HStack(spacing: 10) {
             StatusLabel(
               "\(status.name): \(BrowserManifestStyle.label(status))",
-              symbol: "exclamationmark.triangle.fill", color: .orange)
+              symbol: "exclamationmark.circle.fill", color: .orange)
             if installing == status.browser {
               ProgressView().controlSize(.small)
             } else if let action = BrowserManifestStyle.action(status) {
@@ -749,7 +749,7 @@ private struct SshSettingsRows: View {
     switch state {
     case .configured: return "checkmark.circle.fill"
     case .notConfigured: return "circle"
-    case .otherAgent: return "exclamationmark.triangle.fill"
+    case .otherAgent: return "exclamationmark.circle.fill"
     }
   }
 

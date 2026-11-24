@@ -71,7 +71,7 @@ struct CredentialListView: View {
 
     case .failed(let detail):
       message(
-        icon: "exclamationmark.triangle", title: "Could not reach your vaults",
+        icon: "exclamationmark.circle", title: "Could not reach your vaults",
         detail: detail, action: ("Try Again", { model.retry() }))
 
     case .configuration(let onDone):

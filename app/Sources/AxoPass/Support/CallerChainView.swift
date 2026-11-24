@@ -97,7 +97,7 @@ private struct ProcessRow: View {
           command
             .font(.body.weight(.medium))
           if !node.verified {
-            Label("Unverified", systemImage: "exclamationmark.triangle.fill")
+            Label("Unverified", systemImage: "exclamationmark.circle.fill")
               .font(.caption.weight(.semibold))
               .foregroundStyle(.orange)
               .help(

@@ -351,7 +351,7 @@ struct ItemImportSheet: View {
         }
         Label(
           "The export holds every password as plain text. Delete it now.",
-          systemImage: "exclamationmark.triangle.fill"
+          systemImage: "exclamationmark.circle.fill"
         )
         .foregroundStyle(.orange)
         if let trashError {

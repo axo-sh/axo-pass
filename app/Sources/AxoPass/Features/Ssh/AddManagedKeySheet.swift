@@ -30,7 +30,7 @@ struct AddManagedKeySheet: View {
       )
       .fixedSize(horizontal: false, vertical: true)
       if let error {
-        Label(error, systemImage: "exclamationmark.triangle.fill")
+        Label(error, systemImage: "exclamationmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.red)
       }

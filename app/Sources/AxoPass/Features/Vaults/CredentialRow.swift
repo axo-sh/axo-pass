@@ -568,7 +568,7 @@ struct CredentialRow: View {
     let site = cred.passkey?.rpId ?? "The site"
     if cred.passkey?.siteRejected == true {
       PasskeyNotice(
-        systemImage: "exclamationmark.triangle.fill", color: .red,
+        systemImage: "exclamationmark.circle.fill", color: .red,
         message:
           "\(site) reported that it no longer accepts this passkey, so it is not offered in AutoFill. It may have been removed from your account there."
       ) {

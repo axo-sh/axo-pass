@@ -176,7 +176,7 @@ struct VaultExportSheet: View {
       }
 
       if passphraseMismatch {
-        Label("Passphrases do not match.", systemImage: "exclamationmark.triangle.fill")
+        Label("Passphrases do not match.", systemImage: "exclamationmark.circle.fill")
           .font(.caption)
           .foregroundStyle(.orange)
       }
@@ -216,7 +216,7 @@ struct VaultExportSheet: View {
     VStack(alignment: .leading, spacing: 6) {
       Label(
         "The export finished, but \(report.missingBlobs.count) file(s) could not be included.",
-        systemImage: "exclamationmark.triangle.fill"
+        systemImage: "exclamationmark.circle.fill"
       )
       .font(.callout)
       .foregroundStyle(.orange)

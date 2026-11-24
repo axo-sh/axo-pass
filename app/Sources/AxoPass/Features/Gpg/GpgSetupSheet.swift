@@ -90,7 +90,7 @@ struct GpgSetupSheet: View {
       } else {
         Label(
           "Could not find the bundled ap-pinentry helper. Automatic setup is only available when running the installed app.",
-          systemImage: "exclamationmark.triangle.fill"
+          systemImage: "exclamationmark.circle.fill"
         )
         .foregroundStyle(.orange)
         .fixedSize(horizontal: false, vertical: true)

@@ -656,7 +656,7 @@ private struct PassphraseMessageView: View {
   }
 
   private var symbol: String {
-    if isWarning { return "exclamationmark.triangle.fill" }
+    if isWarning { return "exclamationmark.circle.fill" }
     return cancelLabel == nil ? "info.circle" : "questionmark.circle"
   }
 

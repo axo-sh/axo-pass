@@ -367,7 +367,7 @@ struct SyncStatusSheet: View {
           .lineLimit(1)
           .truncationMode(.middle)
         if mac.keysFlagged {
-          Image(systemName: "exclamationmark.triangle.fill")
+          Image(systemName: "exclamationmark.circle.fill")
             .foregroundStyle(.orange)
             .help(
               "This device published keys that differ from the keys pinned for it. The pinned keys are used."
@@ -405,7 +405,7 @@ struct SyncStatusSheet: View {
         .foregroundStyle(.orange)
         .help("Checked \(relativeTime(scan.at)). The files download in the background.")
       case .failed(let message):
-        Label(message, systemImage: "exclamationmark.triangle.fill")
+        Label(message, systemImage: "exclamationmark.circle.fill")
           .foregroundStyle(.red)
           .lineLimit(2)
           .help("Checked \(relativeTime(scan.at)).")
@@ -575,7 +575,7 @@ struct SyncStatusSheet: View {
           if report.recoveryKitMissing {
             Label(
               kit == nil ? "None saved" : "Needs a new kit",
-              systemImage: "exclamationmark.triangle.fill"
+              systemImage: "exclamationmark.circle.fill"
             )
             .font(.caption)
             .foregroundStyle(.orange)
@@ -946,7 +946,7 @@ struct CheckKitSheet: View {
       VStack(alignment: .leading, spacing: 8) {
         Label(
           "This kit is for an earlier sync key of \(name). It does not open the vault.",
-          systemImage: "exclamationmark.triangle.fill"
+          systemImage: "exclamationmark.circle.fill"
         )
         .foregroundStyle(.orange)
         .fixedSize(horizontal: false, vertical: true)

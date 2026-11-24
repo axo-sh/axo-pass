@@ -77,7 +77,7 @@ struct ExportSshKeySheet: View {
       }
       .formStyle(.columns)
       if let message {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
+        Label(message, systemImage: "exclamationmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.red)
           .fixedSize(horizontal: false, vertical: true)

@@ -272,7 +272,7 @@ struct SyncSettingsView: View {
             .lineLimit(1)
             .truncationMode(.middle)
           if device.keysFlagged {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: "exclamationmark.circle.fill")
               .foregroundStyle(.orange)
               .help(
                 "This device published keys that differ from the keys pinned for it. The pinned keys are used."
