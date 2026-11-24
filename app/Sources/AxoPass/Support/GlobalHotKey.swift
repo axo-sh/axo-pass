@@ -28,7 +28,7 @@ struct HotKey: Equatable, RawRepresentable {
     guard !modifiers.intersection([.command, .option, .control]).isEmpty else { return nil }
     let name =
       Self.specialKeyNames[Int(event.keyCode)]
-      ?? event.charactersIgnoringModifiers?.uppercased()
+      ?? event.characters(byApplyingModifiers: [])?.uppercased()
       ?? ""
     guard !name.isEmpty else { return nil }
     self.init(keyCode: event.keyCode, modifiers: modifiers, keyName: name)
