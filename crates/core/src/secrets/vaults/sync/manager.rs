@@ -79,6 +79,7 @@ use super::pairing::dismissed::DismissedRequests;
 use super::pairing::prompt::PairingPrompt;
 use super::pairing::watcher::{POLL_INTERVAL, PairingWatcher};
 use super::pairing::{PairWait, PairedVault, PendingPairing};
+use super::scan_status::{self, ScanOutcome};
 use super::sidecar::Sidecar;
 use super::state_file::StateHash;
 use super::sync_log;
@@ -202,6 +203,8 @@ enum Message {
     Pair(Box<PairingStart>),
     /// The user finished the pairing of the new Mac.
     FinishPairing,
+    /// The user asks to scan this vault for peer changes now.
+    SyncNow(Uuid),
     /// The user asks to run the failed import of this vault again.
     RetryImport(Uuid),
     /// A watch of the pairing of the new Mac reported a change.
@@ -378,6 +381,12 @@ impl SyncManager {
     /// request.
     pub fn finish_pairing(&self) {
         let _ = self.sender.send(Message::FinishPairing);
+    }
+
+    /// Scan vault `vault_id` for peer changes now, and join them. Does
+    /// nothing if the vault is not synced.
+    pub fn sync_now(&self, vault_id: Uuid) {
+        let _ = self.sender.send(Message::SyncNow(vault_id));
     }
 
     /// Run the failed import of vault `vault_id` again. Does nothing if the
@@ -596,6 +605,7 @@ impl Worker {
         let mut changed = BTreeSet::new();
         let mut refreshed = BTreeSet::new();
         let mut import_changed = BTreeSet::new();
+        let mut requested = BTreeSet::new();
         let mut roots: Vec<TransportRoot> = Vec::new();
         let mut pairing_changed = false;
         for message in received {
@@ -620,6 +630,9 @@ impl Worker {
                         self.events.pairing_ended();
                     }
                 },
+                Message::SyncNow(vault_id) => {
+                    requested.insert(vault_id);
+                },
                 Message::RetryImport(vault_id) => self.retry_import(vault_id),
                 Message::PairingChanged => pairing_changed = true,
             }
@@ -630,7 +643,12 @@ impl Worker {
         if refresh {
             refreshed.extend(self.refresh());
         }
-        for &vault_id in changed.union(&refreshed) {
+        let scanned: BTreeSet<Uuid> = changed
+            .union(&refreshed)
+            .chain(&requested)
+            .copied()
+            .collect();
+        for vault_id in scanned {
             self.scan(vault_id, changed.contains(&vault_id));
         }
         self.retry_due();
@@ -1208,6 +1226,12 @@ impl Worker {
             },
             Err(e) => {
                 sync_log::warn(id, "Failed to join a peer change", &e);
+                scan_status::record(
+                    id,
+                    ScanOutcome::Failed {
+                        message: "Could not join a change from another device.".to_string(),
+                    },
+                );
                 locks.set_pending(id);
             },
         }
@@ -1311,11 +1335,17 @@ impl ManagedVault {
             Ok(changed) => changed,
             Err(e) => {
                 sync_log::warn(id, "Failed to list the peer state files", &e);
+                scan_status::record(
+                    id,
+                    ScanOutcome::Failed {
+                        message: "Could not read the synced folder.".to_string(),
+                    },
+                );
                 return false;
             },
         };
         let mut found = false;
-        let mut remote = false;
+        let mut waiting: u32 = 0;
         for file in &changed {
             if self.reported.contains(file) {
                 continue;
@@ -1332,15 +1362,23 @@ impl ManagedVault {
                         Some(format!("{} {hash}", replica.0)),
                     );
                 },
-                Ok(false) => remote = true,
+                Ok(false) => waiting += 1,
                 Err(e) => {
                     sync_log::warn(id, "Failed to check a state file", &format!("{hash}: {e}"));
-                    remote = true;
+                    waiting += 1;
                 },
             }
         }
         self.reported.retain(|file| changed.contains(file));
-        if remote {
+        scan_status::record(
+            id,
+            if waiting == 0 {
+                ScanOutcome::Synced
+            } else {
+                ScanOutcome::Waiting { files: waiting }
+            },
+        );
+        if waiting > 0 {
             sync_log::info(id, "Peer state file is not downloaded, download requested");
             if let Err(e) = transport.request_download(id) {
                 sync_log::warn(id, "Failed to request the download", &e);

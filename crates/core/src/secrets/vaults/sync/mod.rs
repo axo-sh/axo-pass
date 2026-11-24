@@ -25,6 +25,7 @@ pub mod repair;
 pub mod report;
 pub mod resolve;
 pub mod rotation;
+pub mod scan_status;
 pub mod setup;
 pub mod sidecar;
 pub mod state_file;
