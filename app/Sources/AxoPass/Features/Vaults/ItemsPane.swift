@@ -181,8 +181,9 @@ struct ItemsPane: View {
     }
   }
 
-  /// Shown for a vault with no items. "New Login" opens the sheet of the
-  /// toolbar menu. "Import" offers a password manager export or a backup.
+  /// Shown for a vault with no items. "New Login" and "New Item" open the
+  /// sheets of the toolbar menu. "Import" offers a password manager export or
+  /// a backup.
   private var emptyState: some View {
     ContentUnavailableView {
       Label("No Items", systemImage: "tray")
@@ -190,6 +191,7 @@ struct ItemsPane: View {
       Text("Add a login, or import items from a backup or another password manager.")
     } actions: {
       Button("New Login") { showingNewLoginSheet = true }
+      Button("New Item") { showingNewItemSheet = true }
       Menu("Import") {
         Button("Import Passwords…") { showingItemImport = true }
         Button("Import Backup…") { showingImport = true }
