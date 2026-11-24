@@ -814,7 +814,8 @@ private struct PasskeyAccountChoiceView: View {
   var body: some View {
     VStack(spacing: 14) {
       PromptConnection(
-        callerChain: callerChain, fallbackSystemImage: "lock.fill", appBundleId: appBundleId)
+        callerChain: callerChain, fallbackSystemImage: KeyIcon.vault.filledSymbol,
+        appBundleId: appBundleId)
 
       PromptHeadline(.plain("Choose an account for "), .bold(rpId))
 
@@ -875,7 +876,7 @@ private struct VaultUnlockView: View {
   var body: some View {
     VStack(spacing: 14) {
       PromptConnection(
-        callerChain: callerChain, fallbackSystemImage: "lock.fill",
+        callerChain: callerChain, fallbackSystemImage: KeyIcon.vault.filledSymbol,
         appBundleId: Self.connectionBundleId(caller: caller, appRequester: appRequester))
 
       PromptHeadline(parts: title)
@@ -913,7 +914,7 @@ private struct VaultUnlockView: View {
         // An AutoFill request spans every vault, so it carries no vault key.
         if !vaultKey.isEmpty {
           PromptSubjectCard(
-            systemImage: "lock.fill", title: vaultKey, detail: nil, items: secrets)
+            systemImage: KeyIcon.vault.filledSymbol, title: vaultKey, detail: nil, items: secrets)
         }
         if !isAutofillExtensionChain {
           CallerChainView(

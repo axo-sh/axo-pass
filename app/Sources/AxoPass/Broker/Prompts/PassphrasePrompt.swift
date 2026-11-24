@@ -292,6 +292,16 @@ extension PassphraseKind {
   var isListing: Bool {
     self == .keychainList || self == .ageList
   }
+
+  /// Icon of the key type. Keychain listings use the vault icon.
+  var keyIcon: KeyIcon {
+    switch self {
+    case .ssh: .ssh
+    case .gpg: .gpg
+    case .age, .ageList: .age
+    case .keychainList: .vault
+    }
+  }
 }
 
 /// The inline biometric prompt for a passphrase already in the keychain, or for
@@ -320,7 +330,8 @@ private struct PassphraseUnlockView: View {
 
   var body: some View {
     VStack(spacing: 14) {
-      PromptConnection(callerChain: prompt.callerChain)
+      PromptConnection(
+        callerChain: prompt.callerChain, fallbackSystemImage: prompt.kind.keyIcon.filledSymbol)
 
       PromptHeadline(parts: title)
 
@@ -359,7 +370,8 @@ private struct PassphraseEntryView: View {
 
   var body: some View {
     VStack(spacing: 14) {
-      PromptConnection(callerChain: prompt.callerChain)
+      PromptConnection(
+        callerChain: prompt.callerChain, fallbackSystemImage: prompt.kind.keyIcon.filledSymbol)
 
       PromptHeadline(parts: title)
 
@@ -515,7 +527,7 @@ private struct KeyInfoBox: View {
   var body: some View {
     if keyId != nil || description != nil {
       PromptSubjectCard(
-        systemImage: "key.fill",
+        systemImage: prompt.kind.keyIcon.filledSymbol,
         title: label ?? kindName,
         detail: subtitle.isEmpty ? nil : subtitle,
         rows: rows)

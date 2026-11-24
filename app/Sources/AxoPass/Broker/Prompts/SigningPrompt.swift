@@ -289,13 +289,14 @@ private struct SigningPromptView: View {
 
   var body: some View {
     VStack(spacing: 14) {
-      PromptConnection(callerChain: callerChain)
+      PromptConnection(
+        callerChain: callerChain, fallbackSystemImage: KeyIcon.ssh.filledSymbol)
 
       PromptHeadline(parts: title)
 
       VStack(spacing: 8) {
         PromptSubjectCard(
-          systemImage: "key.fill", title: keyName, detail: keyDetail, rows: keyRows)
+          systemImage: KeyIcon.ssh.filledSymbol, title: keyName, detail: keyDetail, rows: keyRows)
         CallerChainView(
           chain: callerChain, summary: PromptCaller.requesterName(chain: callerChain))
       }
