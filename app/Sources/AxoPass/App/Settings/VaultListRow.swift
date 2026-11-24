@@ -66,9 +66,16 @@ struct VaultListRow: View {
         Circle()
           .fill(status.color)
           .frame(width: 8, height: 8)
-        Text(vault.name)
-          .lineLimit(1)
-          .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 0) {
+          Text(vault.name)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          if model.autofillExcludedVaults.contains(vault.key) {
+            Text("AutoFill disabled")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
         Spacer(minLength: 8)
         Text(status.line)
           .foregroundStyle(.secondary)
@@ -124,9 +131,6 @@ struct VaultListRow: View {
   /// Row of a vault in the synced folder.
   private func remoteVaultRow(_ vault: RemoteVaultRef) -> some View {
     HStack(spacing: 8) {
-      // Placeholder for the status dot, so names line up with the rows above.
-      Color.clear
-        .frame(width: 8, height: 8)
       Text(vault.id)
         .lineLimit(1)
         .truncationMode(.middle)

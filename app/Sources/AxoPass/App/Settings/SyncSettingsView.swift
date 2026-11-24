@@ -62,8 +62,8 @@ struct SyncSettingsView: View {
   @ViewBuilder
   private var syncKeysRow: some View {
     if !sync.syncedVaults.isEmpty {
-      SettingsRow("Sync keys:") {
-        Button("Reset Sync Keys…") { sync.showInSettings(.rotateKey(nil)) }
+      SettingsRow("Vaults:") {
+        Button("Reset All Sync Keys…") { sync.showInSettings(.rotateKey(nil)) }
         Text(
           "Use this if someone else may have a copy of your synced folder or a recovery kit. Your devices keep access."
         )
