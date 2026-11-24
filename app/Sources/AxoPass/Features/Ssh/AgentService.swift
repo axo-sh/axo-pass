@@ -116,11 +116,9 @@ final class AgentService {
   /// - On launch, registers the launchd service if "start on login" is on and
   ///   it is not registered.
   /// - On launch, starts a detached agent if the service cannot run it.
-  ///   `startIfStopped` is false for a launch by the broker, which must not
-  ///   bring back an agent the user stopped.
   /// - Restarts an agent whose version differs from the bundled `ap`, or a
   ///   detached agent that the service can now replace.
-  func sync(launch: Bool, startIfStopped: Bool = true) async {
+  func sync(launch: Bool) async {
     refreshStatus()
     guard !isSyncing else { return }
     isSyncing = true
@@ -132,7 +130,7 @@ final class AgentService {
 
     guard isAgentRunning else {
       // With the service enabled, launchd starts the agent itself.
-      if launch && startsOnLogin && startIfStopped && status != .enabled {
+      if launch && startsOnLogin && status != .enabled {
         try? await core.startSshAgent()
       }
       return
