@@ -108,7 +108,8 @@ struct PairingSheet: View {
   private func codeStep(_ handle: PairingHandle) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(
-        "On a device that syncs your vaults, open Axo Pass, click the pairing request in the sidebar, and enter this code."
+        "Approve this pairing request by entering this code in Axo Pass on a device with synced vaults."
+          + (sync.isPairing ? " Pairing will continue in the background if you close this." : "")
       )
       .foregroundStyle(.secondary)
       .fixedSize(horizontal: false, vertical: true)
@@ -120,29 +121,25 @@ struct PairingSheet: View {
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
 
-      let received = handle.vaultIds().filter { sync.imports[$0] != nil }
-      if received.isEmpty {
-        Text("No vaults received yet.")
-          .foregroundStyle(.secondary)
-      } else {
+      let progress = handle.vaultIds().compactMap { id in sync.imports[id].map { (id, $0) } }
+      let shown = progress.filter { !$0.1.isNotSharedYet }
+      if !shown.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
-          ForEach(received, id: \.self) { vaultId in
-            if let progress = sync.imports[vaultId] {
-              importRow(vaultId, progress)
-            }
+          ForEach(shown, id: \.0) { vaultId, progress in
+            importRow(vaultId, progress)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
       }
-
-      Text(
-        "Pairing continues in the background after you close this."
-      )
-      .font(.callout)
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
+      // Vaults that wait for the approval have no name to show yet.
+      if shown.count < handle.vaultIds().count {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text("Waiting for approval…").foregroundStyle(.secondary)
+        }
+      }
 
       HStack {
         if sync.activePairing != nil {
@@ -205,7 +202,7 @@ struct PairingSheet: View {
     case .paired: return "Received"
     case .waiting: return "Waiting for files from the other device"
     case .awaitingKey(let message), .blocked(let message): return message
-    case .imported: return "Ready"
+    case .imported: return "Synced"
     case .failed(let message): return "Failed: \(message)"
     }
   }
@@ -223,7 +220,7 @@ struct PairingPromptSheet: View {
 
   private enum Step {
     case code
-    case share(name: String, vaults: [PairingVaultInfo])
+    case share(match: PairingMatchInfo, vaults: [PairingVaultInfo])
     case shared(vaults: [PairingVaultInfo], results: [PairingGrantInfo])
   }
 
@@ -240,7 +237,7 @@ struct PairingPromptSheet: View {
 
       switch step {
       case .code: codeStep
-      case .share(let name, let vaults): shareStep(name, vaults)
+      case .share(let match, let vaults): shareStep(match, vaults)
       case .shared(let vaults, let results): sharedStep(vaults, results)
       }
     }
@@ -320,13 +317,13 @@ struct PairingPromptSheet: View {
     Task {
       defer { isWorking = false }
       do {
-        guard let name = try await sync.matchCode(root: root, code: code) else {
+        guard let match = try await sync.matchCode(root: root, code: code) else {
           noMatch = true
           return
         }
         let vaults = try await sync.pairingVaults(root: root, code: code)
         picked = []
-        step = .share(name: name, vaults: vaults)
+        step = .share(match: match, vaults: vaults)
       } catch {
         self.error = error.userMessage
       }
@@ -349,10 +346,17 @@ struct PairingPromptSheet: View {
 
   // MARK: - Share
 
-  private func shareStep(_ name: String, _ vaults: [PairingVaultInfo]) -> some View {
+  private func shareStep(_ match: PairingMatchInfo, _ vaults: [PairingVaultInfo]) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("The code matches the request of “\(name)”.")
-        .fixedSize(horizontal: false, vertical: true)
+      GroupedTable([match], id: \.name) { match in
+        VStack(alignment: .leading, spacing: 2) {
+          Text(match.name)
+          Text(requestDetail(match))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
 
       if vaults.isEmpty {
         Text("This Mac does not sync any of the requested vaults.")
@@ -362,20 +366,17 @@ struct PairingPromptSheet: View {
         Text("Choose the vaults to share.")
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(vaults, id: \.vaultId) { vault in
-            Toggle(
-              vault.name ?? vault.vaultKey,
-              isOn: Binding(
-                get: { picked.contains(vault.vaultId) },
-                set: { on in
-                  if on { picked.insert(vault.vaultId) } else { picked.remove(vault.vaultId) }
-                }))
-          }
+        GroupedTable(vaults, id: \.vaultId) { vault in
+          Toggle(
+            vault.name ?? vault.vaultKey,
+            isOn: Binding(
+              get: { picked.contains(vault.vaultId) },
+              set: { on in
+                if on { picked.insert(vault.vaultId) } else { picked.remove(vault.vaultId) }
+              })
+          )
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
       }
 
       if let error { SyncErrorLabel(message: error) }
@@ -390,6 +391,22 @@ struct PairingPromptSheet: View {
           .disabled(picked.isEmpty || isWorking)
       }
     }
+  }
+
+  /// Request age and number of requested vaults, as one line.
+  private func requestDetail(_ match: PairingMatchInfo) -> String {
+    var parts: [String] = []
+    if let seconds = match.ageSeconds {
+      switch seconds {
+      case ..<60: parts.append("Requested \(seconds) s ago")
+      case ..<3600: parts.append("Requested \(seconds / 60) min ago")
+      case ..<86400: parts.append("Requested \(seconds / 3600) h ago")
+      default: parts.append("Requested \(seconds / 86400) d ago")
+      }
+    }
+    let count = match.requestedVaultCount
+    parts.append(count == 1 ? "Asks for 1 vault" : "Asks for \(count) vaults")
+    return parts.joined(separator: " · ")
   }
 
   /// Grant the picked vaults once.
@@ -414,29 +431,24 @@ struct PairingPromptSheet: View {
     -> some View
   {
     VStack(alignment: .leading, spacing: 12) {
-      VStack(alignment: .leading, spacing: 6) {
-        ForEach(results, id: \.vaultId) { result in
-          let vault = vaults.first { $0.vaultId == result.vaultId }
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if case .granted = result.outcome {
-              Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            } else {
-              Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-            }
-            Text(vault.map { $0.name ?? $0.vaultKey } ?? result.vaultId)
-            Spacer(minLength: 8)
-            Text(outcomeText(result.outcome))
-              .font(.callout)
-              .foregroundStyle(.secondary)
-              .lineLimit(3)
-              .multilineTextAlignment(.trailing)
-              .textSelection(.enabled)
+      GroupedTable(results, id: \.vaultId) { result in
+        let vault = vaults.first { $0.vaultId == result.vaultId }
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          if case .granted = result.outcome {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+          } else {
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
           }
+          Text(vault.map { $0.name ?? $0.vaultKey } ?? result.vaultId)
+          Spacer(minLength: 8)
+          Text(outcomeText(result.outcome))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+            .multilineTextAlignment(.trailing)
+            .textSelection(.enabled)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(8)
-      .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
 
       Text("The new device adds each vault once its files download.")
         .foregroundStyle(.secondary)
@@ -452,9 +464,9 @@ struct PairingPromptSheet: View {
 
   private func outcomeText(_ outcome: GrantOutcomeInfo) -> String {
     switch outcome {
-    case .granted: return "Shared"
-    case .conflict: return "Not shared. This vault knows the new device with other keys."
-    case .notTrusted(let reason): return "Not shared. \(reason)"
+    case .granted: return "Approved"
+    case .conflict: return "Not approved. This vault knows the new device with other keys."
+    case .notTrusted(let reason): return "Not approved. \(reason)"
     case .failed(let message): return "Failed: \(message)"
     }
   }

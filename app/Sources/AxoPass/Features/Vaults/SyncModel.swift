@@ -44,6 +44,13 @@ enum VaultImportProgress: Equatable {
     }
   }
 
+  /// Whether the vault waits for the approval, with no other reason. Matches
+  /// the text of `PairWait::NoKeyFile` in the core.
+  var isNotSharedYet: Bool {
+    if case .awaitingKey(let message) = self { return message == "Not shared yet" }
+    return false
+  }
+
   /// Whether the sync key of the vault arrived.
   var hasKey: Bool {
     if case .awaitingKey = self { return false }
@@ -514,6 +521,13 @@ final class SyncModel {
   func cancelPairing() {
     try? activePairing?.finish()
     activePairing = nil
+    dropImportsAwaitingKey()
+  }
+
+  /// Remove imports whose sync key has not arrived. No pairing remains that
+  /// could deliver it, so they would stay pending.
+  private func dropImportsAwaitingKey() {
+    imports = imports.filter { $0.value.hasKey }
   }
 
   /// Show the pairing of this Mac and the requests in the synced folder.

@@ -1,10 +1,9 @@
 import AxoPassFFI
 import SwiftUI
 
-/// Pairing of this Mac as the new Mac, and the pairing requests in the synced
-/// folder. A request from another Mac shows its id and age, since its computer
-/// name is unknown before a code matches. A request older than the pairing
-/// expiry cannot be live, so it is deleted at once. A younger one asks first.
+/// Pairing requests in the synced folder. A request shows its age, since its
+/// computer name is unknown before a code matches. A request older than the pairing
+/// expiry cannot be live, so it is deleted immediately. A younger one asks first.
 struct PendingPairingsSheet: View {
   @Environment(SyncModel.self) private var sync
   @Environment(VaultsModel.self) private var model
@@ -26,11 +25,8 @@ struct PendingPairingsSheet: View {
       Text("Pending Pairings").font(.headline)
 
       ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          thisMacSection
-          folderSection
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        folderSection
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
       .frame(maxHeight: 400)
 
@@ -64,109 +60,22 @@ struct PendingPairingsSheet: View {
     }
   }
 
-  // MARK: - This Mac
-
-  private var thisMacSection: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("This Mac").font(.subheadline.weight(.semibold))
-      if let pairing = sync.activePairing {
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(pairing.vaultIds(), id: \.self) { vaultId in
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-              Text(vaultName(vaultId))
-              Spacer(minLength: 8)
-              Text(importText(vaultId))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .multilineTextAlignment(.trailing)
-              if case .failed? = sync.imports[vaultId] {
-                Button("Retry") { sync.retryImport(vaultId) }
-                  .controlSize(.small)
-              }
-            }
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        HStack {
-          Button("Show Code") { sync.sheet = .pair(root: root, join: nil) }
-          Button("Cancel Pairing", role: .destructive) { sync.cancelPairing() }
-        }
-      } else {
-        let pending = sync.imports.filter { $0.value.isPending || isFailed($0.value) }
-        if pending.isEmpty {
-          Text("No pairing runs on this Mac.").foregroundStyle(.secondary)
-        } else {
-          VStack(alignment: .leading, spacing: 6) {
-            ForEach(pending.keys.sorted(), id: \.self) { vaultId in
-              HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(vaultName(vaultId))
-                Spacer(minLength: 8)
-                Text(importText(vaultId))
-                  .font(.callout)
-                  .foregroundStyle(.secondary)
-                  .lineLimit(3)
-                  .multilineTextAlignment(.trailing)
-                if isFailed(pending[vaultId]) {
-                  Button("Retry") { sync.retryImport(vaultId) }
-                    .controlSize(.small)
-                }
-              }
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(8)
-          .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-        }
-      }
-    }
-  }
-
-  private func isFailed(_ progress: VaultImportProgress?) -> Bool {
-    if case .failed? = progress { return true }
-    return false
-  }
-
-  private func vaultName(_ vaultId: String) -> String {
-    var key: String? = model.vaultKey(id: vaultId)
-    if case .imported(let vaultKey)? = sync.imports[vaultId] { key = vaultKey }
-    if let key, let vault = model.vaults.first(where: { $0.key == key }) {
-      return vault.name ?? vault.key
-    }
-    return key ?? "Vault \(vaultId)"
-  }
-
-  private func importText(_ vaultId: String) -> String {
-    switch sync.imports[vaultId] {
-    case nil: return "Waiting for the other device to share"
-    case .paired?: return "Received"
-    case .waiting?: return "Waiting for files from the other device"
-    case .awaitingKey(let message)?, .blocked(let message)?: return message
-    case .imported?: return "Ready"
-    case .failed(let message)?: return "Failed: \(message)"
-    }
-  }
-
   // MARK: - Requests in the folder
 
   private var ownRequestId: String? { sync.activePairing?.requestId() }
 
   private var folderSection: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Requests in the synced folder").font(.subheadline.weight(.semibold))
-      Text(rootDescription(root))
-        .font(.caption.monospaced())
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .truncationMode(.middle)
       if let requests {
         if requests.isEmpty {
           Text("No requests.").foregroundStyle(.secondary)
         } else {
           VStack(alignment: .leading, spacing: 6) {
-            ForEach(requests, id: \.requestId) { request in
+            ForEach(
+              requests.filter { $0.requestId == ownRequestId }
+                + requests.filter { $0.requestId != ownRequestId },
+              id: \.requestId
+            ) { request in
               requestRow(request)
             }
           }
@@ -186,16 +95,12 @@ struct PendingPairingsSheet: View {
   private func requestRow(_ request: PairingRequestInfo) -> some View {
     let own = request.requestId == ownRequestId
     return HStack(alignment: .firstTextBaseline, spacing: 8) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(own ? "This Mac" : "Another device")
-        Text(String(request.requestId.prefix(8)))
-          .font(.caption.monospaced())
-          .foregroundStyle(.secondary)
-      }
+      Text(
+        (own ? "This Mac, " : "")
+          + ageText(request.ageSeconds) + (isExpired(request) ? ", expired" : "")
+      )
+      .help("Request id: \(request.requestId)")
       Spacer(minLength: 8)
-      Text(ageText(request.ageSeconds) + (isExpired(request) ? ", expired" : ""))
-        .font(.callout)
-        .foregroundStyle(.secondary)
       if !own {
         Button("Delete", role: .destructive) {
           if isExpired(request) { delete(request) } else { confirming = request }
