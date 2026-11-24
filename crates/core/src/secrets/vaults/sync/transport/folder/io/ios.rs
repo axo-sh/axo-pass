@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 pub(super) use super::apple::{RENAME_UNSUPPORTED, rename_noreplace};
 use super::{
-    FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place, read_limited,
-    write_temp,
+    DownloadDone, FileStatus, FolderIo, WriteMode, delete_path, metadata_status, move_into_place,
+    read_limited, write_temp,
 };
 
 /// Whether the contents of the file are not local.
@@ -51,5 +51,5 @@ impl FolderIo for CoordinatedIo {
         delete_path(path)
     }
 
-    fn download(&self, _paths: Vec<PathBuf>) {}
+    fn download(&self, _paths: Vec<PathBuf>, _done: DownloadDone) {}
 }
