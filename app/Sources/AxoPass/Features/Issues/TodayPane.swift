@@ -123,7 +123,7 @@ struct TodayPane: View {
       list.append(StatusCheck("SSH agent", "SSH agent not running", passing: false))
     case nil: break
     }
-    if issues.sshConf?.state == .configured { list.append(StatusCheck("SSH", "ssh uses Axo Pass")) }
+    if issues.sshConf?.state == .configured { list.append(StatusCheck("SSH", "SSH uses Axo Pass")) }
     if issues.gpgConf?.state == .configured { list.append(StatusCheck("GPG", "gpg uses Axo Pass")) }
     return list
   }

@@ -113,7 +113,7 @@ final class IssueNotifier: NSObject {
   private func body(_ issue: Issue) -> String {
     switch issue {
     case .agentNotRunning:
-      return "ssh cannot use keys in Axo Pass until the agent starts."
+      return "SSH cannot use keys in Axo Pass until the agent starts."
     case .syncStopped:
       return "Changes to this vault are not synced."
     default:

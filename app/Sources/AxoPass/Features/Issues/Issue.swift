@@ -267,9 +267,9 @@ enum Issue: Hashable, Identifiable {
     case .agentNeedsApproval:
       return "Axo Pass agent needs approval in Login Items"
     case .identityAgentMissing:
-      return "ssh does not use the Axo Pass agent"
+      return "SSH does not use the Axo Pass agent"
     case .identityAgentOther:
-      return "ssh uses another agent"
+      return "SSH uses another agent"
     case .shellIntegrationMissing:
       return "ap is not set up in zsh"
     case .pinentryMissing:
