@@ -69,8 +69,9 @@ fn probe_access_group() -> anyhow::Result<String> {
             anyhow::bail!("keychain probe returned no attributes");
         };
         // Both calls follow the Create Rule, so the proxy owns the result.
-        let attributes = CFDictionaryProxy::from_raw(ret.as_ptr().cast::<CFDictionary>().cast_const())
-            .ok_or_else(|| anyhow::anyhow!("keychain probe returned no attributes"))?;
+        let attributes =
+            CFDictionaryProxy::from_raw(ret.as_ptr().cast::<CFDictionary>().cast_const())
+                .ok_or_else(|| anyhow::anyhow!("keychain probe returned no attributes"))?;
         attributes
             .get_string(kSecAttrAccessGroup.to_string())
             .ok_or_else(|| anyhow::anyhow!("keychain item has no access group"))

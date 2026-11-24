@@ -14,9 +14,9 @@ use apple as platform;
 use jiff::Zoned;
 #[cfg(linux)]
 use linux as platform;
+pub(super) use platform::probe_vault_encryption_key;
 #[cfg(sim_keys)]
 use sim as platform;
-pub(super) use platform::probe_vault_encryption_key;
 
 use crate::core::auth::AuthContext;
 use crate::secrets::keychain::errors::KeychainError;

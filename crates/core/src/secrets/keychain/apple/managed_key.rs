@@ -25,8 +25,8 @@ pub use shared::KeyClass;
 use ssh_key::public::KeyData;
 use zeroize::Zeroizing;
 
-use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::apple::{AccessControl, CFErrorOut};
+use crate::secrets::keychain::errors::KeychainError;
 use crate::secrets::keychain::managed_key::shared::{alg, sign_alg};
 use crate::secrets::keychain::sec1_utils::sec1_to_ssh_ecdsa;
 

@@ -220,10 +220,7 @@ mod tests {
     #[test]
     fn default_used_without_override() {
         let cell = OnceLock::new();
-        assert_eq!(
-            data_in(&cell).ok(),
-            imp::data_dir().ok(),
-        );
+        assert_eq!(data_in(&cell).ok(), imp::data_dir().ok(),);
         assert_eq!(logs_in(&cell).ok(), imp::log_dir().ok());
         assert_eq!(cache_in(&cell).ok(), imp::cache_dir().ok());
     }
@@ -274,13 +271,19 @@ mod tests {
     #[test]
     fn missing_var_error_names_directory() {
         let err = resolve("cache", Err(Missing::Var("SOME_VAR"))).unwrap_err();
-        assert!(err.to_string().contains("cannot determine the cache directory"));
+        assert!(
+            err.to_string()
+                .contains("cannot determine the cache directory")
+        );
     }
 
     #[test]
     fn missing_var_error_gives_remedy() {
         let err = resolve("data", Err(Missing::Var("SOME_VAR"))).unwrap_err();
-        assert!(err.to_string().contains("Call `dirs::init` or set SOME_VAR"));
+        assert!(
+            err.to_string()
+                .contains("Call `dirs::init` or set SOME_VAR")
+        );
     }
 
     #[test]

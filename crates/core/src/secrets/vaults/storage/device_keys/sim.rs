@@ -20,7 +20,9 @@ const VAULT_ENCRYPTION_KEY_LABEL: &str = "vault-encryption-key";
 /// `vault-encryption-key` as a managed key, or `None` if it does not exist.
 fn load_encryption_key() -> Result<Option<ManagedKey>, KeychainError> {
     SoftwareKeys::load(VAULT_ENCRYPTION_KEY_LABEL)?
-        .map(|secret| ManagedKey::from_secret(Some(VAULT_ENCRYPTION_KEY_LABEL.to_string()), &secret))
+        .map(|secret| {
+            ManagedKey::from_secret(Some(VAULT_ENCRYPTION_KEY_LABEL.to_string()), &secret)
+        })
         .transpose()
 }
 
