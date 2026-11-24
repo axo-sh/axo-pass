@@ -904,7 +904,7 @@ pub enum Disabled {
 
 /// Outcome of one attempt of [`VaultWriter::write`].
 enum Attempt<R, F> {
-    Done(Committed<R>),
+    Done(Box<Committed<R>>),
     /// The wrapped file key changed. Holds the unused transaction function.
     Retry(F),
     /// The sync state is under a key id the unlock did not unwrap. Holds the
@@ -1036,7 +1036,7 @@ impl VaultWriter {
             let grant = grant.as_deref_mut();
             let step = step.as_deref_mut();
             match self.attempt(target, &unlock, &request, retry_key_missing, grant, step, f)? {
-                Attempt::Done(committed) => return Ok(committed),
+                Attempt::Done(committed) => return Ok(*committed),
                 Attempt::Retry(unused) => f = unused,
                 Attempt::KeyMissing(unused) => {
                     retry_key_missing = false;
@@ -1463,7 +1463,7 @@ impl VaultWriter {
         let rotation_pending = sync
             .as_ref()
             .is_some_and(|sync| !sync.rotation_prompts().is_empty());
-        Ok(Attempt::Done(Committed {
+        Ok(Attempt::Done(Box::new(Committed {
             value,
             vault: vh,
             vault_id: id,
@@ -1473,7 +1473,7 @@ impl VaultWriter {
             sync_status,
             recovery_kit_missing,
             rotation_pending,
-        }))
+        })))
     }
 
     /// [`Self::write`] on a vault already unlocked in memory, with its
@@ -1968,7 +1968,7 @@ impl VaultWriter {
                         let path = committed.vault.path.clone();
                         committed.value = self.copy_final(committed.vault_id, Some(&path));
                     }
-                    return Ok(committed);
+                    return Ok(*committed);
                 },
                 Attempt::Retry(()) => {},
                 Attempt::KeyMissing(()) => retry_key_missing = false,
@@ -2118,7 +2118,7 @@ impl VaultWriter {
             vault_lock.save_count()
         };
         log::info!("Disabled sync of vault {id}: {disabled:?}");
-        Ok(Attempt::Done(Committed {
+        Ok(Attempt::Done(Box::new(Committed {
             value: disabled,
             vault: vh,
             vault_id: id,
@@ -2128,7 +2128,7 @@ impl VaultWriter {
             sync_status: None,
             recovery_kit_missing: false,
             rotation_pending: false,
-        }))
+        })))
     }
 
     /// Delete the own replica directory of `sync` in the synced folder, for
