@@ -24,4 +24,19 @@ final class ShellIntegrationModel {
     }
     isConfiguring = false
   }
+
+  /// Link `ap` and check a new zsh for the hook the user added by hand.
+  /// Returns whether the hook was found.
+  func linkAndVerify() async -> Bool {
+    isConfiguring = true
+    configureError = nil
+    do {
+      try await setupStatus.installApSymlink()
+      try await setupStatus.verifyShellHook()
+    } catch {
+      configureError = error.userMessage
+    }
+    isConfiguring = false
+    return status?.hookConfigured == true
+  }
 }

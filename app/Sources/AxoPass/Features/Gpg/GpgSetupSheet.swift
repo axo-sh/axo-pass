@@ -122,12 +122,11 @@ struct GpgSetupSheet: View {
     VStack(alignment: .leading, spacing: 16) {
       SetupHeader(
         title: "GPG Ready", detail: "gpg-agent prompts for passphrases in Axo Pass.")
-      SetupDoneSummary(
-        path: confPath, activeLine: status?.expectedLine, replaced: replacedProgram)
-      if case .success = model.testResult {
-        Label("Signing works", systemImage: "checkmark.circle.fill")
-          .font(.callout)
-          .foregroundStyle(.green)
+      SetupDoneCard(summary: "Configured in \(confPath).", code: status?.expectedLine) {
+        if let replacedProgram { SetupReplacedRow(replaced: replacedProgram) }
+        if case .success = model.testResult {
+          SetupCardRow(symbol: "checkmark.circle.fill", tint: .green) { Text("Signing works.") }
+        }
       }
       Spacer(minLength: 0)
       HStack {

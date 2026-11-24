@@ -110,12 +110,16 @@ struct SshSetupSheet: View {
   private var doneStep: some View {
     VStack(alignment: .leading, spacing: 16) {
       SetupHeader(title: "SSH Agent Ready", detail: "ssh now uses the Axo Pass agent.")
-      SetupDoneSummary(
-        path: configPath, activeLine: status.map(expectedLine), replaced: replacedAgent)
-      if case .success = model.testResult {
-        Label("SSH connected to Axo Pass SSH agent", systemImage: "checkmark.circle.fill")
-          .font(.callout)
-          .foregroundStyle(.green)
+      SetupDoneCard(
+        summary: "Configured in \(configPath).",
+        code: status.map { "Host *\n  \(expectedLine(for: $0))" }
+      ) {
+        if let replacedAgent { SetupReplacedRow(replaced: replacedAgent) }
+        if case .success = model.testResult {
+          SetupCardRow(symbol: "checkmark.circle.fill", tint: .green) {
+            Text("SSH connected to Axo Pass SSH agent.")
+          }
+        }
       }
       Spacer(minLength: 0)
       HStack {

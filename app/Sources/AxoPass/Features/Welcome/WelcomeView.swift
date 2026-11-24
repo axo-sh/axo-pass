@@ -34,6 +34,11 @@ struct WelcomeView: View {
   /// Whether the import flow is showing in place of the choices. Finishing it
   /// ends the choice.
   @State private var showingItemImport = false
+  /// Whether the integrations page is showing. A choice that brought in a
+  /// vault ends here, and its Done button ends the first run.
+  @State private var showingIntegrations = false
+  @State private var sshModel = SshModel()
+  @State private var shellModel = ShellIntegrationModel()
 
   private let width: CGFloat = 460
 
@@ -51,17 +56,24 @@ struct WelcomeView: View {
   var body: some View {
     ZStack(alignment: .top) {
       choicesPage
-        .offset(x: showingItemImport ? -width : 0)
-        .allowsHitTesting(!showingItemImport)
-        .accessibilityHidden(showingItemImport)
+        .offset(x: showingItemImport || showingIntegrations ? -width : 0)
+        .allowsHitTesting(!showingItemImport && !showingIntegrations)
+        .accessibilityHidden(showingItemImport || showingIntegrations)
 
       if showingItemImport {
         ItemImportSheet(
           model: model,
-          onFinished: { _ in finish() },
+          onFinished: { _ in showIntegrations() },
           onCancel: { setShowingItemImport(false) }
         )
         .transition(.move(edge: .trailing))
+        .offset(x: showingIntegrations ? -width : 0)
+        .allowsHitTesting(!showingIntegrations)
+      }
+
+      if showingIntegrations {
+        WelcomeIntegrationsPage(ssh: sshModel, shell: shellModel, onDone: finish)
+          .transition(.move(edge: .trailing))
       }
     }
     .frame(width: width)
@@ -176,7 +188,7 @@ struct WelcomeView: View {
       switch choice {
       case .startFresh:
         if await model.addPersonalVault() {
-          finish()
+          showIntegrations()
         } else {
           error = model.actionError ?? "Could not create the vault."
         }
@@ -198,7 +210,12 @@ struct WelcomeView: View {
   /// pairing received one. Otherwise the window stays for another choice.
   private func endSyncChoice() {
     model.reload()
-    if !model.vaults.isEmpty || !sync.imports.isEmpty { finish() }
+    if !model.vaults.isEmpty || !sync.imports.isEmpty { showIntegrations() }
+  }
+
+  /// Slide the integrations page in. Its Done button completes the first run.
+  private func showIntegrations() {
+    withAnimation(.smooth(duration: 0.35)) { showingIntegrations = true }
   }
 
   /// Mark the first run complete, close this window, and open the main window.

@@ -828,17 +828,22 @@ private struct ShellSettingsRows: View {
 
   var body: some View {
     SettingsRow("Shell:") {
-      HStack(spacing: 8) {
-        if let status = model.status {
+      if let status = model.status {
+        HStack(spacing: 8) {
           StatusLabel(
-            status.configured ? "Configured" : "Not Configured",
-            symbol: status.configured ? "checkmark.circle.fill" : "circle",
-            color: status.configured ? .green : .secondary,
-            path: status.zshrcPath)
+            status.hookConfigured ? "Configured" : "Not Configured",
+            symbol: status.hookConfigured ? "checkmark.circle.fill" : "circle",
+            color: status.hookConfigured ? .green : .secondary,
+            path: status.zshrcConfigured || !status.hookConfigured ? status.zshrcPath : nil)
+          if model.isConfiguring {
+            ProgressView().controlSize(.small)
+          }
         }
-        if model.isConfiguring {
-          ProgressView().controlSize(.small)
-        }
+        StatusLabel(
+          status.symlinkOk ? "Symlink" : "Symlink missing",
+          symbol: status.symlinkOk ? "checkmark.circle.fill" : "exclamationmark.circle.fill",
+          color: status.symlinkOk ? .green : status.hookConfigured ? .orange : .secondary,
+          path: status.symlinkPath)
       }
       Text("Adds the `ap` command to zsh and shows ssh passphrase prompts in Axo Pass.")
         .captionStyle()

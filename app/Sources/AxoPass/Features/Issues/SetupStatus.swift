@@ -76,6 +76,16 @@ final class SetupStatus {
     shell = try await core.writeShellIntegration()
   }
 
+  /// Start a new zsh to see if it loads the shell hook, wherever the user
+  /// added it.
+  func verifyShellHook() async throws {
+    shell = try await core.verifyShellHook()
+  }
+
+  func installApSymlink() async throws {
+    shell = try await core.installApSymlink()
+  }
+
   func configureGpgConf() async throws {
     gpgConf = try await core.configureGpgAgentConf()
   }

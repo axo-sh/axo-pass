@@ -75,6 +75,7 @@ struct SetupAssistantFrame<Step: Hashable, Content: View>: View {
 struct SetupHeader: View {
   let title: String
   let detail: String
+  var detailLineSpacing: CGFloat = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -83,6 +84,7 @@ struct SetupHeader: View {
         .fontWeight(.semibold)
       Text(detail)
         .font(.callout)
+        .lineSpacing(detailLineSpacing)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -96,7 +98,7 @@ struct SetupCodeBlock: View {
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Text(text)
-        .font(.body.monospaced())
+        .font(.system(size: 12, design: .monospaced))
         .lineSpacing(3)
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
@@ -136,38 +138,97 @@ struct SetupReplaceWarning: View {
   }
 }
 
-/// Final step content: a checkmark with the config path, the active line, and
-/// the value that was commented out, if any.
-struct SetupDoneSummary: View {
-  let path: String
-  let activeLine: String?
-  var replaced: String? = nil
+/// Final step card. The first row is a checkmark with a summary and, if
+/// `code` is set, a toggle that shows the configured code. `rows` adds
+/// further rows below, each preceded by a divider.
+struct SetupDoneCard<Rows: View>: View {
+  let summary: String
+  var code: String? = nil
+  @ViewBuilder var rows: () -> Rows
+
+  @State private var showsCode = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Label {
-        Text("Configured in \(path).")
-          .textSelection(.enabled)
-      } icon: {
-        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-      }
-      .font(.callout)
-      if let activeLine {
-        SetupCodeBlock(text: activeLine)
-      }
-      if let replaced {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Previously configured, now commented out:")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text(replaced)
-            .font(.caption.monospaced())
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+    VStack(alignment: .leading, spacing: 0) {
+      Button {
+        withAnimation(.easeOut(duration: 0.15)) { showsCode.toggle() }
+      } label: {
+        HStack {
+          Label {
+            Text(summary).textSelection(.enabled)
+          } icon: {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+          }
+          Spacer(minLength: 0)
+          if code != nil {
+            Image(systemName: "chevron.right")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+              .rotationEffect(.degrees(showsCode ? 90 : 0))
+          }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .disabled(code == nil)
+      .accessibilityHint("Shows the configured code")
+      if showsCode, let code {
+        SetupCodeBlock(text: code)
+          .padding(.horizontal, 10)
+          .padding(.bottom, 10)
+      }
+      rows()
+    }
+    .font(.callout)
+    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10)
+        .strokeBorder(.separator)
+    }
+  }
+}
+
+extension SetupDoneCard where Rows == EmptyView {
+  init(summary: String, code: String? = nil) {
+    self.init(summary: summary, code: code) { EmptyView() }
+  }
+}
+
+/// Row of a `SetupDoneCard`, preceded by a divider.
+struct SetupCardRow<Content: View>: View {
+  let symbol: String
+  let tint: Color
+  @ViewBuilder let content: () -> Content
+
+  var body: some View {
+    Divider()
+    Label {
+      content().textSelection(.enabled)
+    } icon: {
+      Image(systemName: symbol).foregroundStyle(tint)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .fixedSize(horizontal: false, vertical: true)
+  }
+}
+
+/// Card row that reports the value that was commented out.
+struct SetupReplacedRow: View {
+  let replaced: String
+
+  var body: some View {
+    SetupCardRow(symbol: "minus.circle.fill", tint: .secondary) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Previously configured, now commented out:")
+        Text(replaced)
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
       }
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
