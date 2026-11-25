@@ -8,7 +8,9 @@ use ssh_key::PublicKey;
 use ssh_key::public::KeyData;
 
 use crate::cli::commands::ssh_agent::audit::SignKeySource;
+use crate::cli::commands::ssh_agent::autoload_credential::LoadError;
 use crate::cli::commands::ssh_agent::credential::{Credential, CredentialError};
+use crate::cli::commands::ssh_agent::stored_credential::StoredCredential;
 
 /// A key held by the app: a Secure Enclave key or an SSH key stored in a vault.
 ///
@@ -27,6 +29,64 @@ pub struct ManagedCredential {
     /// The agent lists the key in `request_identities`. The agent signs with a
     /// key that is not listed if a client names it.
     pub auto_load: bool,
+}
+
+impl ManagedCredential {
+    /// Whether the agent loads the key on first use. True for a vault key with
+    /// auto-load on. The app signs with any other managed key and the agent
+    /// never holds it.
+    pub fn loads_into_agent(&self) -> bool {
+        matches!(self.source, KeySource::Vault { .. }) && self.auto_load
+    }
+
+    /// Ask the app for the private key. Blocks while the user answers the vault
+    /// access prompt. The credential is marked auto-load, so every later use is
+    /// confirmed unless an app grant applies. The signature that caused the
+    /// load is covered by the vault prompt.
+    pub fn load(
+        &self,
+        caller: Option<&str>,
+        caller_chain: &[ProcessNode],
+        purpose: Option<&SignPurpose>,
+        requester: Option<BorrowedFd<'_>>,
+    ) -> Result<StoredCredential, LoadError> {
+        let fingerprint = self
+            .public_key
+            .fingerprint(ssh_key::HashAlg::Sha256)
+            .to_string();
+        let comment = (!self.comment.is_empty()).then_some(self.comment.as_str());
+        let private = call_broker(|| {
+            app_broker::request_vault_key(
+                &fingerprint,
+                comment,
+                caller,
+                caller_chain,
+                purpose,
+                requester,
+            )
+        })
+        .map_err(|e| match e {
+            BrokerError::Cancelled | BrokerError::RequesterDisconnected => {
+                LoadError::Cancelled(fingerprint.clone())
+            },
+            e => LoadError::Failed(format!("Could not load the vault key {fingerprint}: {e}")),
+        })?;
+
+        let comment = if private.comment().is_empty() {
+            self.comment.clone()
+        } else {
+            private.comment().to_string()
+        };
+        log::debug!("Loaded vault key {fingerprint} {}", self.key_label);
+
+        let mut credential = StoredCredential::from(proto::PrivateCredential::Key {
+            privkey: private.key_data().clone(),
+            comment,
+        });
+        credential.autoload = true;
+        credential.vault_loaded = true;
+        Ok(credential)
+    }
 }
 
 impl TryFrom<ManagedIdentity> for ManagedCredential {
@@ -188,6 +248,39 @@ mod tests {
             source,
             auto_load: true,
         }
+    }
+
+    fn vault_source() -> KeySource {
+        KeySource::Vault {
+            vault_key: "personal".to_string(),
+            item_key: "github".to_string(),
+            credential_key: "key".to_string(),
+        }
+    }
+
+    #[test]
+    fn vault_key_with_auto_load_loads_into_agent() {
+        let credential = ManagedCredential::try_from(identity(vault_source())).unwrap();
+
+        assert!(credential.loads_into_agent());
+    }
+
+    #[test]
+    fn vault_key_without_auto_load_signed_by_app() {
+        let mut identity = identity(vault_source());
+        identity.auto_load = false;
+
+        let credential = ManagedCredential::try_from(identity).unwrap();
+
+        assert!(!credential.loads_into_agent());
+        assert_eq!(credential.key_source(), SignKeySource::Vault);
+    }
+
+    #[test]
+    fn secure_enclave_key_signed_by_app() {
+        let credential = ManagedCredential::try_from(identity(KeySource::SecureEnclave)).unwrap();
+
+        assert!(!credential.loads_into_agent());
     }
 
     #[test]

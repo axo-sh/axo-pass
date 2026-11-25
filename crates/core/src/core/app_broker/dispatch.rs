@@ -110,6 +110,29 @@ pub(super) async fn serve_request(
                 )
                 .await
             },
+            WireRequest::LoadVaultKey {
+                fingerprint,
+                comment,
+                caller,
+                caller_chain: _,
+                purpose,
+            } => {
+                let request = ssh::VaultLoadRequest {
+                    fingerprint,
+                    comment,
+                    caller,
+                    caller_chain: caller_chain.clone(),
+                    purpose,
+                };
+                ssh::load_vault(
+                    &*authorizers.vault,
+                    &authorizers.vaults,
+                    request,
+                    actor,
+                    &in_flight,
+                )
+                .await
+            },
             WireRequest::AuthorizeKeyUse {
                 fingerprint,
                 comment,

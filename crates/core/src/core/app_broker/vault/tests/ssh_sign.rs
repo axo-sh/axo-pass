@@ -44,6 +44,7 @@ fn sign_action(fingerprint: &str, purpose: Option<SignPurpose>) -> VaultAction {
         fingerprint: fingerprint.to_string(),
         comment: Some("laptop".to_string()),
         purpose,
+        grant_candidate: None,
     }
 }
 

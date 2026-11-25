@@ -113,6 +113,22 @@ pub enum VaultAction {
         fingerprint: String,
         comment: Option<String>,
         purpose: Option<SshSignPurpose>,
+        /// The app the prompt may offer lasting access to.
+        grant_candidate: Option<SshGrantApp>,
+    },
+    /// The SSH agent is loading an SSH key stored in the vault the prompt
+    /// names, to hold in memory. The fields are those of `SignSshKey`, since a
+    /// signature caused the load.
+    LoadSshKey {
+        item_key: String,
+        credential_key: String,
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+        comment: Option<String>,
+        purpose: Option<SshSignPurpose>,
+        /// The app the prompt may offer lasting access to. A grant applies to
+        /// later uses of the loaded key, also while the app is locked.
+        grant_candidate: Option<SshGrantApp>,
     },
 }
 
@@ -406,12 +422,29 @@ impl From<app_broker::VaultAction> for VaultAction {
                 fingerprint,
                 comment,
                 purpose,
+                grant_candidate,
             } => Self::SignSshKey {
                 item_key,
                 credential_key,
                 fingerprint,
                 comment,
                 purpose: purpose.map(SshSignPurpose::from),
+                grant_candidate: grant_candidate.map(SshGrantApp::from),
+            },
+            app_broker::VaultAction::LoadSshKey {
+                item_key,
+                credential_key,
+                fingerprint,
+                comment,
+                purpose,
+                grant_candidate,
+            } => Self::LoadSshKey {
+                item_key,
+                credential_key,
+                fingerprint,
+                comment,
+                purpose: purpose.map(SshSignPurpose::from),
+                grant_candidate: grant_candidate.map(SshGrantApp::from),
             },
         }
     }

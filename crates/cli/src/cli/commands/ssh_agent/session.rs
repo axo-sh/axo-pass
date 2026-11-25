@@ -104,6 +104,9 @@ impl SshAgentSession {
         if credential.autoload {
             detail.push(("autoload", "true".to_string()));
         }
+        if credential.vault_loaded {
+            detail.push(("key_source", "vault".to_string()));
+        }
         if credential.expires_at.is_some() {
             detail.push(("lifetime_constrained", "true".to_string()));
         }
@@ -203,6 +206,52 @@ impl SshAgentSession {
         Ok(())
     }
 
+    /// Load `pubkey` into the shared state if it is a vault key with auto-load
+    /// on that is not loaded yet. Returns whether this call loaded it. The
+    /// vault access prompt that loads it covers the signature that caused
+    /// the load. Every later use is confirmed like an auto-load key, and
+    /// does not touch the vault.
+    async fn load_vault_key(
+        &self,
+        pubkey: &KeyData,
+        purpose: Option<&SignPurpose>,
+    ) -> Result<bool, AgentError> {
+        if self.find_stored_credential(pubkey).await.is_some() {
+            return Ok(false);
+        }
+        let Some(managed) = list_managed_credentials(self.requester())
+            .into_iter()
+            .find(|cred| cred.public_key == *pubkey && cred.loads_into_agent())
+        else {
+            return Ok(false);
+        };
+
+        // Concurrent first uses of one key wait here, then find it loaded.
+        let _guard = AUTOLOAD_LOCK.lock().await;
+        if self.find_stored_credential(pubkey).await.is_some() {
+            return Ok(false);
+        }
+
+        let credential = managed
+            .load(
+                self.caller.as_deref(),
+                self.caller_chain(),
+                purpose,
+                self.requester(),
+            )
+            .map_err(|e| {
+                match &e {
+                    LoadError::Cancelled(_) => log::debug!("{e}"),
+                    LoadError::Failed(_) => {
+                        log::error!("Failed to load vault key {}: {e}", managed.key_label)
+                    },
+                }
+                AgentError::Other(e.into())
+            })?;
+        self.store_credential(credential).await;
+        Ok(true)
+    }
+
     pub async fn remove_credential(&mut self, pubkey: &KeyData) -> Option<StoredCredential> {
         let mut state = self.state.lock().await;
         if let Some(pos) = state.iter().position(|cred| {
@@ -219,12 +268,23 @@ impl SshAgentSession {
 
     /// Run the checks that gate a signature and, if they pass, produce it.
     /// Callers record the `ssh.sign` audit event around this.
+    ///
+    /// With `approved_by_load`, the vault access prompt that loaded the key
+    /// approved this signature, so it is not confirmed again.
     async fn signature_for(
         &self,
         req: SignRequest,
         pubkey_data: &KeyData,
+        approved_by_load: bool,
     ) -> Result<Signature, AgentError> {
         let fingerprint = compute_short_sha256_fingerprint(pubkey_data);
+        // Looked up before `find_credential`, which holds a value that is not
+        // `Send` for the rest of the function.
+        let loaded = if approved_by_load {
+            self.find_stored_credential(pubkey_data).await
+        } else {
+            None
+        };
         let Some(stored_cred) = self.find_credential(pubkey_data).await else {
             log::debug!("request: sign with identity {fingerprint} - key not found");
             return Err(AgentError::Other("Key not found".into()));
@@ -308,15 +368,17 @@ impl SshAgentSession {
 
         // passed all checks, perform signing
         let purpose = self.sign_purpose(&req.data);
-        stored_cred
-            .sign(
+        let signed = match &loaded {
+            Some(credential) => credential.sign_approved(req),
+            None => stored_cred.sign(
                 req,
                 self.caller.as_deref(),
                 self.caller_chain(),
                 purpose.as_ref(),
                 self.requester(),
-            )
-            .map_err(|e| AgentError::Other(e.into()))
+            ),
+        };
+        signed.map_err(|e| AgentError::Other(e.into()))
     }
 
     /// Describe what `data` is a signature over, for the prompt: an
@@ -368,11 +430,16 @@ impl Session for SshAgentSession {
             }
         }
 
-        // get managed keys as well
+        // get managed keys as well. A vault key the agent loaded is listed above.
         identities.extend(
             list_managed_credentials(self.requester())
                 .iter()
                 .filter(|credential| credential.auto_load)
+                .filter(|credential| {
+                    !creds
+                        .iter()
+                        .any(|c| c.public_key_data() == credential.public_key)
+                })
                 .map(Into::into),
         );
         Ok(identities)
@@ -424,8 +491,14 @@ impl Session for SshAgentSession {
         let request_data = req.data.clone();
 
         // An auto-load key is read from disk on first use, before the lookups
-        // below, so they find it.
-        let loaded = self.load_autoload_key(&pubkey_data).await;
+        // below, so they find it. A vault key with auto-load on is loaded from
+        // the app the same way, and the value says whether this request loaded
+        // it.
+        let purpose = self.sign_purpose(&request_data);
+        let loaded = match self.load_autoload_key(&pubkey_data).await {
+            Ok(()) => self.load_vault_key(&pubkey_data, purpose.as_ref()).await,
+            Err(e) => Err(e),
+        };
 
         // Looked up here for the audit record. `signature_for` does its own
         // lookup, with the checks that gate the signature. The credential is not
@@ -443,7 +516,10 @@ impl Session for SshAgentSession {
         // One `ssh.sign` event is recorded for the request, whatever the outcome.
         let result = match loaded {
             Err(e) => Err(e),
-            Ok(()) => self.signature_for(req, &pubkey_data).await,
+            Ok(approved_by_load) => {
+                self.signature_for(req, &pubkey_data, approved_by_load)
+                    .await
+            },
         };
 
         audit::record_sign(
@@ -608,6 +684,93 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&audit_dir);
+    }
+
+    fn rsa_key() -> PrivateKey {
+        let data = include_str!("./fixtures/b64_rsa");
+        PrivateKey::from_bytes(b64.decode(data).unwrap().as_slice()).unwrap()
+    }
+
+    fn vault_loaded_credential() -> StoredCredential {
+        let mut credential = StoredCredential::from(proto::PrivateCredential::Key {
+            privkey: rsa_key().key_data().clone(),
+            comment: "vault-key".to_string(),
+        });
+        credential.autoload = true;
+        credential.vault_loaded = true;
+        credential
+    }
+
+    /// The `ssh.sign` events recorded for one signature from `source`, in an
+    /// audit dir reset to `name`. The caller holds `AUDIT_DIR_LOCK`.
+    fn record_vault_sign(
+        name: &str,
+        source: SignKeySource,
+    ) -> Vec<axo_pass_core::audit::AuditEvent> {
+        let audit_dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&audit_dir);
+        unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", &audit_dir) };
+
+        let pubkey = rsa_key().public_key().key_data().clone();
+        let result = Err(AgentError::Other("declined".into()));
+        audit::record_sign(
+            None,
+            Some("git (ssh)"),
+            &pubkey,
+            b"data",
+            source,
+            Some("vault-key"),
+            None,
+            &[],
+            &result,
+        );
+
+        let page = axo_pass_core::audit::read(&axo_pass_core::audit::AuditFilter {
+            actions: vec![axo_pass_core::audit::Action::SshSign],
+            ..Default::default()
+        });
+        let _ = std::fs::remove_dir_all(&audit_dir);
+        page.events
+    }
+
+    #[tokio::test]
+    async fn vault_loaded_key_found_in_state() {
+        let _guard = AUDIT_DIR_LOCK.lock().await;
+        let state = Arc::new(Mutex::new(Vec::new()));
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let session = SshAgentSession::new(state, None, None, None, shutdown_tx);
+        session.store_credential(vault_loaded_credential()).await;
+
+        let pubkey = rsa_key().public_key().key_data().clone();
+        let found = session
+            .find_credential(&pubkey)
+            .await
+            .expect("credential found without asking the app");
+
+        assert_eq!(found.key_source(), SignKeySource::LoadedVault);
+        assert!(found.dest_constraints().is_empty());
+    }
+
+    #[tokio::test]
+    async fn vault_loaded_signature_recorded_by_agent() {
+        let _guard = AUDIT_DIR_LOCK.lock().await;
+
+        let events = record_vault_sign("axo-audit-vault-loaded", SignKeySource::LoadedVault);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].detail.get("key_source").map(String::as_str),
+            Some("vault")
+        );
+    }
+
+    #[tokio::test]
+    async fn app_signed_vault_signature_not_recorded_by_agent() {
+        let _guard = AUDIT_DIR_LOCK.lock().await;
+
+        let events = record_vault_sign("axo-audit-vault-app", SignKeySource::Vault);
+
+        assert!(events.is_empty());
     }
 
     #[tokio::test]

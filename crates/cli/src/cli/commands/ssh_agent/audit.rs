@@ -46,6 +46,9 @@ pub enum SignKeySource {
     SecureEnclave,
     /// An SSH key stored in a vault, signed with by the app.
     Vault,
+    /// An SSH key stored in a vault, loaded into the agent and signed with by
+    /// the agent.
+    LoadedVault,
 }
 
 impl SignKeySource {
@@ -55,15 +58,17 @@ impl SignKeySource {
             SignKeySource::Agent => "agent",
             SignKeySource::AutoLoad => "auto_load",
             SignKeySource::SecureEnclave => "secure_enclave",
-            SignKeySource::Vault => "vault",
+            SignKeySource::Vault | SignKeySource::LoadedVault => "vault",
         }
     }
 }
 
 /// Record one `ssh.sign` event for a completed request.
 ///
-/// A vault key signature is recorded by the app instead, which knows the ids of
-/// the vault, item, and credential. Nothing is recorded here for it.
+/// A vault key signature made by the app is recorded by the app instead, which
+/// knows the ids of the vault, item, and credential. Nothing is recorded here
+/// for it. A signature with a vault key the agent loaded is recorded here,
+/// since the app does not see it. The app recorded the load.
 #[allow(clippy::too_many_arguments)]
 pub fn record_sign(
     actor: Option<&Actor>,
@@ -191,11 +196,15 @@ mod tests {
             SignKeySource::AutoLoad,
             SignKeySource::SecureEnclave,
             SignKeySource::Vault,
+            SignKeySource::LoadedVault,
         ]
         .into_iter()
         .map(SignKeySource::as_str)
         .collect();
 
-        assert_eq!(names, ["agent", "auto_load", "secure_enclave", "vault"]);
+        assert_eq!(
+            names,
+            ["agent", "auto_load", "secure_enclave", "vault", "vault"]
+        );
     }
 }

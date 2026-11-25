@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::net::{UnixListener, UnixStream};
+use zeroize::Zeroizing;
 
 use super::Authorizers;
 use super::access::{Client, RequestScope, record_rejected_peer, verify_client};
@@ -158,12 +159,18 @@ async fn handle_connection(
     }
 }
 
+/// Initial capacity of the response buffer. A key response fits, so the buffer
+/// does not grow and leave copies of the key behind. The buffer is zeroized
+/// when dropped.
+const RESPONSE_CAPACITY: usize = 32 * 1024;
+
 async fn write_response(
     write_half: &mut tokio::net::unix::OwnedWriteHalf,
     response: &WireResponse,
 ) -> std::io::Result<()> {
-    let mut line =
-        serde_json::to_vec(response).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut line = Zeroizing::new(Vec::with_capacity(RESPONSE_CAPACITY));
+    serde_json::to_writer(&mut *line, response)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
     line.push(b'\n');
     write_half.write_all(&line).await?;
     write_half.flush().await

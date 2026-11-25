@@ -25,6 +25,10 @@ pub struct StoredCredential {
     /// Configured for auto-load: every use prompts unless an app grant
     /// applies. Independent of `requires_auth`, which takes precedence.
     pub autoload: bool,
+    /// The key was loaded from a vault. Always set together with `autoload`.
+    /// The vault access prompt that loaded it approved the signature that
+    /// caused the load.
+    pub vault_loaded: bool,
 }
 
 impl StoredCredential {
@@ -59,17 +63,33 @@ impl StoredCredential {
         purpose: Option<&SignPurpose>,
         requester: Option<BorrowedFd<'_>>,
     ) -> Result<(), CredentialError> {
+        self.check_expiry()?;
+
+        if let Some(allow_grants) = self.confirm_policy() {
+            self.confirm_use(caller, caller_chain, purpose, allow_grants, requester)?;
+        }
+        Ok(())
+    }
+
+    fn check_expiry(&self) -> Result<(), CredentialError> {
         if let Some(expiry) = self.expires_at {
             let now = UtcDateTime::now();
             if now > expiry {
                 return Err(CredentialError::Expired);
             }
         }
-
-        if let Some(allow_grants) = self.confirm_policy() {
-            self.confirm_use(caller, caller_chain, purpose, allow_grants, requester)?;
-        }
         Ok(())
+    }
+
+    /// Sign a request that was just approved, without confirming it again. Used
+    /// for the signature that caused a vault key load, which the vault access
+    /// prompt already covered. Later signatures go through `sign`.
+    pub fn sign_approved(
+        &self,
+        req: proto::SignRequest,
+    ) -> Result<ssh_key::Signature, CredentialError> {
+        self.check_expiry()?;
+        self.sign_validated(req)
     }
 
     /// Whether a use must be confirmed, and if so whether an app grant may
@@ -150,7 +170,9 @@ impl StoredCredential {
 
 impl Credential for StoredCredential {
     fn key_source(&self) -> SignKeySource {
-        if self.autoload {
+        if self.vault_loaded {
+            SignKeySource::LoadedVault
+        } else if self.autoload {
             SignKeySource::AutoLoad
         } else {
             SignKeySource::Agent
@@ -230,6 +252,7 @@ impl From<proto::PrivateCredential> for StoredCredential {
             requires_auth: false,
             dest_constraints: Vec::new(),
             autoload: false,
+            vault_loaded: false,
         }
     }
 }
@@ -260,6 +283,9 @@ impl Debug for StoredCredential {
         if self.autoload {
             out.push_str(" autoload");
         };
+        if self.vault_loaded {
+            out.push_str(" vault_loaded");
+        };
         if let Some(expiry) = self.expires_at {
             out.push_str(&format!(" expires_at={}", expiry));
         }
@@ -286,6 +312,28 @@ mod tests {
         credential.requires_auth = requires_auth;
         credential.autoload = autoload;
         credential
+    }
+
+    #[test]
+    fn vault_loaded_key_confirms_with_grants() {
+        let mut credential = credential(false, true);
+        credential.vault_loaded = true;
+
+        assert_eq!(credential.confirm_policy(), Some(true));
+        assert_eq!(credential.key_source(), SignKeySource::LoadedVault);
+    }
+
+    #[test]
+    fn approved_sign_skips_confirmation() {
+        // A confirmation would call the broker, which is not running here.
+        let credential = credential(true, true);
+        let req = proto::SignRequest {
+            credential: proto::PublicCredential::Key(credential.public_key_data()),
+            data: b"data".to_vec(),
+            flags: 0,
+        };
+
+        assert!(credential.sign_approved(req).is_ok());
     }
 
     #[test]

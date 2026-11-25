@@ -13,14 +13,15 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
-use ssh_key::{Algorithm, Signature};
+use ssh_key::{Algorithm, HashAlg, PrivateKey, Signature};
+use zeroize::Zeroizing;
 
 use self::vault_keys::VaultKeyEntry;
 use super::client::send_request_for;
 use super::in_flight::InFlightRequest;
 use super::vault::{
-    ClientIdentity, SignSshKeyPayload, VaultAccessPrompt, VaultAction, VaultAuthorizer,
-    VaultPayload, authorize_and_serve,
+    ClientIdentity, LoadSshKeyPayload, SignSshKeyPayload, VaultAccessPrompt, VaultAction,
+    VaultAuthorizer, VaultPayload, authorize_and_serve, serve_granted_sign,
 };
 use super::wire::{WireRequest, WireResponse, b64_decode_raw, b64_encode};
 use super::{BrokerError, PassphraseAuthorizer, PassphrasePrompt, PromptOutcome};
@@ -709,13 +710,7 @@ async fn sign_vault_with(
     in_flight: &InFlightRequest,
 ) -> WireResponse {
     let path = cache_path.to_path_buf();
-    let entries = tokio::task::spawn_blocking(move || vault_keys::load(&path))
-        .await
-        .unwrap_or_default();
-    let Some(entry) = entries
-        .into_iter()
-        .find(|entry| entry.fingerprint == request.fingerprint && entry.ssh_use)
-    else {
+    let Some(entry) = find_vault_entry(&path, &request.fingerprint, false).await else {
         return WireResponse::Failed {
             message: "No vault SSH key with SSH use allowed has this fingerprint".to_string(),
         };
@@ -724,7 +719,7 @@ async fn sign_vault_with(
     let comment = Some(entry.comment)
         .filter(|comment| !comment.is_empty())
         .or(request.comment);
-    let prompt = VaultAccessPrompt {
+    let mut prompt = VaultAccessPrompt {
         vault_key: entry.vault_key,
         caller: request.caller,
         caller_chain: request.caller_chain,
@@ -735,15 +730,182 @@ async fn sign_vault_with(
             fingerprint: request.fingerprint,
             comment,
             purpose: request.purpose,
+            grant_candidate: None,
         },
     };
     log::debug!("App broker request: {prompt:?}");
-    let payload = VaultPayload::SignSshKey(SignSshKeyPayload {
+    let payload = SignSshKeyPayload {
         data: request.data,
         flags: request.flags,
         cache_path: cache_path.to_path_buf(),
-    });
-    authorize_and_serve(authorizer, vaults, prompt, peer, Some(payload), in_flight).await
+    };
+    if let Some(response) = serve_granted_sign(authorizer, vaults, &prompt, &payload, &peer).await {
+        return response;
+    }
+    if let VaultAction::SignSshKey {
+        grant_candidate, ..
+    } = &mut prompt.action
+    {
+        *grant_candidate = app_grants::candidate_app(&prompt.caller_chain);
+    }
+    authorize_and_serve(
+        authorizer,
+        vaults,
+        prompt,
+        peer,
+        Some(VaultPayload::SignSshKey(payload)),
+        in_flight,
+    )
+    .await
+}
+
+/// The entry in the listing cache `path` for the key with `fingerprint`, if SSH
+/// use is allowed for it. With `require_auto_load`, auto-load must be allowed
+/// as well.
+async fn find_vault_entry(
+    path: &Path,
+    fingerprint: &str,
+    require_auto_load: bool,
+) -> Option<VaultKeyEntry> {
+    let path = path.to_path_buf();
+    let entries = tokio::task::spawn_blocking(move || vault_keys::load(&path))
+        .await
+        .unwrap_or_default();
+    entries.into_iter().find(|entry| {
+        entry.fingerprint == fingerprint && entry.ssh_use && (entry.auto_load || !require_auto_load)
+    })
+}
+
+/// What a vault key load request carries.
+pub(super) struct VaultLoadRequest {
+    /// Canonical `SHA256:...` fingerprint of the key.
+    pub fingerprint: String,
+    pub comment: Option<String>,
+    pub caller: Option<String>,
+    pub caller_chain: Vec<ProcessNode>,
+    /// What the signature that caused the load is for.
+    pub purpose: Option<SignPurpose>,
+}
+
+/// Serve a vault key load. The broker finds the key in the listing cache and
+/// prompts through the vault authorizer. It unlocks only the vault the cache
+/// entry names, checks that the credential holds a key with the requested
+/// fingerprint and allows SSH use and auto-load, and returns the key.
+pub(super) async fn load_vault(
+    authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
+    request: VaultLoadRequest,
+    peer: audit::Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    load_vault_with(
+        &vault_keys_path(),
+        authorizer,
+        vaults,
+        request,
+        peer,
+        in_flight,
+    )
+    .await
+}
+
+async fn load_vault_with(
+    cache_path: &Path,
+    authorizer: &dyn VaultAuthorizer,
+    vaults: &VaultCatalog,
+    request: VaultLoadRequest,
+    peer: audit::Actor,
+    in_flight: &InFlightRequest,
+) -> WireResponse {
+    let Some(entry) = find_vault_entry(cache_path, &request.fingerprint, true).await else {
+        return WireResponse::Failed {
+            message: "No vault SSH key with SSH use and auto-load allowed has this fingerprint"
+                .to_string(),
+        };
+    };
+
+    let comment = Some(entry.comment)
+        .filter(|comment| !comment.is_empty())
+        .or(request.comment);
+    let mut prompt = VaultAccessPrompt {
+        vault_key: entry.vault_key,
+        caller: request.caller,
+        caller_chain: request.caller_chain,
+        client: ClientIdentity::Process,
+        action: VaultAction::LoadSshKey {
+            item_key: entry.item_key,
+            credential_key: entry.credential_key,
+            fingerprint: request.fingerprint,
+            comment,
+            purpose: request.purpose,
+            grant_candidate: None,
+        },
+    };
+    if let VaultAction::LoadSshKey {
+        grant_candidate, ..
+    } = &mut prompt.action
+    {
+        *grant_candidate = app_grants::candidate_app(&prompt.caller_chain);
+    }
+    log::debug!("App broker request: {prompt:?}");
+    let payload = LoadSshKeyPayload {
+        cache_path: cache_path.to_path_buf(),
+    };
+    authorize_and_serve(
+        authorizer,
+        vaults,
+        prompt,
+        peer,
+        Some(VaultPayload::LoadSshKey(payload)),
+        in_flight,
+    )
+    .await
+}
+
+/// Ask the app for the private key of a vault SSH key, named by its
+/// fingerprint, for the agent to hold. Blocking, for the same reason as
+/// [`request_signature`]. The key is checked against `fingerprint` and is never
+/// logged. Every buffer that held it is zeroized.
+pub fn request_vault_key(
+    fingerprint: &str,
+    comment: Option<&str>,
+    caller: Option<&str>,
+    caller_chain: &[ProcessNode],
+    purpose: Option<&SignPurpose>,
+    requester: Option<BorrowedFd<'_>>,
+) -> Result<PrivateKey, BrokerError> {
+    let request = WireRequest::LoadVaultKey {
+        fingerprint: fingerprint.to_string(),
+        comment: comment.map(String::from),
+        caller: caller.map(String::from),
+        caller_chain: caller_chain.to_vec(),
+        purpose: purpose.cloned(),
+    };
+    match send_request_for(&request, requester)? {
+        WireResponse::VaultKey { private_key } => {
+            let text = Zeroizing::new(
+                b64_decode_raw(private_key.as_bytes())
+                    .map_err(|e| BrokerError::Failed(format!("Malformed key: {e}")))?,
+            );
+            let key = PrivateKey::from_openssh(&*text)
+                .map_err(|e| BrokerError::Failed(format!("Invalid key: {e}")))?;
+            if key.is_encrypted() {
+                return Err(BrokerError::Failed("The key is encrypted".to_string()));
+            }
+            let actual = key.fingerprint(HashAlg::Sha256).to_string();
+            if actual != fingerprint {
+                return Err(BrokerError::Failed(format!(
+                    "The app returned the key {actual} instead of {fingerprint}"
+                )));
+            }
+            Ok(key)
+        },
+        WireResponse::Cancelled => Err(BrokerError::Cancelled),
+        WireResponse::Failed { message } => Err(BrokerError::Failed(message)),
+        _ => Err(BrokerError::Failed(
+            "Unexpected response to key load request".to_string(),
+        )),
+    }
 }
 
 /// Ask the app for an SSH key passphrase, on behalf of `ap ssh-askpass` or the
@@ -1180,6 +1342,217 @@ mod tests {
                 .fingerprint(HashAlg::Sha256)
                 .to_string()
         );
+    }
+
+    fn app_node(verified: bool) -> ProcessNode {
+        ProcessNode {
+            command: "Fork".to_string(),
+            executable: None,
+            pid: 1,
+            bundle_id: Some("com.DanPristupov.Fork".to_string()),
+            team_id: Some("Q6M7LEEA66".to_string()),
+            code_id: Some("cdhash:Fork".to_string()),
+            verified,
+        }
+    }
+
+    /// Grant candidate on the prompt of a vault signature from `chain`.
+    async fn prompted_grant_candidate(chain: Vec<ProcessNode>) -> Option<GrantApp> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let entry = cache_entry("work", "key");
+        vault_keys::store(&path, std::slice::from_ref(&entry)).unwrap();
+        let authorizer = DecliningAuthorizer::default();
+        let mut request = sign_request(&entry.fingerprint);
+        request.caller_chain = chain;
+
+        sign_vault_with(
+            &path,
+            &authorizer,
+            &empty_vaults(),
+            request,
+            audit::Actor::default(),
+            &InFlightRequest::default(),
+        )
+        .await;
+
+        let prompts = authorizer.prompts.lock().unwrap();
+        let VaultAction::SignSshKey {
+            grant_candidate, ..
+        } = &prompts[0].action
+        else {
+            panic!("expected an SSH signing prompt");
+        };
+        grant_candidate.clone()
+    }
+
+    #[tokio::test]
+    async fn vault_signature_prompt_offers_grant_to_verified_app() {
+        let candidate = prompted_grant_candidate(vec![app_node(true)]).await;
+
+        let candidate = candidate.expect("a verified app is offered a grant");
+        assert_eq!(candidate.bundle_id, "com.DanPristupov.Fork");
+        assert_eq!(candidate.team_id, "Q6M7LEEA66");
+    }
+
+    #[tokio::test]
+    async fn vault_signature_prompt_offers_no_grant_to_unverified_app() {
+        assert_eq!(prompted_grant_candidate(vec![app_node(false)]).await, None);
+    }
+
+    #[tokio::test]
+    async fn vault_signature_prompt_offers_no_grant_without_chain() {
+        assert_eq!(prompted_grant_candidate(Vec::new()).await, None);
+    }
+
+    fn load_request(fingerprint: &str) -> VaultLoadRequest {
+        VaultLoadRequest {
+            fingerprint: fingerprint.to_string(),
+            comment: None,
+            caller: Some("git (ssh)".to_string()),
+            caller_chain: Vec::new(),
+            purpose: None,
+        }
+    }
+
+    /// Cache entry for the test key with the given access settings.
+    fn access_entry(auto_load: bool, ssh_use: bool) -> VaultKeyEntry {
+        let mut record = SshKeyRecord::new(&ed25519_key(), "laptop").unwrap();
+        record.set_access(auto_load, ssh_use);
+        VaultKeyEntry::from_record(&record, "work", "github", "key").unwrap()
+    }
+
+    /// Answer to a load request for `entries`, and the prompts it raised.
+    async fn load_with_cache(
+        entries: &[VaultKeyEntry],
+        request: VaultLoadRequest,
+    ) -> (WireResponse, Vec<VaultAccessPrompt>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        vault_keys::store(&path, entries).unwrap();
+        let authorizer = DecliningAuthorizer::default();
+
+        let response = load_vault_with(
+            &path,
+            &authorizer,
+            &empty_vaults(),
+            request,
+            audit::Actor::default(),
+            &InFlightRequest::default(),
+        )
+        .await;
+
+        let prompts = authorizer.prompts.lock().unwrap().clone();
+        (response, prompts)
+    }
+
+    #[tokio::test]
+    async fn vault_load_refused_without_cache_entry() {
+        let (response, prompts) = load_with_cache(&[], load_request("SHA256:unknown")).await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        assert!(prompts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn vault_load_refused_with_ssh_use_off() {
+        let entry = access_entry(true, false);
+
+        let (response, prompts) = load_with_cache(
+            std::slice::from_ref(&entry),
+            load_request(&entry.fingerprint),
+        )
+        .await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        assert!(prompts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn vault_load_refused_with_auto_load_off() {
+        let entry = access_entry(false, true);
+
+        let (response, prompts) = load_with_cache(
+            std::slice::from_ref(&entry),
+            load_request(&entry.fingerprint),
+        )
+        .await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        assert!(prompts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn vault_load_prompts_for_vault_of_cache_entry() {
+        let entry = access_entry(true, true);
+
+        let (response, prompts) = load_with_cache(
+            std::slice::from_ref(&entry),
+            load_request(&entry.fingerprint),
+        )
+        .await;
+
+        assert!(matches!(response, WireResponse::Failed { .. }));
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].vault_key, "work");
+        assert_eq!(prompts[0].caller.as_deref(), Some("git (ssh)"));
+        let VaultAction::LoadSshKey {
+            item_key,
+            credential_key,
+            fingerprint,
+            comment,
+            ..
+        } = &prompts[0].action
+        else {
+            panic!("expected an SSH key load prompt");
+        };
+        assert_eq!(item_key, "github");
+        assert_eq!(credential_key, "key");
+        assert_eq!(*fingerprint, entry.fingerprint);
+        assert_eq!(comment.as_deref(), Some("laptop"));
+    }
+
+    #[tokio::test]
+    async fn vault_load_prompt_offers_grant_to_verified_app() {
+        let entry = access_entry(true, true);
+        let mut request = load_request(&entry.fingerprint);
+        request.caller_chain = vec![app_node(true)];
+
+        let (_, prompts) = load_with_cache(std::slice::from_ref(&entry), request).await;
+
+        let VaultAction::LoadSshKey {
+            grant_candidate, ..
+        } = &prompts[0].action
+        else {
+            panic!("expected an SSH key load prompt");
+        };
+        let candidate = grant_candidate.as_ref().expect("a verified app is offered");
+        assert_eq!(candidate.bundle_id, "com.DanPristupov.Fork");
+    }
+
+    /// A key with auto-load off stays with the app, which signs with it on
+    /// every request.
+    #[tokio::test]
+    async fn vault_signature_prompts_with_auto_load_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh-vault-keys.json");
+        let entry = access_entry(false, true);
+        vault_keys::store(&path, std::slice::from_ref(&entry)).unwrap();
+        let authorizer = DecliningAuthorizer::default();
+
+        sign_vault_with(
+            &path,
+            &authorizer,
+            &empty_vaults(),
+            sign_request(&entry.fingerprint),
+            audit::Actor::default(),
+            &InFlightRequest::default(),
+        )
+        .await;
+
+        let prompts = authorizer.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(matches!(prompts[0].action, VaultAction::SignSshKey { .. }));
     }
 
     #[test]

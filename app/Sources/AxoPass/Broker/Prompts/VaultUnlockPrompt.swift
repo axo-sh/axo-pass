@@ -50,6 +50,11 @@ final class VaultUnlockPromptModel {
   private var listingGrant: ListingGrantOffer?
   private var listingPeer: RequestActor?
 
+  /// The offer of lasting access to a vault SSH key on the prompt `begin` is
+  /// serving. Kept until the prompt ends, when a chosen grant is saved.
+  private var sshGrant: SshGrantOffer?
+  private var sshPeer: RequestActor?
+
   /// Holds the cross-process auth lock during an evaluation. Set by
   /// `VaultsModel` when the broker starts.
   var core: AxoPass?
@@ -88,6 +93,9 @@ final class VaultUnlockPromptModel {
     let listingOffer = reused ? nil : Self.listingGrantOffer(for: prompt)
     listingGrant = listingOffer
     listingPeer = peer
+    let sshOffer = Self.sshGrantOffer(for: prompt)
+    sshGrant = sshOffer
+    sshPeer = peer
 
     // A listing that is still authorized re-evaluates instantly. Delay the
     // panel briefly so that case does not flash a window. A read always
@@ -97,13 +105,15 @@ final class VaultUnlockPromptModel {
       showTask = nil
     } else if Self.promptsEveryTime(prompt.action) {
       showPanel(
-        prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer)
+        prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer,
+        sshGrant: sshOffer)
     } else {
       showTask = Task { [weak self] in
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
         self?.showPanel(
-          prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer)
+          prompt: prompt, view: grant.view, fillGrant: fillGrant, listingGrant: listingOffer,
+          sshGrant: sshOffer)
       }
     }
 
@@ -143,6 +153,13 @@ final class VaultUnlockPromptModel {
   /// The broker filled a login for a verified browser from an earlier approval.
   /// No prompt appeared, so the notification is the only sign of the fill.
   func notifyPreapproved(prompt: VaultAccessPrompt, account: String?) {
+    if case .signSshKey(_, _, let fingerprint, let comment, _, _) = prompt.action {
+      let name = Self.sshKeyName(comment: comment, fingerprint: fingerprint)
+      let suffix = if let caller = prompt.caller, !caller.isEmpty { " for \(caller)" } else { "" }
+      ActivityNotification.signatures.post(
+        title: "SSH key used", body: "Signed with SSH key \(name)\(suffix).")
+      return
+    }
     guard case .fillLogin(let page, _, _, _, _) = prompt.action else { return }
     var body = "Filled \(account ?? "a login") on \(page.host)"
     if case .browser(let name, _) = prompt.client {
@@ -184,6 +201,22 @@ final class VaultUnlockPromptModel {
       case .listLogins = prompt.action
     else { return nil }
     return ListingGrantOffer(browser: browser, teamId: teamId, choice: GrantChoice())
+  }
+
+  /// The choice to let the requesting app use a vault SSH key without a prompt.
+  /// Offered only when the caller chain has a verified app. On a load, the grant
+  /// applies to later uses of the key in the SSH agent.
+  private static func sshGrantOffer(for prompt: VaultAccessPrompt) -> SshGrantOffer? {
+    switch prompt.action {
+    case .signSshKey(_, _, let fingerprint, _, _, let app?):
+      return SshGrantOffer(
+        app: app, fingerprint: fingerprint, loadsKey: false, choice: GrantChoice())
+    case .loadSshKey(_, _, let fingerprint, _, _, let app?):
+      return SshGrantOffer(
+        app: app, fingerprint: fingerprint, loadsKey: true, choice: GrantChoice())
+    default:
+      return nil
+    }
   }
 
   /// The vault and item the user chose for a passkey, read once the evaluation
@@ -251,6 +284,20 @@ final class VaultUnlockPromptModel {
         NSLog("VaultUnlockPrompt: could not save listing grant: %@", String(describing: error))
       }
     }
+
+    let sshOffer = sshGrant
+    let sshRequester = sshPeer
+    sshGrant = nil
+    sshPeer = nil
+    if case .succeeded = outcome, let sshOffer, sshOffer.choice.allow {
+      do {
+        try await core?.addSshAppGrant(
+          fingerprintSha256: sshOffer.fingerprint, app: sshOffer.app,
+          expiresInSeconds: sshOffer.choice.expiration.seconds, peer: sshRequester)
+      } catch {
+        NSLog("VaultUnlockPrompt: could not save SSH app grant: %@", String(describing: error))
+      }
+    }
   }
 
   /// Dismiss the prompt on the user's behalf. Invalidating the context fails
@@ -277,7 +324,7 @@ final class VaultUnlockPromptModel {
 
   private func showPanel(
     prompt: VaultAccessPrompt, view: LAAuthenticationView, fillGrant: FillGrantOffer?,
-    listingGrant: ListingGrantOffer?
+    listingGrant: ListingGrantOffer?, sshGrant: SshGrantOffer?
   ) {
     let content = VaultUnlockView(
       // A registration or a save picks its vault in its own card instead.
@@ -294,6 +341,7 @@ final class VaultUnlockPromptModel {
       notes: Self.notes(for: prompt),
       fillGrant: fillGrant,
       listingGrant: listingGrant,
+      sshGrant: sshGrant,
       icon: AuthenticationIcon(view: view),
       touchID: PromptCaller.hasTouchID(),
       onCancel: { [weak self] in self?.cancel(prompt: prompt) }
@@ -309,7 +357,8 @@ final class VaultUnlockPromptModel {
     case .readSecret(let itemKey, let credentialKey),
       .readFile(let itemKey, let credentialKey, _),
       .writeSecret(let itemKey, let credentialKey),
-      .signSshKey(let itemKey, let credentialKey, _, _, _):
+      .signSshKey(let itemKey, let credentialKey, _, _, _, _),
+      .loadSshKey(let itemKey, let credentialKey, _, _, _, _):
       return ["\(itemKey)/\(credentialKey)"]
     case .resolveSecrets(_, let refs):
       return refs.map { ref in
@@ -405,6 +454,11 @@ final class VaultUnlockPromptModel {
         notes.append(
           AttributedString("A re-import only adds new items and does not update old ones."))
       }
+    case .loadSshKey:
+      notes.append(
+        AttributedString(
+          "The SSH agent keeps this key in memory until it restarts or you run ssh-add -D. "
+            + "Later uses ask for approval in the signing prompt."))
     default:
       break
     }
@@ -452,8 +506,12 @@ final class VaultUnlockPromptModel {
       what = "create a passkey for \(rpId)"
     case .assertPasskey(let rpId, let userName):
       what = userName.map { "sign in to \(rpId) as \($0)" } ?? "sign in to \(rpId) with a passkey"
-    case .signSshKey(_, _, let fingerprint, let comment, _):
+    case .signSshKey(_, _, let fingerprint, let comment, _, _):
       what = "sign with SSH key \(sshKeyName(comment: comment, fingerprint: fingerprint))"
+    case .loadSshKey(_, _, let fingerprint, let comment, _, _):
+      what =
+        "sign with SSH key \(sshKeyName(comment: comment, fingerprint: fingerprint)) and keep it "
+        + "in the SSH agent"
     }
     if let caller = prompt.caller, !caller.isEmpty {
       return "let \(caller) \(what)"
@@ -467,7 +525,7 @@ final class VaultUnlockPromptModel {
     switch action {
     case .readSecret, .readFile, .resolveSecrets, .writeSecret, .exportVaults, .importVaults,
       .importItems, .addVault, .createPasskey, .assertPasskey, .fillLogin, .generateTotp,
-      .saveLogin, .updateLoginPassword, .signSshKey:
+      .saveLogin, .updateLoginPassword, .signSshKey, .loadSshKey:
       return true
     case .listItems, .listLogins: return false
     }
@@ -492,7 +550,8 @@ final class VaultUnlockPromptModel {
     // takes the vault that signed.
     case .createPasskey, .assertPasskey: id = "passkey"
     case .saveLogin: id = "save-login"
-    case .signSshKey(_, _, let fingerprint, _, _): id = fingerprint
+    case .signSshKey(_, _, let fingerprint, _, _, _), .loadSshKey(_, _, let fingerprint, _, _, _):
+      id = fingerprint
     default: id = prompt.vaultKey
     }
     let subject = GrantSubject(kind: .vault, id: id, label: nil)
@@ -520,6 +579,7 @@ final class VaultUnlockPromptModel {
     case .createPasskey: return "passkey-create"
     case .assertPasskey: return "passkey-assert"
     case .signSshKey: return "ssh-sign"
+    case .loadSshKey: return "ssh-load"
     }
   }
 
@@ -562,7 +622,8 @@ final class VaultUnlockPromptModel {
     case .addVault: return [.plain("add a vault")]
     case .createPasskey(let rpId, _, _): return [.plain("create a passkey for "), .bold(rpId)]
     case .assertPasskey(let rpId, _): return [.plain("sign in to "), .bold(rpId)]
-    case .signSshKey(_, _, let fingerprint, let comment, _):
+    case .signSshKey(_, _, let fingerprint, let comment, _, _),
+      .loadSshKey(_, _, let fingerprint, let comment, _, _):
       return [
         .plain("sign with SSH key "),
         .bold(sshKeyName(comment: comment, fingerprint: fingerprint)),
@@ -598,6 +659,60 @@ struct ListingGrantOffer {
   let browser: String
   let teamId: String
   let choice: GrantChoice
+}
+
+/// The offer on a vault SSH key prompt to let the requesting app sign with the
+/// key without asking, until the user removes it in the key's details or it
+/// expires. `loadsKey` is set when the prompt loads the key into the SSH agent.
+struct SshGrantOffer {
+  let app: SshGrantApp
+  let fingerprint: String
+  let loadsKey: Bool
+  let choice: GrantChoice
+}
+
+private struct SshGrantCard: View {
+  let offer: SshGrantOffer
+  @Bindable var choice: GrantChoice
+
+  init(offer: SshGrantOffer) {
+    self.offer = offer
+    self.choice = offer.choice
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Toggle(
+        "Don't ask again for \(offer.app.displayName) using this SSH key.", isOn: $choice.allow
+      )
+      .toggleStyle(.checkbox)
+
+      if choice.allow {
+        // Indent to line up with the checkbox label.
+        VStack(alignment: .leading, spacing: 4) {
+          Picker("Duration:", selection: $choice.expiration) {
+            ForEach(GrantExpiration.allCases, id: \.self) { expiration in
+              Text(expiration.label).tag(expiration)
+            }
+          }
+          .pickerStyle(.menu)
+          .fixedSize()
+          Text(
+            offer.loadsKey
+              ? "Applies to this key and to all processes started by \(offer.app.displayName), "
+                + "while the key stays loaded in the SSH agent, also if Axo Pass is locked. "
+                + "You can revoke this in the key's details."
+              : "While Axo Pass is unlocked, applies to this key and to all processes started by "
+                + "\(offer.app.displayName). You can revoke this in the key's details."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 20)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
 }
 
 private struct ListingGrantCard: View {
@@ -869,6 +984,8 @@ private struct VaultUnlockView: View {
   let fillGrant: FillGrantOffer?
   /// Set for a listing from a verified browser, which may be allowed for good.
   let listingGrant: ListingGrantOffer?
+  /// Set for a vault SSH key signature from a verified app, which may be allowed for good.
+  let sshGrant: SshGrantOffer?
   let icon: AuthenticationIcon
   let touchID: Bool
   let onCancel: () -> Void
@@ -930,6 +1047,10 @@ private struct VaultUnlockView: View {
 
       if let listingGrant {
         ListingGrantCard(offer: listingGrant)
+      }
+
+      if let sshGrant {
+        SshGrantCard(offer: sshGrant)
       }
 
       BiometricFooter(icon: icon, touchID: touchID, onCancel: onCancel)

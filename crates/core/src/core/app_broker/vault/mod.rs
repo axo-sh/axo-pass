@@ -32,6 +32,7 @@ use crate::core::auth::ForeignContext;
 use crate::core::provenance::ProcessNode;
 use crate::secrets::vaults::bundle::ExportMode;
 use crate::secrets::vaults::{Site, passkey};
+use crate::ssh::app_grants::GrantApp;
 
 mod audit;
 mod logins;
@@ -53,6 +54,7 @@ pub use requests::{
     request_write_vault_secret,
 };
 pub(super) use serve::{authorize_and_serve, authorize_and_serve_logins};
+pub(super) use ssh_keys::serve_granted_sign;
 
 /// One `axo://` reference to resolve, as it crosses the socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +229,30 @@ pub enum VaultAction {
         /// What the signature is for, as the agent read it. Shown in the
         /// prompt only.
         purpose: Option<SignPurpose>,
+        /// The app the prompt may offer lasting access to. `None` if the
+        /// caller chain has no verified app.
+        grant_candidate: Option<GrantApp>,
+    },
+
+    /// The SSH agent asks for the private key of an SSH key stored in the
+    /// vault, to hold in memory. The prompt's vault key is the vault the
+    /// listing cache names. The fields are those of
+    /// [`VaultAction::SignSshKey`], since the request that caused the load is a
+    /// signature. A grant the user offers here applies to later uses of the
+    /// loaded key. The listing cache path travels in [`LoadSshKeyPayload`].
+    LoadSshKey {
+        item_key: String,
+        credential_key: String,
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+        /// The key's OpenSSH comment, shown in the prompt.
+        comment: Option<String>,
+        /// What the signature that caused the load is for. Shown in the prompt
+        /// only.
+        purpose: Option<SignPurpose>,
+        /// The app the prompt may offer lasting access to. `None` if the
+        /// caller chain has no verified app.
+        grant_candidate: Option<GrantApp>,
     },
 }
 
@@ -411,6 +437,15 @@ pub struct SignSshKeyPayload {
     pub cache_path: PathBuf,
 }
 
+/// What an [`VaultAction::LoadSshKey`] needs besides the prompt, kept out of
+/// [`VaultAccessPrompt`].
+#[derive(Clone)]
+pub struct LoadSshKeyPayload {
+    /// The listing cache to rewrite if the credential does not hold the key
+    /// the cache names.
+    pub cache_path: PathBuf,
+}
+
 /// One passkey offered in the prompt when the user picks the account to sign
 /// in with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,6 +480,7 @@ pub(super) enum VaultPayload {
     CreatePasskey(CreatePasskeyPayload),
     AssertPasskey(AssertPasskeyPayload),
     SignSshKey(SignSshKeyPayload),
+    LoadSshKey(LoadSshKeyPayload),
 }
 
 /// What the app needs to describe the prompt for a vault access.

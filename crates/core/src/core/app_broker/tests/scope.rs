@@ -27,6 +27,7 @@ fn autofill_scope_allows_only_autofill_requests() {
         r#"{"request":"get_age_identity","key_id":"k"}"#,
         r#"{"request":"list_keychain_passwords"}"#,
         r#"{"request":"list_age_keys"}"#,
+        r#"{"request":"load_vault_key","fingerprint":"SHA256:x"}"#,
     ];
     for line in allowed {
         let request: WireRequest = serde_json::from_str(line).unwrap();
@@ -68,6 +69,7 @@ fn browser_host_scope_extends_requests() {
         r#"{"request":"get_age_identity","key_id":"k"}"#,
         r#"{"request":"list_keychain_passwords"}"#,
         r#"{"request":"sign_with_secure_enclave_key","key_label":"k","data":"aGk="}"#,
+        r#"{"request":"load_vault_key","fingerprint":"SHA256:x"}"#,
         r#"{"request":"get_passphrase","key_id":"k"}"#,
         r#"{"request":"report_unknown_passkey","rp_id":"example.com","credential_id":"AQ=="}"#,
         r#"{"request":"list_passkeys","rp_id":"example.com"}"#,

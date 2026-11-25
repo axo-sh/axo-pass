@@ -183,13 +183,21 @@ private struct SshKeyDetail: View {
   }
 
   /// Every key can hold app grants except a Secure Enclave key that always
-  /// requires authentication. Vault keys have no grants yet.
-  private var grantsApply: Bool { key.policy != .alwaysRequireAuth && key.vaultKey == nil }
+  /// requires authentication.
+  private var grantsApply: Bool { key.policy != .alwaysRequireAuth }
 
-  /// When a key the agent holds uses its grants. Nil for Secure Enclave keys,
-  /// where grants always apply.
+  /// When a key uses its grants. Nil for Secure Enclave keys, where grants
+  /// always apply.
   private var grantsNote: String? {
     guard !key.isManaged else { return nil }
+    if key.vaultKey != nil {
+      if key.autoload {
+        return "These apps sign without asking while the key is loaded in the SSH agent, also if "
+          + "Axo Pass is locked. The agent loads it on first use. Removing it from the agent "
+          + "asks again."
+      }
+      return "These apps sign without asking only while Axo Pass is unlocked."
+    }
     let confirmNote = "Keys added with ssh-add -c ask every time."
     if key.autoload {
       return confirmNote

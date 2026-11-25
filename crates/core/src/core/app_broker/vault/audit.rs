@@ -161,6 +161,19 @@ pub(super) fn access_event(
             }
             (Action::SshSign, subject)
         },
+        // The load is a read of the credential. The agent records the
+        // signatures made with the loaded key.
+        VaultAction::LoadSshKey {
+            item_key,
+            credential_key,
+            ..
+        } => (
+            Action::CredentialRead,
+            Subject::new(
+                SubjectKind::Credential,
+                format!("{vault_key}/{item_key}/{credential_key}"),
+            ),
+        ),
     };
 
     // A write that created the item records `item.created` instead. The
@@ -212,17 +225,18 @@ pub(super) fn access_event(
         },
         VaultAction::SignSshKey { purpose, .. } => {
             event = event.detail("key_source", "vault");
-            match purpose {
-                Some(SignPurpose::Login { user, host }) => {
-                    event = event
-                        .maybe_detail("user", user.clone())
-                        .maybe_detail("host", host.clone());
-                },
-                Some(SignPurpose::Sshsig { namespace }) => {
-                    event = event.detail("namespace", namespace.clone());
-                },
-                None => {},
-            }
+            event = purpose_details(event, purpose.as_ref());
+        },
+        VaultAction::LoadSshKey {
+            fingerprint,
+            purpose,
+            ..
+        } => {
+            event = event
+                .detail("key_source", "vault")
+                .detail("ssh_fingerprint", fingerprint.clone())
+                .detail("agent_load", "true");
+            event = purpose_details(event, purpose.as_ref());
         },
         _ => {},
     }
@@ -274,6 +288,17 @@ pub(super) fn access_event(
         event = event.message(message.to_string());
     }
     event
+}
+
+/// The login user and host, or the signature namespace, of an SSH request.
+fn purpose_details(event: AuditEvent, purpose: Option<&SignPurpose>) -> AuditEvent {
+    match purpose {
+        Some(SignPurpose::Login { user, host }) => event
+            .maybe_detail("user", user.clone())
+            .maybe_detail("host", host.clone()),
+        Some(SignPurpose::Sshsig { namespace }) => event.detail("namespace", namespace.clone()),
+        None => event,
+    }
 }
 
 /// Record `ids` in `event`. Each list holds distinct ids in request order.

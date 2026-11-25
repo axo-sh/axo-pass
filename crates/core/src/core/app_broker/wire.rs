@@ -5,6 +5,7 @@ use std::str::FromStr;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as b64;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use super::ssh::{ManagedIdentity, SignPurpose};
 use super::{BrokerError, age, keychain, vault};
@@ -127,6 +128,35 @@ pub(super) enum WireRequest {
         /// The agent sign request's flags. They select the hash of an RSA key.
         #[serde(default)]
         flags: u32,
+    },
+
+    /// The private key of a vault SSH key, for the agent to hold in memory. The
+    /// app unlocks the vault behind a prompt and returns the key in
+    /// [`WireResponse::VaultKey`]. Served only for a key with SSH use and
+    /// auto-load on. The request carries no key label. The broker finds the key
+    /// from its fingerprint in the listing cache.
+    LoadVaultKey {
+        /// Canonical `SHA256:...` fingerprint of the key.
+        fingerprint: String,
+
+        /// The key's OpenSSH comment, when it has one.
+        #[serde(default)]
+        comment: Option<String>,
+
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller.
+        #[serde(default)]
+        caller: Option<String>,
+
+        /// Delegated the same way as
+        /// [`WireRequest::SignWithSecureEnclaveKey`]'s caller_chain.
+        #[serde(default)]
+        caller_chain: Vec<ProcessNode>,
+
+        /// See [`WireRequest::SignWithSecureEnclaveKey`]'s purpose. Describes
+        /// the signature that caused the load.
+        #[serde(default)]
+        purpose: Option<SignPurpose>,
     },
 
     /// A GPG passphrase, either unlocked from the keychain behind a biometric
@@ -610,6 +640,7 @@ impl WireRequest {
         match self {
             WireRequest::SignWithSecureEnclaveKey { caller, .. }
             | WireRequest::SignWithVaultKey { caller, .. }
+            | WireRequest::LoadVaultKey { caller, .. }
             | WireRequest::AuthorizeKeyUse { caller, .. }
             | WireRequest::GetPassphrase { caller, .. }
             | WireRequest::GetSshPassphrase { caller, .. }
@@ -668,6 +699,7 @@ impl WireRequest {
         match self {
             WireRequest::SignWithSecureEnclaveKey { caller_chain, .. }
             | WireRequest::SignWithVaultKey { caller_chain, .. }
+            | WireRequest::LoadVaultKey { caller_chain, .. }
             | WireRequest::AuthorizeKeyUse { caller_chain, .. }
             | WireRequest::GetPassphrase { caller_chain, .. }
             | WireRequest::GetSshPassphrase { caller_chain, .. } => caller_chain,
@@ -694,6 +726,11 @@ pub(super) enum WireResponse {
     /// passphrase is never mangled by JSON escaping of odd bytes.
     Passphrase {
         passphrase: String,
+    },
+    /// Base64 of the OpenSSH private key text of a vault key. Zeroized when
+    /// dropped. This type has no `Debug`, so the key is not logged by accident.
+    VaultKey {
+        private_key: Zeroizing<String>,
     },
     Confirmed {
         ok: bool,
@@ -1121,6 +1158,32 @@ mod tests {
         };
         assert_eq!(fingerprint, "SHA256:x");
         assert_eq!(flags, 4);
+    }
+
+    #[test]
+    fn load_request_carries_caller_and_chain() {
+        let json = r#"{"request":"load_vault_key","fingerprint":"SHA256:x","caller":"git (ssh)"}"#;
+
+        let request: WireRequest = serde_json::from_str(json).unwrap();
+
+        assert!(matches!(request, WireRequest::LoadVaultKey { .. }));
+        assert_eq!(request.caller(), Some("git (ssh)"));
+        assert!(request.caller_chain().is_empty());
+    }
+
+    #[test]
+    fn vault_key_response_roundtrips() {
+        let response = WireResponse::VaultKey {
+            private_key: Zeroizing::new("a2V5".to_string()),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert_eq!(json, r#"{"status":"vault_key","private_key":"a2V5"}"#);
+        let WireResponse::VaultKey { private_key } = serde_json::from_str(&json).unwrap() else {
+            panic!("expected a vault key response");
+        };
+        assert_eq!(*private_key, "a2V5");
     }
 
     #[test]

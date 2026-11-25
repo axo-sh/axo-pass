@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::time::Duration;
 
+use zeroize::Zeroizing;
+
 use super::platform::launch_app;
 use super::wire::{WireRequest, WireResponse};
 use super::{BrokerError, broker_socket_path};
@@ -20,6 +22,9 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long to wait for a cold app launch to start serving.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Initial capacity of the buffer a response line is read into.
+const RESPONSE_CAPACITY: usize = 32 * 1024;
 
 pub(super) fn send_request(request: &WireRequest) -> Result<WireResponse, BrokerError> {
     send_request_for(request, None)
@@ -80,7 +85,9 @@ fn exchange(
         wait_for_response(stream, requester)?;
     }
 
-    let mut response_line = String::new();
+    // Zeroized when dropped, as a response can carry a private key. Sized so a
+    // key response does not grow the buffer and leave copies behind.
+    let mut response_line = Zeroizing::new(String::with_capacity(RESPONSE_CAPACITY));
     BufReader::new(stream)
         .read_line(&mut response_line)
         .map_err(|e| match e.kind() {
