@@ -6,10 +6,15 @@ The Touch ID secrets manager for macOS dev environments.
 
 ## Features
 
-- Unlock GPG and SSH keys with Touch ID instead of entering passwords
+- Unlock SSH and GPG keys with Touch ID instead of entering passwords
 - Protect API tokens and passwords with Secure Enclave encryption
 - Inject secrets into files and env variables
+- Autofill credentials and passkeys in your browser (Safari/Chrome/Firefox)
+- Serverless syncing in shared folders or storage you control
+- Global hot-keyed command palette
 - Use `age` encryption with keys stored in Secure Enclave
+- Audit logs
+- 1Password/Apple Passwords import
 - Full-featured command-line interface
 - Free and open source
 
@@ -22,6 +27,8 @@ The Touch ID secrets manager for macOS dev environments.
 ![Screenshot 2](https://axo.sh/assets/screenshot-2.jpg)
 
 ## Setup
+
+Download latest version of Axo Pass from [here](https://github.com/octavore/axo-pass/releases) and move it to your Applications folder to install the app. First-time users will be prompted to set up a vault and some common integrations.
 
 Axo Pass provides an `ap` command which allows you to interact with your vault from the command-line. It also integrates with SSH and GPG natively. The app provides helpers for setting up these integrations; this section is mainly useful for understanding how to do it yourself manually.
 
@@ -128,9 +135,9 @@ See the `ap` section above.
 
 ## Vault Spec
 
-Vault files are stored as JSON in `~/Library/Application Support/Axo Pass/vaults`. Each vault has a `file_key`, which is a AES-256 GCM key encrypted with by `vault-encryption-key`, an [ECIES key stored in the Secure Enclave](https://developer.apple.com/documentation/security/keys).
+Vault files are stored as JSON in `~/Library/Application Support/Axo Pass/vaults`. Each vault is encrypted by a `file_key`, which is an AES-256 GCM key that is itself encrypted by an [ECIES key stored in the Secure Enclave](https://developer.apple.com/documentation/security/keys).
 
-This file key is used to encrypt credential values in the file. Credential values are base64 encoded, start with a 96-bit nonce, and the path of credential is used as additional authenticated data. This design was inspired by [SOPS](https://github.com/getsops/sops).
+More precisely, `file_key` is used to encrypt credential and metadata values in the file. Values are base64 encoded, start with a 96-bit nonce, and the path of the value is used as additional authenticated data. This design was inspired by [SOPS](https://github.com/getsops/sops).
 
 Below is an example of a vault json file.
 
