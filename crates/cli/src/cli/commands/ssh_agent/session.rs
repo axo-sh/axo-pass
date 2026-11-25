@@ -13,6 +13,7 @@ use ssh_agent_lib::proto::{
 };
 use ssh_key::Signature;
 use ssh_key::public::KeyData;
+use time::UtcDateTime;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::cli::commands::agent::current_agent_info;
@@ -130,9 +131,37 @@ impl SshAgentSession {
         self.state.lock().await.push(credential);
     }
 
+    /// Remove the credentials whose lifetime has run out, recording an
+    /// `ssh.key_remove` event for each. A removed key is neither listed nor
+    /// signed with, so `ssh` reads the key file again and an auto-load key is
+    /// loaded again on its next use.
+    async fn remove_expired(&self) {
+        let now = UtcDateTime::now();
+        let expired: Vec<StoredCredential> = self
+            .state
+            .lock()
+            .await
+            .extract_if(.., |cred| cred.is_expired(now))
+            .collect();
+
+        // Recorded with the state unlocked: an audit write can block.
+        for cred in expired {
+            log::debug!("Removing expired {cred:?}");
+            audit::record_key_change(
+                Action::SshKeyRemove,
+                None,
+                None,
+                &cred.public_key_data(),
+                cred.comment().as_deref(),
+                &[("reason", "expired".to_string())],
+            );
+        }
+    }
+
     /// Look only among the credentials added to this agent, leaving the app's
     /// managed keys alone.
     pub async fn find_stored_credential(&self, pubkey: &KeyData) -> Option<StoredCredential> {
+        self.remove_expired().await;
         for cred in self.state.lock().await.iter() {
             if let Ok(identity) = TryInto::<proto::Identity>::try_into(cred)
                 && *identity.credential.key_data() == *pubkey
@@ -404,6 +433,7 @@ impl SshAgentSession {
 impl Session for SshAgentSession {
     async fn request_identities(&mut self) -> Result<Vec<proto::Identity>, AgentError> {
         log::debug!("request: list ssh identities");
+        self.remove_expired().await;
         let creds = self.state.lock().await;
         let mut identities = vec![];
 
@@ -811,6 +841,51 @@ mod tests {
                 .iter()
                 .any(|e| e.detail.get("autoload").map(String::as_str) == Some("true")),
             "expected an ssh.key_add event with autoload=true"
+        );
+
+        let _ = std::fs::remove_dir_all(&audit_dir);
+    }
+
+    #[tokio::test]
+    async fn expired_key_removed() {
+        let _guard = AUDIT_DIR_LOCK.lock().await;
+        let audit_dir =
+            std::env::temp_dir().join(format!("axo-audit-expired-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&audit_dir);
+        unsafe { std::env::set_var("AXO_PASS_AUDIT_DIR", &audit_dir) };
+
+        let pubkey = rsa_key().public_key().key_data().clone();
+        let mut credential = StoredCredential::from(proto::PrivateCredential::Key {
+            privkey: rsa_key().key_data().clone(),
+            comment: "expiring-key".to_string(),
+        });
+        credential.expires_at = Some(UtcDateTime::now() + time::Duration::minutes(10));
+
+        let state = Arc::new(Mutex::new(Vec::new()));
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let session = SshAgentSession::new(state.clone(), None, None, None, shutdown_tx);
+        session.store_credential(credential).await;
+
+        // Within its lifetime the key is found and stays in the agent.
+        assert!(session.find_stored_credential(&pubkey).await.is_some());
+        assert_eq!(state.lock().await.len(), 1);
+
+        state.lock().await[0].expires_at = Some(UtcDateTime::now() - time::Duration::seconds(1));
+
+        // The sweep that listing and lookup both run removes the key.
+        session.remove_expired().await;
+        assert!(state.lock().await.is_empty());
+        assert!(session.find_stored_credential(&pubkey).await.is_none());
+
+        let page = axo_pass_core::audit::read(&axo_pass_core::audit::AuditFilter {
+            actions: vec![axo_pass_core::audit::Action::SshKeyRemove],
+            ..Default::default()
+        });
+        assert!(
+            page.events
+                .iter()
+                .any(|e| e.detail.get("reason").map(String::as_str) == Some("expired")),
+            "expected an ssh.key_remove event with reason=expired"
         );
 
         let _ = std::fs::remove_dir_all(&audit_dir);

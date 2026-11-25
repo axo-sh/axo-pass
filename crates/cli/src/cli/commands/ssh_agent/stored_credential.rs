@@ -71,12 +71,15 @@ impl StoredCredential {
         Ok(())
     }
 
+    /// Whether the lifetime given with `ssh-add -t` or `AddKeysToAgent` has
+    /// run out at `now`.
+    pub fn is_expired(&self, now: UtcDateTime) -> bool {
+        self.expires_at.is_some_and(|expiry| now > expiry)
+    }
+
     fn check_expiry(&self) -> Result<(), CredentialError> {
-        if let Some(expiry) = self.expires_at {
-            let now = UtcDateTime::now();
-            if now > expiry {
-                return Err(CredentialError::Expired);
-            }
+        if self.is_expired(UtcDateTime::now()) {
+            return Err(CredentialError::Expired);
         }
         Ok(())
     }
