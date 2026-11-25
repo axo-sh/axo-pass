@@ -16,6 +16,7 @@ use super::utils::{get_ssh_key_comment, get_ssh_key_fingerprint};
 /// there is no wrapper to point at.
 pub fn wrapper_path() -> Option<PathBuf> {
     let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
         .inspect_err(|e| log::debug!("Failed to get exe path: {e}"))
         .ok()?;
     let candidate = exe.parent()?.parent()?.join("Resources/ap-ssh-askpass");
