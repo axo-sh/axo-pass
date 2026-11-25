@@ -57,9 +57,33 @@ pub fn interpolate_secrets(
     input: &str,
     resolver: &mut dyn SecretResolver,
 ) -> Result<String, String> {
+    interpolate_secrets_escaped(input, resolver, &|secret| secret.to_string())
+        .map(|interpolation| interpolation.text)
+}
+
+/// Result of [`interpolate_secrets_escaped`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interpolation {
+    /// Input with every reference replaced.
+    pub text: String,
+    /// Distinct references that became `NOT_FOUND` or `ERROR`, in input order.
+    pub unresolved: Vec<String>,
+}
+
+/// Like [`interpolate_secrets`], but passes each secret value through
+/// `escape` before substitution and reports unresolved references. The
+/// `NOT_FOUND` and `ERROR` placeholders are not escaped.
+pub fn interpolate_secrets_escaped(
+    input: &str,
+    resolver: &mut dyn SecretResolver,
+    escape: &dyn Fn(&str) -> String,
+) -> Result<Interpolation, String> {
     let refs = find_refs(input);
     if refs.is_empty() {
-        return Ok(input.to_string());
+        return Ok(Interpolation {
+            text: input.to_string(),
+            unresolved: Vec::new(),
+        });
     }
 
     let resolved = resolver.resolve_all(&refs)?;
@@ -72,15 +96,34 @@ pub fn interpolate_secrets(
     }
 
     let mut values = resolved.into_iter();
-    let result = axo_url_re().replace_all(input, |caps: &regex::Captures| {
+    let mut unresolved: Vec<String> = Vec::new();
+    let text = axo_url_re().replace_all(input, |caps: &regex::Captures| {
         log::debug!("Found reference {}", &caps[0]);
-        match values.next() {
-            Some(ResolvedSecret::Found(secret)) => secret,
-            Some(ResolvedSecret::NotFound) => "NOT_FOUND".to_string(),
-            Some(ResolvedSecret::Error) | None => "ERROR".to_string(),
+        let (replacement, failed) = match values.next() {
+            Some(ResolvedSecret::Found(secret)) => (escape(&secret), false),
+            Some(ResolvedSecret::NotFound) => ("NOT_FOUND".to_string(), true),
+            Some(ResolvedSecret::Error) | None => ("ERROR".to_string(), true),
+        };
+        if failed && !unresolved.iter().any(|url| url == &caps[0]) {
+            unresolved.push(caps[0].to_string());
         }
+        replacement
     });
-    Ok(result.to_string())
+    Ok(Interpolation {
+        text: text.to_string(),
+        unresolved,
+    })
+}
+
+/// Escape `value` for use inside a JSON string literal. Surrounding quotes are
+/// not added.
+pub fn escape_json(value: &str) -> String {
+    let quoted = serde_json::Value::String(value.to_string()).to_string();
+    quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&quoted)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -154,6 +197,48 @@ mod tests {
         assert_eq!(
             interpolate_secrets("a=axo://v/i/c1 b=axo://v/i/c2", &mut Fixed).unwrap(),
             "a=<c1> b=<c2>",
+        );
+    }
+
+    #[test]
+    fn escape_json_escapes_string_body() {
+        assert_eq!(escape_json("plain"), "plain");
+        assert_eq!(escape_json(r#"a"b\c"#), r#"a\"b\\c"#);
+        assert_eq!(escape_json("line1\nline2\ttab"), r"line1\nline2\ttab");
+        assert_eq!(escape_json("\u{1}"), r"\u0001");
+        assert_eq!(escape_json("caf\u{e9}"), "caf\u{e9}");
+        assert_eq!(escape_json(r#"ends with ""#), r#"ends with \""#);
+        assert_eq!(escape_json(""), "");
+    }
+
+    #[test]
+    fn escaped_interpolation_skips_placeholders() {
+        struct Mixed;
+        impl SecretResolver for Mixed {
+            fn resolve_all(&mut self, refs: &[SecretRef]) -> Result<Vec<ResolvedSecret>, String> {
+                Ok(refs
+                    .iter()
+                    .map(|r| match r.credential_key.as_str() {
+                        "found" => ResolvedSecret::Found("a\"b".to_string()),
+                        "missing" => ResolvedSecret::NotFound,
+                        _ => ResolvedSecret::Error,
+                    })
+                    .collect())
+            }
+        }
+        let interpolation = interpolate_secrets_escaped(
+            r#"{"a": "axo://v/i/found", "b": "axo://v/i/missing", "c": "axo://v/i/boom", "d": "axo://v/i/missing"}"#,
+            &mut Mixed,
+            &escape_json,
+        )
+        .unwrap();
+        assert_eq!(
+            interpolation.text,
+            r#"{"a": "a\"b", "b": "NOT_FOUND", "c": "ERROR", "d": "NOT_FOUND"}"#,
+        );
+        assert_eq!(
+            interpolation.unresolved,
+            vec!["axo://v/i/missing", "axo://v/i/boom"],
         );
     }
 
