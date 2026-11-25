@@ -109,6 +109,11 @@ struct TodayPane: View {
   /// agent check is also listed if it fails. A check that has not run is left
   /// out. Labels are short. Help text gives the full check.
   private var statusChecks: [StatusCheck] {
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent {
+        return MarketingContent.statusChecks.map { StatusCheck($0.label, $0.help) }
+      }
+    #endif
     var list: [StatusCheck] = []
     let synced = vaults.vaults.filter { sync.state($0.key)?.isOn == true }.count
     if synced > 0 {
@@ -130,17 +135,33 @@ struct TodayPane: View {
 
   // MARK: - Used today
 
+  /// Entries of the card. Placeholders while marketing content is shown.
+  private var usedEntries: [UsedTodayEntry] {
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return MarketingContent.usedToday() }
+    #endif
+    return usedToday.entries
+  }
+
+  /// Error of the last read. Hidden while marketing content is shown.
+  private var usedLoadError: String? {
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return nil }
+    #endif
+    return usedToday.loadError
+  }
+
   @ViewBuilder
   private var usedTodayCard: some View {
-    if let error = usedToday.loadError {
+    if let error = usedLoadError {
       TodayCard { TodayNoteRow(error, color: .red) }
-    } else if usedToday.entries.isEmpty {
+    } else if usedEntries.isEmpty {
       TodayCard {
         TodayNoteRow("No activity today.")
       }
     } else {
       TodayCard {
-        ForEach(Array(usedToday.entries.enumerated()), id: \.element.id) { index, entry in
+        ForEach(Array(usedEntries.enumerated()), id: \.element.id) { index, entry in
           if index > 0 {
             Divider()
           }

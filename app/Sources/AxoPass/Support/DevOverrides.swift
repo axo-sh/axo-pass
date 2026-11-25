@@ -14,6 +14,9 @@
     /// Show the "Get started" card on Today, even if every step is done or
     /// skipped. The rows are the real state of this Mac.
     var showChecklist = false
+    /// Show placeholder vaults, issues, and activity for marketing
+    /// screenshots. See `MarketingContent`.
+    var showMarketingContent = false
 
     private init() {}
   }

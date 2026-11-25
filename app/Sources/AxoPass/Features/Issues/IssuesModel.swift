@@ -113,12 +113,18 @@ final class IssuesModel {
   /// Issues that are not dismissed, most severe first. Order within a severity
   /// follows the order of the checks.
   var issues: [Issue] {
-    allIssues.filter { !isDismissed($0) }
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return [] }
+    #endif
+    return allIssues.filter { !isDismissed($0) }
   }
 
   /// Dismissed and snoozed issues whose condition still holds.
   var dismissedIssues: [Issue] {
-    allIssues.filter { isDismissed($0) }
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return [] }
+    #endif
+    return allIssues.filter { isDismissed($0) }
   }
 
   private var allIssues: [Issue] {
@@ -159,6 +165,7 @@ final class IssuesModel {
   /// open. A debug build can show it with every step done.
   var showsChecklist: Bool {
     #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return false }
       if DevOverrides.shared.showChecklist { return true }
     #endif
     return !setupChecklist.open.isEmpty

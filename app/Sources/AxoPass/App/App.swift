@@ -265,7 +265,8 @@ private struct GeneratePasswordMenuItem: View {
 }
 
 #if DEBUG
-  /// Developer menu of debug builds. Previews and resets the first-run screens.
+  /// Developer menu of debug builds. Previews and resets the first-run screens,
+  /// and shows placeholder content for screenshots.
   private struct DeveloperMenu: View {
     let windows: WindowRequests
     let issues: IssuesModel
@@ -282,6 +283,7 @@ private struct GeneratePasswordMenuItem: View {
             if on { windows.requestMain() }
           }))
       Toggle("Show Setup Checklist", isOn: $overrides.showChecklist)
+      Toggle("Show Marketing Content", isOn: $overrides.showMarketingContent)
       Divider()
       Button("Reset First Run") { Preferences.hasCompletedFirstRun = false }
       Button("Reset Setup Checklist") { issues.restoreSetupSteps() }

@@ -243,11 +243,19 @@ struct VaultsSidebar: View {
     }
   }
 
+  /// Vaults to list. Placeholders while marketing content is shown.
+  private var listedVaults: [VaultInfo] {
+    #if DEBUG
+      if DevOverrides.shared.showMarketingContent { return MarketingContent.vaults }
+    #endif
+    return model.vaults
+  }
+
   /// All Secrets row. Hidden with fewer than two vaults, since it would list
   /// the same items as the only vault.
   @ViewBuilder
   private var allSecretsRow: some View {
-    if model.vaults.count > 1 {
+    if listedVaults.count > 1 {
       Label {
         Text("All Secrets")
       } icon: {
@@ -261,8 +269,9 @@ struct VaultsSidebar: View {
   /// Vaults listed while the list is collapsed. The selected vault is always
   /// listed.
   private var visibleVaults: [VaultInfo] {
-    guard !showAllVaults, model.vaults.count > collapsedVaultLimit else { return model.vaults }
-    let shown = Array(model.vaults.prefix(collapsedVaultLimit))
+    let vaults = listedVaults
+    guard !showAllVaults, vaults.count > collapsedVaultLimit else { return vaults }
+    let shown = Array(vaults.prefix(collapsedVaultLimit))
     if let selected = model.selectedVault, !shown.contains(where: { $0.key == selected.key }) {
       return shown + [selected]
     }
@@ -295,7 +304,7 @@ struct VaultsSidebar: View {
 
   @ViewBuilder
   private var vaultItems: some View {
-    if model.vaults.isEmpty {
+    if listedVaults.isEmpty {
       Text("No vaults")
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -324,7 +333,7 @@ struct VaultsSidebar: View {
         }
       }
 
-      if model.vaults.count > collapsedVaultLimit {
+      if listedVaults.count > collapsedVaultLimit {
         Button {
           withAnimation(.snappy(duration: 0.2)) { showAllVaults.toggle() }
         } label: {
