@@ -194,38 +194,40 @@ struct PaletteView: View {
   // MARK: - Unlock
 
   private var unlockPrompt: some View {
-    VStack(spacing: 12) {
+    HStack(spacing: 16) {
       Group {
         if let view = model.unlockView, let context = model.unlockContext {
           AuthenticationIcon(view: view)
             .id(ObjectIdentifier(context))
         } else {
           Image(systemName: "lock.fill")
-            .font(.system(size: 28))
+            .font(.system(size: 20))
             .foregroundStyle(.secondary)
         }
       }
-      .frame(width: 56, height: 56)
+      .frame(width: 36, height: 36)
 
-      Text("Unlock Axo Pass to continue")
-        .font(.headline.weight(.semibold))
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Unlock Axo Pass to continue")
+          .font(.headline.weight(.semibold))
 
-      if let error = model.vaults.unlockError {
-        Text(error)
-          .foregroundStyle(.red)
-          .multilineTextAlignment(.center)
-      }
+        if let error = model.vaults.unlockError {
+          Text(error)
+            .foregroundStyle(.red)
+            .multilineTextAlignment(.leading)
+        }
 
-      if !model.vaults.isUnlocking {
-        Button("Unlock", action: model.startUnlock)
-          .buttonStyle(.borderedProminent)
-      } else if model.vaults.offersPasswordUnlock {
-        Button("Use Login Password…", action: model.unlockWithPassword)
-          .buttonStyle(.link)
+        if !model.vaults.isUnlocking {
+          Button("Unlock", action: model.startUnlock)
+            .buttonStyle(.borderedProminent)
+        } else if model.vaults.offersPasswordUnlock {
+          Button("Use Login Password…", action: model.unlockWithPassword)
+            .buttonStyle(.link)
+        }
       }
     }
     .padding(24)
-    .frame(maxWidth: .infinity)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

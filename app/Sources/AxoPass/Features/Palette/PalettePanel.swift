@@ -122,7 +122,7 @@ final class PalettePanel {
       return
     }
     let visible = (screen ?? NSScreen.main)?.visibleFrame ?? anchor
-    top = anchor.minY - 6
+    top = anchor.minY - 12
     var x = anchor.midX - Self.width / 2
     x = min(max(x, visible.minX + 8), visible.maxX - Self.width - 8)
     panel.setFrame(NSRect(x: x, y: top - height, width: Self.width, height: height), display: true)

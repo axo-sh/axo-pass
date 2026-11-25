@@ -211,7 +211,7 @@ final class PaletteModel {
     // suppressed for this context from the first moment.
     let context = LAContext()
     unlockContext = context
-    unlockView = LAAuthenticationView(context: context, controlSize: .regular)
+    unlockView = LAAuthenticationView(context: context, controlSize: .small)
     guard let attempt = vaults.unlock(on: context) else {
       unlockContext = nil
       unlockView = nil
