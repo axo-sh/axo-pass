@@ -1,0 +1,29 @@
+name: 'macOS'
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: check
+        run: cargo check --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace

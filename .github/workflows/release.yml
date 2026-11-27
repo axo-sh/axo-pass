@@ -7,7 +7,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  test-macos:
+    uses: ./.github/workflows/macos.yml
+
+  test-linux:
+    uses: ./.github/workflows/linux.yml
+
   release:
+    needs: [test-macos, test-linux]
     runs-on: macos-latest
     permissions:
       contents: write
